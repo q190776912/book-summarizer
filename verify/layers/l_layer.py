@@ -9,7 +9,8 @@ def check_separator_blank_lines(md_file):
     above AND below it. Returns list of violation strings (with line numbers).
     Empty = pass."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -33,7 +34,8 @@ def fix_separator_blank_lines(md_file):
     in-place inserts) so both sides are handled in a single pass.
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     out = []

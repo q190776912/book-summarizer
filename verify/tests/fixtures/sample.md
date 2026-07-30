@@ -2,7 +2,7 @@
 
 A paragraph of sample text for the layer-contract test.
 
-quote
+> quote
 
 $$
 x = 1

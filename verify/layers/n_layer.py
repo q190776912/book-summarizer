@@ -6,13 +6,16 @@ from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
+from verify.layers._struct_labels import N_ITEM_RE
+
 def check_excessive_bq_empty_lines(md_file):
     """N-LAYER: detect excessive consecutive empty `>` lines inside blockquotes.
 
     Within a blockquote (> **证明** / > **例** ...), consecutive empty `>` lines
     should be limited to at most 1 between content-bearing lines."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -27,7 +30,7 @@ def check_excessive_bq_empty_lines(md_file):
             continue
         if in_bq:
             if (re.match(r'^---\s*$', s) or re.match(r'^#{1,6}\s', s) or
-                re.match(r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理)', s)):
+                N_ITEM_RE.match(s)):
                 in_bq = False
                 i += 1
                 continue
@@ -52,7 +55,8 @@ def fix_excessive_bq_empty_lines(md_file):
     """N-LAYER auto-fix: collapse excessive consecutive empty `>` lines in
     blockquotes to max 1. Returns number of lines removed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     n = len(lines)
@@ -67,7 +71,7 @@ def fix_excessive_bq_empty_lines(md_file):
             continue
         if in_bq:
             if (re.match(r'^---\s*$', s) or re.match(r'^#{1,6}\s', s) or
-                re.match(r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理)', s)):
+                N_ITEM_RE.match(s)):
                 in_bq = False
                 i += 1
                 continue

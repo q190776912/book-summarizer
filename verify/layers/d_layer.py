@@ -30,7 +30,8 @@ def _d_is_labeled(txt, m):
 def check_d_layer(ch, start, end, md_file, ext):
     """Return dict: missing_sections (list[int]), tail_gaps (dict S->(md_max,raw_max)),
     suspect (dict S->(md_max,raw_max))."""
-    md_text = open(md_file, encoding='utf-8').read()
+    with open(md_file, encoding='utf-8') as f:
+        md_text = f.read()
     md_sections = set()
     md_item_max = {}
     for line in md_text.split('\n'):
@@ -51,7 +52,8 @@ def check_d_layer(ch, start, end, md_file, ext):
         fp = os.path.join(ext, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
-        data = json.load(open(fp, encoding='utf-8'))
+        with open(fp, encoding='utf-8') as f:
+            data = json.load(f)
         for t in data.get('text', []):
             txt = t.get('text', '').strip()
             if not txt:

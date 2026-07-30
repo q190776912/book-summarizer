@@ -6,12 +6,7 @@ from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
-_I_ITEM_RE_STRUCT = re.compile(
-    r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-)
-
-_I_ITEM_RE_EXAMPLE = re.compile(r'^> \*\*(?:例|Example)')
+from verify.layers._struct_labels import I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE
 
 def check_i_separators(md_file):
     """I-LAYER: check that consecutive items are separated by `---`.
@@ -21,14 +16,15 @@ def check_i_separators(md_file):
     don't need separators. Section boundaries (##) reset the requirement.
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
     # Collect all item-starting line numbers
     item_lines = []
     for i, ln in enumerate(lines):
-        if _I_ITEM_RE_STRUCT.match(ln) or _I_ITEM_RE_EXAMPLE.match(ln):
+        if I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln):
             item_lines.append(i)
     # Check consecutive pairs
     for idx in range(len(item_lines) - 1):
@@ -58,20 +54,15 @@ def fix_i_separators(md_file):
     """I-LAYER auto-fix: insert `---` between consecutive items without separator.
     Returns number of separators inserted."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0
 
-    _I_STRUCT = re.compile(
-        r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理'
-        r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-    )
-    _I_EXAMPLE = re.compile(r'^> \*\*(?:例|Example)')
-
     item_lines = []
     for i, ln in enumerate(lines):
-        if _I_STRUCT.match(ln) or _I_EXAMPLE.match(ln):
+        if I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln):
             item_lines.append(i)
 
     insertions = []

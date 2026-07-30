@@ -20,20 +20,11 @@ from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
-H_STRUCT_BQ = re.compile(
-    r'^\s*>\s+\*\*(?:'
-    r'(?:定义|定理|引理|推论|命题|断言|公理'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-    # A label followed by `的证明…` (e.g. `定理3.66的证明思路`) is a *proof
-    # sketch*, NOT a structural theorem — it legitimately lives inside a `>`
-    # blockquote, so don't flag it as a structural-label-in-blockquote violation.
-    r'(?![\d.]*的证明)'
-    r')'
-)
-
-_H_EXT_HEADER = re.compile(
-    r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理|式'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
+from verify.layers._struct_labels import (
+    H_STRUCT_BQ_RE,
+    H_STRUCT_BQ_FIX_RE,
+    TOP_LEVEL_HEADER_RE,
+    H_INLINE_STRUCT_BQ_RE,
 )
 
 _H_UL_OPENERS = re.compile(
@@ -86,11 +77,12 @@ def _h_ext_is_structural_bq(s):
 def _h_ext_items(md_file):
     """Yield (lines, h_idx, pen_idx) for each structural item in the file."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return
     n = len(lines)
-    heads = [i for i in range(n) if _H_EXT_HEADER.match(lines[i])]
+    heads = [i for i in range(n) if TOP_LEVEL_HEADER_RE.match(lines[i])]
     for idx, h in enumerate(heads):
         nxt = heads[idx + 1] if idx + 1 < len(heads) else n
         pen_idx = nxt
@@ -107,12 +99,13 @@ def check_h_structural_blockquote(md_file):
     Each violation is a line matching `> **LABEL...` where LABEL is a
     structural label (definition/theorem/lemma/etc.)."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
     for i, ln in enumerate(lines):
-        if H_STRUCT_BQ.match(ln):
+        if H_STRUCT_BQ_RE.match(ln):
             rest = ln.lstrip()
             label_end = rest.find('**', 2)
             label = rest[4:label_end] if label_end > 4 else rest[4:].split()[0]
@@ -159,11 +152,12 @@ def fix_h_statement_in_blockquote(md_file):
     item's statement region are unwrapped; legit proof/example/note `>` kept.
     Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     n = len(lines)
-    heads = [i for i in range(n) if _H_EXT_HEADER.match(lines[i])] + [n]
+    heads = [i for i in range(n) if TOP_LEVEL_HEADER_RE.match(lines[i])] + [n]
     out, ptr, changes = [], 0, 0
     def _unwrap(t):
         if t == '':
@@ -202,7 +196,8 @@ def fix_h_statement_in_blockquote(md_file):
         out.extend(lines[pen_idx:nxt])
         ptr = nxt
     if changes:
-        open(md_file, 'w', encoding='utf-8').write('\n'.join(out))
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(out))
     return changes
 
 def check_unlabeled_blockquotes(md_file):
@@ -220,7 +215,8 @@ def check_unlabeled_blockquotes(md_file):
 
     Returns a list of violation strings. Empty = pass."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     n = len(lines)
@@ -253,7 +249,7 @@ def check_unlabeled_blockquotes(md_file):
         if _H_UL_OPENERS.match(ln) or _H_UL_FOOTNOTE.match(ln):
             continue  # legit blockquote
         # Let H-layer handle structural labels inside blockquotes (double-flag avoidance)
-        if re.match(r'^\s*>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理|式)', ln):
+        if H_INLINE_STRUCT_BQ_RE.match(ln):
             continue
         # Unlabeled blockquote — flag each content line
         for k in range(start, end):
@@ -270,7 +266,8 @@ def fix_unlabeled_blockquotes(md_file):
     Uses the same block-splitting logic as check_unlabeled_blockquotes.
     Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     n = len(lines)
@@ -300,7 +297,7 @@ def fix_unlabeled_blockquotes(md_file):
         ln = lines[first]
         if _H_UL_OPENERS.match(ln) or _H_UL_FOOTNOTE.match(ln):
             continue
-        if re.match(r'^\s*>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理|式)', ln):
+        if H_INLINE_STRUCT_BQ_RE.match(ln):
             continue
         ranges.append((start, end))
     for start, end in ranges:
@@ -321,7 +318,8 @@ def check_labels_missing_blockquote(md_file):
     found at TOP LEVEL — they MUST be inside `>`. Returns list of violation
     strings. Empty = pass."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -340,7 +338,8 @@ def fix_labels_missing_blockquote(md_file):
     """H-LAYER ext auto-fix: wrap top-level 证明/证/例/注/说明/注记/脚注
     labels with `> `. Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0
@@ -362,22 +361,16 @@ def fix_h_structural_blockquote(md_file):
     """H-LAYER auto-fix: remove `> ` prefix from structural labels inside blockquotes.
     Also removes orphan bare `>` lines. Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0
 
     # Fix structural labels inside blockquotes: un-indent them
-    H_BQ_FIX = re.compile(
-        r'^\s*>\s+\*\*(?:'
-        r'(?:定义|定理|引理|推论|命题|断言|公理|式'
-        r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-        r'(?![\d.]*的证明)'
-        r')'
-    )
     for i in range(len(lines)):
         ln = lines[i]
-        if H_BQ_FIX.match(ln):
+        if H_STRUCT_BQ_FIX_RE.match(ln):
             new_ln = re.sub(r'^\s*>\s+', '', ln)
             if new_ln != ln:
                 lines[i] = new_ln

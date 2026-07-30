@@ -45,7 +45,8 @@ def check_e_figure_completeness(ch, start, end, ext, ignore_fig=None):
         fp = os.path.join(ext, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
-        data = json.load(open(fp, encoding='utf-8'))
+        with open(fp, encoding='utf-8') as f:
+            data = json.load(f)
         for t in data.get('text', []):
             txt = t.get('text', '')
             if not txt:

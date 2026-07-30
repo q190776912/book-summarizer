@@ -27,7 +27,8 @@ def extract_keys(extract_dir, start, end, with_examples):
         fp = os.path.join(extract_dir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
             continue
-        data = json.load(open(fp, encoding='utf-8'))
+        with open(fp, encoding='utf-8') as f:
+            data = json.load(f)
         for t in data.get('text', []):
             txt = t.get('text', '').strip()
             if not txt:
@@ -57,9 +58,10 @@ def extract_keys(extract_dir, start, end, with_examples):
 
 def md_keys(path):
     keys = set()
-    for line in open(path, encoding='utf-8'):
-        for m in MD_ENTRY_RE.finditer(line):
-            keys.add(f"{m.group(1)}{m.group(2)}.{m.group(3)}")
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            for m in MD_ENTRY_RE.finditer(line):
+                keys.add(f"{m.group(1)}{m.group(2)}.{m.group(3)}")
     return keys
 
 

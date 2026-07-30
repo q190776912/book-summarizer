@@ -15,7 +15,8 @@ def check_proof_after_list(md_file):
     the proof at the list's indentation rather than the theorem's outer level.
     Returns a list of violation strings (with line numbers). Empty = pass."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -33,7 +34,8 @@ def fix_proof_after_list(md_file):
     """K-LAYER auto-fix: insert a blank line between a numbered list and a
     `> **证明` blockquote. Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0

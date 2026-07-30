@@ -6,10 +6,7 @@ from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
-_J_HEADER_RE = re.compile(
-    r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理|式'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-)
+from verify.layers._struct_labels import TOP_LEVEL_HEADER_RE
 
 _J_SUBPOINT_RE = re.compile(r'^\*\*\(\d+\)\*\*')
 
@@ -36,7 +33,8 @@ def check_item_header_dash(md_file):
         flag a legitimate `---` that separates two different top-level items).
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     n = len(lines)
@@ -56,7 +54,7 @@ def check_item_header_dash(md_file):
             in_item = False
             continue
         # item header or numbered sub-point opens the block
-        if _J_HEADER_RE.match(s) or _J_SUBPOINT_RE.match(s):
+        if TOP_LEVEL_HEADER_RE.match(s) or _J_SUBPOINT_RE.match(s):
             in_item = True
             continue
         # a top-level `---`
@@ -83,7 +81,8 @@ def fix_item_header_dash(md_file):
     parts stay tight (matching the no-`---` style of `**引理3.3**`).
     Returns number of lines removed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     n = len(lines)
@@ -100,7 +99,7 @@ def fix_item_header_dash(md_file):
         if re.match(r'^#{1,6}\s', s):
             in_item = False
             continue
-        if _J_HEADER_RE.match(s) or _J_SUBPOINT_RE.match(s):
+        if TOP_LEVEL_HEADER_RE.match(s) or _J_SUBPOINT_RE.match(s):
             in_item = True
             continue
         if _J_DASH_RE.match(s):

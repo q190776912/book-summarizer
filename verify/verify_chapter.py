@@ -82,7 +82,8 @@ def _load_page_context(ext, ch, key, items):
     fp = os.path.join(ext, f'page_{pg:03d}.json')
     if not os.path.exists(fp):
         return None
-    data = json.load(open(fp, encoding='utf-8'))
+    with open(fp, encoding='utf-8') as f:
+        data = json.load(f)
     text_blocks = data.get('text', [])
     item_text = detail['text']
     # Find block containing the item text

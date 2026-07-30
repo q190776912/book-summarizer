@@ -145,7 +145,8 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
       start, end: (optional) page range for OCR cross-ref
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
 
@@ -266,7 +267,8 @@ def _o_tail_ocr_scan(ext_dir, ch, start, end, md_nums, ctx_label):
         if not os.path.exists(fp):
             continue
         try:
-            data = _json.load(open(fp, encoding='utf-8'))
+            with open(fp, encoding='utf-8') as f:
+                data = _json.load(f)
         except Exception:
             continue
         full_text = '\n'.join(t.get('text', '') for t in data.get('text', []))

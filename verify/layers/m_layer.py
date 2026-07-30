@@ -11,7 +11,8 @@ def check_displaymath_gt(md_file):
     lines can leak inside the `$$` fences. KaTeX rejects bare `>` inside math
     mode. Returns list of violation strings (with line numbers). Empty = pass."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -37,7 +38,8 @@ def fix_displaymath_gt(md_file):
     """M-LAYER auto-fix: strip `>` prefix from lines inside `$$...$$` blocks.
     Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0

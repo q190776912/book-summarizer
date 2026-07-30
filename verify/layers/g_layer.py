@@ -9,15 +9,13 @@ from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
+from verify.layers._struct_labels import G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE
+
 G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
 
 G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*|\$\$\s*$)')
 
 NESTED_BQ = re.compile(r'^>\s*>\s*\S')
-
-_EX_RE = re.compile(r'> \*\*(?:例\b(?:\d[\d.]*-[0-9]+|\d+)?\*\*|Example\b(?:\s*\d+)?\*\*)')
-
-_PF_RE = re.compile(r'> \*\*(?:证明思路|证明|证明梗概|证明概要)\*\*')
 
 def check_g_quote_continuity(md_file):
     """G-LAYER: quote-block continuity.
@@ -31,7 +29,8 @@ def check_g_quote_continuity(md_file):
     `**label**`) — these are inter-block separators.
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     n = len(lines)
@@ -69,7 +68,8 @@ def check_nested_blockquotes(md_file):
     """Detect nested blockquotes (> > **证明** or > > **例**) — the OLD format.
     Examples and their proofs must use the SAME single `>` level."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return []
     out = []
@@ -91,7 +91,8 @@ def check_example_proof_gap(md_file):
     which should be split onto two separate `>` lines.
     """
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return [], []
     errors = []   # blocking — empty lines or non-bq content
@@ -105,20 +106,20 @@ def check_example_proof_gap(md_file):
                           f"             `> **例…**` and `> **证明…**` on separate lines")
     # --- Gap detection (original logic) ---
     for i, ln in enumerate(lines):
-        if not _EX_RE.match(ln):
+        if not G_EX_RE.match(ln):
             continue
         for j in range(i + 1, min(i + 25, len(lines))):
-            if not _PF_RE.match(lines[j]):
+            if not G_PF_RE.match(lines[j]):
                 continue
             # Another example between → not the same pair
-            if any(_EX_RE.match(lines[k]) for k in range(i + 1, j)):
+            if any(G_EX_RE.match(lines[k]) for k in range(i + 1, j)):
                 break
             # Section header or structural interrupt → not the same pair
             if any(re.match(r'^#{1,6}\s', lines[k]) for k in range(i + 1, j)):
                 break
             if any(re.match(r'^---\s*$', lines[k]) for k in range(i + 1, j)):
                 break
-            if any(re.match(r'^\*\*(?:定义|定理|引理|推论|命题|断言)\b', lines[k]) for k in range(i + 1, j)):
+            if any(G_TOPLEVEL_BREAK_RE.match(lines[k]) for k in range(i + 1, j)):
                 break
             # Inspect gap lines
             for k in range(i + 1, j):
@@ -137,7 +138,8 @@ def fix_g_quote_continuity(md_file):
     """G-LAYER auto-fix: convert bare blank lines inside blockquotes to `> `.
     Returns number of lines changed."""
     try:
-        lines = open(md_file, encoding='utf-8').read().split('\n')
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
     except Exception:
         return 0
     n = len(lines)

@@ -1,0 +1,66 @@
+# .github/workflows/verify-smoke.yml
+# 工作流：Layer registry 冒烟 + Schema 契约测试
+# 目的：在 CI 阶段拦截两类"注册表正确性"事故——
+#   1) 层总数不对（应为 16 层，少一层即说明有层未被注册）；
+#   2) 某层模块 import 失败被 register_all 静默降级跳过（warning 被吞，
+#      层数悄悄变少）。这类"静默降级"若不被显式判失败，会悄悄让校验能力
+#      缺失却仍报绿，是典型的正确性事故护栏（correctness guardrail）。
+
+name: verify-smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取仓库代码（checkout 后 cwd 即仓库根，import verify 可直接解析）
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # opencv-python-headless 在 ubuntu 上偶发缺少 libGL.so.1，
+      # 导致 import cv2 直接 ImportError，进而触发 register_all 的
+      # 静默降级（层数 < 16）。先装系统库，避免把"环境缺库"误判成"层缺失"。
+      - name: 安装 cv2 所需的系统库 libgl1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1
+
+      - name: 安装 Python 依赖（cv2 / PIL / numpy 是部分层模块的 import 依赖）
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy opencv-python-headless pillow
+
+      # 步骤 A：Layer registry 冒烟 + 静默降级拦截
+      - name: Layer registry 冒烟 + 静默降级拦截
+        shell: bash
+        run: |
+          python - 2>reg_stderr.log <<'PY'
+          import verify.register_all        # 执行 pkgutil 自动发现，触发注册
+          try:
+              from verify.registry import LAYER_REGISTRY
+          except ImportError:
+              from verify.register_all import LAYER_REGISTRY
+          n = len(LAYER_REGISTRY.all_ordered())
+          assert n == 16, f"预期注册 16 层，实际仅 {n} 层（疑似层未注册或被跳过）"
+          print(f"Layer registry OK: 已注册 {n} 层")
+          PY
+
+          echo "--- 静默降级护栏：检查 register_all 警告 ---"
+          if grep -Fq '[register_all]' reg_stderr.log; then
+            echo "检测到 [register_all] 警告 => 存在层被 import 失败静默跳过，判失败："
+            grep -F '[register_all]' reg_stderr.log
+            exit 1
+          fi
+          echo "无静默降级，16 层全部正常注册"
+
+      # 步骤 B：Schema 契约测试
+      - name: Schema contract test
+        run: python -m unittest verify.test_layer_contract -v

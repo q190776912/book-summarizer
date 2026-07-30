@@ -1,0 +1,303 @@
+"""Assign figure numbers (图 X.X.X) to detected figures — the SUMMARY phase.
+
+This is **phase 2** of the skill's two-phase figure pipeline. It reads the raw
+detection store ``figure_detect.json`` (produced by ``extract_figures.py``) plus
+the chapter's OCR page JSONs, and for every detected figure recovers its
+semantic label:
+
+  (a) from its caption OCR text (``cap_text``) if it contains "图 X.X.X" /
+      "Figure X.X";
+  (b) otherwise from the nearest "图 X.X.X" caption in the chapter's OCR by
+      reading order / position (same page, vertical proximity) — this is the
+      "根据位置信息 + json 信息判断这张图属于哪张图" step.
+
+Detected crops (named ``det_p{PAGE}_{IDX}.png`` by detection) are then renamed
+to ``chNN_figX.X.X.png`` (matched) or ``chNN_unnamed_K.png`` (unmatched, still
+embedded at summary as "图(未标号)"), and the assigned ``figure_index.json`` is
+written — the file ``verify_chapter.py`` (E/F layers) consumes.
+
+E/F semantics after assignment:
+  * a 图X.X.X referenced in OCR with NO nearby detected figure => E-layer
+    MISSING (truly missed -> re-detect that page, or declare it in
+    ``figure_manual_chN.json`` and run ``apply_manual_figures.py``).
+  * a detected figure that could not be matched to any 图X.X.X => kept as
+    ``chNN_unnamed_K.png`` (label=null). It is NOT a FAIL — it was found, just
+    unnamed. Embed it as "图(未标号)".
+
+Manual figures (``source=="manual"`` in figure_index.json, produced by
+``apply_manual_figures.py``) are ALWAYS preserved across re-assignments.
+
+Two modes:
+    python assign_figures.py <pdf> --out DIR --book            # assign ALL chapters
+    python assign_figures.py <pdf> --out DIR --ch N --start S --end E  # one chapter
+
+(The PDF path is accepted for pipeline symmetry but not used — assignment only
+reads existing crops + OCR JSONs, it does not render.)
+"""
+import os
+import re
+import sys
+import glob
+import json
+import argparse
+
+import numpy as np
+
+
+# ----------------------------------------------------------------------------
+# reuse detection helpers (kept in extract_figures.py)
+# ----------------------------------------------------------------------------
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from figure.extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
+
+
+def load_figure_detect(out_dir):
+    p = os.path.join(out_dir, "figure_detect.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def load_figure_index(out_dir):
+    p = os.path.join(out_dir, "figure_index.json")
+    if not os.path.exists(p):
+        return []
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def gather_refs(out_dir, start, end):
+    """Collect every 图X.X.X / Figure X.X caption in the chapter's OCR pages,
+    with its (page, cy) position. Returns list of (label, page, cy).
+
+    OCR often splits a caption like "图 6.1.1" across several text items, so we
+    reconstruct each page's text in reading order (sorted by y) and regex-find
+    "图 X.X.X" on the joined string — this yields the full 3-level label instead
+    of a partial "6.1" fragment, and we map the match back to its line's y."""
+    refs = []
+    for pno in range(start, end + 1):
+        ocr = load_ocr_text(os.path.join(out_dir, f"page_{pno:03d}.json"))
+        items = []
+        for it in ocr:
+            t = it.get("text", "")
+            if not t:
+                continue
+            y = center_of_poly(it["poly"])[1] if it.get("poly") else 0
+            items.append((t, y))
+        items.sort(key=lambda x: x[1])
+        parts, ranges, pos = [], [], 0
+        for t, y in items:
+            a = pos
+            parts.append(t)
+            pos += len(t)
+            ranges.append((a, pos, y))
+            parts.append("\n")
+            pos += 1
+        full = "".join(parts)
+        for m in re.finditer(r"(?:图|(?:[Ff]igure|[Ff]ig\.))\s*([0-9]+(?:(?:\.|-)[0-9]+){1,2})", full):
+            s = m.start()
+            y = 0
+            for (a, b, yy) in ranges:
+                if a <= s < b:
+                    y = yy
+                    break
+            refs.append((m.group(1), pno, y))
+    return refs
+
+
+def bbox_center(bbox):
+    return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+
+
+def assign_chapter(det_all, ch, start, end, out_dir):
+    """Assign labels to one chapter's detected figures; rename crops; return
+    the list of assigned entries (label-filled) for this chapter."""
+    fig_dir = os.path.join(out_dir, "figure")
+    os.makedirs(fig_dir, exist_ok=True)
+
+    ch_dets = [e for e in det_all if e.get("chapter") == ch]
+    ch_dets.sort(key=lambda e: (e["page"], e.get("fig_idx", 0)))
+
+    refs = gather_refs(out_dir, start, end)
+    used_refs = set()  # indices into refs claimed by a figure
+
+    # ---- cleanup: drop previous NON-manual chNN_* crops for this chapter ----
+    existing_idx = load_figure_index(out_dir)
+    protected = {e["file"] for e in existing_idx
+                 if e.get("chapter") == ch and e.get("source") == "manual"}
+    for f in glob.glob(os.path.join(fig_dir, f"ch{ch:02d}_*")):
+        rel = "figure/" + os.path.basename(f)
+        if rel not in protected:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+    assigned, unnamed_k = [], 0
+    for det in ch_dets:
+        label = parse_fig_label(det.get("cap_text")) if det.get("cap_text") else None
+
+        if not label:
+            # proximity fallback: same page, nearest unused 图X.X.X by vertical gap
+            fig_cx, fig_cy = bbox_center(det["bbox"])
+            best, best_i, best_d = None, None, 1e18
+            for i, (rlabel, rpage, rcy) in enumerate(refs):
+                if i in used_refs or rpage != det["page"]:
+                    continue
+                d = abs(rcy - fig_cy)
+                if d < best_d and d < 500:   # same-page window (~half page @200dpi)
+                    best_d, best, best_i = d, rlabel, i
+            if best is not None:
+                label, used_refs_add = best, best_i
+                used_refs.add(used_refs_add)
+
+        if label:
+            base = f"ch{ch:02d}_fig{label}.png"
+        else:
+            unnamed_k += 1
+            base = f"ch{ch:02d}_unnamed_{unnamed_k:02d}.png"
+
+        src = os.path.join(fig_dir, os.path.basename(det["file"]))
+        dst = os.path.join(fig_dir, base)
+        if os.path.exists(src):
+            if os.path.exists(dst):
+                # dst exists: if it is a manual figure, keep it and drop the
+                # redundant detection crop; else it is a duplicate label -> suffix
+                if "figure/" + base in protected:
+                    try:
+                        os.remove(src)
+                    except OSError:
+                        pass
+                    continue
+                # duplicate label from two detections -> _2 suffix
+                k = 2
+                while os.path.exists(os.path.join(fig_dir, f"ch{ch:02d}_fig{label}_{k}.png")):
+                    k += 1
+                base = f"ch{ch:02d}_fig{label}_{k}.png"
+                dst = os.path.join(fig_dir, base)
+            os.rename(src, dst)
+
+        assigned.append({
+            "chapter": ch,
+            "page": det["page"],
+            "fig_idx": det.get("fig_idx", 0),
+            "label": label,
+            "bbox": det["bbox"],
+            "conf": det.get("conf"),
+            "file": f"figure/{base}",
+            "caption": det.get("cap_text"),
+            "source": "detect",
+        })
+    return assigned
+
+
+def merge_index(out_dir, ch, assigned):
+    """Merge assigned entries for chapter `ch` into figure_index.json,
+    preserving manual (source=manual) entries for that chapter."""
+    idx_path = os.path.join(out_dir, "figure_index.json")
+    existing = load_figure_index(out_dir)
+    # keep manual entries for this chapter; drop this chapter's detect entries
+    kept = [e for e in existing
+            if not (e.get("chapter") == ch and e.get("source") != "manual")]
+    merged = kept + assigned
+    merged.sort(key=lambda e: (e.get("chapter", 0), e.get("page", 0), e.get("fig_idx", 0)))
+    with open(idx_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    return merged
+
+
+def write_figure_index_md(out_dir):
+    """Write figure_index.md from the current figure_index.json (all chapters)."""
+    entries = load_figure_index(out_dir)
+    md_lines = [f"- 图 {e['label']}：![图 {e['label']}]({e['file']})"
+                for e in entries if e.get("label")]
+    md_lines += [f"- 图(未标号, p{e['page']})：![fig]({e['file']})"
+                 for e in entries if not e.get("label")]
+    with open(os.path.join(out_dir, "figure_index.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(md_lines) + "\n")
+
+
+def run_book(pdf_path, out_dir):
+    det = load_figure_detect(out_dir)
+    if det is None:
+        print("ERROR: figure_detect.json not found — run extract_figures.py --book first")
+        sys.exit(2)
+    chap_map = {}
+    cm_path = os.path.join(out_dir, "chapter_map.json")
+    if os.path.exists(cm_path):
+        try:
+            raw = json.load(open(cm_path, encoding="utf-8"))
+            chapters = raw.get("chapters")
+            if chapters is not None:
+                # accept both "start"/"end" and "start_page"/"end_page" keys
+                def _se(ch):
+                    return (ch.get("start") or ch.get("start_page"),
+                            ch.get("end") or ch.get("end_page"))
+                chap_map = {ch["num"]: {"start": _se(ch)[0], "end": _se(ch)[1]}
+                            for ch in chapters}
+            else:
+                chap_map = {int(k): v for k, v in raw.items()}
+        except Exception:
+            chap_map = {}
+
+    chapters = sorted({e["chapter"] for e in det})
+    total_assigned = 0
+    for ch in chapters:
+        if ch in chap_map:
+            start, end = chap_map[ch].get("start"), chap_map[ch].get("end")
+        else:
+            # chapter not in map (e.g. ch00 front matter): use detected page range
+            pg = [e["page"] for e in det if e["chapter"] == ch]
+            start, end = min(pg), max(pg)
+        assigned = assign_chapter(det, ch, start, end, out_dir)
+        merge_index(out_dir, ch, assigned)
+        n_label = sum(1 for e in assigned if e.get("label"))
+        print(f"  chapter {ch}: {len(assigned)} figures, {n_label} named, "
+              f"{len(assigned) - n_label} unnamed")
+        total_assigned += len(assigned)
+    write_figure_index_md(out_dir)
+    print(f"[done] assigned {total_assigned} figures -> figure_index.json")
+
+
+def run_chapter(pdf_path, out_dir, ch, start, end):
+    det = load_figure_detect(out_dir)
+    if det is None:
+        print("ERROR: figure_detect.json not found — run extract_figures.py --book first")
+        sys.exit(2)
+    assigned = assign_chapter(det, ch, start, end, out_dir)
+    merge_index(out_dir, ch, assigned)
+    write_figure_index_md(out_dir)
+    n_label = sum(1 for e in assigned if e.get("label"))
+    print(f"[done] chapter {ch}: {len(assigned)} figures, {n_label} named, "
+          f"{len(assigned) - n_label} unnamed -> figure_index.json")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Assign 图X.X.X labels to detected figures (summary phase)")
+    ap.add_argument("pdf_path", nargs="?",
+                    help="source PDF (accepted for symmetry; auto-discovered from --out parent if omitted)")
+    ap.add_argument("--out", required=True, help="chapter extract dir")
+    ap.add_argument("--book", action="store_true", help="assign ALL chapters")
+    ap.add_argument("--ch", type=int, help="chapter number (single-chapter mode)")
+    ap.add_argument("--start", type=int, help="1-based start page")
+    ap.add_argument("--end", type=int, help="1-based end page")
+    args = ap.parse_args()
+
+    pdf_path = args.pdf_path
+
+    if args.book:
+        run_book(pdf_path, args.out)
+    else:
+        if not (args.ch and args.start and args.end):
+            print("ERROR: provide --book, OR --ch/--start/--end (single chapter)")
+            sys.exit(2)
+        run_chapter(pdf_path, args.out, args.ch, args.start, args.end)
+
+
+if __name__ == "__main__":
+    main()

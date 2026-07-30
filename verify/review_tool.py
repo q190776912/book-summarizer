@@ -1,0 +1,129 @@
+# review_tool.py - Automated Chapter Review Tool (book-agnostic)
+import subprocess
+import json
+import os
+import sys
+
+# Paths (skill-internal scripts only; book data is resolved from argv).
+skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+extract_items = os.path.join(skill_dir, "extract", "extract_items.py")
+verify_chapter = os.path.join(skill_dir, "verify", "verify_chapter.py")
+
+# Book directory: REQUIRED as argv[1] — this tool is book-agnostic.
+if len(sys.argv) < 2:
+    print("Usage: python review_tool.py <book_dir>")
+    print("  <book_dir> is REQUIRED — the book root folder (e.g. D:\\study\\book\\<书名>).")
+    sys.exit(1)
+book_dir = sys.argv[1]
+extract_dir = os.path.join(book_dir, "_extract")
+chapter_map_path = os.path.join(extract_dir, "chapter_map.json")
+
+# Load chapter map
+with open(chapter_map_path, 'r', encoding='utf-8') as f:
+    chapter_map = json.load(f)
+
+PY = r"D:\anaconda3\envs\pdfextract\python.exe"
+
+def run_extract_items(chapter):
+    """Run extract_items for a chapter (no ignore — ignore belongs to verify)."""
+    command = [
+        PY, "-X", "utf8", extract_items,
+        str(chapter),
+        str(chapter_map[str(chapter)]["start"]),
+        str(chapter_map[str(chapter)]["end"]),
+        extract_dir,
+    ]
+    return subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+
+def run_verify_chapter(chapter, md_file, ignore_file=None):
+    """Run verify_chapter for a chapter, optionally with an ignore file."""
+    command = [
+        PY, "-X", "utf8", verify_chapter,
+        str(chapter),
+        str(chapter_map[str(chapter)]["start"]),
+        str(chapter_map[str(chapter)]["end"]),
+        md_file,
+        extract_dir,
+    ]
+    if ignore_file:
+        command.extend(["--ignore", ignore_file])
+    return subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+
+def review_chapter(chapter):
+    """Process a single chapter and handle review."""
+    print(f"\n{'='*60}")
+    print(f"=== CHAPTER {chapter} REVIEW ===")
+    print(f"{'='*60}")
+
+    # Step1: Extract items (ignore is NOT an extract_items flag)
+    result = run_extract_items(chapter)
+    print("\n--- EXTRACT ITEMS OUTPUT ---")
+    print(result.stdout)
+    if result.stderr:
+        print("STDERR:", result.stderr)
+
+    # Step2: Locate this chapter's ignore file (in the book's _extract folder)
+    ignore_file = None
+    ig_path = os.path.join(extract_dir, f"ignore_ch{chapter}.json")
+    if os.path.exists(ig_path):
+        ignore_file = ig_path
+
+    # Step3: Run verification (pass ignore here)
+    md_file = os.path.join(book_dir, f"第{chapter}章_{chapter_map[str(chapter)]['name']}.md")
+    verify_result = run_verify_chapter(chapter, md_file, ignore_file)
+    print("\n--- VERIFY CHAPTER OUTPUT ---")
+    print(verify_result.stdout)
+    if verify_result.stderr:
+        print("STDERR:", verify_result.stderr)
+
+    # Step4: Check if verification passed
+    if verify_result.returncode == 0:
+        print(f"\n✓ CHAPTER {chapter} PASSED VERIFICATION")
+        print("✓ No A-layer missing items / B-layer blocking / C-layer KaTeX errors")
+        return True
+    else:
+        print(f"\n✗ CHAPTER {chapter} FAILED VERIFICATION")
+        print("Manual interventions required:")
+        print("  1. Review A-layer missing items (add to .md)")
+        print("  2. Review B-layer blocking issues (add real item via --manual, or ignore if OCR/ref)")
+        print("  3. Fix C-layer KaTeX errors ($$ blank lines / inline $ / unsupported macros)")
+        print("  4. Re-run verification after manual fixes")
+        return False
+
+def main():
+    print("Chapter Review Tool")
+    print("===================")
+    print("1. Review all chapters")
+    print("2. Exit")
+
+    choice = input("\nSelect option (1-2): ").strip()
+
+    if choice == "1":
+        print(f"\nReviewing {len(chapter_map)} chapters...")
+        all_passed = True
+        for ch in sorted([int(k) for k in chapter_map.keys()]):
+            md_file = os.path.join(book_dir, f"第{ch}章_{chapter_map[str(ch)]['name']}.md")
+            if os.path.exists(md_file):
+                if not review_chapter(ch):
+                    all_passed = False
+            else:
+                print(f"\n✗ Chapter {ch} markdown file not found: {md_file}")
+                all_passed = False
+
+        if all_passed:
+            print(f"\n{'='*60}")
+            print("ALL CHAPTERS PASSED VERIFICATION")
+            print(f"{'='*60}")
+        else:
+            print(f"\n{'='*60}")
+            print("SOME CHAPTERS FAILED VERIFICATION")
+            print("Manual intervention required")
+            print(f"{'='*60}")
+    elif choice == "2":
+        print("Exiting...")
+        return
+    else:
+        print("Invalid choice")
+
+if __name__ == "__main__":
+    main()

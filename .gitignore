@@ -1,0 +1,39 @@
+# ===== Python 字节码 / 缓存（核心：排除 __pycache__ 等编译产物）=====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ===== 打包 / 构建产物 =====
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ===== 测试 / 静态分析缓存 =====
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+_*.log
+_*.txt
+_*.md
+
+# ===== 虚拟环境（若本地曾建）=====
+.venv/
+venv/
+env/
+
+# ===== 编辑器 / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# 注意：本 skill 的 _fig_common.py / _template_layer.py 是必需源码（_ 前缀但非缓存），
+# 上面的规则只忽略字节码（*.py[cod]）与 __pycache__/，不会误伤这些文件，可正常提交。

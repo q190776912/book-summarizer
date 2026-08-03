@@ -22,6 +22,7 @@ from verify.key_parse import (
     keys_in_md, _canon_label, _first_num, sortkey,
 )
 from extract.extract_items import extract_items, extract_items_en
+from extract.extract_items_gm import extract_items_gm, int_to_roman
 
 
 def check_label_consistency(items):
@@ -75,6 +76,13 @@ class ExtractLayer(VerifyLayer):
                 kept.append(it)
             items = kept
             warnings, blocking = [], []
+        elif ctx.scheme in ('gm', 'roman'):
+            # Gelfand-Manin style: book-printed headings in the .md, roman
+            # machine keys ("标签I.S-N" / "I.S-N").  'roman' is kept as a legacy
+            # alias for chapter_map.json entries written before the rename.
+            items, warnings, blocking = extract_items_gm(
+                ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
+                manual_overrides=manual)
         else:
             items, warnings, blocking = extract_items(
                 ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
@@ -87,7 +95,13 @@ class ExtractLayer(VerifyLayer):
         # Remove confirmed-noise keys BEFORE the A/B comparison.
         extracted = extracted_raw - ctx.ignore_keys
 
-        entry_keys, all_keys = keys_in_md(ctx.md_file, scheme=ctx.scheme)
+        if ctx.scheme in ('gm', 'roman'):
+            # keys_in_md('gm') needs the md's roman chapter prefix, which is
+            # known only here (the .md headings are bare per-section ordinals).
+            entry_keys, all_keys = keys_in_md(
+                ctx.md_file, scheme='gm', chapter_roman=int_to_roman(ctx.ch))
+        else:
+            entry_keys, all_keys = keys_in_md(ctx.md_file, scheme=ctx.scheme)
         if ctx.scheme == 'en':
             entry_keys = {k for k in entry_keys if _first_num(k) == ctx.ch}
             all_keys = {k for k in all_keys if _first_num(k) == ctx.ch}

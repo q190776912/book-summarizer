@@ -10,6 +10,9 @@ import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# P 层聚合阈值（与 verify/layers/p_layer.py 中的 VERBOSE_PARA_GATE / VERBOSE_PROOF_GATE 一致）
+from verify.layers.p_layer import VERBOSE_PARA_GATE, VERBOSE_PROOF_GATE
+
 def print_result(r):
     """Print verification result for one chapter.
 
@@ -293,6 +296,70 @@ def print_result(r):
             for g in warning_o:
                 print(g)
 
+    # P-LAYER: anti-regression gate (content/structure defects, blocking, never auto-fix).
+    # Catches the Vakil incident class: exercise-consolidation blocks, OCR/header
+    # noise, bare item numbers (missing title), and missing sections vs skeleton.
+    p_exer = r.get('p_exer_block', [])
+    p_noise = r.get('p_noise', [])
+    p_bare = r.get('p_bare_item', [])
+    p_miss = r.get('p_missing_sec', [])
+    p_extra = r.get('p_extra_item', [])
+    p_verbose = r.get('p_verbose', [])
+    p_proof_verbose = r.get('p_proof_verbose', [])
+    if p_exer:
+        problems += 1
+        print(f"\nP-LAYER EXERCISE CONSOLIDATION BLOCK ({len(p_exer)}): exercises must be "
+              f"inline at their original page position (`**练习 N.M.X（Exercise N.M.X）：**`), "
+              f"NOT pulled into a `### 练习`/`### Exercises` block at section/chapter end — "
+              f"remove the consolidation block and restore each exercise in place:")
+        for g in p_exer:
+            print(g)
+    if p_noise:
+        problems += 1
+        print(f"\nP-LAYER OCR/HEADER NOISE ({len(p_noise)}): page headers/footers/copyright "
+              f"lines must be stripped — summaries are rewritten, never verbatim OCR:")
+        for g in p_noise:
+            print(g)
+    if p_bare:
+        problems += 1
+        print(f"\nP-LAYER BARE ITEM NUMBER ({len(p_bare)}): number-first items need their "
+              f"printed title inside the label (`**N.M.K（标题）：**` or `**定义 N.M.K**：`), "
+              f"not a bare `**N.M.K**` with the title dropped into the body:")
+        for g in p_bare:
+            print(g)
+    if p_miss:
+        problems += 1
+        print(f"\nP-LAYER MISSING SECTION vs SKELETON ({len(p_miss)}): ch{ch}_skeleton.txt is "
+              f"the writing contract — every SEC must be emitted in order; add the missing `## §`:")
+        for g in p_miss:
+            print(g)
+    if p_extra:
+        problems += 1
+        print(f"\nP-LAYER FABRICATED ITEM vs SKELETON ({len(p_extra)}): ch{ch}_skeleton.txt is "
+              f"the writing contract — do NOT invent numbered items the source lacks "
+              f"(e.g. a `**X.1.1（Implicit）：**` where §X.1 is prose); delete or demote to prose/remark:")
+        for g in p_extra:
+            print(g)
+    if len(p_verbose) >= VERBOSE_PARA_GATE:
+        problems += 1
+        print(f"\nP-LAYER VERBOSE TOP-LEVEL PROSE ({len(p_verbose)} ≥ {VERBOSE_PARA_GATE}): non-core "
+              f"content must be SUMMARIZED to core points (Tier 2) or omitted, not copied verbatim "
+              f"from the book. Condense motivation/intros to 2–4 sentences or omit them; "
+              f"definitions/theorems/examples/exercises AND remarks (Remark/Aside, Tier 1: kept "
+              f"complete with only OCR fixes) are exempt:")
+        for g in p_verbose:
+            print(g)
+    if len(p_proof_verbose) >= VERBOSE_PROOF_GATE:
+        problems += 1
+        print(f"\nP-LAYER VERBOSE PROOF/SOLUTION BLOCK ({len(p_proof_verbose)} ≥ {VERBOSE_PROOF_GATE}): "
+              f"proofs and example solutions must be condensed to enumerated core steps (Tier 3), NOT a "
+              f"verbatim translation of the book's proof paragraph. Each step = one sentence with a "
+              f"`1. 2. 3. …` marker; the number of steps is unlimited (the `1,2,3` in the rule is "
+              f"illustrative) — but a wall of un-numbered prose is forbidden. Remarks (Remark/Aside) "
+              f"are Tier 1 (kept complete), exempt:")
+        for g in p_proof_verbose:
+            print(g)
+
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "
               f"/ {len(r['katex_lines'])} KaTeX / {len(d['missing_sections'])} D-layer missing sections "
@@ -304,6 +371,10 @@ def print_result(r):
               f"/ {len(k_list)} k-layer-proof-list / {len(l_sep)} l-layer-sep-blanks "
               f"/ {len(m_dm)} m-layer-dm-gt / {len(n_bq)} n-layer-bq-empty "
               f"/ {len([g for g in o_gaps if g.strip().startswith('x')])} o-layer-subitem "
+              f"/ {len(p_exer)} p-layer-exer-block / {len(p_noise)} p-layer-noise "
+              f"/ {len(p_bare)} p-layer-bare-item / {len(p_miss)} p-layer-missing-sec "
+              f"/ {len(p_extra)} p-layer-fabricated-item "
+              f"/ {len(p_verbose)} p-layer-verbose-prose / {len(p_proof_verbose)} p-layer-verbose-proof "
               f"— {os.path.basename(md)}")
         return 'FAIL'
     else:

@@ -24,7 +24,8 @@ def check_excessive_bq_empty_lines(md_file):
     i = 0
     while i < n:
         s = lines[i].strip()
-        if s.startswith('> **') and ('证明' in s or '例' in s or '注' in s):
+        if s.startswith('> **') and ('证明' in s or '例' in s or '注' in s
+                or re.search(r'\*\*(?:Proof|Example|Note|Remark)\b', s)):
             in_bq = True
             i += 1
             continue
@@ -65,7 +66,8 @@ def fix_excessive_bq_empty_lines(md_file):
     i = 0
     while i < n:
         s = lines[i].strip()
-        if s.startswith('> **') and ('证明' in s or '例' in s or '注' in s):
+        if s.startswith('> **') and ('证明' in s or '例' in s or '注' in s
+                or re.search(r'\*\*(?:Proof|Example|Note|Remark)\b', s)):
             in_bq = True
             i += 1
             continue

@@ -25,7 +25,8 @@ def check_proof_after_list(md_file):
         # A candidate list line: starts with 4 spaces + digit + `.`
         if re.match(r'^    \d+\.\s', lines[i]) or re.match(r'^    \(\d+\)\s', lines[i]):
             nx = lines[i + 1].strip()
-            if nx.startswith('> **证明') or nx.startswith('> **证明思路**'):
+            if (nx.startswith('> **证明') or nx.startswith('> **证明思路**')
+                    or re.search(r'\*\*(?:Proof|Proof sketch|Proof outline|Example|Note|Remark)\b', nx)):
                 out.append(f"  x L{i+2}: `{nx[:50]}` directly follows list item "
                            f"L{i+1} without blank line — add blank line between")
     return out
@@ -44,7 +45,8 @@ def fix_proof_after_list(md_file):
     while i < n - 1:
         if re.match(r'^    \d+\.\s', lines[i]) or re.match(r'^    \(\d+\)\s', lines[i]):
             nx = lines[i + 1].strip()
-            if nx.startswith('> **证明') or nx.startswith('> **证明思路**'):
+            if (nx.startswith('> **证明') or nx.startswith('> **证明思路**')
+                    or re.search(r'\*\*(?:Proof|Proof sketch|Proof outline|Example|Note|Remark)\b', nx)):
                 # Insert blank line after the list item
                 lines.insert(i + 1, '')
                 changes += 1

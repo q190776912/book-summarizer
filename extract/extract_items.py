@@ -190,6 +190,20 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
+    # ---- Pass 0: collect the sections actually present in THIS chapter ----
+    # Used to constrain the fallback regex (see below) so that stray "37-40"
+    # (exercise range) or "1837-1920" (date range) cannot be mis-read as a
+    # phantom "3.7" section. A fallback item c.s-N is only kept when s is a
+    # real section of this chapter.
+    chapter_sections = set()
+    for p, y, txt in all_blocks:
+        stripped = txt.strip().rstrip('：:．.，, ')
+        sm = sec_heading_re.match(stripped) if 'sec_heading_re' in dir() else None
+        if sm is None:
+            sm = re.match(r'^(?:§\s*)?(\d+)\.(\d+)(?:\s{2,}|\s+[^\d\-])', stripped)
+        if sm and int(sm.group(1)) == chapter:
+            chapter_sections.add(int(sm.group(2)))
+
     # ---- regexes ----
     # Step 2: broader pattern (also catches 1.3.9 → 1.3-9)
     num_re = re.compile(r'(\d+)\s*[\.\-\·\，\s]\s*(\d+)\s*[\-\.\·\，\s]\s*(\d+)')
@@ -230,7 +244,10 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             c = int(m2.group(1))
             s = int(m2.group(2))
             n = int(m2.group(3))
-            if c == chapter and s <= 15 and n <= 50:
+            # Only accept when s is a section actually present in this chapter,
+            # so exercise/date ranges like "37-40" / "1837-1920" cannot be
+            # mis-read as a phantom "3.7" section.
+            if c == chapter and s <= 15 and n <= 50 and s in chapter_sections:
                 key2 = f"{c}.{s}-{n}"
                 if key2 not in {rm['key'] for rm in raw_matches}:
                     # Fallback quality filter: require non‑garbage text after the match

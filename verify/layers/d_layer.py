@@ -3,12 +3,19 @@ d_layer.py — D-LAYER (order 1): section-missing & tail-ordinal check.
 
 Self-contained implementation (bodies relocated from verify_chapter.py during the per-layer split). Scans the RAW _extract JSON directly
 and cross-checks against the written .md, INDEPENDENTLY of extract_items' output.
+
+For scheme='gm' (Gelfand-Manin style: "## §1." sections, "### N. Title" item
+headings — legacy "**N.**" bold also accepted, roman machine keys) it uses
+check_d_layer_gm, which reuses the
+extractor's heading scan (extract.extract_items_gm.scan_gm_blocks).
 """
 import re
 import os
 import json
 
 from verify.registry import VerifyLayer, LayerResult
+from verify.key_parse import GM_SEC_RE, GM_ENTRY_RE
+from extract.extract_items_gm import scan_gm_blocks, _load_sections
 
 D_SEC_HEAD_A = re.compile(r'^(?:§|8)(\d+)\.(\d+)')   # §6.6 / 86.6 (OCR §->8 glued)
 D_SEC_HEAD_B = re.compile(r'^(\d+)\.(\d+)\s+\S')     # 6.6 样条函数
@@ -27,9 +34,59 @@ def _d_is_labeled(txt, m):
     return bool(D_LABEL_KW.search(txt[lo:hi]))
 
 
-def check_d_layer(ch, start, end, md_file, ext):
-    """Return dict: missing_sections (list[int]), tail_gaps (dict S->(md_max,raw_max)),
-    suspect (dict S->(md_max,raw_max))."""
+def check_d_layer_gm(ch, start, end, md_file, ext):
+    """Gelfand-Manin variant: sections are chapter-local ("## §1."), items are
+    bare per-section ordinals ("### N. Title" / legacy "**N. ...**"), machine
+    keys are roman."""
+    with open(md_file, encoding='utf-8') as f:
+        md_text = f.read()
+    md_sections = set()
+    md_item_max = {}
+    cur_sec = None
+    for line in md_text.split('\n'):
+        sm = GM_SEC_RE.match(line.strip())
+        if sm:
+            cur_sec = int(sm.group(1))
+            md_sections.add(cur_sec)
+            continue
+        if cur_sec is None:
+            continue
+        for m in GM_ENTRY_RE.finditer(line):
+            n = int(m.group(1))
+            if n > 40:
+                continue
+            md_item_max.setdefault(cur_sec, n)
+            if n > md_item_max[cur_sec]:
+                md_item_max[cur_sec] = n
+
+    sections = _load_sections(ext, ch)
+    raw_sec_header = set()
+    raw_labeled_item = {}
+    for h in scan_gm_blocks(ext, start, end, sections):
+        raw_sec_header.add(h['sec'])
+        raw_labeled_item.setdefault(h['sec'], h['num'])
+        if h['num'] > raw_labeled_item[h['sec']]:
+            raw_labeled_item[h['sec']] = h['num']
+
+    missing = sorted(s for s in raw_sec_header
+                     if s in raw_labeled_item and s not in md_sections)
+    tail = {}
+    suspect = {}
+    for s, rmax in raw_labeled_item.items():
+        if s not in md_sections:
+            continue
+        mmax = md_item_max.get(s, 0)
+        if rmax > mmax:
+            if rmax - mmax > 5:
+                suspect[s] = (mmax, rmax)
+            else:
+                tail[s] = (mmax, rmax)
+    return {'missing_sections': missing, 'tail_gaps': tail, 'suspect': suspect}
+
+
+def check_d_layer(ch, start, end, md_file, ext, scheme='three-level'):
+    if scheme in ('gm', 'roman'):
+        return check_d_layer_gm(ch, start, end, md_file, ext)
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
     md_sections = set()
@@ -95,6 +152,7 @@ class DLayer(VerifyLayer):
     auto_fixable = False
 
     def run(self, ctx):
-        d_layer = check_d_layer(ctx.ch, ctx.start, ctx.end, ctx.md_file, ctx.ext_dir)
+        d_layer = check_d_layer(ctx.ch, ctx.start, ctx.end, ctx.md_file,
+                                ctx.ext_dir, scheme=ctx.scheme)
         ctx.d_layer = d_layer
         return LayerResult(code=self.code, legacy=d_layer, metadata={'d_layer': d_layer})

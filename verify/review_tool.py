@@ -9,6 +9,9 @@ skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 extract_items = os.path.join(skill_dir, "extract", "extract_items.py")
 verify_chapter = os.path.join(skill_dir, "verify", "verify_chapter.py")
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from verify_chapter import chapter_md_groups, _merge_section_files
+
 # Book directory: REQUIRED as argv[1] — this tool is book-agnostic.
 if len(sys.argv) < 2:
     print("Usage: python review_tool.py <book_dir>")
@@ -23,6 +26,20 @@ with open(chapter_map_path, 'r', encoding='utf-8') as f:
     chapter_map = json.load(f)
 
 PY = r"D:\anaconda3\envs\pdfextract\python.exe"
+
+def resolve_md_file(chapter):
+    """Resolve this chapter's verification .md: the merged file if it still
+    exists, otherwise merge the rule-D section files into a temp file."""
+    groups = chapter_md_groups(book_dir, chapter)
+    if not groups:
+        return None
+    grp = groups[0]
+    if len(grp) == 1:
+        return grp[0]
+    tmp = os.path.join(book_dir, f'._review_merged_ch{chapter}.md')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(_merge_section_files(grp))
+    return tmp
 
 def run_extract_items(chapter):
     """Run extract_items for a chapter (no ignore — ignore belongs to verify)."""
@@ -69,7 +86,10 @@ def review_chapter(chapter):
         ignore_file = ig_path
 
     # Step3: Run verification (pass ignore here)
-    md_file = os.path.join(book_dir, f"第{chapter}章_{chapter_map[str(chapter)]['name']}.md")
+    md_file = resolve_md_file(chapter)
+    if not md_file:
+        print(f"\n✗ Chapter {chapter} markdown file not found in {book_dir}")
+        return False
     verify_result = run_verify_chapter(chapter, md_file, ignore_file)
     print("\n--- VERIFY CHAPTER OUTPUT ---")
     print(verify_result.stdout)
@@ -102,12 +122,17 @@ def main():
         print(f"\nReviewing {len(chapter_map)} chapters...")
         all_passed = True
         for ch in sorted([int(k) for k in chapter_map.keys()]):
-            md_file = os.path.join(book_dir, f"第{ch}章_{chapter_map[str(ch)]['name']}.md")
-            if os.path.exists(md_file):
+            md_file = resolve_md_file(ch)
+            if md_file:
                 if not review_chapter(ch):
                     all_passed = False
+                if os.path.basename(md_file).startswith('._review_merged'):
+                    try:
+                        os.remove(md_file)
+                    except OSError:
+                        pass
             else:
-                print(f"\n✗ Chapter {ch} markdown file not found: {md_file}")
+                print(f"\n✗ Chapter {ch} markdown file not found in {book_dir}")
                 all_passed = False
 
         if all_passed:

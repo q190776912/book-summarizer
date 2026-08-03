@@ -25,7 +25,7 @@ NO KaTeX error AND (if figure_index.json present) NO missing-figure gap AND NO
 invalid figure AND NO quote-block continuity gap (G-layer).
 Referenced by Step 4 校验 #0.
 """
-import sys, os, json, glob
+import sys, os, json, glob, re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,6 +36,87 @@ from verify.register_all import LAYER_REGISTRY
 from verify.report import print_result
 # --ignore / --ignore-figure loaders (relocated; no longer import fig_layers).
 from verify.ignore_files import load_ignore, load_ignore_fig
+
+
+def _section_num_from_filename(fn):
+    """Extract the section number (as str) from a split section filename.
+
+    Section files follow the rule-D naming: `第{N}章{M}{名称}.md` (zh) or
+    `Chapter{N}_{M}{名称}.md` (en), where {M} is the section id (digits,
+    possibly with a single dot for N.M style). Returns None if the name is
+    not a section file (e.g. the merged 第N章_*.md / ChapterN_*.md file).
+    """
+    base = os.path.basename(fn)
+    m = None
+    if base.startswith('第') and '章' in base:
+        m = re.match(r'^第\d+章([\d.]+)', base)
+    else:
+        m = re.match(r'^Chapter\d+_([\d.]+)', base)
+    if not m:
+        return None
+    sec = m.group(1)
+    if not sec or sec.endswith('.'):
+        return None
+    return sec
+
+
+def chapter_md_groups(book_dir, ch):
+    """Return per-language verification groups for chapter `ch`.
+
+    A group is a list of .md files that together form one language's full
+    chapter: either the single merged file (第N章_*.md / ChapterN_*.md if it
+    still exists) or the rule-D section files sorted by section number.
+    Returns [] if none found.
+    """
+    groups = []
+    for merged_pat, sec_pat in (
+        (f'第{ch}章_*.md', f'第{ch}章*.md'),       # zh
+        (f'Chapter{ch}_*.md', f'Chapter{ch}_*.md'),  # en
+    ):
+        merged = [f for f in glob.glob(os.path.join(book_dir, merged_pat))
+                  if _section_num_from_filename(f) is None]
+        if merged:
+            groups.append(sorted(merged))
+            continue
+        sec = [(f, _section_num_from_filename(f))
+               for f in glob.glob(os.path.join(book_dir, sec_pat))]
+        sec = [(f, n) for f, n in sec if n is not None]
+        if not sec:
+            continue
+        sec.sort(key=lambda x: tuple(int(p) for p in x[1].split('.')))
+        groups.append([f for f, n in sec])
+    return groups
+
+
+def _merge_section_files(section_files):
+    """Merge section files back into one full-chapter content string.
+
+    Each section file starts with the chapter H1 title line (repeated per
+    file); keep it once, then concatenate the rest in order. Returns the
+    merged text.
+    """
+    merged_lines = []
+    title_seen = False
+    for i, fp in enumerate(section_files):
+        with open(fp, encoding='utf-8-sig') as f:
+            lines = f.read().split('\n')
+        for j, line in enumerate(lines):
+            if j == 0 and line.startswith('# ') and not title_seen:
+                merged_lines.append(line)
+                title_seen = True
+                continue
+            if j == 0 and line.startswith('# ') and title_seen:
+                continue
+            merged_lines.append(line)
+    return '\n'.join(merged_lines).rstrip('\n') + '\n'
+
+
+def _merged_temp_path(book_dir, ch, section_files):
+    """Write merged chapter content to a temp file and return its path."""
+    tmp = os.path.join(book_dir, f'._verify_merged_ch{ch}.md')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(_merge_section_files(section_files))
+    return tmp
 
 
 def verify_one(ch, start, end, md, ext, manual_path, ignore_keys=None, scheme='three-level', ignore_fig=None, disabled=None):
@@ -119,7 +200,7 @@ def verify_all(ext, book_dir, ignore_keys=None, ignore_fig=None, scheme_override
     def _norm_entry(e):
         if not isinstance(e, dict):
             return None
-        num = e.get('num', e.get('ch'))
+        num = e.get('num', e.get('ch', e.get('chapter')))
         sp = e.get('start_page', e.get('pdf_start', e.get('start')))
         ep = e.get('end_page', e.get('pdf_end', e.get('end')))
         if num is None or sp is None or ep is None:
@@ -153,14 +234,14 @@ def verify_all(ext, book_dir, ignore_keys=None, ignore_fig=None, scheme_override
         start, end = entry['start_page'], entry['end_page']
         scheme = scheme_override or entry.get('scheme', 'three-level')
 
-        # Find matching .md file
-        md_pattern = os.path.join(book_dir, f'第{ch}章_*.md')
-        md_files = glob.glob(md_pattern)
-        if not md_files:
+        # Find matching .md file(s) — per language: either the merged file
+        # (第N章_* / ChapterN_* naming) or the rule-D section files
+        # (第N章M... / ChapterN_M...) when already split.
+        groups = chapter_md_groups(book_dir, ch)
+        if not groups:
             print(f"Ch{ch}: SKIP — no .md file found")
             continue
 
-        md = md_files[0]
         manual_path = os.path.join(ext, f'manual_overrides_ch{ch}.json')
         # Per-chapter ignore file (ignore_ch{N}.json) auto-detected, merged with
         # any global --ignore set passed in.
@@ -168,15 +249,33 @@ def verify_all(ext, book_dir, ignore_keys=None, ignore_fig=None, scheme_override
         # Per-chapter figure ignore file (ignore_fig_ch{N}.json) auto-detected,
         # merged with any global --ignore-figure set (figure completeness layer).
         ch_ignore_fig = load_ignore_fig(os.path.join(ext, f'ignore_fig_ch{ch}.json'))
-        r = verify_one(ch, start, end, md, ext, manual_path,
-                       ignore_keys=ignore_keys | ch_ignore, scheme=scheme,
-                       ignore_fig=ignore_fig | ch_ignore_fig,
-                       disabled=book_cfg.disabled)
-        print(f"--- Chapter {ch}: {os.path.basename(md)} ---")
-        status = print_result(r)
-        r['status'] = status
-        results.append(r)
-        print()
+        for grp in groups:
+            if len(grp) == 1:
+                md = grp[0]
+                md_display = os.path.basename(md)
+            else:
+                # Split chapter: merge section files back for whole-chapter
+                # checks (A-layer completeness needs all sections in one pass).
+                md = _merged_temp_path(book_dir, ch, grp)
+                md_display = (f"{os.path.basename(grp[0]).split('_')[0]}_"
+                              f"合并{len(grp)}节")
+            try:
+                r = verify_one(ch, start, end, md, ext, manual_path,
+                               ignore_keys=ignore_keys | ch_ignore, scheme=scheme,
+                               ignore_fig=ignore_fig | ch_ignore_fig,
+                               disabled=book_cfg.disabled)
+            finally:
+                if len(grp) > 1:
+                    try:
+                        os.remove(md)
+                    except OSError:
+                        pass
+            print(f"--- Chapter {ch}: {md_display} ---")
+            status = print_result(r)
+            r['status'] = status
+            r['md'] = md_display
+            results.append(r)
+            print()
 
     # Summary
     print("=" * 60)
@@ -276,7 +375,7 @@ def main():
         pos = _strip_flags(sys.argv[1:], pos_flags)
         i = pos.index('--all')
         if i + 2 >= len(pos):
-            print("Usage: python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--scheme two-level|three-level|en]")
+            print("Usage: python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--scheme two-level|three-level|en|gm]")
             sys.exit(2)
         ext = pos[i + 1]
         book_dir = pos[i + 2]
@@ -298,16 +397,15 @@ def main():
                 else:
                     chapters = []
                 for entry in chapters:
-                    ch_num = entry.get('num') or entry.get('ch')
+                    ch_num = entry.get('num') or entry.get('ch') or entry.get('chapter')
                     if ch_num is None:
                         continue
-                    md_pattern = os.path.join(book_dir, f'第{int(ch_num)}章_*.md')
-                    md_files = glob.glob(md_pattern)
-                    if md_files:
-                        res = fix_all_layers(md_files[0])
-                        parts = [f"{k}={v}" for k, v in res.items() if v > 0]
-                        if parts:
-                            print(f"[FIX] Ch{ch_num}: {', '.join(parts)}")
+                    for grp in chapter_md_groups(book_dir, int(ch_num)):
+                        for md_file in grp:
+                            res = fix_all_layers(md_file)
+                            parts = [f"{k}={v}" for k, v in res.items() if v > 0]
+                            if parts:
+                                print(f"[FIX] Ch{ch_num} {os.path.basename(md_file)}: {', '.join(parts)}")
 
         ok = verify_all(ext, book_dir, ignore_keys=ignore_keys, ignore_fig=ignore_fig_global,
                         scheme_override=scheme_override)
@@ -327,8 +425,9 @@ def main():
         print("  --manual: path to manual_overrides_ch{N}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
-        print("  --scheme: 'three-level' (default) or 'two-level' (周民强型: 定义独立计数 +")
-        print("           定理/引理/推论/命题共享计数器). Also auto-read from chapter_map.json.")
+        print("  --scheme: 'three-level' (default) | 'two-level' (周民强型: 定义独立计数 +")
+        print("           定理/引理/推论/命题共享计数器) | 'gm' (Gelfand-Manin型: 章内§N节 +")
+        print("           节内裸序号条目, 机器键为罗马章). Also auto-read from chapter_map.json.")
         print("  --fix: auto-correct G/H/I/J layer issues before verification")
         sys.exit(2)
 

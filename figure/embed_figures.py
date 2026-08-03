@@ -59,6 +59,11 @@ CN_KIND_SYN = {
 NUM_RE = r"(\d+(?:\s*\.\s*\d+){0,3}(?:\s*-\s*\d+)?)"
 ITEM_REF_RE = re.compile(ITEM_KINDS + r"\s*" + NUM_RE)
 ITEM_REF_RE_EN = re.compile(r'(?:' + EN_KIND_ALT + r')\s*' + NUM_RE)
+# Exercise (practice-problem) references — lettered Vakil-style `N.N.X` (X a
+# letter) and plain numeric `N.N`, in Chinese (`习题`) or English (`Exercise`).
+EX_NUM_RE = r"(\d+\.\d+(?:\.[A-Za-z])?)"
+EX_ITEM_RE = re.compile(r'习题\s*' + EX_NUM_RE)
+EX_ITEM_RE_EN = re.compile(r'Exercise\s*' + EX_NUM_RE)
 
 # matches HTML `<img src="...">` (the only format used for figure embeds)
 IMG_RE = re.compile(r'^\s*(<img\b[^>]*\bsrc="[^"]+"[^>]*>)')
@@ -74,7 +79,7 @@ def short_caption(cap):
 
 
 def parse_ref(cap):
-    if not cap or "习题" in cap:
+    if not cap:
         return None
     # English caption first (bilingual book support).
     m = ITEM_REF_RE_EN.search(cap)
@@ -84,12 +89,20 @@ def parse_ref(cap):
         num = re.sub(r"\s+", "", m.group(1))
         return (kind, num, "proof" in cap.lower())
     m = ITEM_REF_RE.search(cap)
-    if not m:
-        return None
-    kind_match = re.match(ITEM_KINDS, m.group(0))
-    kind = kind_match.group(0)
-    num = re.sub(r"\s+", "", m.group(1))
-    return (kind, num, "证明" in cap)
+    if m:
+        kind_match = re.match(ITEM_KINDS, m.group(0))
+        kind = kind_match.group(0)
+        num = re.sub(r"\s+", "", m.group(1))
+        return (kind, num, "证明" in cap)
+    # Exercise (practice-problem) reference. Exercises are now retained in
+    # summaries, so a figure captioned with an exercise (e.g. "Exercise 11.4.A"
+    # / "习题 1.2.A") should still anchor to that exercise entry
+    # (`**11.4.A（练习 (Exercise)）：…`) instead of being skipped.
+    em = EX_ITEM_RE_EN.search(cap) or EX_ITEM_RE.search(cap)
+    if em:
+        num = re.sub(r"\s+", "", em.group(1))
+        return ('练习', num, False)
+    return None
 
 
 def read_lines(p):
@@ -368,13 +381,18 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
             is_proof = False
             if r:
                 kind, num, is_proof = r
-                # Try every surface form: canonical CN, its CN synonyms
-                # (示例/注释/...), and the English label form.
-                kind_en = {v: k for k, v in EN_KIND_MAP.items()}.get(kind, kind)
-                cands = []
-                for k in CN_KIND_SYN.get(kind, [kind]):
-                    cands += [f"**{k} {num}", f"**{k}{num}", f"**{num} {k}"]
-                cands += [f"**{kind_en} {num}", f"**{kind_en}{num}", f"**{num} {kind_en}"]
+                if kind == '练习':
+                    # Exercises are written num-first: `**11.4.A（练习 (Exercise)）：…`
+                    cands = [f"**{num}（", f"**{num} (", f"### 练习",
+                             f"**练习 {num}", f"**练习{num}", f"**{num} 练习"]
+                else:
+                    # Try every surface form: canonical CN, its CN synonyms
+                    # (示例/注释/...), and the English label form.
+                    kind_en = {v: k for k, v in EN_KIND_MAP.items()}.get(kind, kind)
+                    cands = []
+                    for k in CN_KIND_SYN.get(kind, [kind]):
+                        cands += [f"**{k} {num}", f"**{k}{num}", f"**{num} {k}"]
+                    cands += [f"**{kind_en} {num}", f"**{kind_en}{num}", f"**{num} {kind_en}"]
                 idx, anchor_used = find_first_match(lines, cands)
             if idx is None and fname in overrides:
                 ov = overrides[fname]

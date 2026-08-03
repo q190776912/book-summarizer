@@ -51,7 +51,8 @@ _LABEL_CANON = {
     'Corollary': '推论', '推论': '推论',
     'Proposition': '命题', '命题': '命题',
     'Example': '例', '例': '例', '示例': '例',
-    'Remark': '评注', '评注': '评注', '注释': '评注', '注': '评注',
+    'Remark': '评注', '评注': '评注', '注释': '评注', '注': '评注', '注记': '评注',
+    'Commentary': '评注',
     'Axiom': '公理', '公理': '公理',
     'Assertion': '断言', '断言': '断言',
     'Conjecture': '猜想', '猜想': '猜想',
@@ -65,10 +66,10 @@ _LABEL_CANON = {
 # write **Example N.M** as a full entry, unlike the CN two-level scheme).
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
-                  'Assumption', 'Algorithm']
+                  'Assumption', 'Algorithm', 'Commentary']
 # Chinese label synonyms that appear in bilingual-book .md files.
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
-                  '注', '公理', '断言', '猜想', '条件', '假设', '算法']
+                  '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法']
 # Combined (used by the 'en' scheme so either language matches).
 COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(
@@ -87,8 +88,72 @@ ENTRY_RE_EN_C = re.compile(
 PROSE_RE_EN_C = re.compile(
     r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)\.(\d+)')
 
+# --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
+# Item numbers are Chapter.Section.Item with a ROMAN chapter: I.2.13, II.3.5.
+# The chapter prefix is a roman numeral; section/item are arabic.
+ROMAN_KEY_RE = re.compile(r'([IVXLCDM]+)\.(\d+)[\.\-](\d+)')
+ENTRY_RE_ROMAN = re.compile(
+    r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\.(\d+)[\.\-](\d+))')
+PROSE_RE_ROMAN = re.compile(
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*([IVXLCDM]+)\.(\d+)[\.\-](\d+)')
+
+# --- gm scheme: BOOK-printed forms, roman machine keys ---
+# Gelfand-Manin style books print sections per chapter ("## §1. Triangulated
+# Spaces") and item titles as per-section headings; the .md renders them as
+# ATX sub-headings ("### 1. Main Definitions", "### 3. Proposition." — book
+# typography, 2026-08 user directive).  Legacy "**N. Title**" inline bold is
+# still accepted for backward compatibility.  Full "Proposition I.2.11" labels
+# appear only in prose cross-references.  Machine keys stay `标签I.S-N`
+# (labelled) / `I.S-N` (heading with no label word — mirror of the PDF-side
+# rule in extract/extract_items_gm.py).
+GM_SEC_RE = re.compile(r'^##\s*[§$]?\s*(\d{1,2})[.．、]?\s+\S')
+GM_ENTRY_RE = re.compile(
+    r'^\s*(?:>\s*)?(?:###\s+|\*\*)(\d{1,3})[.．]\s*([^*\n]{0,80})')
+GM_LABELED_RE = re.compile(
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\s*\.?\s*(\d+)\s*\.?\s*(\d+)',
+    re.IGNORECASE)
+# First label keyword inside an item heading ("3. Proposition. ...",
+# "6. Definition (- Lemma). ...", "9. Remarks and Examples", or the CN
+# translations "3. 命题.", "6. 定义（-引理）.").  BOTH EN and CN label words
+# are accepted so the gm scheme verifies the derived CN chapter too (extract
+# keys are already Chinese-canonical via _canon_label).  The optional plural
+# 's' lets "Examples"/"Remarks" match ("1. Main Definitions" matches as
+# Definition+s too) — SAME rule as extract/extract_items_gm.py so both sides
+# build identical keys.
+GM_HEAD_LABEL_RE = re.compile(
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')s?\b', re.IGNORECASE)
+
+
+def gm_head_label(title):
+    """Label of an item heading ("3. Proposition." -> 'Proposition'), or None
+    when the heading carries no label word ("14. Skeleton and Dimension")."""
+    m = GM_HEAD_LABEL_RE.search(title)
+    if not m:
+        return None
+    raw = m.group(1)
+    if raw.lower().endswith('s') and len(raw) > 1 and \
+            raw[:-1].lower() in (k.lower() for k in EN_LABEL_KINDS):
+        raw = raw[:-1]
+    return raw[:1].upper() + raw[1:]
+
 def _canon_label(lbl):
-    return _LABEL_CANON.get(lbl, lbl)
+    if lbl in _LABEL_CANON:
+        return _LABEL_CANON[lbl]
+    # Case-insensitive English labels: prose cross-references are written in
+    # the .md as "proposition II.5.15" (lowercase) while the extractor
+    # normalizes them via _norm_label before _canon_label; both sides must
+    # produce the same canonical Chinese label.  Handles 'cor.'/'def.'
+    # abbreviations and plurals ("propositions") the same way.
+    low = lbl.lower()
+    if low in ('cor.', 'def.'):
+        low = {'cor.': 'corollary', 'def.': 'definition'}[low]
+    if low.endswith('s') and len(low) > 1 and \
+            low[:-1] in (k.lower() for k in EN_LABEL_KINDS):
+        low = low[:-1]
+    for k in EN_LABEL_KINDS:
+        if k.lower() == low:
+            return _LABEL_CANON[k]
+    return lbl
 
 def _first_num(key):
     """Return the first integer found in a key string (e.g. leading chapter
@@ -96,11 +161,37 @@ def _first_num(key):
     m = re.search(r'\d+', key)
     return int(m.group()) if m else -1
 
-def keys_in_md(path, scheme='three-level'):
+def keys_in_md(path, scheme='three-level', chapter_roman=None):
+    """Entries/all_keys from an .md file.
+
+    For scheme='gm', `chapter_roman` (e.g. 'I') is REQUIRED: the .md headings
+    are bare per-section ordinals with no chapter prefix, so the chapter is
+    known only at the call site (the verify context).
+    """
     entries, allk = set(), set()
+    cur_sec = None
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
-            if scheme == 'two-level':
+            if scheme == 'gm':
+                if chapter_roman is None:
+                    raise ValueError("keys_in_md(scheme='gm') requires chapter_roman")
+                sm = GM_SEC_RE.match(line.strip())
+                if sm:
+                    cur_sec = int(sm.group(1))
+                    continue
+                if cur_sec is None:
+                    continue
+                for m in GM_ENTRY_RE.finditer(line):
+                    n = int(m.group(1))
+                    if n > 40:
+                        continue
+                    lbl = gm_head_label(m.group(2))
+                    key = (f"{_canon_label(lbl)}{chapter_roman}.{cur_sec}-{n}"
+                           if lbl else f"{chapter_roman}.{cur_sec}-{n}")
+                    entries.add(key); allk.add(key)
+                for m in GM_LABELED_RE.finditer(line):
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
+            elif scheme == 'two-level':
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
@@ -112,6 +203,12 @@ def keys_in_md(path, scheme='three-level'):
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+            elif scheme == 'roman':
+                for m in ENTRY_RE_ROMAN.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_ROMAN.finditer(line):
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
             else:
                 for m in ENTRY_RE.finditer(line):
                     entries.add(normkey(m.group(1)))

@@ -28,9 +28,10 @@ from verify.layers._struct_labels import (
 )
 
 _H_UL_OPENERS = re.compile(
-    r'^\s*>\s*\*\*(?:'
+    r'^\s*>\s*\*\*(?:\d{1,3}[.．]\s*)?(?:'
     r'(?:证明|证|例|注|说明'
-    r'|Proof|Example|Note|Remark)'
+    r'|Proof|Example|Note|Remark'
+    r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
     r')'
 )
 
@@ -48,13 +49,26 @@ _H_MISSING_BQ = re.compile(
 _H_MISSING_BQ_FOOTNOTE = re.compile(r'^\s*\{')
 
 def _h_ext_is_legit_bq(s):
-    """A blockquote line that is LEGIT (proof/example/note/footnote) -> stop."""
+    """A blockquote line that is LEGIT (proof/example/note/footnote) -> stop.
+
+    Bilingual: recognizes both Chinese (证明/例/注) and English
+    (Proof/Example/Note/Remark) openers so English summaries are not
+    mis-scanned as a statement region (which would flag `> $$` as h_stmt_bq).
+    """
     t = s.lstrip()
     if not t.startswith('>'):
         return False
     inner = t[1:].lstrip()
-    return (inner.startswith('**证明') or inner.startswith('**例')
-            or inner.startswith('**注') or inner.startswith('^{'))
+    if inner.startswith('^{'):
+        return True
+    # Chinese openers
+    if (inner.startswith('**证明') or inner.startswith('**例')
+            or inner.startswith('**注')):
+        return True
+    # English openers (bilingual support)
+    if re.match(r'^\*\*(?:Proof|Example|Note|Remark|Exercise)\b', inner):
+        return True
+    return False
 
 def _h_ext_is_structural_bq(s):
     """A blockquote line that is WRAPPED STATEMENT content (sub-point/formula)."""

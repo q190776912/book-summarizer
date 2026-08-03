@@ -73,6 +73,7 @@ Definitions, theorems, propositions, corollaries, lemmas, axioms, and remarks MU
 - Correct (example): `> **例3a（事故易发性）**：` / `> **Example 3a**:`.
 - The ONLY `###` headings allowed are genuine **subsection dividers** under a `##` section, and they MUST carry the `§` prefix (e.g. `## §3.2 节名`, `### §4.8.1 小节名`).
 - If a source file already uses the bold-inline style, match that exactly — do not introduce `###` headings for items.
+- **gm 体例书例外（条目即小节标题，如 Gelfand-Manin《Methods of Homological Algebra》）**：这类书把条目印成小节标题、每节内从 1 起号（`1. Main Definitions`、`3. Proposition.`）。总结文件中这些**条目小节标题用 `### N. Title`**（不加粗、不加冒号、照原书标题文字原样，含句号），`## §N.` 节标题照旧。**`###` 子节标题下方不得紧接 `---` 分隔线**——标题本身就是条目分隔，其下直接接内容/子点；`---` 只允许在条目与条目之间（上一个条目内容与下一个 `###` 标题之间）。禁止写成 `**N. Title**` 内联加粗，也禁止拼造「节.条」编号。gm scheme 的 verify 工具（`GM_ENTRY_RE`）同时识别 `### N. Title` 与旧 `**N. Title**` 两种形式，机器键均为 `标签I.S-N`。条目内的结构性标签（Definition/Proposition/…）仍在 `###` 标题内，陈述顶层、证明/例进块引用的规则不变。
 
 **⚠️ 结构性标签（定义/定理/引理/推论/命题/断言/公理）必须顶层，禁止进块引用**：这些「条目陈述」一律独立成行、写在块引用 `>` 之外。只有 **证明（思路/梗概/概要）** 与 **例/Example** 才用 `>` 包裹。把一个结构性标签写成 `> **引理X**` 是格式错误——它会把该条目吞进上一个 `> **证明**` 块引用，破坏章节结构。
 
@@ -217,7 +218,7 @@ Do NOT trim or selectively keep examples. Every `例` / `Example` from the book 
 
 - **Keep ALL examples**, not just 0–3 per section.
 - Preserve original example numbering (e.g. keep `例 3a` as `例 3a`).
-- The only items that may ever be omitted are the **习题/练习题** sections at the end of each chapter.
+- **习题/练习题（exercises）收录规则**（2026-07-31 修订）：判定标准是有无专门的习题小标题（「练习」「习题」「Exercises」「Problems」等）——**有标题归拢的集中习题块** → 一律省略（含整节习题的节）。**无专门标题、以穿插形式出现的习题**（散落在正文条目间，或虽在节末但无习题标题归拢）→ 保留，在原位写出（OCR 噪声需重写正确 LaTeX），可附提示。简言之：有标题归拢即省，无标题穿插即留。
 
 ### 4. All Labeled Items Must Be Included
 
@@ -346,9 +347,14 @@ Common patterns (after correction):
 > 如果某节内容在书中是原理性描述（无编号也无标签），直接用带 `**` 的段落叙述，不强制编号。
 > 正文中首次出现的关键术语也要标注英文。
 
-### 不需要写习题
+### 习题（练习）收录规则
 
-每章末尾的**习题/练习题**（practice problems）属于课后练习，**不写入总结**。生成 .md 时，需主动扫描并删除所有以 `**习题`、`**练习`、`习题` 等开头的习题段落及紧随其后的 `---` 分隔线。
+判定标准是有无**专门的习题小标题**把习题归拢成块：
+
+- **带有专门习题小标题的集中习题块**（如 `### 练习`、`## §1.11 习题`、`**习题**`、`Exercises`、`Problems` 等标题下罗列的编号习题）→ **一律省略，不写入总结**，直接跳过，不写任何注记。整节都是习题的节（如 `## §1.11 练习`、`## §3.9 习题`）同理省略。
+- **没有专门习题标题、以穿插形式出现的习题**（习题散落在定义/定理/例等正文条目之间，或虽出现在节末但没有用「练习/习题」之类标题归拢）→ **保留**（可以是一道或多道），在原位写出题目（OCR 噪声必须重写正确 LaTeX），可附一句提示或思路。
+
+简言之：**有标题归拢即省，无标题穿插即留**。练习不计入 verifier 必备条目（ch*_items.txt 不含练习）。
 
 ---
 

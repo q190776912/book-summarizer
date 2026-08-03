@@ -95,6 +95,27 @@ def _int_to_roman(n):
             n -= val
     return ''.join(result)
 
+def _split_roman_suffix(lb):
+    """'iia' -> 'ii' when the leading part is valid roman and the tail is a short
+    alpha suffix; 'ii' -> 'ii'. Returns None if the label is not of that shape."""
+    lb = lb.lower()
+    for cut in range(len(lb), 0, -1):
+        head, tail = lb[:cut], lb[cut:]
+        if len(tail) <= 2 and _ROMAN_VALID.match(head):
+            return head
+    return None
+
+def _alpha_to_int(lb):
+    """Spreadsheet-style alpha ordinal: a=1 .. z=26, aa=27, ab=28 ...
+    Tolerates multi-char labels (previously `ord()` crashed on them)."""
+    n = 0
+    for ch in lb.lower():
+        if 'a' <= ch <= 'z':
+            n = n * 26 + (ord(ch) - ord('a') + 1)
+        else:
+            return 0
+    return n
+
 def _classify_block(items):
     """Classify a block of (line_idx, raw_label) pairs as 'numeric', 'roman',
     or 'alpha'. Returns (type, [(line_idx, ordinal_int), ...]) where ordinal_int
@@ -115,15 +136,20 @@ def _classify_block(items):
         if multi_char:
             if all(_ROMAN_VALID.match(lb) for lb in multi_char):
                 return 'roman', [(li, _roman_to_int(lb)) for li, lb in items]
-            else:
-                return 'alpha', [(li, ord(lb) - ord('a') + 1) for li, lb in items]
+            # Roman with an alpha sub-suffix, e.g. (i) (iia) (iib) — textbooks use
+            # this for sub-cases. Rank by the roman prefix; duplicates collapse.
+            split = [_split_roman_suffix(lb) for lb in labels]
+            if all(s is not None for s in split):
+                return 'roman', [(li, _roman_to_int(s)) for (li, _), s in zip(items, split)]
+            # Heterogeneous labelling we cannot rank — skip rather than emit noise.
+            return 'mixed', []
         else:
             # All single-char: check if they're all roman chars
             roman_chars = set('ivxlcdm')
             if all(lb.lower() in roman_chars for lb in labels):
                 return 'roman', [(li, _roman_to_int(lb)) for li, lb in items]
             else:
-                return 'alpha', [(li, ord(lb.lower()) - ord('a') + 1) for li, lb in items]
+                return 'alpha', [(li, _alpha_to_int(lb)) for li, lb in items]
 
     # Mixed (shouldn't happen with the regex, but fallback)
     return 'numeric', [(li, int(lb) if lb.isdigit() else 0) for li, lb in items]
@@ -182,6 +208,8 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
             continue  # too few items — likely cross-references, not a sequence
 
         seq_type, ordinal_items = _classify_block(block)
+        if seq_type == 'mixed':
+            continue  # unrankable labelling — no reliable gap signal
         # Filter out any items with ordinal 0 (failed conversion)
         ordinal_items = [(li, ord_val) for li, ord_val in ordinal_items if ord_val > 0]
         if len(ordinal_items) < 3:

@@ -1,6 +1,6 @@
 # 校验层解耦重构 — 系统架构设计（ADR-VERIFY-001）
 
-**状态:** Done — Phase 1（facade/门面）与 Phase 2（函数体搬入 layers/）均已完成；原两个巨型层实现模块已删除，16 层全部自包含于 `verify/layers/*.py`，由 `register_all.py` 经 `pkgutil` 自动发现注册。
+**状态:** Done — Phase 1（facade/门面）与 Phase 2（函数体搬入 layers/）均已完成；原两个巨型层实现模块已删除，17 层全部自包含于 `verify/layers/*.py`，由 `register_all.py` 经 `pkgutil` 自动发现注册。
 **作者:** architect（系统架构师）
 **日期:** 2025-07-30
 **适用范围:** `verify/` 包（book-summarizer skill）

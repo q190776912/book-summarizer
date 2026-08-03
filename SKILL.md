@@ -369,11 +369,11 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 
 **任何一条不通过都算失败，必须修正后重验。全部细节详见 [`references/verification.md`](references/verification.md)。**
 
-> **快捷修复**：`verify/verify_chapter.py --fix` 可自动修复 G/H/I/J 层问题（引用块连续、结构标签出块、条目分隔线、条目块内多余 `---`（含标题↔子点 与 子点↔子点）），再手动确认余项即可。
+> **快捷修复**：`verify/verify_chapter.py --fix` 可自动修复 G/H/I/J/K/L/M/N 共 8 层问题（引用块连续、结构标签出块、条目分隔线、条目块内多余 `---`（含标题↔子点 与 子点↔子点）、证明–编号列表空行、分隔线上下空行、显示公式内 `>` 前缀、块引用内空 `>` 行），再手动确认其余（O、P 不可自动修复层）即可。
 
 | # | 规则 | 校验方法 |
 |---|------|---------|
-| 0 | **全标项必录 + 十三层强制校验（含 G 扩展/EG）** | **`verify/verify_chapter.py <ch> <start> <end> <md> <extract_dir>`** — 按 D→A→B→C→E→F→G→G扩展→EG→H→I→J→K→L→M→N 顺序输出，exit 0 才算通过。支持 `--fix` 自动修复 G/H/I/J/K/L/M/N 层问题 |
+| 0 | **全标项必录 + 十七层强制校验**（EXTRACT 为数据 provider，必跑不可禁用；G 层内含 G扩展/EG 子检查，非独立层） | **`verify/verify_chapter.py <ch> <start> <end> <md> <extract_dir>`** — 按 EXTRACT→D→A→B→C→E→F→G→H→I→J→K→L→M→N→O→P 顺序输出，exit 0 才算通过。支持 `--fix` 自动修复其中 G/H/I/J/K/L/M/N 共 8 层（O、P 不可自动修复，须手动） |
 | 1 | **OCR 噪声已修正** | 抽 2–3 个公式，确认不是 OCR 照抄 |
 | 2 | **UTF-8 无乱码** | `read` 前 5 行，无 `绗?` `闅忔` 等 mojibake |
 | 3 | **粗体标签/块引用 + § 标识** | 确认无 `### 定义` 等违规，节标题均带 `§` |
@@ -414,7 +414,7 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 | `figure/assign_figures.py` | 图片命名（阶段 2）：据 OCR 图注匹配图号，写 `figure_index.json` |
 | `figure/apply_manual_figures.py` | 手动补图：E 层 FAIL 时用 `figure_manual_chN.json` 声明+执行 |
 | `figure/embed_figures.py` | **【强制步骤 Step 3.5】** 把 `figure_index.json` 中引用到的图嵌入对应条目；自带块内缩进 + 连续性扫描，幂等 |
-| `verify/verify_chapter.py` | **统一强制校验关卡**（九层 D→A→B→C→E→F→G→G扩展→EG→H→I→J）；`--fix` 自动修复 G/H/I/J 层问题。`--all` 自动发现章节文件：合并文件（`第N章_*` / `ChapterN_*`）存在则直接校验，否则按规则 D 节文件（`第N章M...` / `ChapterN_M...`）每语言一组，**临时合并回整章再校验**（A 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复 |
+| `verify/verify_chapter.py` | **统一强制校验关卡**（十七层：EXTRACT/D/A/B/C/E/F/G/H/I/J/K/L/M/N/O/P，G 层内含 G扩展/EG 子检查）；`--fix` 自动修复 G/H/I/J/K/L/M/N 共 8 层。`--all` 自动发现章节文件：合并文件（`第N章_*` / `ChapterN_*`）存在则直接校验，否则按规则 D 节文件（`第N章M...` / `ChapterN_M...`）每语言一组，**临时合并回整章再校验**（A 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复 |
 | `format/check_katex.py` | KaTeX 格式校验（被 C 层内部调用）；`--fix` 仅修复格式问题（拆分单行 `$$`、补空行、修缩进等），**不碰 `$` 内容**。当前工作流已用 `fix_katex.py` 替代 `--fix`。 |
 | `format/fix_katex.py` | **综合 KaTeX 修复脚本**：一行命令修复所有已知模式（未闭合 `$`、`$$`包裹`$`、断裂命令、CD 图表语法、集合花括号、`$$`内空行等），不含 `--fix` 级联破坏风险。详见下方「KaTeX 问题识别与修复」 |
 | `extract/extract_items.py` | 从 JSON 提取全部编号项（中文书）；英文书加 `--lang en` 走英文正则 |

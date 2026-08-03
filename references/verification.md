@@ -9,15 +9,19 @@
 - [verify/verify_chapter.py 分层校验](#verify_chapterpy-分层校验)
 - [编号体系（三级 vs 两级）](#编号体系三级-vs-两级)
 - [--ignore 登记规则](#--ignore-登记规则)
+- [K-LAYER：证明–编号列表空行](#k-layer编号列表后证明块的空行检查)
+- [L-LAYER：分隔线上下空行](#l-layer分隔线---上下需有空行)
 - [M-LAYER：显示公式内无 `>` 前缀](#m-layer显示公式内无--前缀)
-- [N-LAYER：块引用内空 `>` 行不超过 1 行](#n-layer块引用内空--行不超过-1-行)
+- [N-LAYER：块引用内空 `>` 行](#n-layer块引用内空--行不超过-1-行)
+- [O-LAYER：编号子项缺口](#o-layer编号子项序列缺口检查)
+- [P-LAYER：verbose 闸门](#p-layerverbose闸门反回归)
 - [常用校验命令](#常用校验命令)
 
 ---
 
-## verify/verify_chapter.py 分层校验（D→…→N，含 G 扩展/EG）
+## verify/verify_chapter.py 分层校验（EXTRACT→…→P，共 17 层；G 层含 G扩展/EG 子检查）
 
-`verify/verify_chapter.py` 是**统一强制关卡**，按 **D → A → B → C → E → F → G → G扩展 → EG → H → I → J → K → L → M → N** 顺序输出。**`<extract_dir>` 为必填参数**（该书 `_extract` 目录，无写死默认值，换书必须显式传入）。
+`verify/verify_chapter.py` 是**统一强制关卡**，共 **17 层**，按 **EXTRACT → D → A → B → C → E → F → G → H → I → J → K → L → M → N → O → P** 顺序输出（G 层内含 G扩展/EG 子检查，非独立层）。**`<extract_dir>` 为必填参数**（该书 `_extract` 目录，无写死默认值，换书必须显式传入）。
 
 > **⚠️ 前置依赖**：#9「图片嵌入正确」与 G 层「引用块连续」是由 **Step 3.5** 的 `figure/embed_figures.py` 生成的——**必须先嵌图、再跑本校验**。未嵌图时 #9 必 FAIL，含 `> **证明/例**` 块却未跑连续性扫描时 G 层必 FAIL。
 
@@ -33,7 +37,7 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
   [--ignore ignore.json] [--ignore-figure fig_noise.json]
 ```
 
-**exit 0 的唯一条件**：无 D 层整节缺失、无 A 层 TRULY MISSING、无 B 层 BLOCKING、无 C 层 KATEX ERRORS、且无 E 层图缺失、无 F 层图无效、无 G 层引用块断裂、无 H 层结构标签包裹在块引用内、**无 H 层扩展（陈述进块引用）**、无 I 层条目间缺失分隔线、**无 J 层条目块内多余 `---`**。
+**exit 0 的唯一条件（全部阻断层通过）**：无 EXTRACT 数据缺失、无 D 层整节缺失、无 A 层 TRULY MISSING、无 B 层 BLOCKING、无 C 层 KATEX ERRORS、无 E 层图缺失、无 F 层图无效、无 G 层引用块断裂（含 G扩展嵌套、EG 例证空隙）、无 H 层结构标签包裹在块引用内、**无 H 层扩展（陈述进块引用）**、无 I 层条目间缺失分隔线、**无 J 层条目块内多余 `---`**、无 K 层证明–编号列表缺空行、无 L 层分隔线缺上下空行、无 M 层显示公式内 `>` 前缀、无 N 层块引用内空 `>` 行 >1、无 O 层 HEAD/INTERNAL 子项缺口、无 P 层 verbose 闸门（练习归拢/页眉噪声/裸编号/缺节/编造条目/长散文/长证明）。**O 层的 TAIL/OCR 缺口（`~` 行）仅告警不阻断；EXTRACT 为数据 provider，永不可禁用。**
 
 ### 各层详解
 
@@ -306,6 +310,26 @@ E/F 层**只校验图片的存在与文件有效性**，**不**校验「图是�
 **强制规则**：在 `> **证明**` / `> **例**` / `> **注**` 等块引用内，连续的空 `>` 行（仅有 `>` 或 `> ` 无其他内容）不得超过 1 行。过多的空 `>` 行是提取噪声或视觉填充，会不必要地增大文件体积。
 
 - `--fix` 自动删除多余的空 `>` 行（保留第 1 行）。
+
+## O-LAYER：编号子项序列缺口检查
+
+**强制规则（order 15，不可 --fix，部分阻断）**：检测圆括号/加粗编号子项序列 `(1)(2)(3)` / `(a)(b)(c)` / `(i)(ii)(iii)` 中的**缺口**。仅当块内序号项 ≥3 才检测，避免把交叉引用误判为序列：
+- **HEAD gap / INTERNAL gap（阻断 FAIL）**：序列起始 >1（前面缺项）或 min–max 之间缺号 → 视为真实遗漏，须补回缺失子项（`x` 行，`problems += 1`）。如某条目列了 `(1)(2)(4)` 漏 `(3)`。
+- **TAIL gap（仅告警）**：OCR 交叉引用显示有更大编号（如 md 最大 `(3)`、OCR 出现 `(5)`），疑似尾部漏写 → 仅打印 `~` 行提示复核，**不阻断**。
+- **不可 `--fix`**，须手动补项或确认。与 J 层（条目块内 `---`）互补：O 管「编号子项是否连续」，J 管「块内分隔线」。
+
+## P-LAYER：verbose 闸门（反回归）
+
+**强制规则（order 16，不可 --fix，阻断）**：针对 Vakil 事故类的机器闸门，任一闸门非空即整章 FAIL。七道闸门：
+1. **`p_exer_block`**：独立的 `### 练习`/`### 习题`/`### Exercises` 归拢块——练习须原位内联 `**练习 N.M.X（Exercise N.M.X）：**`，禁止抽出来堆到节/章末（自造结构 = 无中生有）。
+2. **`p_noise`**：照抄 OCR 噪声——页眉/页脚/版权行（`(c) 2024` / `draft` / `out-of-date` / 孤立页码等）混进正文。
+3. **`p_bare_item`**：number-first 体例下条目标题缺失——裸 `**N.M.K**` 无标题、无类型词。
+4. **`p_missing_sec`**：缺节——md 的 `## §` 数 < 骨架 SEC 数（骨架见 `extract/scan_skeleton.py`）。
+5. **`p_extra_item`**：编造条目——md 出现骨架 ITEM 清单中没有的编号条目（如散文节被补 `**X.1.1**`）。
+6. **`p_verbose`**：过度照抄（非核心内容未摘要）——顶层长散文段（不含 `**` 标签条目/例/练习/注记的忠实内容）≥ 6 段（VERBOSE_PARA_GATE）即 FAIL；动机/导语须 Tier 2 摘要或省略。
+7. **`p_proof_verbose`**：证明/解答块过长且未分条——单个 `> **证明/解答/Proof/Solution**` 块内 >700 字且未用 `1.`/`（1）`/`(a)` 分条枚举，且此类块 ≥ 2（VERBOSE_PROOF_GATE）即 FAIL。
+- **关键豁免**：已用 `1. 2. 3. …` 分条枚举的证明【步数不限】一律不计入 `p_proof_verbose`；例（Example）题面按 Tier 1 忠实保留、其内 `> **解答/证明**：` 子块受第 7 道约束。注记（Remark/Aside）按 Tier 1 完整保留，不参与 verbose 判定。
+- **不可 `--fix`**（故意不让绕过），须回到写作阶段修正。
 
 ## 常用校验命令
 

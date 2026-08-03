@@ -2,7 +2,7 @@
 verify_chapter.py — the single MANDATORY gate for a chapter. It enforces ALL
 completeness/validity layers in one command.
 
-REFACTOR (ADR-VERIFY-001): the ~16 layers (EXTRACT/D/A/B/C/E/F/G/H/I/J/K/L/M/N/O)
+REFACTOR (ADR-VERIFY-001): the 17 layers (EXTRACT/D/A/B/C/E/F/G/H/I/J/K/L/M/N/O/P)
 now live as independent modules under `verify/layers/`, registered in
 `verify/register_all.py` and orchestrated by `verify/registry.VerifyManager`.
 This file is now a THIN SHELL:

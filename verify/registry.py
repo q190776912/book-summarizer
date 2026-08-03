@@ -5,7 +5,7 @@ ADR-VERIFY-001 §2 / §3.
 
 The manager produces a BYTE-COMPATIBLE result dict that mirrors the legacy
 `verify_one()` return contract (the exact key set consumed by `report.print_result`
-and `verify_all`). This is the single guarantee that lets us decouple the ~16
+and `verify_all`). This is the single guarantee that lets us decouple the 17
 layers behind a registry WITHOUT touching `report.py`, `verify_all`, `main`,
 or the `--fix` CLI surface.
 

@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/h.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
 h_layer.py — H-LAYER (order 8, fix_order 1): structural label / blockquote audit.
 

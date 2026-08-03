@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/m.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """m_layer.py — M-LAYER (order 13, fix_order 10): `>` lines inside display math blocks.
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""

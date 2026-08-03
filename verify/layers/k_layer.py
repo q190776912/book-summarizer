@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/k.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """k_layer.py — K-LAYER (order 11, fix_order 8): blank line between list and proof.
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""

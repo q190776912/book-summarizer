@@ -1,3 +1,5 @@
+> 🔴 **本文件是该领域规则的唯一权威详细说明（SSOT）**。`SKILL.md` 与代码注释只引用此处、不重复描述；新增/修改该领域规则只改本文件。
+
 # 图片流水线（Figure Pipeline）
 
 > 本文档是 `book-summarizer` skill 的图片提取参考。工作流步骤见 `SKILL.md`，格式规则见 `formatting.md`，校验关卡见 `verification.md`。

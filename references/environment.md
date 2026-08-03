@@ -1,3 +1,5 @@
+> 🔴 **本文件是该领域规则的唯一权威详细说明（SSOT）**。`SKILL.md` 与代码注释只引用此处、不重复描述；新增/修改该领域规则只改本文件。
+
 # PDF-Extract-Kit Environment Setup (conda `pdfextract`)
 
 > 本文件从 `SKILL.md` 的 `## Prerequisite` 段外移而来，集中放**安装 / 排障**类参考（CUDA-cudnn 对齐、conda 环境、权重绝对路径、启动器）。日常"总结一章"的流程不需要读它；只在**首次装环境**或**遇到 `WinError 127/193` 等 CUDA/cudnn 报错**时查阅。SKILL.md 中对应位置保留指针。

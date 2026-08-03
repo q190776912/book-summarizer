@@ -1,31 +1,283 @@
-# 校验关卡（Verification）
+# 校验关卡与架构总览（Verification & Architecture）
 
-> 本文档是 `book-summarizer` skill 的校验参考。工作流步骤见 `SKILL.md`，格式规则见 `formatting.md`，图片流水线见 `figure_pipeline.md`。
-
----
-
-## 目录
-
-- [verify/verify_chapter.py 分层校验](#verify_chapterpy-分层校验)
-- [编号体系（三级 vs 两级）](#编号体系三级-vs-两级)
-- [--ignore 登记规则](#--ignore-登记规则)
-- [K-LAYER：证明–编号列表空行](#k-layer编号列表后证明块的空行检查)
-- [L-LAYER：分隔线上下空行](#l-layer分隔线---上下需有空行)
-- [M-LAYER：显示公式内无 `>` 前缀](#m-layer显示公式内无--前缀)
-- [N-LAYER：块引用内空 `>` 行](#n-layer块引用内空--行不超过-1-行)
-- [O-LAYER：编号子项缺口](#o-layer编号子项序列缺口检查)
-- [P-LAYER：verbose 闸门](#p-layerverbose闸门反回归)
-- [常用校验命令](#常用校验命令)
+> 🔴 **本文件是校验系统的「注册表 + 全局架构」单一入口。**
+> - **每层的全部细节（语义 / 阈值 / `--fix` 范围 / 字节契约键 / 实现）只写在 [`layers/<code>.md`](layers/) 各自文件中**，本文件不重复描述。
+> - `SKILL.md` Step 4 只链接本文件的注册表，不内联任何规则。
+>
+> **新增 / 修改一层 = 新建 `layers/X.md` + 在本文件注册表加一行 + 改必要代码**，不要在其他文档重复描述层级语义。
 
 ---
 
-## verify/verify_chapter.py 分层校验（EXTRACT→…→P，共 17 层；G 层含 G扩展/EG 子检查）
+## 1. 层级注册表（Registry）
 
-`verify/verify_chapter.py` 是**统一强制关卡**，共 **17 层**，按 **EXTRACT → D → A → B → C → E → F → G → H → I → J → K → L → M → N → O → P** 顺序输出（G 层内含 G扩展/EG 子检查，非独立层）。**`<extract_dir>` 为必填参数**（该书 `_extract` 目录，无写死默认值，换书必须显式传入）。
+统一强制关卡由 `verify/verify_chapter.py` 驱动；层级由 `verify/layers/*.py` 经 `register_all.py` **自动发现**，运行顺序 = 各层 `order` 属性。下表为当前全部层级的唯一索引，每行链接到该层的专属文档与代码模块。
 
-> **⚠️ 前置依赖**：#9「图片嵌入正确」与 G 层「引用块连续」是由 **Step 3.5** 的 `figure/embed_figures.py` 生成的——**必须先嵌图、再跑本校验**。未嵌图时 #9 必 FAIL，含 `> **证明/例**` 块却未跑连续性扫描时 G 层必 FAIL。
+| # | 层 code | 名称 | 一句话目的 | 阻断? | 可 `--fix`? | 层文档 | 代码模块 |
+|---|---------|------|-----------|-------|------------|--------|----------|
+| 0 | EXTRACT | 数据 provider | 提供原始 JSON 数据；必跑、永不可禁用 | 数据缺失→FAIL | 否 | [layers/extract.md](layers/extract.md) | [extract_layer.py](../verify/layers/extract_layer.py) |
+| 1 | D | MISSING SECTION / TAIL ORDINAL | 整节缺失 / 尾部缺口 | 整节缺失阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
+| 2 | A | TRULY MISSING | 提取到但 `.md` 无 | 阻断 | 否 | [layers/a.md](layers/a.md) | [a_layer.py](../verify/layers/a_layer.py) |
+| 3 | B | BLOCKING | 边界复查候选项 | 阻断 | 否 | [layers/b.md](layers/b.md) | [b_layer.py](../verify/layers/b_layer.py) |
+| 4 | C | KATEX ERRORS | KaTeX 渲染失败 | 阻断 | 部分 | [layers/c.md](layers/c.md) | [c_layer.py](../verify/layers/c_layer.py) |
+| 5 | E | FIGURE COMPLETENESS | 图缺失 | 有图时阻断 | 否 | [layers/e.md](layers/e.md) | [e_layer.py](../verify/layers/e_layer.py) |
+| 6 | F | FIGURE VALIDITY | 图无效 | 有图时阻断 | 否 | [layers/f.md](layers/f.md) | [f_layer.py](../verify/layers/f_layer.py) |
+| 7 | G | QUOTE CONTINUITY | 引用块连续性（+ G扩展/EG） | 阻断 | 是 | [layers/g.md](layers/g.md) | [g_layer.py](../verify/layers/g_layer.py) |
+| 8 | H | STRUCTURAL LABEL IN BQ | 结构标签被块引用吞（+ H扩展） | 阻断 | 是 | [layers/h.md](layers/h.md) | [h_layer.py](../verify/layers/h_layer.py) |
+| 9 | I | MISSING SEPARATOR | 条目间缺 `---` | 阻断 | 是 | [layers/i.md](layers/i.md) | [i_layer.py](../verify/layers/i_layer.py) |
+| 10 | J | ITEM-HEADER DASH | 条目块内多余 `---` | 阻断 | 是 | [layers/j.md](layers/j.md) | [j_layer.py](../verify/layers/j_layer.py) |
+| 11 | K | PROOF-LIST BLANK | 编号列表后证明块缺空行 | 阻断 | 是 | [layers/k.md](layers/k.md) | [k_layer.py](../verify/layers/k_layer.py) |
+| 12 | L | SEP BLANKS | `---` 上下缺空行 | 阻断 | 是 | [layers/l.md](layers/l.md) | [l_layer.py](../verify/layers/l_layer.py) |
+| 13 | M | DISPLAY-MATH `>` | 显示公式内 `>` 前缀 | 阻断 | 是 | [layers/m.md](layers/m.md) | [m_layer.py](../verify/layers/m_layer.py) |
+| 14 | N | BQ EMPTY LINES | 块内空 `>` 行 >1 | 阻断 | 是 | [layers/n.md](layers/n.md) | [n_layer.py](../verify/layers/n_layer.py) |
+| 15 | O | SUBITEM GAP | 编号子项缺口 | 部分阻断 | 否 | [layers/o.md](layers/o.md) | [o_layer.py](../verify/layers/o_layer.py) |
+| 16 | P | VERBOSE 闸门 | 反回归 7 闸门 | 阻断 | 否 | [layers/p.md](layers/p.md) | [p_layer.py](../verify/layers/p_layer.py) |
 
-### 用法
+> G 层内含 **G扩展**（嵌套块引用）与 **EG 层**（例–证明空隙）子检查，非独立层；H 的 3 个扩展（stmt-in-bq / unlabeled-bq / missing-bq）仍归属 `code="H"` 单层。
+
+## 2. 字节契约键集合（代码侧 SSOT）
+
+`verify/registry.py` 的 `DEFAULT_RESULT` 与 `verify/report.py` 的 `print_result` 必须共同覆盖一组 legacy dict 键。**每个层拥有哪些键，由各层专属文档 [`layers/<code>.md`](layers/) 里的 ```` ```contract-keys ```` 代码块声明**——本文件不再硬编码完整清单。
+
+- **聚合与防遗漏**：[`verify/tests/test_key_contract.py`](../verify/tests/test_key_contract.py) 扫描 `layers/*.md` 的所有 `contract-keys` 块，断言其并集（加上下方管理器注入键）**完全等于** `DEFAULT_RESULT` 的键集，且 `report.py` 只读取已知键。三者不一致直接 FAIL，杜绝"加层漏改键导致静默漏检"。
+- **管理器注入、不归属任何层的键**（稳定基础设施，加层时不受影响）：`ch`, `md`, `status`, `extract_dir`。
+
+## 3. 新增 / 修改一层同步清单（只改这几处）
+
+1. **`verify/layers/X_layer.py`**：复制 `_template_layer.py` 新建层，定义 `code/order/fix_order/auto_fixable` + `run()`（+`fix()`）。自动注册，无需改 `register_all.py`。若引入新 legacy 结果键，在 `metadata` 中返回。
+2. **`references/layers/x.md`**（新建）：写该层的**全部**内容——一句话目的、语义与检查内容、阻断性/可修复、```` ```contract-keys ```` 声明的字节契约键、实现（code/order/fixable/数据源/关键逻辑）。
+3. **本文件注册表（第 1 节）**：追加一行（code + 名称 + 一句话目的 + 阻断/可fix + 两个链接）。
+4. **`verify/registry.py` 的 `DEFAULT_RESULT`**：追加新键及中性默认值（类型须匹配该层正常 emission）。
+5. **`verify/report.py` 的 `print_result`**：若新键需展示，增加对应读取与输出；否则确保不读取不存在的键。
+6. **护栏**：运行 `python -m pytest verify/tests/ -q`，键集不一致会立即 FAIL，无需手工核对。
+
+> `SKILL.md` Step 4 只链接本注册表，层级增减**无需改 SKILL.md**。
+
+---
+
+## 4. 全局架构（原 ADR-VERIFY-001，已合并）
+
+**状态：** Done — 全部层级自包含于 `verify/layers/*.py`，由 `register_all.py` 经 `pkgutil` 自动发现注册（当前层列表见上方 §1 注册表，不在此写死数量）。
+**核心约束（不可破坏）：**
+
+1. CLI 不变：`verify_chapter.py <ch> <start> <end> <md> <ext> [--manual --ignore --ignore-figure --scheme --fix]` 以及 `--all <ext> <book_dir> [...]`
+2. `--fix` 行为不变：自动修 G/H/I/J/K/L/M/N（含 H 三扩展），O 仅警告不修
+3. `print_result` 输出格式不变（下游 agent 在 Step 4 解析 PASS/FAIL）
+4. exit 0 条件不变（见 §5.2）
+5. 层字母代号（G/H/...）作为**稳定标识符**保留（被 SKILL.md 与 per-book 记忆引用）
+6. 不破坏已在 10+ 本书上跑通的流水线（幂等、中文 UTF-8）
+
+> **关键洞察：** 约束 #3 要求 `print_result` 原样不变，而它靠硬编码的约 30 个 dict 键渲染输出。因此最稳妥策略是**让 `VerifyManager` 产出一个与旧 `verify_one` 返回结构字节级兼容的 `dict`**，把 `print_result`、退出码逻辑、下游解析全部原样保留。
+
+### 4.1 高层设计
+
+```
+                          ┌─────────────────────────────┐
+ CLI (main)  ──args──▶    │  VerifyManager               │
+                          │   • verify_one(ch,start,end,md,ext) -> dict │
+                          │   • fix(md_file) -> dict      │
+                          └──────────────┬──────────────┘
+                                         │  iterates
+                                         ▼
+                          ┌─────────────────────────────┐
+                          │  LayerRegistry (LAYER_REGISTRY)│
+                          │   D A B C E F G H I J K L M N O + EXTRACT │
+                          └──────────────┬──────────────┘
+                                         │  each layer.run(ctx)
+                                         ▼
+                          ┌─────────────────────────────┐
+                          │  VerifyContext (ctx)         │
+                          │  md_file, ext_dir, ch, ...   │
+                          │  items, entry_keys, fig_idx  │  ◀── 无全局状态
+                          └─────────────────────────────┘
+```
+
+每个层 = 一个 `VerifyLayer` 实例，`run(ctx) -> LayerResult`（其 `.legacy` / `.metadata` 片段并入总 dict），`fix(ctx) -> LayerFixResult`（仅 auto-fixable 层实现）。`verify_one` 返回的 dict 即旧 `verify_one` 返回值（字节级兼容）。
+
+### 4.2 关键接口签名（`verify/registry.py`）
+
+```python
+class VerifyLayer:
+    code: str = 'X'
+    order: int = 0          # run 运行顺序
+    fix_order: int = 999    # fix 运行顺序（仅 auto_fixable 有意义）
+    auto_fixable: bool = False
+    def run(self, ctx) -> LayerResult: ...
+    def fix(self, ctx) -> Optional[LayerFixResult]:
+        return None         # 默认无操作
+
+class LayerRegistry:
+    def register(self, layer) -> VerifyLayer: ...
+    def get(self, code) -> Optional[VerifyLayer]: ...
+    def all_ordered(self) -> list[VerifyLayer]: ...        # 按 order 排序
+    def fixable_ordered(self) -> list[VerifyLayer]: ...    # 按 (fix_order, order) 排序
+    def by_code(self) -> dict[str, VerifyLayer]: ...
+
+DEFAULT_RESULT: Dict[str, Any]   # 模块级常量：为每一个 legacy 键注入正确类型的占位值，
+                                 # 使被禁用的层不会破坏字节契约
+```
+
+> **真实子类只设置** `code`、`order`、`auto_fixable`；仅当 `auto_fixable=True` 时设置 `fix_order`。`depends_on` 事实上从不被任何子类设置（层间顺序完全由 `order`/`fix_order` 决定）。
+
+### 4.3 管理器（`verify/registry.py`）
+
+```python
+@dataclass
+class ManagerConfig:
+    scheme: str = 'three-level'
+    ignore_keys: Set[str] = set()
+    ignore_fig: Set[str] = set()
+    manual_path: Optional[str] = None
+    disabled: Set[str] = set()
+    @classmethod
+    def load_book_config(cls, book_dir: str) -> "ManagerConfig":
+        """读 <book_dir>/verify_config.json {"disable":[...]}，把 code 大写化进 disabled。"""
+
+class VerifyManager:
+    def verify_one(self, ch, start, end, md_file, ext_dir) -> Dict[str, Any]: ...
+    def fix(self, md_file) -> Dict[str, int]: ...
+```
+
+> **合并规则（实现护栏）：**
+> - `fix()` 遍历 `fixable_ordered()`（按 `(fix_order, order)` 排序），`result.update(fr.fix_dict)`，得到键插入序钉死的 change-dict：`h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n`。
+> - `verify_one()` 对 `all_ordered()` 中每层的 `res.metadata` 做 `merged.update(res.metadata)`（last-writer-wins），再 `final = dict(DEFAULT_RESULT)`；`final.update({ch, md, status, extract_dir, items})`；`final.update(merged)`。
+> - `DEFAULT_RESULT` 为每个 legacy 键预置正确类型，被禁用的层因此保持字节安全。
+> - `print_result` **不是** manager 的方法，来自 `verify.report`；`verify_chapter.verify_one` 先构建 `ManagerConfig` 再 `VerifyManager(LAYER_REGISTRY, cfg).verify_one(...)`。
+
+### 4.4 模块布局
+
+```
+verify/
+├── context.py            # VerifyContext
+├── registry.py           # Severity / Finding / LayerResult / LayerFixResult
+│                         #   VerifyLayer / LayerRegistry / ManagerConfig / VerifyManager
+│                         #   DEFAULT_RESULT（模块级常量）
+├── register_all.py       # 导入时经 pkgutil 自动发现 verify/layers/ 下所有层并注册进 LAYER_REGISTRY
+├── layers/
+│   ├── extract_layer.py  # EXTRACT：填 ctx.items/entry_keys/all_keys；算 ignored_hit stage1；mandatory
+│   ├── d_layer.py  a_layer.py  b_layer.py  c_layer.py
+│   ├── e_layer.py  f_layer.py
+│   ├── g_layer.py  h_layer.py  i_layer.py  j_layer.py  k_layer.py  l_layer.py  m_layer.py  n_layer.py  o_layer.py  p_layer.py
+│   ├── _fig_common.py    # 内部 helper（'_' 前缀，自动发现跳过）
+│   └── _template_layer.py# 复制起点（'_' 前缀，自动发现跳过）
+├── verify_chapter.py     # main() / verify_one()(薄壳) / verify_all()(薄壳)
+├── key_parse.py  report.py  manage_ignore.py  review_tool.py
+```
+
+> **自动发现机制：** `register_all.py` 遍历 `pkgutil.iter_modules(verify.layers.__path__)`，跳过头为 `_` 的模块，导入其余每个模块并把其中**所有** `VerifyLayer` 子类注册进全局 `LAYER_REGISTRY`。**新增一层 = 丢一个 `X_layer.py` 进 `verify/layers/`，无需改动 `register_all.py`。**
+
+### 4.5 EXTRACT 层关键逻辑（字节级 gate 的关键）
+
+- **(a) `scheme='en'` 分支必须原样 port。** 英文书专用路径（调 `extract_items_en`、按章过滤前向引用、key 规范化成中文形式、md 侧 `entry_keys`/`all_keys` 限制到当前章）必须完整搬运，否则 EN 书整体漂移。
+- **(b) `ignored_hit` 两段式，第二段归 B 层。** EXTRACT 算第一段写入 `ctx.ignored_hit`（stage1）；B 层在产出 `blocking` 后做第二段 regex 抑制、把 `bkeys` 并入 `ctx.ignored_hit` 并在自己的 legacy 片段中回写最终 `ignored_hit`（manager 按 order 合并、B 覆盖 EXTRACT）。禁止只由 EXTRACT 一次性算完。
+- **(c) E/F 在底层返回 None 时必须显式 emit 空列表**（`fig_missing:[]`/`fig_extra:[]` 与 `fig_invalid:[]`/`fig_invalid_warn:[]`），镜像旧 `e_layer['missing'] if e_layer else []` 守卫，防崩溃。
+
+> **EN 书回归要求：** 10+ 本书验收语料中**至少包含 1 本 EN 书**，否则 `scheme='en'` 分支回归盲区。
+
+### 4.6 用法示例
+
+定义一个层（复制 `_template_layer.py`）：
+
+```python
+# verify/layers/x_layer.py  —— 由 _template_layer.py 复制而来
+from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.register_all import LAYER_REGISTRY   # 全局注册表，自动发现，无需手动注册
+
+class XLayer(VerifyLayer):
+    code = 'X'            # 新大写字母，不与现有层重复（完整列表见本文件第 1 节注册表）
+    order = 17            # 运行顺序；取当前最大 +1
+    auto_fixable = False  # 若支持 --fix，改为 True 并实现 fix()，并设 fix_order
+
+    def run(self, ctx):
+        return LayerResult(code=self.code, metadata={'xxxx': 0})  # 只贡献 DEFAULT_RESULT 中已有键
+
+# 仅当 auto_fixable=True 时实现：
+#     def fix(self, ctx):
+#         return LayerFixResult(fix_dict={'xxxx': changes})
+```
+
+注册与运行：
+
+```python
+from verify.register_all import LAYER_REGISTRY
+from verify.registry import VerifyManager, ManagerConfig
+from verify.report import print_result
+
+cfg = ManagerConfig(manual_path=mp, ignore_keys=ik, ignore_fig=ifig, scheme=scheme)
+mgr = VerifyManager(LAYER_REGISTRY, cfg)
+legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)
+status = print_result(legacy_dict)
+```
+
+`--fix` 流程（与现有行为一致）：
+
+```python
+mgr = VerifyManager(LAYER_REGISTRY, ManagerConfig(manual_path=mp, ignore_keys=ik, ignore_fig=ifig, scheme=scheme))
+changes = mgr.fix(md_file)        # 按 fix_order 跑 H→G→I→J→K→L→M→N
+                                  # change-dict 键插入序钉死：h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n
+parts = [f"{k}={v}" for k, v in changes.items() if v > 0]
+print("[FIX] Applied: " + ", ".join(parts) if parts else "[FIX] No changes needed")
+legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)   # fix 改盘后重读，复验
+```
+
+### 4.7 Per-book 启用/禁用
+
+```python
+cfg = ManagerConfig.load_book_config(book_dir)   # 读 verify_config.json {"disable":["O"]}
+mgr = VerifyManager(LAYER_REGISTRY, cfg)
+# O 层被跳过：o_subitem_gaps 不出现、不计入；其余完全不变
+# 注意：EXTRACT 永不可禁用（manager 特判 code != 'EXTRACT'）；其余层可按书 disable。
+```
+
+> A/B 与 EXTRACT **不存在依赖关系**（无 `depends_on` 机制）。EXTRACT 由 manager 特判为 mandatory，根本不在 `disabled` 的可选范围内。
+
+### 4.8 可扩展性要点
+
+- **加新层 = 新增一个模块，自动发现即生效**，管理器按 `order` 自动调度，无需改 `VerifyManager` / CLI / `register_all.py`。
+- **新增结果键**必须同步更新 `DEFAULT_RESULT`（registry.py）**和** `print_result`（report.py），否则字节契约破裂（由 §2 的护栏测试拦截）。
+- `VerifyLayer.depends_on` 属性存在但**任何子类都不设置、manager 也不强制**：层间顺序完全由 `order`/`fix_order` 决定。
+
+### 4.9 影响与风险
+
+- **变容易：** 单测可针对单个层（输入 `.md` → legacy 片段）；加新层/按书禁用/调整 fix 顺序变成"数据/注册"操作；移除巨型文件耦合，review diff 变小。
+- **需重新审视：** 现有 exit 0 条件在代码里实际比描述更宽——`print_result` 把下列任一非空即判 FAIL：`d_layer.missing_sections`、`truly_missing`、`blocking`(B)、`katex_errors`、`fig_missing`、`fig_invalid`、`quote_gaps`、`nested_bq`、`ex_proof_gaps`、`h_structural_bq`、`h_stmt_bq`、`h_ul_bq`、`h_mbq`、`i_sep_gaps`、`j_header_dash`、`k_proof_list`、`l_sep_blanks`、`m_dm_gt`、`n_bq_empty`、以及 `o_subitem_gaps` 中以 `x` 开头的条目。**方案通过保留 `print_result` 不动，使该集合 100% 不变。**
+- **风险与缓解：**
+
+| 风险 | 缓解 |
+|------|------|
+| 搬函数时改到语义 | 先有字节级基线再 diff |
+| `fig_skipped` 语义变窄 | 改为按 E 层 `metadata['skipped']`（= `e_layer is None` 完整语义）注入，禁止 `ctx.figure_index is None` |
+| EXTRACT 被误禁用 | manager 特判 `code != 'EXTRACT'` |
+| `--fix` 旧代码直接调 `fix_all_layers` | 保留 shim；新路径走 `mgr.fix(md_file)` |
+
+### 4.10 字节级 gate 的 5 条硬约束
+
+1. **`fig_skipped` 必须 == `e_layer is None`**（含「文件在但本章无图条目」两种情况都 SKIP）。禁止窄化为 `ctx.figure_index is None`。
+2. **H 层 `fix()` 内部子 fix 顺序钉死 `h→h_stmt→h_ul→h_mbq`**；`mgr.fix` 产出的 change-dict 键插入序钉死 `h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n`；字节级 diff 范围包含**完整 `--fix` stdout**（含 `[FIX] Applied:` 行）。
+3. **`ignored_hit` 第二段必须归属 B 层或 post-step**，禁止只由 EXTRACT 算第一段。
+4. **EXTRACT 层必须原样 port `scheme=='en'` 分支**；10+ 书语料须含 ≥1 本 EN 书。
+5. **`extract_dir` 作顶层键名**（勿用 `ext`）；`all_keys` 为**新增键、不进入旧契约、不影响输出**。
+
+### 4.11 迁移计划（历史，已 Done）
+
+- **Phase 1**（门面）：新增 `context.py`/`registry.py`/`register_all.py`，`verify_chapter.py` 变薄壳，`print_result` 不动。字节级 diff 验收。
+- **Phase 2**（实现抽取）：函数体搬入 `layers/*.py`，删原巨型模块。
+- **Phase 3**（per-book 配置）：`ManagerConfig.load_book_config` + `verify_config.json {"disable":[...]}`。
+- **Phase 4**（可选）：新 reporter 遍历 `findings` 渲染，输出可选 JSON。
+- **Phase 5**（零侵入扩展）：新增 `p_layer.py` 自动发现即生效。
+
+### 4.12 结论
+
+本方案以**"产出字节级兼容的 legacy dict"** 为核心策略，把全部校验层解耦为 `layers/` 包下独立模块 + `LAYER_REGISTRY` 自动发现注册 + `VerifyManager` 统一调度，同时**完整保留 CLI、`--fix` 行为、`print_result` 格式、exit 0 条件、字母代号与 10+ 本书流水线**。
+
+---
+
+## 5. 校验用法与命令
+
+### 5.1 用法（`verify/verify_chapter.py`）
+
+`verify/verify_chapter.py` 是**统一强制关卡**（各层顺序见第 1 节注册表）。**`<extract_dir>` 为必填参数**（该书 `_extract` 目录，无写死默认值，换书必须显式传入）。
+
+> **⚠️ 前置依赖**：图片嵌入正确与 G 层「引用块连续」由 Step 3.5 的 `figure/embed_figures.py` 生成——**必须先嵌图、再跑本校验**。未嵌图时图完整性必 FAIL，含 `> **证明/例**` 块却未跑连续性扫描时 G 层必 FAIL。
 
 ```bash
 # 单章
@@ -37,301 +289,11 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
   [--ignore ignore.json] [--ignore-figure fig_noise.json]
 ```
 
-**exit 0 的唯一条件（全部阻断层通过）**：无 EXTRACT 数据缺失、无 D 层整节缺失、无 A 层 TRULY MISSING、无 B 层 BLOCKING、无 C 层 KATEX ERRORS、无 E 层图缺失、无 F 层图无效、无 G 层引用块断裂（含 G扩展嵌套、EG 例证空隙）、无 H 层结构标签包裹在块引用内、**无 H 层扩展（陈述进块引用）**、无 I 层条目间缺失分隔线、**无 J 层条目块内多余 `---`**、无 K 层证明–编号列表缺空行、无 L 层分隔线缺上下空行、无 M 层显示公式内 `>` 前缀、无 N 层块引用内空 `>` 行 >1、无 O 层 HEAD/INTERNAL 子项缺口、无 P 层 verbose 闸门（练习归拢/页眉噪声/裸编号/缺节/编造条目/长散文/长证明）。**O 层的 TAIL/OCR 缺口（`~` 行）仅告警不阻断；EXTRACT 为数据 provider，永不可禁用。**
+### 5.2 exit 0 的唯一条件（全部阻断层通过）
 
-### 各层详解
+无 EXTRACT 数据缺失、无 D 层整节缺失、无 A 层 TRULY MISSING、无 B 层 BLOCKING、无 C 层 KATEX ERRORS、无 E 层图缺失、无 F 层图无效、无 G 层引用块断裂（含 G扩展嵌套、EG 例证空隙）、无 H 层结构标签包裹在块引用内、**无 H 层扩展（陈述进块引用）**、无 I 层条目间缺失分隔线、**无 J 层条目块内多余 `---`**、无 K 层证明–编号列表缺空行、无 L 层分隔线缺上下空行、无 M 层显示公式内 `>` 前缀、无 N 层块引用内空 `>` 行 >1、无 O 层 HEAD/INTERNAL 子项缺口、无 P 层 verbose 闸门（练习归拢/页眉噪声/裸编号/缺节/编造条目/长散文/长证明）。**O 层的 TAIL/OCR 缺口（`~` 行）仅告警不阻断；EXTRACT 为数据 provider，永不可禁用。**
 
-#### ⓪ D 层 — MISSING SECTION / TAIL ORDINAL
-
-直接重扫原始 `_extract` 的 `page_*.json`，与 `.md` 的 `## §` 标题取差集。
-
-- **MISSING SECTION**（阻断 FAIL）：某节在原始 JSON 中既有节标题特征、又有带标签的 `章.节-号` 条目，但 `.md` 无对应 `## §` → 必须补写整节
-- **TAIL ORDINAL GAP**（非阻断 WARNING）：某节在 `.md` 中存在，但原始 JSON 里有编号更大的带标签项且缺口 ≤5 → 复核是否漏写尾部条目
-- **SUSPECT**（仅提示）：缺口 >5，疑似 OCR 噪声
-
-D 层专门用于堵住 B 层的盲区——B 层只在**已检出节之间**重扫，对**零检出整节不可见**。
-
-> **中英文均受支持（2026-07-27 修复）**：D 层的标签关键词与 two-level 条目正则
-> 现同时识别中文（定义/定理/…）与英文（Definition/Theorem/Lemma/Proposition/Corollary/…）。
-> 英文标签在 two-level 键名中会归一为中文标签（`Theorem 6.1` ≡ `定理6.1`），
-> 保证英文原文书籍 / 英文版总结与 `extract_items` 输出可比。
-> 注意：three-level 的 `ENTRY_RE` 本就按**编号**匹配、与语言无关，
-> 中英文 `.md` 各自独立对照原书 OCR 校验，任一版漏条目都会各自被 A 层抓到。
-
-#### ① A 层 — TRULY MISSING
-
-提取到了但 `.md` 里完全没有 → 必须补写对应条目，**FAIL**。
-
-#### ② B 层 — BLOCKING
-
-提取时边界/尾部自动复查发现了可能漏掉的候选项 → 必须解决，**FAIL**。
-- 真实项则补写并在 `extract_items` 用 `--manual` 登记
-- 确为 OCR 乱码/无法修复的交叉引用则记入 `--ignore`
-
-#### ③ C 层 — KATEX ERRORS
-
-运行 `format/check_katex.py` 发现 KaTeX 渲染失败。**具体禁忌清单（转义定界符 `\$\$`、缺空行、行内 `$` 未配对、不支持的宏、嵌套块引用 `> > $$` 等）见 [`references/formatting.md` 的 KaTeX 规则](references/formatting.md)；逐项必须修复，FAIL。**
-
-`format/check_katex.py` 内部调用 `katex_validate.js` 做真实 KaTeX 渲染，能抓出 `\minimize` 这类非法命令、括号不配对等真正语法错误。
-
-`format/check_katex.py --fix` 可自动修正以上第 1–3 项（转义定界符、单行展示公式、缺空行、嵌套块引用展示公式）；第 4–6 项需手动修复。
-
-#### ④ MENTIONED-ONLY
-
-在 `.md` 中只作正文/交叉引用出现，不是独立条目 → 复核，不 FAIL。
-
-#### ⑤ EXTRA
-
-在 `.md` 但提取未检出，通常是被正确过滤的交叉引用 → 仅供参考。
-
-#### ⑥ E 层 — FIGURE COMPLETENESS（可选）
-
-仅当 `_extract/figure_index.json` 存在且含本章 `chapter` 条目时运行。
-
-- **MISSING FIGURE**（阻断 FAIL）：章内 OCR 引用了"图 X.X.X"图注但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` 条目 → 图片提取可能漏检（真漏检），须重跑 `figure/extract_figures.py --ch N` + `figure/assign_figures.py --ch N` 刷新，或手动补图
-- **EXTRA**（仅 WARN）：某裁剪图的 `label` 在本章 OCR 里找不到对应图注，疑似误配对
-
-#### ⑦ F 层 — FIGURE VALIDITY（可选，同前提）
-
-`verify/verify_chapter.py` 用 `np.fromfile`+`cv2.imdecode` 逐一打开裁剪图。
-
-- **INVALID**（阻断 FAIL）：缺失文件 / 无法解码 / 单边 <20px
-- **SUSPICIOUS**（仅 WARN）：近空白（灰度方差 <50，疑似误检文字块）
-
-无 `figure_index.json`（未跑图片提取）的章节，E/F 两层自动 SKIP，绝不阻断。
-
-#### ⑧ G 层 — QUOTE CONTINUITY（引用块连续性，始终运行）
-
-**针对缺陷**：`> **证明` / `> **例` 引用块内出现**裸空行**（零内容、无 `>` 前缀的纯空行），多数渲染器会把它当成块结束符，于是块被切成好几个独立的引用框——典型症状就是「图/公式跟对应的例子或证明断开了，不是同一个框」。
-
-**重要说明**：此层也用于检查**例/Example 图片是否正确嵌入**。例的图片必须放在例的 blockquote 内（带 `>` 前缀），否则会被视为破坏 blockquote 连续性的内容。
-
-- **QUOTE GAP（阻断 FAIL）**：`> **证明/证/例` 块处于激活态时，遇一裸空行，且其后首个非空行仍是**块内容**（`>` 行，或既非新块起点、也非块边界的行）→ 必须将该裸空行改成 `> `（空引用行），使整段成为连续不断的 `>` 块。
-- **允许作为「块间分隔」的裸空行**（不报）：其后紧接的是**新块起点**（`> **证明/例`）或**块边界**（`---` / `## ` / 顶层 `**标签**`）——这类裸空行是「例子块」与「紧随的证明块」之间的正当分隔，保留即可。
-- **块内留白一律用 `> `（空引用行）**，不要用裸空行。
-- **例/Example 图片必须嵌入到例的 blockquote 内**：若图片出现在例 blockquote 之外（顶层或其他位置），将被视为破坏 blockquote 连续性的内容，触发 G 层 FAIL。
-
-> 该层是**结构性校验，始终运行**（不依赖图片层）。它把之前只能人工抽查的「块连续性」固化成强制关卡——任何书只要含 `> **证明/例**` 块就必须通过。
-
-#### ⑨ G 层扩展 — NESTED BLOCKQUOTE（嵌套块引用检测）
-
-**针对缺陷**：旧版规则要求例子内的证明用 `> > **证明**`（二级嵌套），但现版规则已改为同一层 `> **证明**`。嵌套块引用会导致 KaTeX 公式 `> > $$` 不被识别，且渲染上例子和证明被分割成两个独立框。
-
-- **NESTED BQ（阻断 FAIL）**：检测到行首为 `> > **证明**` 或 `> > **例**` 等嵌套模式 → 必须展平为单层 `>`。
-- 与 C 层已有的 `> > $$` 检测互补，确保整份文档的引用层级一致。
-
-### E 层假阳性：OCR 噪声造成的"图 X.X.X"引用
-
-OCR 有时会将正文中的图案/公式误识别为图注（如 Cantor 集构造步骤的图形标注被 OCR 读成"图1.5"），导致 E 层报 "caption(s) referenced in chapter OCR but no matching crop"。此时：
-
-1. **确认页面上是否真有图**：检查该页 `page_XXX.json` 的 `images` 字段是否存在。若缺失 YOLO 也未检测到（`figure_detect.json` 无该页条目），则很可能是 OCR 噪声。
-2. **登记豁免**：创建 `_extract/ignore_fig_ch{N}.json`（JSON 字符串数组），将噪声图号加入：
-   ```json
-   ["1.5"]
-   ```
-3. **重验**：`verify/verify_chapter.py` 加 `--ignore-figure <extract_dir>/ignore_fig_ch{N}.json` → E 层忽略该图号 → PASS。
-
-> **判断依据**：被 YOLO 检测为 `figure` class 的实体才会存为裁剪 PNG。若 `figure_index.json` 中本章根本无此图号、且对应页面无 images 数据，基本可判定为 OCR 噪声。若检测到但未被命名（`figure_index.json` 有 `chNN_unnamed_K.png` 条目），则是漏配而非噪声，应手动补图（见 figure_pipeline.md#手动补图）。
-
----
-
-#### ⑩ EG 层 — EXAMPLE-PROOF GAP（例与证明块间空隙检测 + 同行检测）
-
-**针对缺陷**：例的陈述与它的证明之间若出现裸空行（零内容且无 `>` 前缀的空行）或裸 `$$`（无 `>` 前缀的展示公式），会打断 blockquote，使例子和证明被渲染为两个独立框。同时检测例与证明在同一行的问题（`> **例**：...**证明梗概**：...`）。
-
-- **SAME-LINE EXAMPLE+PROOF（阻断 FAIL）**：`> **例**` 行内容同时包含 `**证明**` 标记——必须拆分为两行：`> **例**：描述。` 和 `> **证明梗概**：步骤。`。
-- **EXAMPLE-PROOF GAP（阻断 FAIL）**：在 `> **例**` 块的陈述与证明之间检测到裸空行或裸 `$$`，且空隙后首个非空行仍是该例的证明（`> **证明思路**` 或 `> **证明**`）→ 必须将裸空行改为 `> `（空引用行），将裸 `$$` 改为 `> $$`，使例段成为连续 `>` 块。
-- **允许**：块间分隔的裸空行（其后为 `---` / `## ` / 顶层 `**标签**` / 另一个 `> **例**` 的块首行）。
-- 与 G 层（QUOTE GAP）互补：G 层覆盖所有 `> **证明/例**` 块的普遍连续性，EG 层专门针对「例的陈述→证明」之间的特定空隙。
-
-#### ⑪ H 层 — 结构标签包裹块引用（STRUCTURAL LABEL IN BLOCKQUOTE，始终运行）
-
-**针对缺陷**：定义/定理/引理/推论/命题/断言/公理等**结构性标签**若被写进 `>` 块引用内（如 `> **引理33.5**：…`），渲染时会被吞进前一个证明/例的块，造成标签丢失、层级错乱。
-
-- **STRUCTURAL BLOCKQUOTE（阻断 FAIL）**：检测到 `> **<结构性标签>**` 形式（标签在 `>` 块引用前缀之后）→ 必须将标签移到顶层（`**引理33.5**：…`），其证明另起 `> **证明**：…` 块。
-- **允许**：例/证明块（`> **例**` / `> **证明**`）本就在块引用内，不在此层范围（由 G 家族覆盖）。
-
-> 与 G 家族互补：G 家族保证块内连续，H 层保证结构性标签不被块引用吞掉。
-
-#### ⑪a H 层扩展 — STATEMENT IN BLOCKQUOTE（陈述内容包裹块引用，ISSUE1，始终运行）
-
-**针对缺陷**：⑪ 只管「结构性标签本身」是否被 `>` 吞掉；但有些书把**条目陈述区里的枚举子句 / 展示公式 / 子点列表**也写进了 `>`（如 `> （N）` / `> **(N)**` / `> $$` / `> - （a）` / `> - (a)`），位于标题行到首个 `> **证明/例/注**` 之间。这些属于该条目的**陈述内容**，必须顶层书写——只有证明 / 例 / 注 / 脚注才进 `>`。错误写法会被渲染器当成上一个 `>` 块的延续，破坏层级（真实事故：冯琦《集合论导引 第三卷》`第3章` 引理 3.25 / 3.28、定义 3.13 的陈述公式与枚举子句曾被裹进 `>`）。
-
-- **STATEMENT-IN-BLOCKQUOTE（阻断 FAIL）**：在某个结构性条目（定义/定理/引理/推论/命题/断言/公理/式）的**陈述区**内，检测到 `>` 包裹的 `（N）` / `**(N)**` / `$$` / `- （a）` / `- (a)` → 必须解包到顶层（`> （N）` → `**(N)**`、`> **(N)**` → `**(N)**`、`> $$` → `$$`、`> - （a）` → `- (a)`）。
-- **不报**（合法保留在 `>` 内）：示例块 `> **例N**` 及其内部的 `> **(N)**` 子点——示例整体本就应在 `>` 内；脚注 `> ^{...}`；证明 / 注块 `> **证明...` / `> **注...`。
-- **判定边界**：陈述区 = `[标题行+1, 第一个合法 `>` 块起点)`，合法块起点为 `> **证明` / `> **例` / `> **注` / `> ^{`。
-- **自动修复**：`verify_chapter.py --fix` 的 `fix_h_statement_in_blockquote` 仅当某条目的陈述区含 structural 标记才整体 unwrap，避免误拆合法注记块。
-
-> 与 ⑪ 互补：⑪ 管「标签是否被 `>` 吞」，⑪a 管「陈述内容是否被 `>` 吞」。两者皆由 H 家族覆盖，`--fix` 可一并自动修复（顺序：H 结构标签 → ⑪a 解包陈述 → G → I → J）。
-
-#### ⑫ I 层 — MISSING SEPARATOR（条目间缺失 `---` 分隔线，始终运行）
-
-**针对缺陷**：定义/定理/引理/推论/命题/断言/公理/例之间必须用 `---` 分隔。缺少 `---` 会使相邻条目在视觉上合并、阅读时无法区分边界。
-
-**重要说明**：证明（思路/梗概/概要）是定理/定义等条目的**内部附属块**，**不是独立条目**，因此：
-- 定理/定义与其证明**之间不应有 `---`** （因为证明属于该条目）
-- `---` 仅用于分隔**独立条目**之间（如 定理→定理、定理→例、例→定理 等）
-
-- **MISSING SEPARATOR（阻断 FAIL）**：两个相邻的条目行（`**定义N.N**`、`> **例N**` 等）之间没有 `---` 分隔线，且中间没有节标题（`##`）作为自然分隔 → 必须在两条目之间的空白区域插入一行 `---`（前空一行、后空一行）。
-- **允许**：节标题（`## §`）分隔的条目对不报 — 标题本身充当视觉分隔。
-- **跳过**：相隔超过 100 行的条目对（通常跨越整个节，节标题可能被透传逻辑漏检）。
-- **自动修复**：运行 `format/fmt_proofs.py <book_dir>` 自动扫描并补齐缺失的 `---` 分隔线（幂等，已有则跳过）。
-
-> 本层（I，条目分隔）与 G 家族互补：G 家族检查引用块连续性，I 层检查独立条目间的 `---` 分隔线。运行 `format/fmt_proofs.py` 可自动修复 I 层所有问题。
-
-##### ⑫a 定理/证明间无 `---`（I 层行为与手动复核）
-
-While there is no dedicated automated layer for checking `---` between a theorem and its proof, this is correctly handled by the I-layer's natural exemption:
-
-1. **I-layer** (`check_i_separators`): Ensures `---` exists between independent items (theorem→theorem, theorem→example, etc.). Since a proof is **NOT** an independent item (it belongs to the preceding theorem), the I-layer will **NOT** flag a missing `---` between theorem and proof — which is correct.
-
-2. **Manual verification** (per Step 4 rule #13): During manual review, confirm that theorems/propositions and their proofs do **not** have a `---` separator between them. The proof (whether `> **Proof sketch**` or `> **Proof**`) should directly follow the theorem statement without intervening `---`.
-
-   - ❌ Wrong (extra `---` between theorem and proof):
-     ```
-     **Theorem 20.6**: ...
-
-     ---
-
-     > **Proof sketch**: ...
-     ```
-   - ✅ Correct (proof directly follows theorem):
-     ```
-     **Theorem 20.6**: ...
-
-     > **Proof sketch**: ...
-     ```
-
-> This applies to all theorem-like items (定理/定义/命题/推论/引理) and their corresponding proof blocks. The rule holds regardless of whether the theorem is top-level and the proof is in a blockquote, or both are in the same blockquote (as with Examples).
-
-##### ⑫b J 层 — 条目块内多余 `---`（始终运行，阻断）
-
-**针对缺陷**：顶层条目（定义/定理/引理/推论/命题/断言/公理）的「块」内部不得出现 `---` 分隔线。块的范围 = 标题行 到 其全部 `**(N)**` 子点。具体覆盖两种情形：
-
-- **标题 ↔ 首个子点**：`**引理3.1**` 与其 `**(1)**` 之间插了 `---`。
-- **子点 ↔ 子点**：`**(i)**` 与 `**(i+1)**` 之间插了 `---`。
-
-**关键**：`---` 只用于分隔两个*不同的顶层条目*（I 层语义）。条目块内部必须直接连写——标题 → 空行 → `**(1)**` →（接续文本 / `$$` 公式）→ `**(2)**` → …，全程无 `---`，参照 `**引理3.3**` 写法。`---` 上方即使是子点的接续文本或 `$$` 公式（而非 `**(i)**` 标签本身），它仍属条目内部，必须删除。
-
-**实现（in_item 跨行追踪，`check_item_header_dash`）**：逐行扫描，维护 `in_item` 标志——
-- 遇到 `**LABEL**` 标题行或 `**(N)**` 子点行 → `in_item = True`；
-- 遇到 `## ` 节标题或 `>` 块引用行 → `in_item = False`（块结束）；
-- 遇到顶层 `---` 且 `in_item == True` 且其后第一个非空、非块引用行是 `**(N)**` 子点 → 记为违规。
-
-这样即使子点跨多行（接续文本 / 公式在 `---` 上方），也能准确识别，而两个不同顶层条目之间的 `---`（其后是另一个 `**LABEL**` 标题）不会被误报。
-
-**自动修复**：`verify/verify_chapter.py --fix` 调用 `fix_item_header_dash` 删除条目块内所有 `---`（并合并其后的单个空行），幂等。
-
-**阻断性**：J 层违规计入 `problems`，非零即 `FAIL`（exit 1），必须 `--fix` 或手动删除后重验。
-
-### 图片嵌入位置（手动校验）
-
-E/F 层**只校验图片的存在与文件有效性**，**不**校验「图是否放在引用它的条目处」。图片嵌入的位置正确性（即「对应定理引理等的图，放在对应位置」）由 `references/formatting.md#图片嵌入规则` 规定，写作时按 caption→条目编号的映射执行。verify 阶段人工抽查 `figure_index.json` 的 `caption` 与 `.md` 中图块前后文是否吻合即可。
-
-> **块连续性已自动化**：图片是否「跟对应的例/证在同一个连续 `>` 框内」，现在由 **G 层**强制校验（裸空行切断块即 FAIL），无需人工抽查。人工只需确认「图放的是**哪个**条目」（映射正确性），这部分仍是 G 层不覆盖的。
-
-### ⑬ 公式忠于原文（手动校验）
-
-**`page_XXX.json` 的 `formulas[].latex` 是原始 PDF 公式内容的唯一凭据**。写公式时必须对照 JSON 确认数学语义一致。允许修正 OCR LaTeX 编码噪声（如 `\pmb{\mathscr{R}}` → `\mathcal{R}`），但**禁止篡改数学语义**（如把空集 `\emptyset` 改成数字 `0`）。
-
-手动抽查每章 2–3 个展示公式，确认：
-- 运算符（∩、∪、⊂ 等）与原书一致
-- 数学常量/对象（0、∅、ℕ、ℝ 等）与原书一致
-- 变量名与函数名与原书一致
-- 仅 OCR LaTeX 编码噪声被纠正，**数学语义未改变**
-
-**任何语义替换（如 `∅ → 0`、`∩ → ∪`）= FAIL**，必须修正。
-
----
-
-## 编号体系（三级 vs 两级）
-
-`extract/extract_items.py` 与 `verify/verify_chapter.py` 默认按**三级**编号 `章.节-号`（N.S-N）工作。**但部分中文教材用两级编号 + 双计数器**，默认三级正则会把公式碎片/集合枚举误读成幻影键，导致虚假 `TRULY MISSING`。
-
-### 两级编号典型：周民强《实变函数论》第三版
-
-- 定义：独立每章计数（`定义1.1`…`定义1.33`）
-- 定理/引理/推论/命题：**共用一个连续计数器**（`定理1.1`、`引理1.2`…`命题`…，1.1–1.27 连续）
-- 例：按节各自重编（`> **例1**：`）
-
-### 启用方式
-
-- 在 `chapter_map.json` 每章加 `"scheme": "two-level"`，`verify --all` 自动启用
-- 或单章显式 `extract/extract_items.py ... --scheme two-level` / `verify/verify_chapter.py ... --scheme two-level`
-
-### 判定与处理
-
-详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树选对 scheme。
-
-> 两级书的**例完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），统一用 `extract/scan_items.py` 做独立连续性核验（权威）。
-
----
-
-## `--ignore` 登记规则
-
-`--ignore <extract_dir>/ignore_ch{N}.json` 用于登记**已确认**不必阻断校验的键。该文件**放在本书 `_extract` 目录下**，不进 skill 目录。
-
-1. **作用域：每章一个文件**。`ignore_ch{N}.json`（JSON 字符串数组，如 `["1.7-0"]`），随章传入 `--ignore`。**禁止全局单一文件**。
-2. **仅允许忽略两类键**：
-   - **(a) OCR 乱码**：提取自破碎/无意义文本块，且全书无对应真实条目
-   - **(b) 残留交叉引用**：书中对某条目的引用（"见3.3-1"之类），提取误判为条目
-3. **禁止忽略真实条目**：书里确有、应独立成条的编号项，**绝不可进 ignore**。
-4. **举证责任**：每条 ignore 必须能在 raw 页面文本中定位到来源块并确认是乱码/交叉引用。
-5. **暂定性质**：ignore 非永久删除。若后续发现该键实为真实项，必须从 ignore 移除并补写。
-6. **B 层 BLOCKING 解决优先级**：先尝试补真实项；仅当确认是 (a)/(b) 时才进 ignore。
-
-### `--ignore-figure` 图片豁免
-
-`--ignore-figure fig_noise.json`（JSON 数组 `["6.7.9"]` 或字典）登记 OCR 噪声图豁免。
-脚本会自动合并 `_extract/ignore_ch{N}.json` 与 `_extract/ignore_fig_ch{N}.json`（存在即读）。
-
----
-
-## K-LAYER：编号列表后证明块的空行检查
-
-**强制规则**：当定理/定义的陈述含 4-空格缩进的编号列表（`    N.`），且其后紧接 `> **证明**` / `> **证明思路**` 块引用时，列表末项与证明块之间**必须有一空行**，否则证明块渲染时会视觉上对齐编号项而非定理外层。
-
-- `--fix` 自动在列表末项与 `> **证明**` 之间插入空行。
-
-## L-LAYER：分隔线 `---` 上下需有空行
-
-**强制规则**：每个 `---` 分隔线上方和下方都必须紧邻一空白行（即 `正文\n\n---\n\n正文` 格式）。无空白行时 `---` 可能被误解为 setext 标题下划线，或被某些渲染器吞没，导致条目间的视觉分隔不一致。
-
-- `--fix` 自动在 `---` 上下补缺失的空白行。
-
-## M-LAYER：显示公式内无 `>` 前缀
-
-**强制规则**：`$$...$$` 显示公式块内部的每一行都不能以 `>`（块引用标记）开头。若块引用上下文中的 `>` 泄漏进公式块，KaTeX 渲染会失败，因为 `>` 在数学模式中是一个非法字符。
-
-- `--fix` 自动剥离 `$$...$$` 内部的 `>` 前缀。
-
-## N-LAYER：块引用内空 `>` 行不超过 1 行
-
-**强制规则**：在 `> **证明**` / `> **例**` / `> **注**` 等块引用内，连续的空 `>` 行（仅有 `>` 或 `> ` 无其他内容）不得超过 1 行。过多的空 `>` 行是提取噪声或视觉填充，会不必要地增大文件体积。
-
-- `--fix` 自动删除多余的空 `>` 行（保留第 1 行）。
-
-## O-LAYER：编号子项序列缺口检查
-
-**强制规则（order 15，不可 --fix，部分阻断）**：检测圆括号/加粗编号子项序列 `(1)(2)(3)` / `(a)(b)(c)` / `(i)(ii)(iii)` 中的**缺口**。仅当块内序号项 ≥3 才检测，避免把交叉引用误判为序列：
-- **HEAD gap / INTERNAL gap（阻断 FAIL）**：序列起始 >1（前面缺项）或 min–max 之间缺号 → 视为真实遗漏，须补回缺失子项（`x` 行，`problems += 1`）。如某条目列了 `(1)(2)(4)` 漏 `(3)`。
-- **TAIL gap（仅告警）**：OCR 交叉引用显示有更大编号（如 md 最大 `(3)`、OCR 出现 `(5)`），疑似尾部漏写 → 仅打印 `~` 行提示复核，**不阻断**。
-- **不可 `--fix`**，须手动补项或确认。与 J 层（条目块内 `---`）互补：O 管「编号子项是否连续」，J 管「块内分隔线」。
-
-## P-LAYER：verbose 闸门（反回归）
-
-**强制规则（order 16，不可 --fix，阻断）**：针对 Vakil 事故类的机器闸门，任一闸门非空即整章 FAIL。七道闸门：
-1. **`p_exer_block`**：独立的 `### 练习`/`### 习题`/`### Exercises` 归拢块——练习须原位内联 `**练习 N.M.X（Exercise N.M.X）：**`，禁止抽出来堆到节/章末（自造结构 = 无中生有）。
-2. **`p_noise`**：照抄 OCR 噪声——页眉/页脚/版权行（`(c) 2024` / `draft` / `out-of-date` / 孤立页码等）混进正文。
-3. **`p_bare_item`**：number-first 体例下条目标题缺失——裸 `**N.M.K**` 无标题、无类型词。
-4. **`p_missing_sec`**：缺节——md 的 `## §` 数 < 骨架 SEC 数（骨架见 `extract/scan_skeleton.py`）。
-5. **`p_extra_item`**：编造条目——md 出现骨架 ITEM 清单中没有的编号条目（如散文节被补 `**X.1.1**`）。
-6. **`p_verbose`**：过度照抄（非核心内容未摘要）——顶层长散文段（不含 `**` 标签条目/例/练习/注记的忠实内容）≥ 6 段（VERBOSE_PARA_GATE）即 FAIL；动机/导语须 Tier 2 摘要或省略。
-7. **`p_proof_verbose`**：证明/解答块过长且未分条——单个 `> **证明/解答/Proof/Solution**` 块内 >700 字且未用 `1.`/`（1）`/`(a)` 分条枚举，且此类块 ≥ 2（VERBOSE_PROOF_GATE）即 FAIL。
-- **关键豁免**：已用 `1. 2. 3. …` 分条枚举的证明【步数不限】一律不计入 `p_proof_verbose`；例（Example）题面按 Tier 1 忠实保留、其内 `> **解答/证明**：` 子块受第 7 道约束。注记（Remark/Aside）按 Tier 1 完整保留，不参与 verbose 判定。
-- **不可 `--fix`**（故意不让绕过），须回到写作阶段修正。
-
-## 常用校验命令
+### 5.3 常用校验命令
 
 ```bash
 # 单章校验（最常用）
@@ -351,3 +313,42 @@ E/F 层**只校验图片的存在与文件有效性**，**不**校验「图是�
 "<python>" format/fmt_proofs.py <book_dir> --number  # + 证明步骤编号
 "<python>" format/fmt_proofs.py <book_dir> --check   # 仅检测标题下分隔线，不改
 ```
+
+---
+
+## 6. 编号体系（三级 vs 两级）
+
+`extract/extract_items.py` 与 `verify/verify_chapter.py` 默认按**三级**编号 `章.节-号`（N.S-N）工作。**但部分中文教材用两级编号 + 双计数器**，默认三级正则会把公式碎片/集合枚举误读成幻影键，导致虚假 `TRULY MISSING`。
+
+### 两级编号典型：周民强《实变函数论》第三版
+- 定义：独立每章计数（`定义1.1`…`定义1.33`）
+- 定理/引理/推论/命题：**共用一个连续计数器**（`定理1.1`、`引理1.2`…`命题`…，1.1–1.27 连续）
+- 例：按节各自重编（`> **例1**：`）
+
+### 启用方式
+- 在 `chapter_map.json` 每章加 `"scheme": "two-level"`，`verify --all` 自动启用
+- 或单章显式 `extract/extract_items.py ... --scheme two-level` / `verify/verify_chapter.py ... --scheme two-level`
+
+### 判定与处理
+详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树选对 scheme。
+
+> 两级书的**例完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），统一用 `extract/scan_items.py` 做独立连续性核验（权威）。
+
+---
+
+## 7. `--ignore` 登记规则
+
+`--ignore <extract_dir>/ignore_ch{N}.json` 用于登记**已确认**不必阻断校验的键。该文件**放在本书 `_extract` 目录下**，不进 skill 目录。
+
+1. **作用域：每章一个文件**。`ignore_ch{N}.json`（JSON 字符串数组，如 `["1.7-0"]`），随章传入 `--ignore`。**禁止全局单一文件**。
+2. **仅允许忽略两类键**：
+   - **(a) OCR 乱码**：提取自破碎/无意义文本块，且全书无对应真实条目
+   - **(b) 残留交叉引用**：书中对某条目的引用（"见3.3-1"之类），提取误判为条目
+3. **禁止忽略真实条目**：书里确有、应独立成条的编号项，**绝不可进 ignore**。
+4. **举证责任**：每条 ignore 必须能在 raw 页面文本中定位到来源块并确认是乱码/交叉引用。
+5. **暂定性质**：ignore 非永久删除。若后续发现该键实为真实项，必须从 ignore 移除并补写。
+6. **B 层 BLOCKING 解决优先级**：先尝试补真实项；仅当确认是 (a)/(b) 时才进 ignore。
+
+### `--ignore-figure` 图片豁免
+
+`--ignore-figure fig_noise.json`（JSON 数组 `["6.7.9"]` 或字典）登记 OCR 噪声图豁免。脚本会自动合并 `_extract/ignore_ch{N}.json` 与 `_extract/ignore_fig_ch{N}.json`（存在即读）。

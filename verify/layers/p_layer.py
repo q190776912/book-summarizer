@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/p.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """p_layer.py — P-LAYER (order 16): anti-regression gate for content/structure defects.
 
 新增于 2026-08-02 整改后，作为「验收闸门」兜底：即使写章的 agent 无视 SKILL.md 的

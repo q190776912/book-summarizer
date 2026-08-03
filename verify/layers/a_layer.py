@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/a.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
 a_layer.py — A-LAYER (order 2): .md completeness.
 

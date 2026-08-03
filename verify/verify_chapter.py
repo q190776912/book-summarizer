@@ -2,10 +2,15 @@
 verify_chapter.py — the single MANDATORY gate for a chapter. It enforces ALL
 completeness/validity layers in one command.
 
-REFACTOR (ADR-VERIFY-001): the 17 layers (EXTRACT/D/A/B/C/E/F/G/H/I/J/K/L/M/N/O/P)
-now live as independent modules under `verify/layers/`, registered in
+REFACTOR (ADR-VERIFY-001, merged into `references/verification.md` §4): all verification
+layers now live as independent modules under `verify/layers/`, registered in
 `verify/register_all.py` and orchestrated by `verify/registry.VerifyManager`.
 This file is now a THIN SHELL:
+
+  * The authoritative layer REGISTRY (ordered list, --fix scope) is `references/verification.md`
+    (SSOT). Per-layer semantics / thresholds / byte-contract live in `references/layers/<code>.md`
+    — do NOT duplicate them here or in any other doc. Run order == each layer's `order`
+    attribute (auto-discovered).
 
   * `verify_one(...)` builds a per-chapter ManagerConfig and delegates to
     `VerifyManager.verify_one(...)`, which returns the SAME byte-compatible
@@ -15,10 +20,10 @@ This file is now a THIN SHELL:
     to `VerifyManager.fix(...)`, returning the same {h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n}
     change dict.
 
-Layer order / fix order (stable codes):
-  EXTRACT 0, D 1, A 2, B 3, C 4, E 5, F 6, G 7 (fix 5), H 8 (fix 1),
-  I 9 (fix 6), J 10 (fix 7), K 11 (fix 8), L 12 (fix 9), M 13 (fix 10),
-  N 14 (fix 11), O 15.
+Layer order / fix order: this is now DERIVED from `verify/layers/*.py` (auto-discovered
+by `register_all.py`); the full ordered list and --fix scope are the SSOT in
+`references/verification.md`, per-layer semantics in `references/layers/<code>.md`
+(do NOT re-list them here).
 
 Exit 0 only when there is NO truly-missing item AND NO B-layer blocking issue AND
 NO KaTeX error AND (if figure_index.json present) NO missing-figure gap AND NO

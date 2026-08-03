@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/j.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """j_layer.py — J-LAYER (order 10, fix_order 7): no `---` inside an item block.
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""

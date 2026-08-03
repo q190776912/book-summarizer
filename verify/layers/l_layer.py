@@ -1,3 +1,4 @@
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/l.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """l_layer.py — L-LAYER (order 12, fix_order 9): blank lines around `---` separators.
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""

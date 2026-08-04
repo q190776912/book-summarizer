@@ -158,7 +158,90 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
     return items, [], []
 
 
+def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides=None):
+    """Fraleigh-style section-based two-level extractor.
+
+    Fraleigh《抽象代数基础教程》: items are numbered per GLOBAL section —
+    定义8.1 / 例1.2 / 表1.20 / 图3.6 — while the Chinese translation groups
+    sections into chapters (ch1 = secs 1-7, ch2 = secs 8-11, ...). The first
+    number is the SECTION, not the chapter, so the `c == chapter` filter of
+    the 周民强 two-level scheme must NOT apply; instead keys are restricted to
+    the sections belonging to this chapter (read from chapter_map.json's
+    "sections" field). Labels include 例/表/图 which the built-in two-level
+    scheme drops.
+
+    chapter_map.json format: {"chapters": [{"num": N, "pdf_start": S,
+    "pdf_end": E, "scheme": "fraleigh", "sections": [8, 9, 10, 11], ...}]}
+    """
+    import json as _json
+
+    sections = None
+    cm_path = os.path.join(extract_dir, 'chapter_map.json')
+    if os.path.exists(cm_path):
+        try:
+            with open(cm_path, 'r', encoding='utf-8-sig') as f:
+                cm = _json.load(f)
+            chs = cm.get('chapters', []) if isinstance(cm, dict) else cm
+            for e in chs:
+                if e.get('num') == chapter and e.get('sections'):
+                    sections = {int(s) for s in e['sections']}
+                    break
+        except Exception:
+            sections = None
+
+    all_blocks = []
+    for p in range(start_page, end_page + 1):
+        fpath = os.path.join(extract_dir, f"page_{p:03d}.json")
+        if not os.path.exists(fpath):
+            continue
+        with open(fpath, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        for t in data.get("text", []):
+            txt = t.get("text", "").strip()
+            if not txt:
+                continue
+            poly = t.get("poly", [])
+            y = poly[1] if poly and len(poly) >= 8 else 0
+            all_blocks.append((p, y, txt))
+    all_blocks.sort(key=lambda x: (x[0], x[1]))
+
+    fr_re = re.compile(
+        r'(定义|定理|引理|推论|命题|例|表|图)\s*(\d+)\s*[\.\．·]\s*(\d+)')
+    raw = []
+    for p, y, txt in all_blocks:
+        for m in fr_re.finditer(txt):
+            sec = int(m.group(2)); num = int(m.group(3))
+            if sec > 80 or num > 120:
+                continue
+            if sections is not None and sec not in sections:
+                continue
+            label = m.group(1)
+            key = f"{label}{sec}.{num}"
+            text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
+            raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+
+    seen = {}
+    for it in raw:
+        if it['key'] not in seen:
+            seen[it['key']] = it
+    items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
+
+    if manual_overrides:
+        existing = {it['key']: idx for idx, it in enumerate(items)}
+        for mo in manual_overrides:
+            if mo['key'] in existing:
+                items[existing[mo['key']]] = {'key': mo['key'], 'page': mo['page'],
+                                              'label': mo['label'], 'text': mo['text']}
+            else:
+                items.append({'key': mo['key'], 'page': mo['page'],
+                              'label': mo['label'], 'text': mo['text']})
+        items.sort(key=lambda x: (x['page'], x['key']))
+    return items, [], []
+
+
 def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, scheme='three-level'):
+    if scheme == 'fraleigh':
+        return extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides)
     if scheme == 'two-level':
         items, warnings, blocking = extract_items_two_level(extract_dir, chapter, start_page, end_page)
         if manual_overrides:
@@ -190,21 +273,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
-    # ---- Pass 0: collect the sections actually present in THIS chapter ----
-    # Used to constrain the fallback regex (see below) so that stray "37-40"
-    # (exercise range) or "1837-1920" (date range) cannot be mis-read as a
-    # phantom "3.7" section. A fallback item c.s-N is only kept when s is a
-    # real section of this chapter.
-    chapter_sections = set()
-    for p, y, txt in all_blocks:
-        stripped = txt.strip().rstrip('：:．.，, ')
-        sm = sec_heading_re.match(stripped) if 'sec_heading_re' in dir() else None
-        if sm is None:
-            sm = re.match(r'^(?:§\s*)?(\d+)\.(\d+)(?:\s{2,}|\s+[^\d\-])', stripped)
-        if sm and int(sm.group(1)) == chapter:
-            chapter_sections.add(int(sm.group(2)))
-
-    # ---- regexes ----
+    # ---- regexes (defined BEFORE the section-scan loop below) ----
     # Step 2: broader pattern (also catches 1.3.9 → 1.3-9)
     num_re = re.compile(r'(\d+)\s*[\.\-\·\，\s]\s*(\d+)\s*[\-\.\·\，\s]\s*(\d+)')
     label_re = re.compile(r'(?:定义|定理|引理|推论|命题)\s*（|例(?:子)?|Example|Definition|Theorem|Lemma|Corollary|Proposition')
@@ -213,6 +282,18 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     sec_heading_re = re.compile(r'^(?:§\s*)?(\d+)\.(\d+)(?:\s{2,}|\s+[^\d\-])')
     # Section-level label: a text block that is a standalone "例子" or "Examples" heading
     sec_label_re = re.compile(r'^(例[子]?|Examples?)$')
+
+    # ---- Pass 0: collect the sections actually present in THIS chapter ----
+    # Used to constrain the fallback regex (see below) so that stray "37-40"
+    # (exercise range) or "1837-1920" (date range) cannot be mis-read as a
+    # phantom "3.7" section. A fallback item c.s-N is only kept when s is a
+    # real section of this chapter.
+    chapter_sections = set()
+    for p, y, txt in all_blocks:
+        stripped = txt.strip().rstrip('：:．.，, ')
+        sm = sec_heading_re.match(stripped)
+        if sm and int(sm.group(1)) == chapter:
+            chapter_sections.add(int(sm.group(2)))
 
     # ---- Step 2a: fallback pattern for garbled numbers (e.g. "21_7" → 2.1-7) ----
     fallback_re = re.compile(r'(\d)(\d)[\s_\-\·]\s*(\d+)')

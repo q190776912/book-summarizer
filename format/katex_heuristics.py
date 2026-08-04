@@ -137,6 +137,123 @@ _SWALLOWED_PREFIX_RE = re.compile(
     r'^\$\s*(?:>\s*)?(?:[-*]\s+|\([A-Za-z0-9]\)\s+|\d+[.)]\s+)')
 
 
+# ============================================================================
+# Pass 1f (NEW, 2026-08-04): "character-type" formulas outside math mode
+#   (formatting.md rule #17). ALL mathematical content MUST be rendered via
+#   KaTeX ($...$ / $$...$$); it must NEVER appear as bare characters in the
+#   running text. Two sub-cases:
+#     (A) Raw Unicode math glyphs (Greek letters, operators, relations, sets,
+#         ...). These are never legitimate prose in these summaries and must be
+#         rewritten as KaTeX (e.g. σ -> $\sigma$, √ -> $\sqrt{}$, ∑ -> $\sum$).
+#     (B) ASCII math written as plain text: probability/expectation operators
+#         (Pr{ Pr( E[ Var( Cov( ...), single-letter function calls with a
+#         math-like argument (X(t) p_k(n) f(x+y)), and variable+digit tokens
+#         (x0 t1 y2) meaning a subscripted variable.
+#   NOTE: superscript digits ² ³ are intentionally NOT enforced here (physical
+#   units like km² would false-positive); they remain a documentation request.
+# ============================================================================
+
+# (A) Unicode math glyphs — high precision: essentially never prose.
+BARE_MATH_GLYPHS = (
+    # Greek (math variables / constants)
+    'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'κ', 'λ', 'μ', 'ν', 'ξ',
+    'π', 'ρ', 'σ', 'τ', 'φ', 'χ', 'ψ', 'ω',
+    'Γ', 'Δ', 'Θ', 'Λ', 'Ξ', 'Σ', 'Φ', 'Ψ', 'Ω',
+    # operators / relations
+    '√', '∑', '∞', '≤', '≥', '≠', '≈', '≡', '×', '÷', '±', '∓',
+    '∂', '∇', '∏', '∓',
+    # set theory / logic / number sets
+    '∪', '∩', '∈', '∉', '⊂', '⊆', '∀', '∃', '∅',
+    'ℝ', 'ℕ', 'ℤ', 'ℂ',
+)
+
+# (B) probability / expectation / variance operators written bare.
+# Lookbehind (?<![.\w]) excludes citation contexts like "1.7.E (...)" /
+# "Exercise ... E (...)" where E is a label, not the expectation operator.
+_PROB_OP_RE = re.compile(r'(?<![.\w])(?:Pr|E|Var|Cov)\s*[\(\[\{]')
+
+# (B) single-letter function call: name is ONE letter, arg is math-like.
+# Lookbehind (?<![A-Za-z$0-9.]) excludes citation sub-refs like "1.7.H(c)",
+# "2(a)", "Figure 3(b)" — these are label references, not math calls.
+_FUNC_CALL_RE = re.compile(r'(?<![A-Za-z$0-9.])([A-Za-z])\s*\(([^)]{0,25})\)')
+
+# (B) variable + subscript-digit token (x0 t1 y2 ...), standalone math variable.
+_VAR_DIGIT_RE = re.compile(r'(?<![A-Za-z$\\])([a-z])\d(?![A-Za-z$])')
+
+# words that legitimately precede a '(' in prose — never a math function call.
+_LABEL_WORDS = (
+    'Example', 'Section', 'Chapter', 'Theorem', 'Definition', 'Corollary',
+    'Remark', 'Note', 'Figure', 'Part', 'Lemma', 'Proposition', 'Scholium',
+    'Exercise', 'Hint', 'Appendix', 'Equation', 'See', 'If', 'When', 'Since',
+    'Then', 'Proof', 'Random', 'Brown', 'Chapman', 'Kolmogorov', 'Schauder',
+    'Haar', 'Bessel', 'Cauchy', 'Borel', 'Cantelli', 'Parseval', 'Optional',
+    'Martingale', 'Brownian', 'Scholium',
+)
+
+
+def find_bare_math_errors(lines):
+    """Pass 1f: flag "character-type" formulas OUTSIDE math mode.
+
+    Math must be rendered with KaTeX, never as bare characters. Detects:
+      (A) raw Unicode math glyphs (σ √ ∑ ∞ ≤ ≥ π η Δ μ λ ...),
+      (B) ASCII math as plain text (Pr{ X(t) p_k(n) x0 ...).
+    Lines inside $...$ / $$...$$ / code fences are already stripped by
+    _strip_math_and_code, so anything left is genuinely outside math mode.
+    """
+    errs = []
+    in_fence = False
+    in_display = False
+    for i, line in enumerate(lines, 1):
+        # Skip <img ...> lines entirely: alt-text is a descriptive caption, not
+        # rendered markdown, so bare chars there are neither bugs nor renderable.
+        if '<img' in line:
+            continue
+        text, in_fence, in_display = _strip_math_and_code(
+            line, in_fence, in_display)
+        if not text:
+            continue
+        # (A) Unicode math glyphs
+        bad = [ch for ch in BARE_MATH_GLYPHS if ch in text]
+        if bad:
+            errs.append(
+                f'line {i}: character-type formula — raw Unicode math glyph(s) '
+                f'{"".join(bad)} outside math mode — wrap in $...$ / rewrite as '
+                f'KaTeX (formatting.md rule #17)')
+        # (B) probability / expectation / variance operators
+        for m in _PROB_OP_RE.finditer(text):
+            errs.append(
+                f'line {i}: character-type formula — bare operator '
+                f'"{m.group(0).strip()}" outside math mode — write as '
+                f'$\\Pr{{...}}$, $\\mathbb{{E}}[...]$, $\\operatorname{{Var}}(...)$ '
+                f'(rule #17)')
+        # (B) single-letter function call with math-like argument
+        for m in _FUNC_CALL_RE.finditer(text):
+            arg = m.group(2)
+            # skip if the argument is a real English phrase (label-like)
+            if re.search(r'[a-z]{4,}', arg):
+                continue
+            # skip if preceded by a label word (e.g. "Example (X(t)...")
+            pre = text[max(0, m.start() - 16):m.start()]
+            last_tok = pre.split()[-1] if pre.split() else ''
+            if last_tok.rstrip('(') in _LABEL_WORDS:
+                continue
+            # argument must look math-like (digit / _ / , | = < > ; ^ ± or 1-2 letters)
+            if (re.search(r'[\d_,|=<>;^±]', arg)
+                    or re.fullmatch(r'[A-Za-z]{1,2}', arg)):
+                errs.append(
+                    f'line {i}: character-type formula — bare function call '
+                    f'"{m.group(0)}" outside math mode — wrap as ${m.group(0)}$ '
+                    f'(rule #17)')
+        # (B) variable + digit subscript token
+        for m in _VAR_DIGIT_RE.finditer(text):
+            errs.append(
+                f'line {i}: character-type formula — bare variable '
+                f'"{m.group(0)}" (variable+subscript) outside math mode — '
+                f'write as ${m.group(0)[0]}_{m.group(0)[1]}$ (rule #17)')
+    return errs
+
+
+
 def find_swallowed_prefix_errors(lines):
     """Pass 1e: flag `$` that swallowed a blockquote/list/number prefix."""
     errs = []

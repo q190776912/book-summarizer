@@ -149,14 +149,23 @@ def check_missing_sections(md_lines, ext_dir, ch):
     if not secs:
         return out
     present = set()
+    present_first = set()
     for ln in md_lines:
         m = SEC_HEADING_RE.match(ln)
         if m:
-            present.add(m.group(1))
+            num = m.group(1)
+            present.add(num)
+            # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
+            # （Fraleigh 等：骨架存 "6.26"，md 用 `## §26.1` —— 全局节号 26
+            # 是 md 的首级分量、也是骨架的末级分量）。该匹配为「附加」，
+            # 不破坏标准书（md 用 `## §A.B` 时仍靠精确匹配 s in present），
+            # 仅对全局编号书放行 skeleton-last in present_first。
+            present_first.add(num.split('.')[0])
     for s, title in secs:
         if EXER_SEC_TITLE_RE.search(title):
             continue  # 习题专属节按规则可省略，不强制要求落地
-        if s not in present:
+        ok = (s in present) or (s.split('.')[-1] in present_first)
+        if not ok:
             out.append(f"  x Ch{ch} §{s}: 骨架契约要求此节，但 md 无对应 `## §{s}` 标题")
     return out
 

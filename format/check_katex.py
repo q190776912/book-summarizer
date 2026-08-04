@@ -25,6 +25,14 @@ Two layers of checking:
     4. Unbalanced inline $...$ (odd number of unescaped $ outside display math).
     5. Known KaTeX-unsupported macros that cause cascade render failure.
     6. Over-indented blockquote display math (`>    $$` / `>    <formula>`): an
+    7. 嵌套列表错位：顶层条目 `(n)` 紧接 `- (i)` 子项 bullet 之后且缺空行，
+       渲染会将 `(n)` 误与子项并列；`--fix` 自动在 `(n)` 前补空行。
+    8. 结构性条目被吞进块引用（`> **定义/定理/...**`）：结构性条目必须独立成行
+       （顶层），`--fix` 自动 unwrap（去掉 `>` 前缀）。
+    9. (NEW, rule #17) character-type formulas outside math mode — raw Unicode
+       math glyphs (σ √ ∑ ∞ ≤ ≥ π η Δ μ λ …) and ASCII math written as plain
+       text (Pr{ X(t) p_k(n) x0 …) MUST be wrapped in $...$ / rewritten as
+       KaTeX. Math must never appear as bare characters in running text.
        extra indent makes CommonMark treat `$$` as `   $$` content, which KaTeX
        does NOT recognize as a math fence — the formula renders as literal text.
        MUST be single-space (`> $$` / `> <formula>`).
@@ -60,6 +68,7 @@ from format.katex_heuristics import (
     find_raw_arrow_errors,
     find_naked_command_errors,
     find_swallowed_prefix_errors,
+    find_bare_math_errors,
     _fence_looks_like_math,
 )
 from format.katex_render import run_render_check
@@ -233,6 +242,9 @@ def process_file(path, fix):
 
     # --- Pass 1e: `$` swallowed a blockquote/list/number prefix ---
     errors.extend(find_swallowed_prefix_errors(lines))
+
+    # --- Pass 1f: character-type formulas outside math mode (rule #17) ---
+    errors.extend(find_bare_math_errors(lines))
 
     # --- Pass 1i: equation number annotation outside $$ block (rule #10) ---
     # Detect lines starting with （式 (N.M)） that follow a $$ closing line.

@@ -34,8 +34,53 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pa
 import os
 import re
 import json
+import glob
 import argparse
 from PIL import Image
+
+try:
+    import fitz  # PyMuPDF — already a dependency of the figure pipeline
+    _HAVE_FITZ = True
+except Exception:
+    _HAVE_FITZ = False
+
+# Cache rendered page widths (px) keyed by (book_dir, page, dpi) so we don't
+# reopen the PDF for every figure on the same page.
+_PAGE_PX_CACHE = {}
+
+
+def page_px_width(book_dir, page, dpi=200):
+    """Return the rendered page width in px at `dpi` for a figure's PDF page.
+
+    The embedder used to divide a figure's crop width by a HARD-CODED 1653
+    (= A4 width @200 DPI). That is wrong for any book that is not A4 — e.g.
+    the Karlin–Taylor stochastic-processes book is A3 (842x1191 pt), whose
+    @200 DPI page width is 2339 px. Dividing by 1653 inflated every width by
+    ~1.414x and pushed wide figures over 100%. We now read the ACTUAL page
+    MediaBox from the PDF, so the percentage reflects the real column
+    fraction regardless of page size/orientation (and handles landscape
+    pages correctly too).
+
+    Returns None when the PDF or fitz is unavailable, so callers fall back to
+    the historical 1653 constant (preserves old behaviour elsewhere).
+    """
+    if not _HAVE_FITZ or not page:
+        return None
+    key = (book_dir, int(page), int(dpi))
+    if key in _PAGE_PX_CACHE:
+        return _PAGE_PX_CACHE[key]
+    val = None
+    pdfs = glob.glob(os.path.join(book_dir, "*.pdf"))
+    if pdfs:
+        try:
+            doc = fitz.open(pdfs[0])
+            mb = doc[int(page) - 1].mediabox
+            val = float(mb.width) / 72.0 * dpi
+            doc.close()
+        except Exception:
+            val = None
+    _PAGE_PX_CACHE[key] = val
+    return val
 
 ITEM_KINDS = r"(?:定理|引理|命题|推论|例|示例|定义|公理|公设|注|注释|评注)"
 # English item-kind -> canonical Chinese kind, so a bilingual .md that writes
@@ -421,7 +466,11 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
             bbox = f.get("bbox", None)
             if bbox:
                 crop_w = bbox[2] - bbox[0] + 16
-                pct = round(crop_w / 1653 * 100, 1)
+                dpi = f.get("dpi", 200)
+                denom = page_px_width(book_dir, f.get("page"), dpi) or 1653
+                pct = round(crop_w / denom * 100, 1)
+                if pct > 100:
+                    pct = 100.0   # full-bleed figure -> fills the reader column
             else:
                 pct = 45.0
             rel = "_extract/figure/" + fname

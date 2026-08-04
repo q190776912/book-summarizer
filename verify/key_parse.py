@@ -11,6 +11,21 @@ import re, sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# --- fraleigh scheme: section-based two-level (Fraleigh《抽象代数基础教程》) ---
+# Unlike 周民强-type two-level (where first number == CHAPTER and label counters
+# are independent/shared), Fraleigh numbers items per global SECTION, and the
+# Chinese translation groups sections into chapters (ch1 = secs 1-7, ch2 = secs
+# 8-11, ...). Item keys are 标签S.N where S is the SECTION number: 定义8.1,
+# 例1.2, 表1.20, 图3.6, 定理8.5. Labels include 例/表/图 (extractor emits them).
+FR_COMBINED_LABELS = '|'.join(
+    ['定义', '定理', '引理', '推论', '命题', '例', '表', '图',
+     'Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
+     'Example', 'Table', 'Figure'])
+FR_ENTRY_RE = re.compile(
+    r'\*\*(' + FR_COMBINED_LABELS + r')\s*(\d+)\.(\d+)[^\n*]*\*+')
+FR_PROSE_RE = re.compile(
+    r'(' + FR_COMBINED_LABELS + r')\s*(\d+)\.(\d+)')
+
 # --- three-level (default) key parsing ---
 # Matches both dash (N.S-N) and dot (N.S.N) numbering — the extractor
 # canonicalizes everything to dash, but the .md may keep the book's dot style.
@@ -202,6 +217,12 @@ def keys_in_md(path, scheme='three-level', chapter_roman=None):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+            elif scheme == 'fraleigh':
+                for m in FR_ENTRY_RE.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
+                    entries.add(key); allk.add(key)
+                for m in FR_PROSE_RE.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             elif scheme == 'roman':
                 for m in ENTRY_RE_ROMAN.finditer(line):

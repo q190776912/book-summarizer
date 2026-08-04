@@ -8,7 +8,7 @@
 叫什么」的权威清单 —— 于是必然出现：漏节、节序颠倒、条目丢标题、练习被随手归拢。
 
 本脚本直接从 `page_*.json` 扫出这份清单，**按页码顺序**输出，作为写作时的结构契约：
-骨架里有几节就必须写几节、顺序照抄、每个 ITEM/EXER 都要落地、印刷标题必须进标签。
+骨架里有几节就必须写几节、顺序照抄、每个 ITEM 都要落地、印刷标题必须进标签。`EXER`（练习）按 `references/formatting.md` 的「习题收录规则」处理：穿插习题原位落地，章末整块习题省略（不强制落地）。
 
 用法
 ----
@@ -141,7 +141,9 @@ def main():
         with open(out, 'w', encoding='utf-8') as f:
             f.write('# Chapter %d skeleton (pages %d-%d, scheme=%s)\n' % (ch, start, end, scheme))
             f.write('# THIS FILE IS A WRITING CONTRACT: emit every SEC in this order,\n')
-            f.write('# cover every ITEM and EXER in this order, keep every printed title.\n')
+            f.write('# cover every ITEM in this order, keep every printed title.\n')
+            f.write('# EXER (exercises): follow references/formatting.md 习题收录规则\n')
+            f.write('#   (interleaved exercises kept in place; chapter-end blocks omitted).\n')
             f.write('# kind  number      page  printed-title\n')
             for p, kind, num, title in rows:
                 if kind == 'SEC':

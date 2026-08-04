@@ -27,14 +27,21 @@ TYPE_MAP = {
     'Assertion': 'assertion',
 }
 
-# 条目标签（行首或行内粗体）：类型 + 数字（支持 N 或 N.M 三级编号）
+# 条目标签（行首或行内粗体）：类型 + 数字（支持 N / N.M / N.M.K 三级编号）
 LABEL_RE = re.compile(
     r'^\**\s*((?:定义|定理|引理|推论|命题|公理|断言|'
     r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Assertion))'
-    r'\s*([0-9]+(?:\.[0-9]+)?)', re.I)
-# 章节标题：行首 `N.M Title`（Title 以大写字母开头）
-SEC_RE = re.compile(r'^\s*(\d+\.\d+)\s+([A-Z][A-Za-z].{1,40})')
-SEC_RE2 = re.compile(r'§\s*(\d+\.\d+)')
+    r'\s*([0-9]+(?:\.[0-9]+){0,2})', re.I)
+# 数字前置标签（Vakil 惯例）：`**12.2.1（定理 …）：**`；书内 OCR 为 `12.2.1. Theorem.`
+# —— 编号在前，类型在 `（`/`（`/`.` 之后
+LABEL_RE_NF = re.compile(
+    r'^\**\s*([0-9]+(?:\.[0-9]+){0,2})\s*[.．。（(]\s*'
+    r'((?:定义|定理|引理|推论|命题|公理|断言|'
+    r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Assertion))', re.I)
+# 章节标题：行首 `N.M Title`（Title 以大写字母开头；容忍 OCR 把破折号误识为 xx）
+SEC_RE = re.compile(r'^\s*(\d+\.\d+)\s*(?:[—–\-–—]+\s*|xx\s*)?([A-Z][A-Za-z].{1,40})')
+# §N.M 仅当位于行首才算章节标题；行内 `in §11.3` 是交叉引用，不能作为标题
+SEC_RE2 = re.compile(r'^\s*§\s*(\d+\.\d+)')
 # 章节标题（冒号格式）：行首 `N: Title`（如 `1:Definitions`）→ 归入本章第 N 节
 SEC_RE3 = re.compile(r'^\s*(\d+):\s*([A-Z][A-Za-z].{1,40})')
 
@@ -62,6 +69,17 @@ def texts_of_page(p, ext):
     return [s for _, s in blocks]
 
 
+def _label_type(ln):
+    """返回 (type_word, num_str) 或 None。兼容「类型前置」与「数字前置」两种标签。"""
+    m = LABEL_RE.match(ln)
+    if m:
+        return m.group(1), m.group(2)
+    m = LABEL_RE_NF.match(ln)
+    if m:
+        return m.group(2), m.group(1)
+    return None
+
+
 def parse_md(path):
     secs = {}
     cur = None
@@ -70,12 +88,12 @@ def parse_md(path):
         if m:
             cur = m.group(1)
         if cur:
-            m2 = LABEL_RE.search(ln.strip())
-            if m2:
-                t = TYPE_MAP.get(m2.group(1))
+            r = _label_type(ln.strip())
+            if r:
+                t = TYPE_MAP.get(r[0])
                 if t:
-                    g = m2.group(2)
-                    num = int(g.split('.')[1]) if '.' in g else int(g)
+                    g = r[1]
+                    num = int(g.split('.')[-1]) if '.' in g else int(g)
                     secs.setdefault(cur, {}).setdefault(t, []).append(num)
     return secs
 
@@ -101,12 +119,12 @@ def parse_book(start, end, ext, chnum=None):
             # 只认「本章」的 N.M 节：消除书内「见 2.1 节」之类交叉引用造成的误报
             if cand and (chnum is None or cand.split('.')[0] == str(chnum)):
                 cur = cand
-            ml = LABEL_RE.match(st)
+            ml = _label_type(st)
             if ml and cur:
-                t = TYPE_MAP.get(ml.group(1))
+                t = TYPE_MAP.get(ml[0])
                 if t:
-                    g = ml.group(2)
-                    num = int(g.split('.')[1]) if '.' in g else int(g)
+                    g = ml[1]
+                    num = int(g.split('.')[-1]) if '.' in g else int(g)
                     secs.setdefault(cur, {}).setdefault(t, []).append(num)
     return secs
 
@@ -126,7 +144,7 @@ def main():
         types = sorted(set(md_t) | set(bk_t))
         for t in types:
             mc = len(md_t.get(t, []))
-            bc = len(bk_t.get(t, []))
+            bc = len(set(bk_t.get(t, [])))  # 书内同一条目常以「N.M.K. Type.」与「Type N.M.K」两种形态出现，去重
             if mc != bc:
                 problems += 1
                 print('  [MISMATCH] §%s %s: 书中 %d 条, 总结 %d 条'

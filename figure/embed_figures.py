@@ -94,10 +94,12 @@ def parse_ref(cap):
         kind = kind_match.group(0)
         num = re.sub(r"\s+", "", m.group(1))
         return (kind, num, "证明" in cap)
-    # Exercise (practice-problem) reference. Exercises are now retained in
-    # summaries, so a figure captioned with an exercise (e.g. "Exercise 11.4.A"
-    # / "习题 1.2.A") should still anchor to that exercise entry
-    # (`**11.4.A（练习 (Exercise)）：…`) instead of being skipped.
+    # Exercise (practice-problem) reference. When an exercise entry is kept in the
+    # summary (interleaved exercises per references/formatting.md 习题收录规则), a
+    # figure captioned with that exercise (e.g. "Exercise 11.4.A" / "习题 1.2.A")
+    # anchors to the exercise entry (`**11.4.A（练习 (Exercise)）：…`) instead of
+    # being skipped. (Chapter-end exercise blocks are omitted, so their figures
+    # are simply not embedded.)
     em = EX_ITEM_RE_EN.search(cap) or EX_ITEM_RE.search(cap)
     if em:
         num = re.sub(r"\s+", "", em.group(1))

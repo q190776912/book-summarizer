@@ -6,8 +6,10 @@
 页眉 / 条目标题缺失 / 缺节）再次整批通过。
 
 本 skill 的体例铁律（详见 SKILL.md）：
-  - 练习必须【原位内联】为 `**练习 N.M.X（Exercise N.M.X）：**`，绝不可抽出来在
-    节末/章末新建 `### 练习` / `### 习题` / `### Exercises` 归拢块（= 重排原书结构）。
+  - 习题策略（详见 `references/formatting.md`「习题收录规则」）：**穿插在小节中的习题
+    原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`）；**章末整块习题（带专门习题
+    小标题 / 整节都是习题）省略不写**。绝不可把原书穿插排布的内容抽出来在节末/章末新建
+    `### 练习` / `### 习题` / `### Exercises` 归拢块（= 重排原书结构，由 p_exer_block 拦截）。
   - 必须逐条读懂重写，剔除页眉/页脚/版权行，不得照抄 OCR 文本流。
   - number-first 体例（编号在前、标题在后）：条目标签必须是
     `**N.M.K（标题）：**` 或 `**定义 N.M.K**：`，禁止裸 `**N.M.K**` 把标题甩到正文。
@@ -46,7 +48,8 @@ import re
 from verify.registry import VerifyLayer, LayerResult, LayerFixResult
 
 # ── 练习归拢块：独立标题 / 独立加粗 ───────────────────────────────────────
-# 节末/章末的 `### 练习` `### 习题` `### Exercises` 标题（练习应原位内联，不该有标题块）
+# 节末/章末「自建」的 `### 练习` `### 习题` `### Exercises` 归拢标题块——策略上章末整块习题本就省略不写，
+# 此处专拦「无中生有新建归拢块」的违规（穿插习题应原位内联为 `**练习 N.M.X**：` 而非标题块）。
 EXER_HEADING_RE = re.compile(r'^#{1,6}\s+.*(?:练习|习题|[Ee]xercises?)\s*$')
 # 独立加粗（无编号）：`**练习**` / `**习题**` / `**Exercise**` / `**练习：**`
 EXER_BOLD_RE = re.compile(r'^\*\*(?:练习|习题|Exercise)\b[：:]*\*\*\s*$')
@@ -122,6 +125,11 @@ def check_bare_items(lines, scheme):
     return out
 
 
+# 习题专属节（如 "1.11 Exercises" / "3.9 习题" / "Problems"）——按习题收录规则可省略，
+# 不计入「骨架必写节」契约（详见 references/formatting.md 习题收录规则）
+EXER_SEC_TITLE_RE = re.compile(r'(练习|习题|[Ee]xercises?|[Pp]roblems?)\b')
+
+
 def check_missing_sections(md_lines, ext_dir, ch):
     out = []
     skel = os.path.join(ext_dir, 'ch%d_skeleton.txt' % ch)
@@ -134,7 +142,8 @@ def check_missing_sections(md_lines, ext_dir, ch):
                 if ln.startswith('SEC'):
                     parts = ln.split()
                     if len(parts) >= 2:
-                        secs.append(parts[1].strip())
+                        # (num, printed-title)；title 含页码前缀，仅用于习题节判定
+                        secs.append((parts[1].strip(), ' '.join(parts[2:])))
     except Exception:
         return out
     if not secs:
@@ -144,7 +153,9 @@ def check_missing_sections(md_lines, ext_dir, ch):
         m = SEC_HEADING_RE.match(ln)
         if m:
             present.add(m.group(1))
-    for s in secs:
+    for s, title in secs:
+        if EXER_SEC_TITLE_RE.search(title):
+            continue  # 习题专属节按规则可省略，不强制要求落地
         if s not in present:
             out.append(f"  x Ch{ch} §{s}: 骨架契约要求此节，但 md 无对应 `## §{s}` 标题")
     return out

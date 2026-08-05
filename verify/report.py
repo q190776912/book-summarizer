@@ -93,6 +93,14 @@ def print_result(r):
         print("\nExtraction warnings (non-blocking, re-scan clean):")
         for w in r['warnings']:
             print(f"  {w}")
+    if r.get('b_tail_warnings'):
+        print("\nB-LAYER TAIL CHECK (non-blocking, verify chapter/section end):")
+        for w in r['b_tail_warnings']:
+            print(f"  ~ {w.strip()}")
+    if r.get('b_gap_warnings'):
+        print("\nB-LAYER NUMBERING GAP CHECK (non-blocking, verify against source):")
+        for w in r['b_gap_warnings']:
+            print(f"  ~ {w.strip()}")
     if r['katex_errors']:
         problems += 1
         print(f"\nC-LAYER KATEX ERRORS ({len(r['katex_lines'])}):")
@@ -359,6 +367,10 @@ def print_result(r):
               f"are Tier 1 (kept complete), exempt:")
         for g in p_proof_verbose:
             print(g)
+
+    # B-LAYER BLOCKING 已包含「重要概念首项缺失」(原 Q 层逻辑，2026-08-05 并入 B)：
+    # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
+    # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。
 
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "

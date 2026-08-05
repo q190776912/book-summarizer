@@ -36,7 +36,7 @@ def load_figure_index(ext):
 
 class VerifyContext:
     def __init__(self, ch, start, end, md_file, ext_dir, manual_path=None,
-                 ignore_keys=None, ignore_fig=None, scheme='three-level'):
+                 ignore_keys=None, ignore_fig=None, scheme='three-level', numbering='combined'):
         self.ch = ch
         self.start = start
         self.end = end
@@ -46,6 +46,7 @@ class VerifyContext:
         self.ignore_keys = ignore_keys or set()      # canonical dash-form keys
         self.ignore_fig = ignore_fig or set()
         self.scheme = scheme
+        self.numbering = numbering                    # 'combined' | 'per-type' (item numbering convention)
 
         # --- derived (populated by EXTRACT provider + B layer) ---
         self.items = None

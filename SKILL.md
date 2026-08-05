@@ -349,6 +349,7 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 
 - **结构性 / 格式校验层（统一强制关卡）**：由 `verify/verify_chapter.py` 执行，覆盖本 skill 定义的全部校验层。运行 `verify/verify_chapter.py --all <md> <extract_dir>`，**exit 0 才算通过**；`--fix` 可自动修复其中标记为可修复的层，其余须手动确认。各层的顺序、语义、`--fix` 范围、字节契约键集合 —— 全部见 [`references/verification.md`](references/verification.md)（SSOT，唯一权威）。
 - **内容保真 / 写作质量关卡**（OCR 噪声修正、UTF-8 无乱码、粗体标签与 `§` 标识、KaTeX 渲染成功、英文标注、输出语种、一次性写齐、文件命名、图片嵌入、公式忠于原文、非核心内容摘要等）：定义见 [`references/formatting.md`](references/formatting.md) 与 [`references/verification.md`](references/verification.md) 对应章节；顶层「核心原则」亦为本类总纲。
+- **OCR 无法识别的遗漏标签**：书中确有但 OCR 漏识的条目，按两步法补写 + 标注 + 登记，查漏机制与 over-mark 守卫见 [`references/missing_label_policy.md`](references/missing_label_policy.md)。
 
 ---
 

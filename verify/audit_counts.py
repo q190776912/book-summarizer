@@ -27,11 +27,14 @@ TYPE_MAP = {
     'Assertion': 'assertion',
 }
 
-# 条目标签（行首或行内粗体）：类型 + 数字（支持 N / N.M / N.M.K 三级编号）
+# 条目标签（行首或行内粗体）：类型 + 数字（支持 N / N.M / N.M.K 三级编号；
+# OCR 可能把分隔符识别为 。．·，也可能出现 类型（数字） 形态。
+# 额外容忍三种 OCR 变体：行首多余点号（`．定义10.2.1…`）、类型与编号之间的
+# 点号（`引理.7.2.1…`）、末段数字被识别成小写 l（`定义9.2.l…`）。
 LABEL_RE = re.compile(
-    r'^\**\s*((?:定义|定理|引理|推论|命题|公理|断言|'
+    r'^[.．·。]*\**\s*((?:定义|定理|引理|推论|命题|公理|断言|'
     r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Assertion))'
-    r'\s*([0-9]+(?:\.[0-9]+){0,2})', re.I)
+    r'\s*[.．·。]?\s*[（(]?\s*([0-9]+(?:[.．·。][0-9l]+){0,2})\s*[）)]?', re.I)
 # 数字前置标签（Vakil 惯例）：`**12.2.1（定理 …）：**`；书内 OCR 为 `12.2.1. Theorem.`
 # —— 编号在前，类型在 `（`/`（`/`.` 之后
 LABEL_RE_NF = re.compile(
@@ -44,6 +47,15 @@ SEC_RE = re.compile(r'^\s*(\d+\.\d+)\s*(?:[—–\-–—]+\s*|xx\s*)?([A-Z][A-Z
 SEC_RE2 = re.compile(r'^\s*§\s*(\d+\.\d+)')
 # 章节标题（冒号格式）：行首 `N: Title`（如 `1:Definitions`）→ 归入本章第 N 节
 SEC_RE3 = re.compile(r'^\s*(\d+):\s*([A-Z][A-Za-z].{1,40})')
+# 中文书籍章节标题（高等代数学等）：`S8.1二次型的化简` / `8 1.1二阶行列式` /
+# `875初等因子`（§ 被 OCR 成 8 且与节号粘连）/ 裸 `6.2`（标题换行）。
+# 数字与标题之间不允许空格且标题 ≤24 字符，可滤掉正文里的节号引用
+# （如 `4.1 的交换性可得…`、`10.1中定义的双线性型…`、`8.1.3），所以…`）。
+SEC_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})[\.\．·。]?(?!\s+[\u4e00-\u9fff])(?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
+SECBARE_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})$')
+# 粘连写法：`875初等因子` / `S62对角化` / `82.3方阵的逆阵`（§/S/s/8 与节号粘连，
+# 节与节号之间可有可无点号）。
+SECGLUE_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 
 
 def texts_of_page(p, ext):
@@ -80,6 +92,12 @@ def _label_type(ln):
     return None
 
 
+def _norm_num(g):
+    """把 OCR 常见分隔符  。．·  统一为 . 再取末段数字；末段若被识别为 l 当作 1。"""
+    seg = g.replace('。', '.').replace('．', '.').replace('·', '.').split('.')[-1]
+    return int(seg.replace('l', '1'))
+
+
 def parse_md(path):
     secs = {}
     cur = None
@@ -92,9 +110,7 @@ def parse_md(path):
             if r:
                 t = TYPE_MAP.get(r[0])
                 if t:
-                    g = r[1]
-                    num = int(g.split('.')[-1]) if '.' in g else int(g)
-                    secs.setdefault(cur, {}).setdefault(t, []).append(num)
+                    secs.setdefault(cur, {}).setdefault(t, []).append(_norm_num(r[1]))
     return secs
 
 
@@ -102,30 +118,49 @@ def parse_book(start, end, ext, chnum=None):
     secs = {}
     cur = None
     for p in range(start, end + 1):
-        for s in texts_of_page(p, ext):
-            st = s.strip()
-            cand = None
-            ms = SEC_RE.match(st)
-            if ms:
-                cand = ms.group(1)
-            else:
-                ms2 = SEC_RE2.search(st)
-                if ms2:
-                    cand = ms2.group(1)
-            if not cand:
-                ms3 = SEC_RE3.match(st)
-                if ms3:
-                    cand = '%s.%s' % (chnum, ms3.group(1)) if chnum else None
-            # 只认「本章」的 N.M 节：消除书内「见 2.1 节」之类交叉引用造成的误报
-            if cand and (chnum is None or cand.split('.')[0] == str(chnum)):
-                cur = cand
-            ml = _label_type(st)
-            if ml and cur:
-                t = TYPE_MAP.get(ml[0])
-                if t:
-                    g = ml[1]
-                    num = int(g.split('.')[-1]) if '.' in g else int(g)
-                    secs.setdefault(cur, {}).setdefault(t, []).append(num)
+        for block in texts_of_page(p, ext):
+            for ln in block.split('\n'):
+                st = ln.strip()
+                if not st:
+                    continue
+                cand = None
+                ms = SEC_RE.match(st)
+                if ms:
+                    cand = ms.group(1)
+                else:
+                    ms2 = SEC_RE2.search(st)
+                    if ms2:
+                        cand = ms2.group(1)
+                if not cand:
+                    ms3 = SEC_RE3.match(st)
+                    if ms3:
+                        cand = '%s.%s' % (chnum, ms3.group(1)) if chnum else None
+                if not cand:
+                    mcn = SEC_CN.match(st)
+                    if mcn and not mcn.group(1).startswith('0') and not mcn.group(2).startswith('0') and int(mcn.group(2)) != 0:
+                        cand = '%s.%s' % mcn.group(1, 2)
+                    else:
+                        mgl = SECGLUE_CN.match(st)
+                        if mgl and not mgl.group(1).startswith('0') and not mgl.group(2).startswith('0') and int(mgl.group(2)) != 0:
+                            cand = '%s.%s' % mgl.group(1, 2)
+                        else:
+                            mbb = SECBARE_CN.match(st)
+                            if mbb and not mbb.group(1).startswith('0') and not mbb.group(2).startswith('0') and int(mbb.group(2)) != 0:
+                                cand = '%s.%s' % mbb.group(1, 2)
+                # 只认「本章」的 N.M 节：消除书内「见 2.1 节」之类交叉引用造成的误报
+                if cand and (chnum is None or cand.split('.')[0] == str(chnum)):
+                    cur = cand
+                # OCR 变体归一化：p216「引I理4.4.1」；p320「论 7.2.1」（推论被截断，
+                # 仅当编号属于当前节时归一，避免把「论5.3.2即得…」这类跨节引用误判）
+                st2 = re.sub(r'^引[Il1]?理', '引理', st)
+                if cur:
+                    st2 = re.sub(r'^论(?=\s*%s[.．·。])' % re.escape(cur), '推论', st2)
+                ml = _label_type(st2)
+                # 无分隔符的纯数字标签（如正文引用「命题29」）不是正式条目，跳过
+                if ml and cur and re.search(r'[.．·。]', ml[1]):
+                    t = TYPE_MAP.get(ml[0])
+                    if t:
+                        secs.setdefault(cur, {}).setdefault(t, []).append(_norm_num(ml[1]))
     return secs
 
 

@@ -69,7 +69,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
         if num_re.search(before) or num_re.search(after_ctx) or re.search(r'[到至～]', before + after_ctx):
             return
 
-    label = '裸'
+    label = 'uncat'
     ctx_self = (before[-60:] if len(before) > 60 else before) + after[:40]
     lm = label_re.search(ctx_self)
     if lm:
@@ -87,10 +87,10 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
         elif re.search(r'命题|Proposition', raw):
             label = '命题'
 
-    if label == '裸' and active_section_label:
+    if label == 'uncat' and active_section_label:
         label = active_section_label
 
-    if label == '裸':
+    if label == 'uncat':
         if i > 0:
             prev_txt = all_blocks[i-1][2]
             prev_label = label_re.search(prev_txt[-40:])
@@ -98,7 +98,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
                 raw = prev_label.group()
                 if re.search(r'例|Example|定义|Definition', raw):
                     label = '例' if re.search(r'例|Example', raw) else '定义'
-        if label == '裸' and i < len(all_blocks) - 1:
+        if label == 'uncat' and i < len(all_blocks) - 1:
             next_txt = all_blocks[i+1][2]
             next_label = label_re.search(next_txt[:40])
             if next_label:
@@ -231,15 +231,17 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
         for mo in manual_overrides:
             if mo['key'] in existing:
                 items[existing[mo['key']]] = {'key': mo['key'], 'page': mo['page'],
-                                              'label': mo['label'], 'text': mo['text']}
+                                              'label': mo['label'], 'text': mo['text'],
+                                              'agent_recovered': True}
             else:
                 items.append({'key': mo['key'], 'page': mo['page'],
-                              'label': mo['label'], 'text': mo['text']})
+                              'label': mo['label'], 'text': mo['text'],
+                              'agent_recovered': True})
         items.sort(key=lambda x: (x['page'], x['key']))
     return items, [], []
 
 
-def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, scheme='three-level'):
+def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, scheme='three-level', numbering='combined'):
     if scheme == 'fraleigh':
         return extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides)
     if scheme == 'two-level':
@@ -249,10 +251,12 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             for mo in manual_overrides:
                 if mo['key'] in existing:
                     items[existing[mo['key']]] = {'key': mo['key'], 'page': mo['page'],
-                                                  'label': mo['label'], 'text': mo['text']}
+                                                  'label': mo['label'], 'text': mo['text'],
+                                                  'agent_recovered': True}
                 else:
                     items.append({'key': mo['key'], 'page': mo['page'],
-                                  'label': mo['label'], 'text': mo['text']})
+                                  'label': mo['label'], 'text': mo['text'],
+                                  'agent_recovered': True})
             items.sort(key=lambda x: (x['page'], x['key']))
         return items, warnings, blocking
     # ---- Step 2: read all JSONs, sort by (page, poly_y) ----
@@ -342,7 +346,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     for it in raw_matches:
         if it['key'] not in seen:
             seen[it['key']] = it
-        elif seen[it['key']]['label'] == '裸' and it['label'] != '裸':
+        elif seen[it['key']]['label'] == 'uncat' and it['label'] != 'uncat':
             seen[it['key']] = it
 
     items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
@@ -353,15 +357,17 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
         for mo in manual_overrides:
             if mo['key'] in existing:
                 items[existing[mo['key']]] = {'key': mo['key'], 'page': mo['page'],
-                                              'label': mo['label'], 'text': mo['text']}
+                                              'label': mo['label'], 'text': mo['text'],
+                                              'agent_recovered': True}
             else:
                 items.append({'key': mo['key'], 'page': mo['page'],
-                              'label': mo['label'], 'text': mo['text']})
+                              'label': mo['label'], 'text': mo['text'],
+                              'agent_recovered': True})
         items.sort(key=lambda x: (x['page'], x['key']))
 
     # ---- Step 5-6: boundary & density checks with auto-recovery (B-layer) ----
     items, warnings, blocking = recover_missing_items(
-        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD
+        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, numbering
     )
     return items, warnings, blocking
 

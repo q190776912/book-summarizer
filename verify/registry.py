@@ -102,14 +102,17 @@ class ManagerConfig:
     ignore_fig: Set[str] = field(default_factory=set)
     manual_path: Optional[str] = None
     disabled: Set[str] = field(default_factory=set)
+    numbering: str = 'combined'            # item numbering convention: 'combined' | 'per-type'
 
     @classmethod
     def load_book_config(cls, book_dir: str) -> "ManagerConfig":
-        """Read <book_dir>/verify_config.json -> {"disable": ["O", ...]}.
+        """Read <book_dir>/verify_config.json -> {"disable": ["O", ...], "numbering": "..."}.
 
         Returns a config whose `disabled` set is populated from the JSON
-        `disable` list (codes upper-cased). Missing/invalid file -> all layers
-        enabled. EXTRACT is never disableable (it is the mandatory provider).
+        `disable` list (codes upper-cased) and `numbering` from the JSON
+        `numbering` key (validated to 'combined'|'per-type', else 'combined').
+        Missing/invalid file -> all layers enabled, combined numbering.
+        EXTRACT is never disableable (it is the mandatory provider).
         """
         cfg = cls()
         p = os.path.join(book_dir, 'verify_config.json')
@@ -120,6 +123,9 @@ class ManagerConfig:
                 disable = data.get('disable', [])
                 if isinstance(disable, list):
                     cfg.disabled = set(str(x).upper() for x in disable)
+                numbering = data.get('numbering', 'combined')
+                if numbering in ('combined', 'per-type'):
+                    cfg.numbering = numbering
             except Exception:
                 pass
         return cfg
@@ -182,6 +188,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'truly_missing': [], 'mentioned_only': [], 'extra': [],
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
+    'b_gap_warnings': [], 'b_tail_warnings': [],
     'entry_keys': set(), 'd_layer': {'missing_sections': [], 'tail_gaps': {}, 'suspect': {}},
     'ignored_hit': [],
     'fig_missing': [], 'fig_extra': [], 'fig_invalid': [], 'fig_invalid_warn': [], 'fig_skipped': False,
@@ -220,6 +227,7 @@ class VerifyManager:
             ignore_keys=cfg.ignore_keys,
             ignore_fig=cfg.ignore_fig,
             scheme=cfg.scheme,
+            numbering=cfg.numbering,
         )
 
     def verify_one(self, ch, start, end, md_file, ext_dir) -> Dict[str, Any]:

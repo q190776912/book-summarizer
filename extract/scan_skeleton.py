@@ -56,6 +56,16 @@ SEC_2 = re.compile(r'^(\d{1,2})\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$')
 ITEM_2 = re.compile(r'^(\d{1,2})\.(\d{1,3})\.\s*(.{0,90})')
 EXER_2 = re.compile(r'^(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
+# Chinese-scheme books (e.g. 高等代数学): "1.5行列式的计算" / "定理1.4.1 ..." /
+# "(1.1.3)" / "习题 1.3". 条目标签在编号之前，节标题可带 § 或 * + x × ★ 记号。
+SEC_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})[\.\．·。]?(?!\s+[\u4e00-\u9fff])(?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
+SECBARE_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})$')
+SECGLUE_CN = re.compile(r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
+ITEM_CN = re.compile(
+    r'^(?:定理|定义|引理|推论|命题|性质|例|注|表|图)\s*[（(]?(\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)]?(?!\d)\s*(.{0,90})')
+BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
+EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
+
 
 def lines_of(page_json):
     for it in page_json.get('text', []):
@@ -87,6 +97,38 @@ def scan(extract_dir, ch, start, end, scheme):
                 m = ITEM_2.match(ln)
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'ITEM', '%s.%s' % m.group(1, 2), m.group(3).strip()))
+            elif scheme == 'cn':
+                m = SEC_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
+                        continue
+                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2),
+                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip()))
+                    continue
+                m = SECBARE_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
+                        continue
+                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), ''))
+                    continue
+                m = SECGLUE_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
+                        continue
+                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2),
+                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip()))
+                    continue
+                m = ITEM_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    rows.append((p, 'ITEM', '%s.%s.%s' % m.group(1, 2, 3), m.group(4).strip()))
+                    continue
+                m = BARE_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    rows.append((p, 'ITEM', '%s.%s.%s' % m.group(1, 2, 3), '(%s.%s.%s)' % m.group(1, 2, 3)))
+                    continue
+                m = EXER_CN.match(ln)
+                if m and int(m.group(1)) == ch:
+                    rows.append((p, 'EXER', '%s.%s' % m.group(1, 2), '习题 %s.%s' % m.group(1, 2)))
             else:
                 m = SEC_3.match(ln)
                 if m and int(m.group(1)) == ch and not m.group(3).endswith('.'):
@@ -124,11 +166,22 @@ def main():
     cm_path = os.path.join(extract_dir, 'chapter_map.json')
     with open(cm_path, encoding='utf-8') as fh:
         cm = json.load(fh)
-    chapters = cm['chapters'] if isinstance(cm, dict) and 'chapters' in cm else cm
+    if isinstance(cm, dict) and 'chapters' in cm:
+        chapters = cm['chapters']
+    elif isinstance(cm, dict):
+        # chapter_map.json may be a dict-of-dicts: {"1": {"name":..,"start":..,"end":..}, ...}
+        chapters = cm
+    else:
+        chapters = cm
     rng = {}
-    for c in chapters:
-        n = c.get('ch', c.get('chapter', c.get('n')))
-        rng[int(n)] = (int(c['start']), int(c['end']))
+    if isinstance(chapters, dict):
+        # keyed by chapter number (string)
+        for k, c in chapters.items():
+            rng[int(k)] = (int(c['start']), int(c['end']))
+    else:
+        for c in chapters:
+            n = c.get('num', c.get('ch', c.get('chapter', c.get('n'))))
+            rng[int(n)] = (int(c['start']), int(c['end']))
 
     for ch in (want or sorted(rng)):
         if ch not in rng:
@@ -136,6 +189,21 @@ def main():
             continue
         start, end = rng[ch]
         rows = scan(extract_dir, ch, start, end, scheme)
+        sec_best = {}
+        for row in rows:
+            if row[1] == 'SEC':
+                if row[2] not in sec_best or (sec_best[row[2]][3] == '' and row[3] != ''):
+                    sec_best[row[2]] = row
+        deduped, seen = [], set()
+        for row in rows:
+            if row[1] == 'SEC':
+                if row[2] in seen:
+                    continue
+                seen.add(row[2])
+                deduped.append(sec_best[row[2]])
+            else:
+                deduped.append(row)
+        rows = deduped
         out = os.path.join(extract_dir, 'ch%d_skeleton.txt' % ch)
         secs = []
         with open(out, 'w', encoding='utf-8') as f:

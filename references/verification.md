@@ -17,7 +17,7 @@
 | 0 | EXTRACT | 数据 provider | 提供原始 JSON 数据；必跑、永不可禁用 | 数据缺失→FAIL | 否 | [layers/extract.md](layers/extract.md) | [extract_layer.py](../verify/layers/extract_layer.py) |
 | 1 | D | MISSING SECTION / TAIL ORDINAL | 整节缺失 / 尾部缺口 | 整节缺失阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
 | 2 | A | TRULY MISSING | 提取到但 `.md` 无 | 阻断 | 否 | [layers/a.md](layers/a.md) | [a_layer.py](../verify/layers/a_layer.py) |
-| 3 | B | BLOCKING | 边界复查候选项 | 阻断 | 否 | [layers/b.md](layers/b.md) | [b_layer.py](../verify/layers/b_layer.py) |
+| 3 | B | BLOCKING | 缺号检测（MD 侧首项检验/连续性 + 提取侧辅助，OCR 误报经 MD 存在性过滤） | 阻断 | 否 | [layers/b.md](layers/b.md) | [b_layer.py](../verify/layers/b_layer.py) |
 | 4 | C | KATEX ERRORS | KaTeX 渲染失败 | 阻断 | 部分 | [layers/c.md](layers/c.md) | [c_layer.py](../verify/layers/c_layer.py) |
 | 5 | E | FIGURE COMPLETENESS | 图缺失 | 有图时阻断 | 否 | [layers/e.md](layers/e.md) | [e_layer.py](../verify/layers/e_layer.py) |
 | 6 | F | FIGURE VALIDITY | 图无效 | 有图时阻断 | 否 | [layers/f.md](layers/f.md) | [f_layer.py](../verify/layers/f_layer.py) |
@@ -352,3 +352,11 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 ### `--ignore-figure` 图片豁免
 
 `--ignore-figure fig_noise.json`（JSON 数组 `["6.7.9"]` 或字典）登记 OCR 噪声图豁免。脚本会自动合并 `_extract/ignore_ch{N}.json` 与 `_extract/ignore_fig_ch{N}.json`（存在即读）。
+
+---
+
+## 8. 遗漏标签处理策略（OCR 无法识别）
+
+书中确有、但 OCR 未识别其标题的重要概念（定义/定理/引理/推论/命题），导致总结缺失该条目时的标准流程 —— **两步法（Step 1 调参/归一化尝试识别 → Step 2 凭知识库补写 + 标 `（OCR无法识别）` + 登记 `manual_overrides_ch{N}.json`）**、B 层的两项查漏（整类首项缺失 / over-mark 守卫）、序列缺口兜底，详见 [`missing_label_policy.md`](missing_label_policy.md)（SSOT）。该策略无新字节契约键，复用 B 层 `blocking` / `warnings`。
+- **B 层宗旨与缺号检测权威逻辑见 [`layers/b.md`](layers/b.md)**（SSOT）：MD 侧首项检验 / 连续性为权威，提取侧序列缺口 / 尾部校验为辅助，OCR 误报经 MD 存在性过滤后抑制；分组按 `verify_config.json` 的 `numbering`（`combined` / `per-type`）。
+

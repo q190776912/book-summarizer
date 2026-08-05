@@ -124,12 +124,14 @@ def _merged_temp_path(book_dir, ch, section_files):
     return tmp
 
 
-def verify_one(ch, start, end, md, ext, manual_path, ignore_keys=None, scheme='three-level', ignore_fig=None, disabled=None):
+def verify_one(ch, start, end, md, ext, manual_path, ignore_keys=None, scheme='three-level', ignore_fig=None, disabled=None, numbering='combined'):
     """Verify a single chapter. Returns the byte-compatible result dict.
 
     Delegates all layer execution to VerifyManager, which merges each layer's
     metadata into the legacy verify_one contract (see registry.py).
     `disabled` is an optional iterable of layer codes (e.g. {"O"}) to skip —
+    normally wired from <book_dir>/verify_config.json by verify_all.
+    `numbering` is the item-numbering convention ('combined'|'per-type'),
     normally wired from <book_dir>/verify_config.json by verify_all.
     """
     cfg = ManagerConfig(
@@ -138,6 +140,7 @@ def verify_one(ch, start, end, md, ext, manual_path, ignore_keys=None, scheme='t
         ignore_fig=ignore_fig or set(),
         manual_path=manual_path,
         disabled=set(disabled) if disabled else set(),
+        numbering=numbering,
     )
     mgr = VerifyManager(LAYER_REGISTRY, cfg)
     return mgr.verify_one(ch, start, end, md, ext)
@@ -268,7 +271,7 @@ def verify_all(ext, book_dir, ignore_keys=None, ignore_fig=None, scheme_override
                 r = verify_one(ch, start, end, md, ext, manual_path,
                                ignore_keys=ignore_keys | ch_ignore, scheme=scheme,
                                ignore_fig=ignore_fig | ch_ignore_fig,
-                               disabled=book_cfg.disabled)
+                               disabled=book_cfg.disabled, numbering=book_cfg.numbering)
             finally:
                 if len(grp) > 1:
                     try:

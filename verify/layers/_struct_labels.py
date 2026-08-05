@@ -69,10 +69,18 @@ H_INLINE_STRUCT_BQ_RE = re.compile(
 # ── 例 / 证明 等块引用标签（非 定义 家族，但属「加粗标签」，本次一并抽取） ──
 
 # i_layer._I_ITEM_RE_EXAMPLE 与 fix 内局部 _I_EXAMPLE 相同 → 共享。
-I_ITEM_EXAMPLE_RE = re.compile(r'^> \*\*(?:例|Example)')
+# 同时识别「编号在前」体例：> **N.M-K 例（…）**（Kreyszig 等书把例印成编号在前）。
+I_ITEM_EXAMPLE_RE = re.compile(
+    r'^> \*\*(?:例|Example|\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example))'
+)
 
 # g_layer._EX_RE。
-G_EX_RE = re.compile(r'> \*\*(?:例\b(?:\d[\d.]*-[0-9]+|\d+)?\*\*|Example\b(?:\s*\d+)?\*\*)')
+# 同时识别「编号在前」体例：> **N.M-K 例（…）**。
+G_EX_RE = re.compile(
+    r'> \*\*(?:例\b(?:\d[\d.]*-[0-9]+|\d+)?\*\*'
+    r'|Example\b(?:\s*\d+)?\*\*'
+    r'|\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*例)'
+)
 
 # g_layer._PF_RE。
 G_PF_RE = re.compile(r'> \*\*(?:证明思路|证明|证明梗概|证明概要)\*\*')

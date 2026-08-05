@@ -29,10 +29,15 @@ from verify.layers._struct_labels import (
 )
 
 _H_UL_OPENERS = re.compile(
-    r'^\s*>\s*\*\*(?:\d{1,3}[.．]\s*)?(?:'
+    r'^\s*>\s*\*\*(?:'
+    r'(?:\d{1,3}[.．]\s*)?(?:'
     r'(?:证明|证|例|注|说明'
     r'|Proof|Example|Note|Remark'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
+    r')'
+    # number-first form:  > **N.M-K 例  (some books print 编号在前, e.g. Kreyszig `8.1-6 例子`)
+    r'|(?:\d{1,3}(?:[.．-]\d{1,3}){1,2})\s*'
+    r'(?:例|Example|注|Note|Remark|证明|证|说明)'
     r')'
 )
 
@@ -65,6 +70,9 @@ def _h_ext_is_legit_bq(s):
     # Chinese openers
     if (inner.startswith('**证明') or inner.startswith('**例')
             or inner.startswith('**注')):
+        return True
+    # number-first form:  > **N.M-K 例  (book prints 编号在前)
+    if re.match(r'^\*\*\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example|注|Note|Remark|证明|证|说明)', inner):
         return True
     # English openers (bilingual support)
     if re.match(r'^\*\*(?:Proof|Example|Note|Remark|Exercise)\b', inner):
@@ -392,7 +400,12 @@ def fix_h_structural_blockquote(md_file):
                 changes += 1
 
     # Also remove orphan bare `>` lines (H-layer sub-check).
-    # Remove both `>` (no space) and `> ` (with space) when not between real blockquote content.
+    # Remove both `>` (no space) and `> ` (with space) when not between real
+    # blockquote content.  We DELETE the line entirely (rather than blanking it
+    # to '') so the surrounding lines stay adjacent — blanking left a stray empty
+    # line that tripped the G-layer quote-gap check (e.g. an orphan `>` sitting
+    # between a top-level header and the next header).  Backward iteration makes
+    # `del` safe.
     orphan_changes = 0
     for i in range(len(lines) - 1, -1, -1):
         ln = lines[i]
@@ -402,7 +415,7 @@ def fix_h_structural_blockquote(md_file):
         prev_has = i > 0 and lines[i-1].startswith('>') and lines[i-1].strip() not in ('', '>')
         next_has = i < len(lines)-1 and lines[i+1].startswith('>') and lines[i+1].strip() not in ('', '>')
         if not (prev_has and next_has):
-            lines[i] = ''
+            del lines[i]
             orphan_changes += 1
     changes += orphan_changes
 

@@ -57,7 +57,7 @@ def _try_label_rescan(snippet, active_section_label, label_re):
             return '推论'
         elif re.search(r'命题|Proposition', raw):
             return '命题'
-    return active_section_label if active_section_label else '裸'
+    return active_section_label if active_section_label else 'uncat'
 
 
 def _scan_and_recover(p_start, p_end, sec_num, section_label, extract_dir, chapter, existing_keys, label_re):
@@ -75,20 +75,47 @@ def _scan_and_recover(p_start, p_end, sec_num, section_label, extract_dir, chapt
         # content in ANY script (≥2 Unicode letters) or a LaTeX command. A bare
         # "3.2-1" OCR fragment with no letters is rejected, not hallucinated.
         has_alpha = (len(re.findall(r'[^\W\d_]', snippet)) >= 2) or ('\\' in snippet)
-        if label != '裸' or has_alpha:
+        if label != 'uncat' or has_alpha:
             recovered.append({'key': key, 'page': page, 'label': label, 'text': snippet[:120]})
             keys_found.add(key)
             existing_keys.add(key)
     return recovered
 
 
-def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD):
-    """Step 5-6: boundary & density checks with auto-recovery.
-    Faithfully reproduces the original B-layer logic. Returns (items, warnings, blocking)."""
+def _group_key(it, numbering):
+    """Section-grouping key for the missing-number scan.
+
+    - 'combined' (default): 定义/定理/例 share ONE sequence per section
+      (Kreyszig style) -> group by ``C.S`` only.
+    - 'per-type': each item TYPE (定义/定理/引理/例/...) has its OWN sequence
+      per section -> group by ``C.S:LABEL``. ``uncat`` items fall back to the
+      combined key so they are not split into a spurious group of their own.
+    """
+    parts = it['key'].split('.')
+    sec = f"{parts[0]}.{parts[1].split('-')[0]}"
+    if numbering == 'per-type':
+        lab = it.get('label', 'uncat')
+        if lab and lab != 'uncat':
+            return f"{sec}:{lab}"
+    return sec
+
+
+def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, numbering='combined'):
+    """Step 5-6: boundary & density checks with auto-recovery (B-LAYER).
+
+    Detection 宗旨 (the part that flags missing numbers for the agent to fill):
+      1. 首项检验  — a section/type sequence must start at its first number (usually 1).
+      2. 连续性     — every number in [first, last] must be present (middle gaps = dropped).
+      3. 尾部校验   — after the last found number, re-scan following pages for
+                     max+1, max+2, ...; any such item the strict pass dropped is recovered.
+
+    When a gap (head/internal) is detected and the OCR re-scan cannot recover it,
+    it is reported as BLOCKING so the agent verifies/fills it — NOT silently
+    resolved as "likely absent" (that hid real drops swallowed by OCR, e.g. 4.11-4).
+    Returns (items, warnings, blocking)."""
     by_sec = defaultdict(list)
     for it in items:
-        parts = it['key'].split('.')
-        sec_key = f"{parts[0]}.{parts[1].split('-')[0]}"
+        sec_key = _group_key(it, numbering)
         num = int(it['key'].split('-')[1])
         by_sec[sec_key].append((num, it))
 
@@ -99,7 +126,11 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
     existing_keys = {it['key'] for it in items}
     auto_recovered = []
 
-    sec_order = sorted(by_sec.keys(), key=lambda k: (int(k.split('.')[0]), float(k.split('.')[1])))
+    def _sec_sort_key(k):
+        a, b = k.split('.', 1)
+        b = b.split(':')[0]
+        return (int(a), float(b))
+    sec_order = sorted(by_sec.keys(), key=_sec_sort_key)
 
     # First pass: collect all auto-recoverable items
     for idx, sec_key in enumerate(sec_order):
@@ -109,32 +140,35 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
         last_num = nums_sorted[-1][0]
         first_page = nums_sorted[0][1]['page']
         last_page = nums_sorted[-1][1]['page']
-        sec_num = int(sec_key.split('.')[1])
+        sec_num = int(sec_key.split('.')[1].split(':')[0])
         detected = {n for n, _ in nums_sorted}
 
         # Get active section label (例/定义/etc.) from items in this section
-        sec_labels = [it['label'] for _, it in nums_sorted if it['label'] != '裸']
+        sec_labels = [it['label'] for _, it in nums_sorted if it['label'] != 'uncat']
         section_label = sec_labels[0] if sec_labels else None
 
-        # --- Boundary check: head (items before first_num) ---
+        # --- Boundary check: head (首项检验, items before first_num) ---
+        # NOTE: this extraction-side pass is SECONDARY. Its role is to surface
+        # gaps the strict OCR pass dropped; it must NOT hard-block on its own
+        # because OCR phantom matches (a stray "8.6-15" citation) inflate
+        # last_num and fabricate gaps. The authoritative missing-number
+        # detection runs on the written .md in verify/layers/b_layer.py.
         if first_num > 1:
             recovered = _scan_and_recover(start_page, first_page - 1, sec_num, section_label, extract_dir, chapter, existing_keys, label_re)
             auto_recovered.extend(recovered)
             still_missing = [n for n in range(1, first_num)
                            if f"{chapter}.{sec_num}-{n}" not in existing_keys]
             if recovered and still_missing:
-                # Found some but not all => BLOCKING for remaining
                 msg = (f"  WARN (BLOCKING): {sec_key} starts at -{first_num}, items "
                        f"{', '.join(f'-{n}' for n in still_missing)} still missing after auto-recovery")
                 warnings.append(msg); blocking.append(msg)
             elif not recovered and still_missing:
-                # Found nothing in re-scan => likely cross-refs (not a real gap)
                 warnings.append(f"  WARN (resolved): {sec_key} starts at -{first_num}; re-scan "
                                 f"p{start_page}-{first_page-1} found nothing → likely starts at -{first_num}")
             else:
                 warnings.append(f"  WARN (resolved): {sec_key} starts at -{first_num}; auto-recovered all gaps")
 
-        # --- Internal gap check (missing items within the range) ---
+        # --- Internal gap check (连续性, missing items within [first, last]) ---
         expected = set(range(first_num, last_num + 1))
         actual = {n for n, _ in nums_sorted}
         missing = sorted(expected - actual)
@@ -148,7 +182,8 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
                        f"{', '.join(f'-{m}' for m in still_missing)}; still missing after auto-recovery")
                 warnings.append(msg); blocking.append(msg)
             elif not recovered and still_missing:
-                # Found nothing in re-scan → likely cross-refs/absent
+                # Found nothing in re-scan → likely cross-refs/absent (or an OCR
+                # swallow). The .md-side B-layer check is what ultimately decides.
                 warnings.append(f"  WARN (resolved): {sec_key} missing items "
                                 f"{', '.join(f'-{m}' for m in missing)}; re-scan found nothing → likely cross-refs/absent")
             else:

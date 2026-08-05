@@ -203,7 +203,17 @@ def find_after(lines, start):
     i = start + 1
     while i < len(lines) and lines[i].strip() == "":
         i += 1
-    if i < len(lines) and lines[i].startswith(">"):
+    if i < len(lines) and lines[i].lstrip().startswith(">"):
+        # Anchor sits inside a blockquote (e.g. an Example/Remark label, or a
+        # caption-referenced example). Inserting a TOP-LEVEL figure <div>/<img>
+        # before the next '>' line would split the blockquote and trip the
+        # verifier's h-layer (blockquote-structure). Push the figure to just
+        # AFTER the blockquote closes, keeping it adjacent to its item.
+        if lines[start].lstrip().startswith(">"):
+            j = i
+            while j < len(lines) and (lines[j].lstrip().startswith(">") or lines[j].strip() == ""):
+                j += 1
+            return j
         return i
     while i < len(lines):
         ln = lines[i]

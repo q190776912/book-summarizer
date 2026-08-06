@@ -29,6 +29,16 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set
 
+
+class ConfigError(Exception):
+    """Raised when the per-book verify configuration is incomplete/invalid.
+
+    Used by `ConfigLoader.require_complete()` to enforce the mandatory book
+    config gate (rule H in SKILL.md). Callers (verify_chapter.py / scan_skeleton.py)
+    catch it and exit non-zero with a clear message.
+    """
+
+
 # --- separation modes for `separate_types` ---------------------------------
 # ALWAYS compare with `==` against these NAMED constants — never `>=`.
 # A greater number must NOT silently inherit the per-type behaviour; each new
@@ -64,6 +74,29 @@ ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en'
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
     'en': 4, 'roman': 5, 'gm': 6, 'fraleigh': 7,
+}
+
+# --- section role codes (1..4) for the nested section hierarchy ------------
+# Each level in the D-layer section hierarchy carries a ROLE. These codes are
+# stable identifiers stored in `section_types`; `section_depths` stores the
+# matching numeric component count per level (e.g. role 3 = subsection carried
+# by a 3-component number C.S.K).
+SECTION_ROLE_CHAPTER       = 1
+SECTION_ROLE_SECTION       = 2
+SECTION_ROLE_SUBSECTION    = 3
+SECTION_ROLE_SUBSUBSECTION = 4
+SECTION_ROLE_CODES = (1, 2, 3, 4)
+
+# Default section-types (role codes) per ordinal code. This is the BACK-COMPAT
+# fallback when a verify_config.json does not explicitly declare `section_types`.
+# It mirrors the historical D-layer behaviour exactly:
+#   * ordinals 2/4/6/7 only verified the section level (2-part numbers);
+#   * ordinal 3/5 verified subsections (3-part numbers, 1.1.1) — previously via
+#     the dead D_MD_NESTED_SEC_RE, now live for the first time;
+#   * ordinal 1 is single-level (chapter only).
+ORDINAL_SECTION_TYPES = {
+    1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
+    5: [1, 2, 3], 6: [1, 2], 7: [1, 2],
 }
 
 
@@ -144,6 +177,14 @@ class BookConfig:
     strict: bool = True
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
+    # --- nested section hierarchy (D-layer) -----------------------------------
+    # `section_types`  : role code per level   (e.g. [1, 2, 3] = chapter/section/subsection)
+    # `section_depths`: numeric component count per level (parallel to section_types;
+    #                   always starts at 1 so level 1 is the chapter prefix).
+    # Both default to []; `from_dict` populates them from verify_config.json or,
+    # when absent, from ORDINAL_SECTION_TYPES (back-compat).
+    section_types: List[int] = field(default_factory=list)
+    section_depths: List[int] = field(default_factory=list)
 
     # --- derived helpers (kept as methods so grouping logic stays config-side) ---
     @property
@@ -163,6 +204,26 @@ class BookConfig:
     def group_prefix_len(self) -> int:
         sp = {'book': 0, 'chapter': 1, 'section': 2}.get(self.scope, 1)
         return min(sp, max(0, self.depth - 1))
+
+    # --- nested section-hierarchy helpers (D-layer) --------------------------
+    # NOTE: `max_level` / `section_depth` / `section_role` are ORTHOGONAL to the
+    # existing `depth` property. `depth` counts the numeric components of an
+    # *item* key (e.g. N.S-N -> depth 3, the ITEM numbering depth). `max_level`
+    # counts how many SECTION-hierarchy levels (chapter / section / subsection /
+    # sub-subsection) the D-layer verifies. The two are independent axes and must
+    # not be conflated.
+    @property
+    def max_level(self) -> int:
+        """Number of verified section-hierarchy levels (>= 1)."""
+        return len(self.section_depths)
+
+    def section_depth(self, level: int) -> int:
+        """Numeric component count for hierarchy level `level` (1-based)."""
+        return self.section_depths[level - 1]
+
+    def section_role(self, level: int) -> int:
+        """Role code (SECTION_ROLE_*) for hierarchy level `level` (1-based)."""
+        return self.section_types[level - 1]
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BookConfig':
@@ -205,6 +266,24 @@ class BookConfig:
                 f"falling back to {ORDINAL_THREE_LEVEL}.")
             ordinal = ORDINAL_THREE_LEVEL
 
+        # --- nested section hierarchy (D-layer) -------------------------------
+        # Backward compatible: when `section_types` is absent, derive it from the
+        # ordinal via ORDINAL_SECTION_TYPES. `section_depths` defaults to a copy
+        # of `section_types` (role code == component count) unless explicitly
+        # given with the same length and all entries >= 1. Level 1 (chapter) must
+        # always have depth 1.
+        st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(ordinal, [1])
+        st = [int(x) for x in st if int(x) in SECTION_ROLE_CODES] or [1]
+        sd = data.get('section_depths')
+        if sd:
+            sd = [int(x) for x in sd]
+            if len(sd) != len(st) or any(d < 1 for d in sd):
+                sd = list(st)
+        else:
+            sd = list(st)
+        if sd[0] != 1:
+            sd[0] = 1
+
         # --- language (orthogonal; default derived from ordinal) ---
         language = str(data.get('language', ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')))
 
@@ -241,6 +320,8 @@ class BookConfig:
             strict=bool(data.get('strict', True)),
             ignore=ignore,
             manual=manual,
+            section_types=st,
+            section_depths=sd,
         )
 
 
@@ -263,6 +344,8 @@ class ConfigLoader:
                  extra_ignore: Optional[List[str]] = None):
         self.extract_dir = extract_dir
         self.book_dir = book_dir
+        self.book_config_path: Optional[str] = None
+        self.book_config_has_ordinal: bool = False
         self.book = self._load_book_config()
         self.chapters = self._load_chapter_map()
         self.figure_index = self._load_figure_index()
@@ -276,16 +359,98 @@ class ConfigLoader:
             os.path.join(self.extract_dir, 'verify_config.json'),
             os.path.join(self.book_dir, 'verify_config.json'),
         ]
-        data = {}
+        data: Dict[str, Any] = {}
+        hit_path: Optional[str] = None
         for p in candidates:
             if os.path.exists(p):
                 try:
                     with open(p, 'r', encoding='utf-8') as f:
                         data = json.load(f)
+                    hit_path = p
                 except Exception:
                     data = {}
                 break
+        # Record WHICH candidate (if any) was actually loaded, plus whether the
+        # raw data explicitly declared an ordinal (the old `levels` count counts
+        # as an ordinal declaration). `require_complete()` needs these to tell
+        # "file present but no ordinal" (hard error) from "file absent"
+        # (warning + default) — `BookConfig.from_dict` silently defaults ordinal
+        # to 3, so we cannot infer absence from the resolved value alone.
+        self.book_config_path = hit_path
+        self.book_config_has_ordinal = ('ordinal' in data) or ('levels' in data)
         return BookConfig.from_dict(data)
+
+    def require_complete(self, allow_absent: bool = True) -> None:
+        """Validate per-book verify-config completeness (rule H gate).
+
+        Rules:
+          * File absent:
+              - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
+              - allow_absent=False -> raise ConfigError.
+          * File present but `ordinal` missing/illegal -> raise ConfigError (hard error).
+          * `section_types` / `section_depths` explicitly given but inconsistent
+            (length mismatch / component < 1 / bad role code / depth[0] != 1)
+            -> raise ConfigError.
+
+        `BookConfig.from_dict` already does most sanitising/inference, so this is
+        a backstop consistency check mainly guarding hand-written mistakes.
+        """
+        import warnings
+
+        cfg = self.book
+
+        # --- file presence ---
+        if self.book_config_path is None:
+            if allow_absent:
+                warnings.warn(
+                    "[CONFIG] 未找到 verify_config.json，沿用默认 ordinal=3（向后兼容）。"
+                    "新流程要求在源语言全部初稿完成后，用 verify/make_config.py 生成 "
+                    "<book>/_extract/verify_config.json（至少含 ordinal）。",
+                    stacklevel=2,
+                )
+                return
+            raise ConfigError(
+                "[CONFIG] 未找到 verify_config.json，且 allow_absent=False。"
+                "请先创建 <book>/_extract/verify_config.json（至少含 ordinal）。"
+            )
+
+        # --- ordinal present & legal (1..7) ---
+        # `from_dict` clamps an illegal ordinal to 3, so the `has_ordinal` flag is
+        # the reliable "was it declared" signal; the ORDINAL_CODES check is a
+        # defensive backstop for any future path that bypasses clamping.
+        if not self.book_config_has_ordinal:
+            raise ConfigError(
+                f"[CONFIG] {self.book_config_path} 未声明 ordinal"
+                f"（应在 1..7）。请显式填写，例如 {{\"ordinal\": 3}}。"
+            )
+        if cfg.ordinal not in ORDINAL_CODES:
+            raise ConfigError(
+                f"[CONFIG] {self.book_config_path} 未声明合法 ordinal"
+                f"（应在 1..7）。请显式填写，例如 {{\"ordinal\": 3}}。"
+            )
+
+        # --- section_types / section_depths (only when explicitly given) ---
+        if cfg.section_types or cfg.section_depths:
+            if len(cfg.section_types) != len(cfg.section_depths):
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} section_types 与 section_depths "
+                    f"长度不等（{len(cfg.section_types)} vs {len(cfg.section_depths)}）。"
+                )
+            if any(d < 1 for d in cfg.section_depths):
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} section_depths 含非法分量（<1）。"
+                )
+            for code in cfg.section_types:
+                if code not in SECTION_ROLE_CODES:
+                    raise ConfigError(
+                        f"[CONFIG] {self.book_config_path} section_types 含非法角色码 "
+                        f"{code}（应在 {SECTION_ROLE_CODES}）。"
+                    )
+            if cfg.section_depths[0] != 1:
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} section_depths[0] 必须为 1"
+                    f"（章首分量）。"
+                )
 
     # ---- chapter_map.json ----
     def _load_chapter_map(self) -> Dict[int, ChapterInfo]:

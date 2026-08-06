@@ -15,7 +15,7 @@
 | # | 层 code | 名称 | 一句话目的 | 阻断? | 可 `--fix`? | 层文档 | 代码模块 |
 |---|---------|------|-----------|-------|------------|--------|----------|
 | 0 | EXTRACT | 数据 provider | 提供原始 JSON 数据；必跑、永不可禁用 | 数据缺失→FAIL | 否 | [layers/extract.md](layers/extract.md) | [extract_layer.py](../verify/layers/extract_layer.py) |
-| 1 | D | SECTION CONTINUITY + MISSING | 连续节(节序列内部缺节)+尾节(末尾缺节)（源有节标题+条目但 md 无/缺 `## §`） | 阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
+| 1 | D | SECTION CONTINUITY + MISSING | 连续节(节序列内部缺节)+尾节(末尾缺节)（源有节标题+条目但 md 无/缺 `## §`）；支持任意小节层级（1–4 级）+ `section_types`/`section_depths` | 阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
 | 2 | A | TRULY MISSING | 提取到但 `.md` 无 | 阻断 | 否 | [layers/a.md](layers/a.md) | [a_layer.py](../verify/layers/a_layer.py) |
 | 3 | B | BLOCKING | 缺号检测（MD 侧首项检验/连续性 + 提取侧辅助，OCR 误报经 MD 存在性过滤） | 阻断 | 否 | [layers/b.md](layers/b.md) | [b_layer.py](../verify/layers/b_layer.py) |
 | 4 | C | KATEX ERRORS | KaTeX 渲染失败 | 阻断 | 部分 | [layers/c.md](layers/c.md) | [c_layer.py](../verify/layers/c_layer.py) |
@@ -336,6 +336,42 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树确定 `ordinal`（编号模式）。
 
 > 两级书的**例完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），统一用 `extract/scan_items.py` 做独立连续性核验（权威）。
+
+### 6.x 小节层级配置（section_types / section_depths）
+
+> 🔴 **强制书级配置（规则 H）**：`verify_config.json` 是每本书的强制配置文件，是 `verify` 的**硬性前置**（规则见 `SKILL.md` 规则 H 与 `references/book_patterns.md` §6）。🔴 **配置的生成时机在「源语言全部初稿完成后」**（规则 E 阶段 2），依据**源语言版** `.md` 生成（`verify/make_config.py` 或人工填写），**翻译派生版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（此时 `scan_skeleton` 遇文件缺失仅 WARNING + 默认 ordinal=3），但**任何 `verify` 跑起来前配置必须完整**。`verify_chapter.py` 与 `scan_skeleton.py` 入口均经 `ConfigLoader.require_complete()` 校验其完整性：**文件存在但缺 `ordinal` → 报 `[CONFIG]` 错误并 exit 2**；**文件缺失仅 WARNING 并沿用默认 ordinal=3**（存量书兼容，不阻断）。`section_types` / `section_depths` 仅在本书小节层级深于 `ordinal` 默认反推时显式声明（如四级子小节书 `1.1.1.1` 需写 `[1,2,3,4]`），且一旦显式给出就必须合法（等长 / 各分量 ≥1 / 角色码 ∈ {1,2,3,4} / `depths[0]==1`），否则同样报 `[CONFIG]` 硬错误。
+
+D 层（§1 注册表第 1 行）默认按书号模式校验「整节缺失」，但不同书的**小节嵌套深度**不同。为支持任意小节层级（1–4 级：章 / 节 / 小节 / 子小节），`verify_config.json` 新增两个可选字段：
+
+- `section_types`（List[int]）：每一层级承担的角色码（`SECTION_ROLE_*`：1=章 / 2=节 / 3=小节 / 4=子小节）。
+- `section_depths`（List[int]）：每一层级对应的**编号分量数**，必须与 `section_types` 等长、且首个分量恒为 1（章首分量）。
+
+**向后兼容**：两字段均可省略。省略时按 `ordinal` 反推（见下表）。仅当某书的小节层级与默认不符（如 4 级子小节书）才需在 `verify_config.json` 显式声明。
+
+| `ordinal` | 名称 | 默认 `section_types` | 默认 `section_depths` | D 层校验层级 |
+|---|---|---|---|---|
+| 1 | single | `[1]` | `[1]` | 仅章 |
+| 2 | two_level | `[1, 2]` | `[1, 2]` | 章 + 节 |
+| 3 | three_level | `[1, 2, 3]` | `[1, 2, 3]` | 章 + 节 + 小节（1.1.1） |
+| 4 | en | `[1, 2]` | `[1, 2]` | 章 + 节 |
+| 5 | roman | `[1, 2, 3]` | `[1, 2, 3]` | 章 + 节 + 小节 |
+| 6 | gm | `[1, 2]` | `[1, 2]` | 章 + 节（章内本地，无 `levels`） |
+| 7 | fraleigh | `[1, 2]` | `[1, 2]` | 章 + 节 |
+
+> ⚠️ **回归风险**：`ordinal` = 3 或 5 的书现在会**首次真正校验 1.1.1 小节层级**（旧 `D_MD_NESTED_SEC_RE` 是死代码，从未生效）。此前已 PASS 的语料可能因新增的小节连续性/尾节 finding 而转变为 FAIL，需对三级书语料重新跑 `verify` 回归。
+
+`verify_config.json` 样例（显式声明三级小节层级）：
+
+```json
+{
+  "ordinal": 3,
+  "language": "cn",
+  "ignore": [],
+  "strict": true,
+  "section_types": [1, 2, 3],
+  "section_depths": [1, 2, 3]
+}
+```
 
 ---
 

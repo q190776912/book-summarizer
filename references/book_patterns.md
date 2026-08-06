@@ -68,16 +68,31 @@ python extract/scan_items.py 1 20 82 _extract
 
 ## 4. 判定树：遇到新书先看编号
 
+> 🔴 **`verify_config.json` 是校验的硬性前置（规则 H），但生成时机在「源语言全部初稿完成后」**：先写完**源语言**全部章节初稿（规则 E 阶段 1），再依据**源语言版** `.md` 生成 `<book>/_extract/verify_config.json`（至少含 `ordinal`），然后才批量校验（阶段 3）。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal` 会令 `verify_chapter.py` / `scan_skeleton.py` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写初稿阶段可继续，存量书兼容）。可用 `python verify/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在源语言初稿全部完成后批量进行。
+
 ```
-读 TOC / 抽一页原文，看编号长什么样？
+读 TOC / 抽一页原文，看编号长什么样？（判定树只用于确定 ordinal，配置在源语言初稿全部完成后统一生成）
 │
 ├─ 编号形如  定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）
 │     → 两级 + 双计数器（周民强型）
-│     → 在 <book>/_extract/verify_config.json 设 "ordinal": 2
-│     → 写章后用 extract/scan_items.py 做连续性核验
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 2
+│     → 批量校验后用 extract/scan_items.py 做连续性核验
 │
 ├─ 编号形如  1.1-2 / 3.2-7（三级 章.节-号）
-│     → 默认 three-level，无需配置
+│     → 默认 three-level
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 3（默认可不写，但仍建议显式）
+│
+├─ 英文书编号形如  Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 4
+│
+├─ 罗马数字章号  I.2.3 / II.1.1 …（章号是 I/II/III…）
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 5
+│
+├─ Gelfand–Manin 风格  §2 标题 + 条目从 1 起号（gm，两级、章内本地）
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 6
+│
+├─ Fraleigh 风格  按节编号、无章号位（fraleigh，两级）
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 7
 │
 └─ 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）
       → 几乎肯定是三级正则误吃公式/枚举
@@ -104,3 +119,57 @@ python extract/scan_items.py 1 20 82 _extract
   ```
 - 配套写 `ignore_ch{N}.md`：贴出原始文本片段，证明这些键是噪声而非漏写条目。
 - `verify/verify_chapter.py` 会自动合并 `ignore_ch{N}.json`，无需手动传 `--ignore`。
+
+---
+
+## 6. 书级配置与小节层级（verify_config.json）
+
+> 🔴 **本规则由 SKILL.md「规则 H」强制前置**：`verify_config.json` 配置（ordinal / section_types / section_depths / language）由**源语言**内容派生，是 `verify` 的硬性前置。配置在**源语言全部初稿完成后**（规则 E 阶段 2）依据**源语言版** `.md` 生成，至少含 `ordinal`；**翻译版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（scan_skeleton 遇缺失仅告警 + 默认 ordinal=3），但任何 `verify` 跑起来前配置必须完整。
+
+### 6.1 `ordinal` —— 必填（1–7）
+
+`ordinal` 是编号风格选择器（整数编码，见 `lib/config.py` 的 `ORDINAL_*` 常量）。它是**必填**字段；文件存在但缺 `ordinal` 会令 `verify_chapter.py` / `scan_skeleton.py` 直接报 `[CONFIG]` 错误并 exit 2。判定树（§4）每个分支都对应一个 `ordinal` 值：
+
+| 编号形态 | `ordinal` | 说明 |
+|---|---|---|
+| 两级 + 双计数器（周民强型） | `2` | 定义1.1 / 定理1.1 共用连续号 |
+| 三级 章.节-号（默认） | `3` | 1.1-2 / 3.2-7 |
+| EN 两级（Theorem 1.2） | `4` | 无章号位 |
+| 罗马数字章号（I.2.3） | `5` | 章号为 I/II/III… |
+| gm（§2 + 章内本地号） | `6` | Gelfand–Manin 风格 |
+| fraleigh（按节编号） | `7` | 无章号位 |
+
+### 6.2 `section_types` / `section_depths` —— 仅四级（及更深）书显式声明
+
+绝大多数书**不需要**手写这两个字段：省略时由 `ordinal` 自动反推（见下表的「默认反推」），D 层据此校验小节层级连续性。`from_dict` 还会兜底清洗（长度不等 / 含 <1 / 含非法角色码 → 回退到反推值）。
+
+**只有在书的小节层级深于 `ordinal` 默认反推时**，才需在 `verify_config.json` 显式声明。典型例子：四级子小节书（编号形如 `1.1.1.1`），其 `ordinal=3`（三级默认反推只到 1.1.1），要校验到第四级必须手写：
+
+```json
+{
+  "ordinal": 3,
+  "section_types": [1, 2, 3, 4],
+  "section_depths": [1, 2, 3, 4]
+}
+```
+
+反推表（`ordinal` → 默认 `section_types` / `section_depths`，即 D 层默认校验层级）：
+
+| `ordinal` | 名称 | 默认 `section_types` | 默认 `section_depths` |
+|---|---|---|---|
+| 1 | single | `[1]` | `[1]` |
+| 2 | two_level | `[1, 2]` | `[1, 2]` |
+| 3 | three_level | `[1, 2, 3]` | `[1, 2, 3]` |
+| 4 | en | `[1, 2]` | `[1, 2]` |
+| 5 | roman | `[1, 2, 3]` | `[1, 2, 3]` |
+| 6 | gm | `[1, 2]` | `[1, 2]` |
+| 7 | fraleigh | `[1, 2]` | `[1, 2]` |
+
+> 角色码 `section_types` ∈ `{1=章, 2=节, 3=小节, 4=子小节}`；`section_depths` 与 `section_types` 等长、各分量 ≥1、且 `section_depths[0]==1`。若显式给出但不合法（长度不等 / 含 <1 / 含非法角色码 / 首分量非 1），`require_complete()` 会直接报 `[CONFIG]` 硬错误。
+>
+> ⚠️ 存量书（无 `verify_config.json`）跑 `verify` / `scan_skeleton` 只会有 WARNING 并沿用默认 ordinal=3，不阻断；新流程之所以允许沿用默认，是为了**不误伤存量书**，但规则 H 要求**新建书必须显式填写**，不得依赖静默默认值。
+
+### 6.3 生成 / 校验工具
+
+- `python verify/make_config.py <extract_dir>` —— best-effort 生成起始配置（判定不清时仍以本判定树为准，人工核对）。
+- `verify_chapter.py` / `scan_skeleton.py` 入口均经 `ConfigLoader.require_complete()` 校验完整性（规则 H 主防线在**工作流规则**，不在单脚本行为上）。

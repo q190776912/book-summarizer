@@ -31,7 +31,7 @@ import sys, os, json, glob, re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.config import ConfigLoader
+from lib.config import ConfigLoader, ConfigError
 from verify.layers.base import VerifyManager
 from verify.register_all import LAYER_REGISTRY
 from verify.report import print_result
@@ -116,9 +116,18 @@ def _merged_temp_path(book_dir, ch, section_files):
 
 
 def _make_loader(ext, book_dir, extra_ignore=None):
-    """Construct the single ConfigLoader (config source of truth)."""
-    return ConfigLoader(ext, book_dir or os.path.dirname(ext) or ext,
-                        extra_ignore=extra_ignore)
+    """Construct the single ConfigLoader (config source of truth).
+
+    Enforces the mandatory book-config gate (rule H) before any verification:
+    `require_complete()` warns (file absent, back-compat) or raises ConfigError
+    (file present but no ordinal / invalid section hierarchy). All three call
+    sites (verify_one / verify_all / fix_all_layers / --all --fix) route through
+    this helper, so the gate is applied uniformly.
+    """
+    loader = ConfigLoader(ext, book_dir or os.path.dirname(ext) or ext,
+                          extra_ignore=extra_ignore)
+    loader.require_complete()
+    return loader
 
 
 def verify_one(ch, start, end, md, ext, book_dir=None, extra_ignore=None):
@@ -282,6 +291,16 @@ def fix_all_layers(md_file, book_dir=None):
 
 
 def main():
+    try:
+        _main_impl()
+    except ConfigError as e:
+        # Mandatory book-config gate (rule H) failed — surface the message and
+        # exit non-zero (exit 2) so the agent knows to fix verify_config.json.
+        print(e)
+        sys.exit(2)
+
+
+def _main_impl():
     ignore_path = _flag_value('--ignore')
     ignore_keys = load_ignore(ignore_path)
     ignore_fig_global = load_ignore_fig(_flag_value('--ignore-figure'))
@@ -359,6 +378,8 @@ def main():
         print("  --fix: auto-correct G/H/I/J layer issues before verification")
         print("  ordinal / language / scope / separate_types / strict / ignore / manual are")
         print("  configured in <book>/_extract/verify_config.json (see references/verification.md).")
+        print("  ordinal / section_types / section_depths 必须在 <book>/_extract/verify_config.json")
+        print("  显式配置（缺失 ordinal 将直接报错 exit 2；缺失文件仅警告并沿用默认 ordinal=3）。")
         sys.exit(2)
 
     manual_path = _flag_value('--manual')

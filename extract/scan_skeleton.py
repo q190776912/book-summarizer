@@ -53,7 +53,8 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
-from lib.config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_THREE_LEVEL)
+from lib.config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_THREE_LEVEL,
+                       ConfigLoader, ConfigError)
 
 # 节标题：可带 Vakil 的可选标记（★ 被 OCR 成 + / * / x），标题也可能以单字母词开头
 # （"3.5 A base of ..."），故只要求首字符大写、长度 4~72。
@@ -176,18 +177,21 @@ def main():
     want = [int(x) for x in args[1:]]
 
     # Numbering mode is auto-detected from the book's verify_config.json
-    # (the single source of truth for `ordinal`); no CLI override needed.
-    ordinal = ORDINAL_THREE_LEVEL
-    mode = 'three-level'
+    # (the single source of truth for `ordinal`); no direct file read / CLI
+    # override. We reuse the same ConfigLoader gate as verify_chapter.py so the
+    # mandatory book-config rule (H) is enforced consistently: file absent ->
+    # warning + default ordinal=3 (back-compat); file present but no ordinal ->
+    # ConfigError (exit 2). Either way `loader.book.ordinal` is a valid default.
     cfg_path = os.path.join(extract_dir, 'verify_config.json')
-    if os.path.exists(cfg_path):
-        try:
-            with open(cfg_path, encoding='utf-8') as fh:
-                cfg = json.load(fh)
-            ordinal = int(cfg.get('ordinal', ORDINAL_THREE_LEVEL))
-            mode = _mode_for_ordinal(ordinal)
-        except (ValueError, TypeError, OSError):
-            pass
+    try:
+        loader = ConfigLoader(extract_dir,
+                              os.path.dirname(extract_dir.rstrip('/')) or extract_dir)
+        loader.require_complete()
+        ordinal = loader.book.ordinal
+    except ConfigError as e:
+        print(e)
+        return 2
+    mode = _mode_for_ordinal(ordinal)
 
     cm_path = os.path.join(extract_dir, 'chapter_map.json')
     with open(cm_path, encoding='utf-8') as fh:

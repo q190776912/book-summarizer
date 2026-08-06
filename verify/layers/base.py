@@ -138,7 +138,11 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
     'b_gap_warnings': [], 'b_tail_warnings': [],
-    'entry_keys': set(), 'd_layer': {'continuity_sections': [], 'missing_sections': []},
+    'entry_keys': set(), 'd_layer': {'continuity_sections': [], 'missing_sections': [], 'levels': {}},
+    # Top-level mirror of d_layer['levels'] (declared in references/layers/d.md's
+    # contract-keys block so the doc/code key-set parity test stays green given
+    # `levels` is also surfaced there; the live value lives nested in `d_layer`).
+    'levels': {},
     'ignored_hit': [],
     'fig_missing': [], 'fig_extra': [], 'fig_invalid': [], 'fig_invalid_warn': [], 'fig_skipped': False,
     'quote_gaps': [], 'nested_bq': [],

@@ -45,6 +45,28 @@ def print_result(r):
         for s in d['missing_sections']:
             print(f"  ! Ch{ch} §{ch}.{s}")
 
+    # Per-level breakdown — only when the generalized nested check emitted a
+    # `levels` map (gm/roman books don't). This is SUPPLEMENTARY detail: the
+    # FAIL gate above is driven entirely by the merged continuity/missing lists,
+    # so we do NOT re-increment `problems` here (that would double-count). Renders
+    # Level 1 (章) / Level 2 (节) / Level 3 (小节) / Level 4 (子小节) blocks.
+    levels = d.get('levels')
+    if levels:
+        for L in sorted(levels.keys()):
+            blk = levels[L] or {}
+            cont = blk.get('continuity') or []
+            miss = blk.get('missing') or []
+            if cont:
+                print(f"D-LAYER LEVEL {L} CONTINUITY GAP ({len(cont)}): section sequence has a HOLE "
+                      f"at hierarchy level {L} — MUST be added:")
+                for s in cont:
+                    print(f"  ! Ch{ch} §{ch}.{s}")
+            if miss:
+                print(f"D-LAYER LEVEL {L} MISSING TAIL SECTION ({len(miss)}): beyond last written "
+                      f"section at hierarchy level {L} — MUST be added:")
+                for s in miss:
+                    print(f"  ! Ch{ch} §{ch}.{s}")
+
     if r.get('ignored_hit'):
         print(f"\nIGNORED ({len(r['ignored_hit'])}): confirmed-noise keys suppressed via --ignore "
               f"(excluded from A/B comparison; C/D unaffected):")

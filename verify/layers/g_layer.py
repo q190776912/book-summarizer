@@ -6,7 +6,7 @@ Self-contained implementation of the three G-checks (bodies relocated from the d
 blank lines inside blockquotes to `> ` and removes orphan bare `>` lines.
 """
 
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 

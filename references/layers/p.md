@@ -13,9 +13,10 @@
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见 `extract/scan_skeleton.py`）。
   5. `p_extra_item`：编造条目（md 出现骨架 ITEM 清单没有的编号条目）。
-  6. `p_verbose`：顶层长散文段（不含 `**` 标签条目/例/练习/注记的忠实内容）≥6 段（`VERBOSE_PARA_GATE`）即 FAIL。
+  6. `p_verbose`：顶层纯散文段（不含 `**` 标签条目/例/练习/注记的忠实内容、且**不含公式**）>450 字/段（`VERBOSE_PARA_CHARS`）且段数 ≥6（`VERBOSE_PARA_GATE`）即 FAIL。
   7. `p_proof_verbose`：单个 `> **证明/解答**` 块 >700 字且未分条枚举，且此类块 ≥2（`VERBOSE_PROOF_GATE`）即 FAIL。
 - **关键豁免**：已用 `1. 2. 3. …` 分条枚举的证明【步数不限】不计入 `p_proof_verbose`；例（Example）题面与注记（Remark/Aside）按 Tier 1 忠实保留，不参与 verbose 判定。
+- **🔴 含公式段落豁免 `p_verbose`（2026-08-06 新增，对应 SKILL.md Tier 2 修订）**：凡承载数学（`$...$` / `$$` / `\begin{}` / `\(`）的顶层段落，视为「忠实保留公式的描述性内容」（Tier 2 要求保留公式与概念），**不计入**长散文闸门。仅「纯散文（无公式）且 >450 字/段」仍受约束。此豁免确保忠实描述不会因段落较长被误杀，但仍拦得住真正整段照抄的纯散文 padding。
 - **不可 `--fix`**（故意不让绕过），须回到写作阶段修正。
 
 ## 阻断性 / 可修复
@@ -35,4 +36,4 @@ p_proof_verbose
 
 ## 实现（`verify/layers/p_layer.py`）
 - `code = 'P'`，`order = 16`，`auto_fixable = False`。
-- 阈值 `VERBOSE_PARA_GATE=6` / `VERBOSE_PROOF_GATE=2`（须与 `p_layer.py` 同步）。
+- 阈值 `VERBOSE_PARA_CHARS=450`（纯散文段长阈值，含公式段落豁免）/ `VERBOSE_PARA_GATE=6` / `VERBOSE_PROOF_GATE=2`（须与 `p_layer.py` 同步）。

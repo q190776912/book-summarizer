@@ -2,6 +2,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json, re
+from lib.regexlib import SEP_TIGHT
 
 # ---------------------------------------------------------------------------
 # ENGLISH-aware extraction (merged from extract_items_en.py)
@@ -12,7 +13,8 @@ EN_LABELS = ["Definition", "Theorem", "Lemma", "Proposition", "Corollary", "Exam
              "Assertion", "Conjecture", "Remark"]
 EN_LAB_RE = re.compile(
     r'\b(' + '|'.join(EN_LABELS) + r')\b\s*(?:\([^)]*\))?\s*'
-    r'(\d+)\s*\.\s*(\d+)'
+    r'(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)',
+    re.IGNORECASE,
 )
 
 def extract_items_en(extract_dir, start, end, want_examples=True):
@@ -30,6 +32,14 @@ def extract_items_en(extract_dir, start, end, want_examples=True):
             for m in EN_LAB_RE.finditer(txt):
                 label = m.group(1)
                 if label == "Example" and not want_examples:
+                    continue
+                # Heading vs prose reference: a real entry heading starts the
+                # text block (e.g. "THEOREM 8.4. Let k >= 2."); a cross-reference
+                # like "by Lemma 11.26" / "satisfy Theorem 11.1" sits mid-block.
+                # Skip mid-block matches to avoid false-positive phantom items
+                # (Apostol prints headings in UPPERCASE / OCR-mangled case, so
+                # IGNORECASE is needed above, but it also widens prose capture).
+                if txt[:m.start()].strip():
                     continue
                 key = f"{label} {m.group(2)}.{m.group(3)}"
                 snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")

@@ -18,8 +18,10 @@ sys.path.insert(0, 'C:/Users/ye190/.agents/skills/book-summarizer')
 
 import unittest
 from verify.register_all import LAYER_REGISTRY
-from verify.registry import DEFAULT_RESULT
-from verify.context import VerifyContext
+from verify.layers.base import DEFAULT_RESULT
+from verify.layers.base import VerifyContext
+from lib.config import BookConfig
+from lib.config import BookConfig
 
 # Fix-dict contract keys (registry.py L20-21): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
 FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
@@ -71,10 +73,7 @@ class LayerContractTest(unittest.TestCase):
             end=2,
             md_file=FIXTURE_PATH,
             ext_dir=FIXTURE_DIR,
-            manual_path=None,
-            ignore_keys=set(),
-            ignore_fig=set(),
-            scheme='three-level',
+            config=BookConfig(ordinal=3),
         )
 
     def test_metadata_keys_subset(self):

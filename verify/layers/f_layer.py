@@ -8,7 +8,7 @@ emits EMPTY LISTS ([]), never None, so the merged result dict stays byte-compati
 with the legacy contract (guardrail #2 from the audit).
 """
 
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 
 import os
 

@@ -12,7 +12,7 @@ import pkgutil
 import warnings
 
 from verify import layers as _layers_pkg
-from verify.registry import LayerRegistry, VerifyLayer
+from verify.layers.base import LayerRegistry, VerifyLayer
 
 LAYER_REGISTRY = LayerRegistry()
 

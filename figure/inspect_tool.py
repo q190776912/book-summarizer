@@ -23,6 +23,7 @@ import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
 import sys, os, json, re, argparse
+from lib.regexlib import SEP_NUMERIC
 
 
 def _ykey(t):
@@ -113,7 +114,7 @@ def find_items(ch, start, end, extract_dir):
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
-    num_re = re.compile(r'(\d+)[\.\-\·\，\s]\s*(\d+)\s*[\-\.\·\，\s]\s*(\d+)')
+    num_re = re.compile(r'(\d+)' + SEP_NUMERIC + r'\s*(\d+)' + SEP_NUMERIC + r'\s*(\d+)')
     cite_re = re.compile(r'见|由|根据|参考|参见|Cf\.')
     label_re = re.compile(r'定义|定理|引理|命题|推论|例|Example|Definition|Theorem|Lemma|Proposition|Corollary')
 

@@ -5,7 +5,7 @@ d_layer.py — D-LAYER (order 1): section-missing & tail-ordinal check.
 Self-contained implementation (bodies relocated from verify_chapter.py during the per-layer split). Scans the RAW _extract JSON directly
 and cross-checks against the written .md, INDEPENDENTLY of extract_items' output.
 
-For scheme='gm' (Gelfand-Manin style: "## §1." sections, "### N. Title" item
+For ordinal=ORDINAL_GM (Gelfand-Manin style: "## §1." sections, "### N. Title" item
 headings — legacy "**N.**" bold also accepted, roman machine keys) it uses
 check_d_layer_gm, which reuses the
 extractor's heading scan (extract.extract_items_gm.scan_gm_blocks).
@@ -14,18 +14,26 @@ import re
 import os
 import json
 
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 from verify.key_parse import GM_SEC_RE, GM_ENTRY_RE
 from extract.extract_items_gm import scan_gm_blocks, _load_sections
+from lib.regexlib import SEP_TIGHT
+from lib.config import ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL
 
-D_SEC_HEAD_A = re.compile(r'^(?:§|8)(\d+)\.(\d+)')   # §6.6 / 86.6 (OCR §->8 glued)
-D_SEC_HEAD_B = re.compile(r'^(\d+)\.(\d+)\s+\S')     # 6.6 样条函数
-D_SEC_HEAD_C = re.compile(r'§\s*(\d+)\.(\d+)')       # § 6.6 (short block)
-D_ITEM_RE = re.compile(r'(\d{1,3})\.(\d{1,3})[.\-·](\d{1,3})')  # N.S-N (no space sep -> no chain misread)
+D_SEC_HEAD_A = re.compile(r'^(?:§|8)(\d+)' + SEP_TIGHT + r'(\d+)')   # §6.6 / 86.6 (OCR §->8 glued)
+D_SEC_HEAD_B = re.compile(r'^(\d+)' + SEP_TIGHT + r'(\d+)\s+\S')     # 6.6 样条函数
+D_SEC_HEAD_C = re.compile(r'§\s*(\d+)' + SEP_TIGHT + r'(\d+)')       # § 6.6 (short block)
+D_ITEM_RE = re.compile(r'(\d{1,3})' + SEP_TIGHT + r'(\d{1,3})' + SEP_TIGHT + r'(\d{1,3})')  # N.S-N (no space sep -> no chain misread)
 D_LABEL_KW = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则'
     r'|Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|Remark)')
-D_MD_SEC_RE = re.compile(r'^##\s*§\s*(\d+)\.(\d+)')
+D_MD_SEC_RE = re.compile(r'^##\s*§\s*(\d+)' + SEP_TIGHT + r'(\d+)')
+# Nested subsection headers (### §C.S.T and deeper). A section that owns such
+# nested subsections is a "subsection container", NOT an "item container"; source
+# C.S.N numbers inside it are subsections, not labeled items. Used to suppress
+# false tail-ordinal gaps on books whose items are 2-level (e.g. `定理 3.2`) while
+# keeping genuine per-section examples (e.g. Ch3 §3.7 `3.7.1`/`3.7.2`).
+D_MD_NESTED_SEC_RE = re.compile(r'^#{3,6}\s*§\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 
 def _d_is_labeled(txt, m):
@@ -85,17 +93,21 @@ def check_d_layer_gm(ch, start, end, md_file, ext):
     return {'missing_sections': missing, 'tail_gaps': tail, 'suspect': suspect}
 
 
-def check_d_layer(ch, start, end, md_file, ext, scheme='three-level'):
-    if scheme in ('gm', 'roman'):
+def check_d_layer(ch, start, end, md_file, ext, ordinal=ORDINAL_THREE_LEVEL):
+    if ordinal in (ORDINAL_GM, ORDINAL_ROMAN):
         return check_d_layer_gm(ch, start, end, md_file, ext)
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
     md_sections = set()
     md_item_max = {}
+    md_nested_secs = set()   # (ch, sec) that own nested subsection headers
     for line in md_text.split('\n'):
         m = D_MD_SEC_RE.match(line.strip())
         if m and int(m.group(1)) == ch:
             md_sections.add(int(m.group(2)))
+        nm = D_MD_NESTED_SEC_RE.match(line.strip())
+        if nm and int(nm.group(1)) == ch:
+            md_nested_secs.add((ch, int(nm.group(2))))
         if '**' in line:
             for m in D_ITEM_RE.finditer(line):
                 if int(m.group(1)) != ch or int(m.group(3)) == 0:
@@ -138,6 +150,10 @@ def check_d_layer(ch, start, end, md_file, ext, scheme='three-level'):
     for s, rmax in raw_labeled_item.items():
         if s not in md_sections:
             continue
+        # Section owns nested subsections in .md -> source C.S.N are subsections,
+        # not labeled items. Skip to avoid false tail-ordinal gaps.
+        if (ch, s) in md_nested_secs:
+            continue
         mmax = md_item_max.get(s, 0)
         if rmax > mmax:
             if rmax - mmax > 5:
@@ -154,6 +170,6 @@ class DLayer(VerifyLayer):
 
     def run(self, ctx):
         d_layer = check_d_layer(ctx.ch, ctx.start, ctx.end, ctx.md_file,
-                                ctx.ext_dir, scheme=ctx.scheme)
+                                ctx.ext_dir, ordinal=ctx.config.ordinal)
         ctx.d_layer = d_layer
         return LayerResult(code=self.code, legacy=d_layer, metadata={'d_layer': d_layer})

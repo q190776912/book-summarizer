@@ -6,6 +6,9 @@ import json, re, os, sys
 
 from extract.b_layer import recover_missing_items
 from extract.extract_items_en import extract_items_en
+from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
+from lib.config import (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH, ORDINAL_THREE_LEVEL,
+                         _LEGACY_ORDINAL_STR)
 
 # Tail gap (pages after a section's last detected item, up to the next section
 # or chapter end) considered "suspicious" rather than silently "resolved" once
@@ -136,7 +139,7 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
-    lab_re = re.compile(r'(定义|定理|引理|推论|命题)\s*(\d+)\s*[\.\·]\s*(\d+)')
+    lab_re = re.compile(r'(定义|定理|引理|推论|命题)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
     raw = []
     for p, y, txt in all_blocks:
         for m in lab_re.finditer(txt):
@@ -171,7 +174,7 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     scheme drops.
 
     chapter_map.json format: {"chapters": [{"num": N, "pdf_start": S,
-    "pdf_end": E, "scheme": "fraleigh", "sections": [8, 9, 10, 11], ...}]}
+    "pdf_end": E, "ordinal": 7, "sections": [8, 9, 10, 11], ...}]}
     """
     import json as _json
 
@@ -206,7 +209,7 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
     fr_re = re.compile(
-        r'(定义|定理|引理|推论|命题|例|表|图)\s*(\d+)\s*[\.\．·]\s*(\d+)')
+        r'(定义|定理|引理|推论|命题|例|表|图)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
     raw = []
     for p, y, txt in all_blocks:
         for m in fr_re.finditer(txt):
@@ -241,10 +244,10 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     return items, [], []
 
 
-def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, scheme='three-level', numbering='combined'):
-    if scheme == 'fraleigh':
+def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, ordinal=ORDINAL_THREE_LEVEL, separate_types=0):
+    if ordinal == ORDINAL_FRALEIGH:
         return extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides)
-    if scheme == 'two-level':
+    if ordinal == ORDINAL_TWO_LEVEL:
         items, warnings, blocking = extract_items_two_level(extract_dir, chapter, start_page, end_page)
         if manual_overrides:
             existing = {it['key']: idx for idx, it in enumerate(items)}
@@ -279,11 +282,11 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
 
     # ---- regexes (defined BEFORE the section-scan loop below) ----
     # Step 2: broader pattern (also catches 1.3.9 → 1.3-9)
-    num_re = re.compile(r'(\d+)\s*[\.\-\·\，\s]\s*(\d+)\s*[\-\.\·\，\s]\s*(\d+)')
+    num_re = re.compile(r'(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)')
     label_re = re.compile(r'(?:定义|定理|引理|推论|命题)\s*（|例(?:子)?|Example|Definition|Theorem|Lemma|Corollary|Proposition')
     cite_re = re.compile(r'(见|由|根据|参考|参见|据|Cf\.)')
     # Step 3: section heading (e.g. "§1.1 Name", "1.1 Name"). NOT matching "1.1-1" (numbered items).
-    sec_heading_re = re.compile(r'^(?:§\s*)?(\d+)\.(\d+)(?:\s{2,}|\s+[^\d\-])')
+    sec_heading_re = re.compile(r'^(?:§\s*)?(\d+)' + SEP_TIGHT + r'(\d+)(?:\s{2,}|\s+[^\d\-])')
     # Section-level label: a text block that is a standalone "例子" or "Examples" heading
     sec_label_re = re.compile(r'^(例[子]?|Examples?)$')
 
@@ -300,7 +303,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             chapter_sections.add(int(sm.group(2)))
 
     # ---- Step 2a: fallback pattern for garbled numbers (e.g. "21_7" → 2.1-7) ----
-    fallback_re = re.compile(r'(\d)(\d)[\s_\-\·]\s*(\d+)')
+    fallback_re = re.compile(r'(\d)(\d)' + SEP_NUMERIC + r'\s*(\d+)')
 
     # ---- Step 2: collect all number matches with context ----
     raw_matches = []
@@ -367,7 +370,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
 
     # ---- Step 5-6: boundary & density checks with auto-recovery (B-layer) ----
     items, warnings, blocking = recover_missing_items(
-        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, numbering
+        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, separate_types
     )
     return items, warnings, blocking
 
@@ -377,11 +380,16 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description="Extract numbered items from book JSON pages.")
     ap.add_argument("pos", nargs="*", help="CN: <ch> <start> <end> <extract_dir> | EN: <start> <end> <extract_dir>")
     ap.add_argument("--lang", choices=["cn", "en"], default="cn")
-    ap.add_argument("--scheme", default="three-level", help="two-level|three-level (CN only)")
+    ap.add_argument("--ordinal", dest="ordinal", type=int, default=ORDINAL_THREE_LEVEL,
+                        help="integer style code: 1 single | 2 two_level(CN) | "
+                             "3 three_level(CN, default) | 4 en | 5 roman | 6 gm | 7 fraleigh")
     ap.add_argument("--manual", default=None, help="path to manual_overrides json (CN only)")
     ap.add_argument("--examples", action="store_true", help="include Example items (EN only)")
     ap.add_argument("--verbose", action="store_true")
     ns = ap.parse_args()
+    # Back-compat: accept legacy STRING ordinal values (warn + map to int code).
+    if isinstance(ns.ordinal, str):
+        ns.ordinal = _LEGACY_ORDINAL_STR.get(ns.ordinal, ORDINAL_THREE_LEVEL)
 
     if ns.lang == "en":
         if len(ns.pos) < 3:
@@ -406,7 +414,7 @@ if __name__ == '__main__':
             with open(ns.manual, 'r', encoding='utf-8') as f:
                 manual = json.load(f)
             print(f"[INFO] Loaded {len(manual)} manual overrides from {ns.manual}")
-        items, warnings, blocking = extract_items(extract_dir, ch, start, end, manual_overrides=manual, scheme=ns.scheme)
+        items, warnings, blocking = extract_items(extract_dir, ch, start, end, manual_overrides=manual, ordinal=ns.ordinal)
         print(f"=== Ch{ch} ITEMS ===")
         cur_sec = ""
         for it in items:

@@ -9,7 +9,7 @@
 ## 语义与检查内容
 - 扫描 `_extract` 的 `page_*.json`，填 `ctx.items` / `ctx.entry_keys` / `ctx.all_keys`。
 - 算 `ignored_hit` **第一段（stage1）** 写入 `ctx`（最终值由 B 层第二段回写，见下）。
-- 必须原样 port `scheme='en'` 分支（英文书按章过滤前向引用、key 规范化成中文形式；md 侧 `entry_keys`/`all_keys` 限制到当前章）。
+- 必须原样 port 英文书分支（`ctx.config.ordinal == ORDINAL_EN`：按章过滤前向引用、key 规范化成中文形式；md 侧 `entry_keys`/`all_keys` 限制到当前章）。
 - 三段逻辑（three-level / two-level / en）必须完整搬运，否则 EN 书整体漂移。
 
 ## 阻断性 / 可修复

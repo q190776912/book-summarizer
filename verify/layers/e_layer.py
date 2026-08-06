@@ -13,7 +13,7 @@ a chapter as NOT-skipped when the index exists but has no entries for this
 chapter. The byte-level golden gate depends on this exact semantics.
 """
 
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 
 import os, json
 
@@ -68,7 +68,7 @@ class ELayer(VerifyLayer):
 
     def run(self, ctx):
         e_layer = check_e_figure_completeness(
-            ctx.ch, ctx.start, ctx.end, ctx.ext_dir, ctx.ignore_fig)
+            ctx.ch, ctx.start, ctx.end, ctx.ext_dir, ctx.ignore)
         ctx.e_layer = e_layer
         fig_missing = e_layer['missing'] if e_layer else []
         fig_extra = e_layer['extra'] if e_layer else []

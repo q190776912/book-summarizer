@@ -4,7 +4,7 @@ SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if SKILL_ROOT not in sys.path:
     sys.path.insert(0, SKILL_ROOT)
 
-from verify.registry import DEFAULT_RESULT
+from verify.layers.base import DEFAULT_RESULT
 
 LAYERS_DIR = os.path.join(SKILL_ROOT, "references", "layers")
 REPORT = os.path.join(SKILL_ROOT, "verify", "report.py")

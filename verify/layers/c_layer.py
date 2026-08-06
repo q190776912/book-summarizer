@@ -9,7 +9,7 @@ import os
 import sys
 import subprocess
 
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 
 
 def check_katex(md_file):

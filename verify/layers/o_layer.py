@@ -7,7 +7,7 @@ NEVER auto-fixed and never forces a FAIL by itself. check_ordinal_subitem_gaps i
 Self-contained implementation of check_ordinal_subitem_gaps (bodies relocated from the deleted structure_layers.py), forwarding the OCR cross-reference args.
 """
 
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 

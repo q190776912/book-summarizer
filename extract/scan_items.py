@@ -26,8 +26,9 @@ directly mirrors the book's numbering and reports:
   * CONTINUITY gaps for 定义 / 定理family (missing = [..] means a hole)
 
 Use it AFTER writing a chapter to confirm nothing was dropped, INDEPENDENTLY
-of verify_chapter.py (which may run with --scheme two-level for A/B, but this
-scanner is the authoritative continuity check). It is also the basis for
+of verify_chapter.py (which reads `ordinal` from <extract_dir>/verify_config.json
+to pick the numbering mode, but this scanner is the authoritative continuity
+check). It is also the basis for
 deciding whether a key is genuine or OCR noise when registering --ignore.
 
 OCR QUIRKS HANDLED
@@ -48,6 +49,7 @@ import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
 import json, os, re, sys
+from lib.regexlib import SEP_TIGHT
 
 def ykey(t):
     poly = t.get("poly")
@@ -60,9 +62,9 @@ def ykey(t):
 
 def scan(ch, start, end, d):
     # Label items: 定义 / 定理 / 引理 / 推论 / 命题, each as 标签 章.号
-    lab_re = re.compile(r'(定义|定理|引理|推论|命题)\s*(\d+)\s*[\.\·]\s*(\d+)')
+    lab_re = re.compile(r'(定义|定理|引理|推论|命题)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
     # Section heading: §N.M Name  — tolerate OCR § -> S / 8  (e.g. "S2.5", "81.6")
-    sec_re = re.compile(r'^(?:§|S|8)?\s*(' + str(ch) + r')\s*[\.\·]\s*(\d+)\s*([^\d\.\·].{0,30})')
+    sec_re = re.compile(r'^(?:§|S|8)?\s*(' + str(ch) + r')\s*' + SEP_TIGHT + r'\s*(\d+)\s*([^\d.\-–·/．－〜].{0,30})')
     # Examples: 例N (NOT 例N.M) at the start of a block, per-section renumbering.
     ex_re = re.compile(r'^例\s*(\d+)(?![\.\·]?\d)')
 

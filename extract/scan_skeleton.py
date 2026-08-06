@@ -12,12 +12,15 @@
 
 用法
 ----
-    python extract/scan_skeleton.py <extract_dir> [ch ...] [--scheme three-level|two-level]
+    python extract/scan_skeleton.py <extract_dir> [ch ...]
 
     # 全书
     python extract/scan_skeleton.py D:/study/book/<书名>/_extract
     # 指定章
     python extract/scan_skeleton.py D:/study/book/<书名>/_extract 1 2 3
+
+    # 编号模式（three-level / two-level / cn）由 <extract_dir>/verify_config.json
+    # 的 `ordinal` 字段自动判定，无需任何 --scheme 之类的命令行 override。
 
 输出
 ----
@@ -38,6 +41,10 @@ two-level（如 "§2 标题" + 条目 "2.3."）：
     节   "2 Some title"
     条目 "2.3. Title."
     练习 "2.C. Exercise."
+cn（中文三级，标签在前，如 "定理1.4.1 ..."）：
+    节   "1.5 行列式的计算"
+    条目 "定理1.4.1 ..."（标签 + 章.节.号）
+    练习 "习题 1.3"
 """
 import json
 import os
@@ -45,6 +52,8 @@ import re
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+from lib.config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_THREE_LEVEL)
 
 # 节标题：可带 Vakil 的可选标记（★ 被 OCR 成 + / * / x），标题也可能以单字母词开头
 # （"3.5 A base of ..."），故只要求首字符大写、长度 4~72。
@@ -66,6 +75,19 @@ ITEM_CN = re.compile(
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
 EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 
+# Map an integer `ordinal` (lib.config) to scan_skeleton's parsing mode.
+# Returns one of 'three-level' (default western 3-level), 'two-level'
+# (western/EN/GM/Fraleigh 2-level), or 'cn' (Chinese 3-level).
+def _mode_for_ordinal(ordinal):
+    o = int(ordinal)
+    depth = ORDINAL_DEPTH.get(o, ORDINAL_THREE_LEVEL)
+    lang = ORDINAL_LANGUAGE_DEFAULT.get(o, 'cn')
+    if lang == 'cn':
+        return 'cn'
+    if depth >= 3:
+        return 'three-level'
+    return 'two-level'
+
 
 def lines_of(page_json):
     for it in page_json.get('text', []):
@@ -73,7 +95,7 @@ def lines_of(page_json):
             yield ln.strip()
 
 
-def scan(extract_dir, ch, start, end, scheme):
+def scan(extract_dir, ch, start, end, mode):
     rows = []
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, 'page_%03d.json' % p)
@@ -85,7 +107,7 @@ def scan(extract_dir, ch, start, end, scheme):
             ln = ln.rstrip('$').strip()
             if not ln:
                 continue
-            if scheme == 'two-level':
+            if mode == 'two-level':
                 m = SEC_2.match(ln)
                 if m and int(m.group(1)) == ch and not m.group(2).endswith('.'):
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
@@ -97,7 +119,7 @@ def scan(extract_dir, ch, start, end, scheme):
                 m = ITEM_2.match(ln)
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'ITEM', '%s.%s' % m.group(1, 2), m.group(3).strip()))
-            elif scheme == 'cn':
+            elif mode == 'cn':
                 m = SEC_CN.match(ln)
                 if m and int(m.group(1)) == ch:
                     if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
@@ -146,22 +168,26 @@ def scan(extract_dir, ch, start, end, scheme):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    scheme = 'three-level'
-    for a in sys.argv[1:]:
-        if a.startswith('--scheme'):
-            scheme = a.split('=', 1)[1] if '=' in a else 'three-level'
-    if '--scheme' in sys.argv:
-        i = sys.argv.index('--scheme')
-        if i + 1 < len(sys.argv):
-            scheme = sys.argv[i + 1]
-            if scheme in args:
-                args.remove(scheme)
 
     if not args:
         print(__doc__)
         return 2
     extract_dir = args[0]
     want = [int(x) for x in args[1:]]
+
+    # Numbering mode is auto-detected from the book's verify_config.json
+    # (the single source of truth for `ordinal`); no CLI override needed.
+    ordinal = ORDINAL_THREE_LEVEL
+    mode = 'three-level'
+    cfg_path = os.path.join(extract_dir, 'verify_config.json')
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, encoding='utf-8') as fh:
+                cfg = json.load(fh)
+            ordinal = int(cfg.get('ordinal', ORDINAL_THREE_LEVEL))
+            mode = _mode_for_ordinal(ordinal)
+        except (ValueError, TypeError, OSError):
+            pass
 
     cm_path = os.path.join(extract_dir, 'chapter_map.json')
     with open(cm_path, encoding='utf-8') as fh:
@@ -188,7 +214,7 @@ def main():
             print('ch%-3d SKIP (not in chapter_map)' % ch)
             continue
         start, end = rng[ch]
-        rows = scan(extract_dir, ch, start, end, scheme)
+        rows = scan(extract_dir, ch, start, end, mode)
         sec_best = {}
         for row in rows:
             if row[1] == 'SEC':
@@ -207,7 +233,7 @@ def main():
         out = os.path.join(extract_dir, 'ch%d_skeleton.txt' % ch)
         secs = []
         with open(out, 'w', encoding='utf-8') as f:
-            f.write('# Chapter %d skeleton (pages %d-%d, scheme=%s)\n' % (ch, start, end, scheme))
+            f.write('# Chapter %d skeleton (pages %d-%d, ordinal=%s)\n' % (ch, start, end, ordinal))
             f.write('# THIS FILE IS A WRITING CONTRACT: emit every SEC in this order,\n')
             f.write('# cover every ITEM in this order, keep every printed title.\n')
             f.write('# EXER (exercises): follow references/formatting.md 习题收录规则\n')

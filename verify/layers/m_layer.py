@@ -3,7 +3,7 @@
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""
 
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 def check_displaymath_gt(md_file):
     """M-LAYER: detect `>` lines inside `$$...$$` display math blocks.

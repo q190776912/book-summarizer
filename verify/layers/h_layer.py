@@ -17,7 +17,7 @@ Self-contained implementation (bodies relocated from the deleted structure_layer
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split).
 """
 
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 

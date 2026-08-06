@@ -36,7 +36,7 @@ OCR on scanned mathematical textbooks produces **noisy text and severely corrupt
 The summary must mirror the original book's content faithfully:
 
 - **允许修正 OCR 噪声**：编号模糊时还原（`定? 2.?-1` → `定义2.8-1`），内容模糊时基于上下文 + 学科知识复原原意
-- **允许适度精简**：压缩表述，但不得省略任何编号项
+- **允许适度精简**：精简的是表述不是内容——压缩冗余铺陈，但不得省略任何编号项，也**不得省略描述性内容（动机/直观/导语等）中的公式与概念**（详见 SKILL.md「Tier 2 描述性内容」）
 - **不允许无中生有**：书本没讲的概念不要编进去，书本没出现的编号不要硬加
 - **不允许统一风格**：不得为美观把原书的 `定义2.1.1` 改成 `定义2-1-1`
 - **不允许创造编号**：无编号章节不强行编号

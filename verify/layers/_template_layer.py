@@ -14,15 +14,16 @@ _template_layer.py — 新增校验层时的复制起点（非层文件，自动
 
 ⚠️ 若你的层要贡献**新的**结果字典键（即 DEFAULT_RESULT 里还没有的键），
    必须同步更新（完整步骤见 [`references/verification.md` 的「新增/修改一层同步清单」](../../references/verification.md)）：
-     - `verify/registry.py` 的 `DEFAULT_RESULT`（增加该键及正确类型的占位值），
+     - `verify/layers/base.py` 的 `DEFAULT_RESULT`（增加该键及正确类型的占位值），
      - `verify/report.py` 的 `print_result`（增加该键的展示逻辑），
      - `references/verification.md` 的「层级注册表（Registry）」索引表与「字节契约键集合」清单，
    否则会破坏字节契约（report 可能遇到缺失键 / 错误类型）；`verify/tests/test_key_contract.py` 会自动拦下这类遗漏。
 
 `ctx` 可用字段（由 VerifyContext 提供）：ch, start, end, md_file, ext_dir,
-manual_path, ignore_keys, ignore_fig, scheme，以及部分层写入的 e_layer / fig_skipped。
+manual_path, ignore_keys, ignore_fig，以及配置 ordinal（由 lib.config.BookConfig
+从 verify_config.json 载入）、和部分层写入的 e_layer / fig_skipped。
 """
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 
 class TemplateLayer(VerifyLayer):

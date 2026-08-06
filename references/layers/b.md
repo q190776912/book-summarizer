@@ -18,13 +18,16 @@
 - `b_tail_warnings`：尾部校验，始终非阻断。
 
 ## 分组（按书的编号习惯，来自 `BNumberingConfig`）
-配置由 B 层脚本**直接从 `<book_dir>/_extract/` 读 JSON**（不依赖任何编排层透传）。候选顺序：
-`<book_dir>/_extract/b_numbering.json` → `_extract/verify_config.json`（`b_numbering` 键或平铺）→ `<book_dir>/verify_config.json`。缺省/非法 → 默认 `levels=2, scope=chapter, separate_types=True, strict=True`。
+配置由 B 层脚本**直接从 `<book_dir>/_extract/` 读 JSON**（不依赖任何编排层透传）。
+
+**单一配置文件**：`<book_dir>/_extract/verify_config.json`（扁平，**同时**存放通用 `disable` 与 B 编号字段 `levels/scope/separate_types/strict/known_gaps`）。`<book_dir>/verify_config.json` 仅作为向后兼容的回退位置。不存在 `b_numbering.json` 这种独立文件，也没有 `b_numbering` 子键——一份文件，一种 schema，编号约定与层禁用共用同一真相源。
+
+缺省/非法 → 默认 `levels=2, scope=chapter, separate_types=1, strict=True`。
 
 `BNumberingConfig` 字段（用户框架）：
 - `levels`：数字路径的总级数（1 / 2 / 3）。`5`=1，`4.1`=2，`4.11-5`=3。
 - `scope`：末级序号的重置/连续性边界（`book` 全书 | `chapter` 章内 | `section` 节内）。对 k 级编号，有意义的前缀是前 `k-1` 级；其他取值被 `group_prefix_len()` 上限钳到 `levels-1`，错配不会崩溃。
-- `separate_types`：`True` → 每类（定理/定义/引理/…）独立计数器（组键 = `(前缀, 类型)`）；`False` → 各类共享一个计数器。
+- `separate_types`：编号粒度（**整数，非布尔**，预留更细分组）。判定必须用 `==` 对比具名常量 `SEP_COMBINED` / `SEP_PER_TYPE`，**严禁 `>=`**：`0`(SEP_COMBINED) → 各类共享一个计数器（combined，组键 = `前缀`）；`1`(SEP_PER_TYPE) → 每类（定理/定义/引理/…）独立计数器（per-type，组键 = `前缀:类型`）；`2+` 预留（更细分组），**当前未定义**——`from_dict` 拒绝未知值并回退 `SEP_COMBINED` + 报警，新增类别时必须显式写分支，绝不静默继承 per-type 行为。
 - `strict`：`True`（默认）→ md 内部缺口成为 BLOCKING（不允许遗漏）；`False` → 降级为 `b_gap_warnings`。
 - `known_gaps`：已核对确为书本身稀疏编号（非遗漏）的条目 token 列表，如 `["Theorem 12.3","Lemma 2.5"]`。`strict` 下这些被抑制，不误报 FAIL；其余缺口仍硬阻断。填表前须对照源 PDF 核实。
 
@@ -53,7 +56,7 @@ ignored_hit
 ## 实现（`verify/layers/b_layer.py`）
 - `code = 'B'`，`order = 3`，`auto_fixable = False`。
 - 数据源：`ctx.extraction_blocking`（EXTRACT 阶段填）+ MD 侧 `_md_gap_blocking` 结果 + 源 `ctx.items`（尾部校验）。
-- `BNumberingConfig.load_for_md(md_file)`：从 extract/book 文件夹读配置（无透传）。
+- 编号配置由 `lib.config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层与提取层都读 `ctx.config`，**不再各自读文件**（旧的 `load_for_md` 文件 IO 已删除）。编号级数由整数 `ordinal` 决定（见 `lib/config.py` 的 `ORDINAL_DEPTH`），JSON 里可不写。
 - `BLayer.run`：
   1. `ignored_hit` **第二段** suppression：遍历 `blocking`，若某条引用键全部 ∈ `ignore_keys`，把 `bkeys` 并入 `ctx.ignored_hit` 并从 `blocking` 剔除（最终 `ignored_hit` 由 B 回写，覆盖 EXTRACT 的 stage1）。
   2. 算 MD 侧 `_md_gap_blocking` -> `(md_blocking, md_warnings, present_md, md_tail)`。

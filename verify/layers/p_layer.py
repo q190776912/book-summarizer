@@ -45,7 +45,7 @@
 import os
 import re
 
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 # ── 练习归拢块：独立标题 / 独立加粗 ───────────────────────────────────────
 # 节末/章末「自建」的 `### 练习` `### 习题` `### Exercises` 归拢标题块——策略上章末整块习题本就省略不写，
@@ -104,11 +104,14 @@ def check_noise(lines):
     return out
 
 
-def check_bare_items(lines, scheme):
+def check_bare_items(lines, ordinal):
     out = []
     n = len(lines)
-    bare = BARE_ITEM_3 if scheme == 'three-level' else BARE_ITEM_2
-    detached = DETACHED_3 if scheme == 'three-level' else DETACHED_2
+    # ordinal == 3 (three_level) uses the 3-component bare-item detector;
+    # every other style (single / two_level / en / roman / gm / fraleigh) uses
+    # the 2-component detector.
+    bare = BARE_ITEM_3 if ordinal == 3 else BARE_ITEM_2
+    detached = DETACHED_3 if ordinal == 3 else DETACHED_2
     for i, ln in enumerate(lines):
         if bare.match(ln):
             # 标题可能在下一行（英文 "Categories." 之类）
@@ -180,7 +183,9 @@ PROOF_OPEN_RE = re.compile(
     r'梗概|概要|解答|Solution)\b', re.I)
 
 # 顶层长散文段的最小字符数（超过即疑似整段照抄非核心内容）
-VERBOSE_PARA_CHARS = 350
+# 注：含公式($...$/$$/\begin{})的段落视为「内容承载的描述性内容」，豁免本闸门
+# （忠实保留公式/概念的描述本就该较长，不应被误杀；见 SKILL.md Tier 2）。
+VERBOSE_PARA_CHARS = 450
 # 单证明块过长的字符阈值
 VERBOSE_PROOF_CHARS = 700
 # 触发 FAIL 的聚合阈值（report.py 读取）
@@ -202,12 +207,20 @@ def _is_enumerated(buf):
     return False
 
 
+def _para_has_math(text):
+    """段落是否承载数学内容（视为内容而非照抄 padding）。"""
+    return ('$' in text) or ('\\begin{' in text) or ('\\(' in text)
+
+
 def check_verbose_paragraphs(lines):
     """顶层长散文段（非核心内容未摘要）。
 
     豁免：块引用(`>`)内、标题(`#`)、`**` 标签条目/例/练习的忠实陈述、$$ 公式、
     `---` 分隔线、表格行。只统计「无标签的顶层散文」——即动机/直观/注记非核心
-    阐述/导语等 Tier 2 内容；这些若被整段搬自原书（>350 字/段）即违规。
+    阐述/导语等 Tier 2 内容；这些若被整段搬自原书（>450 字/段）即违规。
+    ⚠️ **含公式的段落豁免**：凡承载数学（`$...$`/`$$`/`\\begin{}`/`\\(`）的段落视为
+    忠实保留公式的描述性内容（SKILL.md Tier 2 要求保留公式），不计入长散文闸门，
+    避免「忠实描述」被误杀。纯散文（无公式）仍按 450 字阈值约束。
     """
     out = []
     n = len(lines)
@@ -243,9 +256,13 @@ def check_verbose_paragraphs(lines):
             j += 1
         if buf:
             text = ' '.join(buf)
+            # 含公式的段落 = 内容承载的描述性内容，豁免长散文闸门（Tier 2）
+            if _para_has_math(text):
+                i = j
+                continue
             if len(text) > VERBOSE_PARA_CHARS:
                 out.append(f"  x L{i+1}: 顶层散文段过长（{len(text)} 字，疑似整段照抄非核心内容）"
-                           f"— 动机/导语须概括为核心要点或省略(Tier 2)：{text[:60]}…")
+                           f"— 动机/导语须精简表述但保留公式与概念(Tier 2)：{text[:60]}…")
         i = j
     return out
 
@@ -340,7 +357,7 @@ class PLayer(VerifyLayer):
             })
         exer = check_exer_blocks(lines)
         noise = check_noise(lines)
-        bare = check_bare_items(lines, ctx.scheme)
+        bare = check_bare_items(lines, ctx.config.ordinal)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
         verbose = check_verbose_paragraphs(lines)

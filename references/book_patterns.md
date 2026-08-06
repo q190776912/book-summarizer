@@ -3,7 +3,7 @@
 # 编号体系与 OCR 怪象参考（book_patterns）
 
 本文件记录 skill 在总结不同教材时遇到的**非标准编号体系**与 **OCR 怪象**，
-以及对应的处理决策。遇到新的书时先对照「判定树」，选对 extraction scheme，
+以及对应的处理决策。遇到新的书时先对照「判定树」，确定编号模式（ordinal），
 可避免大量假阳性（phantom key）误报。
 
 ---
@@ -24,19 +24,18 @@
 把它们报成永远无法消除的 `TRULY MISSING`。
 
 ### 处理决策（已内置到 skill）
-- `extract/extract_items.py` 新增 `--scheme two-level`：直接按 `标签 章.号` 提取，
-  产出 `定义1.1`、`定理1.1` 等键，**不再使用三级 N.S-N 正则**，从根本上杜绝幻影键。
+- `extract/extract_items.py` 对两级书按 `ordinal` 路由（`<book>/_extract/verify_config.json` 设 `"ordinal": 2`）：直接按 `标签 章.号` 提取，
+  产出 `定义1.1`、`定理1.1` 等键，**不再使用三级 N.S-N 正则**，从根本上杜绝幻影键（命令行亦可显式 `extract/extract_items.py 1 20 82 _extract --ordinal 2`）。
 - `verify/verify_chapter.py` 的 `keys_in_md` 同样支持两级：解析 `**定义1.1**：` 等 bold 键；
-  并在 `chapter_map.json` 中按章读取 `"scheme": "two-level"`，`--all` 时自动启用。
-- 单章校验也可显式传 `--scheme two-level`。
+  编号模式由 `<book>/_extract/verify_config.json` 的 `ordinal` 决定，`--all` 时自动启用。
 - **例的完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），
   交给专门的 `extract/scan_items.py` 做独立连续性核验。
 
 ### 命令
 ```bash
-# 提取（两级）
-python extract/extract_items.py 1 20 82 _extract --scheme two-level
-# 校验（两级，全书）
+# 提取（两级；ordinal 也可在 verify_config.json 里设，无需命令行）
+python extract/extract_items.py 1 20 82 _extract --ordinal 2
+# 校验（两级，全书；ordinal 来自 verify_config.json）
 python verify/verify_chapter.py --all _extract <book_dir>
 # 独立连续性核验（权威）
 python extract/scan_items.py 1 20 82 _extract
@@ -62,7 +61,7 @@ python extract/scan_items.py 1 20 82 _extract
 ## 3. 三级编号（默认，大多数书）
 
 `章.节-号`（N.S-N），例如 `1.1-2`、`3.2-7`。这是 `extract/extract_items.py` 的默认
-scheme（`three-level`），`verify/verify_chapter.py` 也默认三级。绝大多数教材（含英文书）
+编号模式（`ordinal=3`，三级），`verify/verify_chapter.py` 也默认三级。绝大多数教材（含英文书）
 属此类，无需任何额外配置。
 
 ---
@@ -74,7 +73,7 @@ scheme（`three-level`），`verify/verify_chapter.py` 也默认三级。绝大�
 │
 ├─ 编号形如  定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）
 │     → 两级 + 双计数器（周民强型）
-│     → 在 chapter_map.json 每章加 "scheme": "two-level"
+│     → 在 <book>/_extract/verify_config.json 设 "ordinal": 2
 │     → 写章后用 extract/scan_items.py 做连续性核验
 │
 ├─ 编号形如  1.1-2 / 3.2-7（三级 章.节-号）
@@ -83,7 +82,7 @@ scheme（`three-level`），`verify/verify_chapter.py` 也默认三级。绝大�
 └─ 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）
       → 几乎肯定是三级正则误吃公式/枚举
       → 先用 extract/scan_items.py 或人工核对确认真实条目齐全
-      → 若确为两级书：切 two-level scheme
+      → 若确为两级书：设 ordinal=2（两级）
       → 若确为三级书但有几个真·OCR 噪点：用 --ignore 登记
         （写入 _extract/ignore_ch{N}.json，附 ignore_ch{N}.md 举证）
 ```

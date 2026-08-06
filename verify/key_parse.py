@@ -6,12 +6,32 @@ verify package: the three-level / two-level / English key regexes, the label
 canonicalization maps (_LABEL_CANON etc.), `normkey`, `keys_in_md`, `sortkey`
 and `_first_num`. It has NO heavy dependencies (no cv2 / torch) so it can be
 imported standalone in a bare environment.
+
+The inter-component separator policy now lives in `lib/regexlib`
+(SEP_TIGHT / SEP_WIDE / canon helpers).  This module imports SEP_TIGHT and
+rebuilds every label-embedded regex with it, and re-exports the label-FREE
+shared regexes (KEY_RE / ENTRY_RE / ROMAN_KEY_RE) so all callers stay unchanged.
 """
 import re, sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# --- fraleigh scheme: section-based two-level (Fraleigh《抽象代数基础教程》) ---
+from lib.regexlib import (
+    SEP_TIGHT, SEP_SPLIT_RE, KEY_RE, ENTRY_RE, ROMAN_KEY_RE,
+)
+from lib.config import (
+    ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM, ORDINAL_FRALEIGH,
+    ORDINAL_THREE_LEVEL,
+)
+
+# GM (Gelfand-Manin) section/entry separators: the shared wildcard set
+# (SEP_TIGHT) plus the ideographic comma "、" that GM book headings
+# occasionally use ("## 1、 Triangulated …"). Derived from SEP_TIGHT so the
+# GM separator stays in lockstep with the rest of the pipeline's policy
+# (single source of truth in lib.regexlib).
+GM_SEP = SEP_TIGHT[:-1] + r'、]'
+
+# --- Fraleigh (ordinal=ORDINAL_FRALEIGH): section-based two-level ---
 # Unlike 周民强-type two-level (where first number == CHAPTER and label counters
 # are independent/shared), Fraleigh numbers items per global SECTION, and the
 # Chinese translation groups sections into chapters (ch1 = secs 1-7, ch2 = secs
@@ -22,16 +42,15 @@ FR_COMBINED_LABELS = '|'.join(
      'Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
      'Example', 'Table', 'Figure'])
 FR_ENTRY_RE = re.compile(
-    r'\*\*(' + FR_COMBINED_LABELS + r')\s*(\d+)\.(\d+)[^\n*]*\*+')
+    r'\*\*(' + FR_COMBINED_LABELS + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)[^\n*]*\*+')
 FR_PROSE_RE = re.compile(
-    r'(' + FR_COMBINED_LABELS + r')\s*(\d+)\.(\d+)')
+    r'(' + FR_COMBINED_LABELS + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 # --- three-level (default) key parsing ---
-# Matches both dash (N.S-N) and dot (N.S.N) numbering — the extractor
-# canonicalizes everything to dash, but the .md may keep the book's dot style.
-KEY_RE = re.compile(r'(\d+)\.(\d+)[\.\-](\d+)')
-# A bold entry looks like  **标签N.S-N**  or  **N.S-N 名称**  or  > **例N.S-N**
-ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+\.\d+[\.\-]\d+)[^*]*\*+')
+# KEY_RE / ENTRY_RE are imported from lib.regexlib (label-FREE, built from
+# SEP_TIGHT). They match both dash (N.S-N) and dot (N.S.N) numbering — the
+# extractor canonicalizes everything to dash, but the .md may keep the book's
+# dot style.
 
 # --- two-level key parsing (e.g. 周民强《实变函数论》) ---
 # Bold entries:  **定义1.1**： / **定理1.1**：
@@ -40,15 +59,16 @@ ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+\.\d+[\.\-]\d+)[^*]*\*+')
 # would never match — every entry then silently degrades to "mentioned-only".
 ENTRY_RE_2 = re.compile(
     r'\*\*(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)\.(\d+)\s*[.．]?\s*\*+')
+    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
 PROSE_RE_2 = re.compile(
     r'(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)\.(\d+)')
+    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 def normkey(s):
-    """Canonicalize a key to N.S-N dash form (N.S.N -> N.S-N)."""
-    parts = s.split('.')
+    """Canonicalize a key to N.S-N dash form (N.S.N -> N.S-N, N·S·N -> N.S-N).
+    Wildcard-aware: any separator run normalizes via SEP_SPLIT_RE."""
+    parts = [p for p in SEP_SPLIT_RE.split(s) if p]
     if len(parts) == 3:
         return f'{parts[0]}.{parts[1]}-{parts[2]}'
     return s
@@ -76,21 +96,21 @@ _LABEL_CANON = {
     'Algorithm': '算法', '算法': '算法',
 }
 
-# English two-level book item regexes (for scheme='en'). Mirror ENTRY_RE_2 /
+# English two-level book item regexes (used when ordinal == ORDINAL_EN). Mirror ENTRY_RE_2 /
 # PROSE_RE_2 but include English label kinds AND Example (English summaries
-# write **Example N.M** as a full entry, unlike the CN two-level scheme).
+# write **Example N.M** as a full entry, unlike the CN two-level).
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
                   'Assumption', 'Algorithm', 'Commentary']
 # Chinese label synonyms that appear in bilingual-book .md files.
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
                   '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法']
-# Combined (used by the 'en' scheme so either language matches).
+# Combined (used when ordinal == ORDINAL_EN so either language matches).
 COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(
-    r'\*\*(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)\.(\d+)\s*\*+')
+    r'\*\*(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*\*+')
 PROSE_RE_EN = re.compile(
-    r'\b(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)\.(\d+)')
+    r'\b(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 # Capturing variants of the EN regexes (label as group(1)) — used by
 # keys_in_md('en'), which needs the label to canonicalize (Definition->定义...).
@@ -98,21 +118,26 @@ PROSE_RE_EN = re.compile(
 # `**定义 5.1（级联系统）**：` — the number is immediately after the label but a
 # parenthetical + closing `**` follows, so we must NOT require `*` right after
 # the number. The label IS captured (group 1) so we can canonicalize it.
+# re.IGNORECASE: English books (e.g. Apostol) print headings in UPPERCASE
+# (THEOREM 8.16. / COROLLARY 8.3.) or OCR-mangled mixed case (THEoREM /
+# CoROLLARY); without it the md-side parser misses those entries and they
+# surface as false "truly missing". Mirrors extract_items_en (EN_LAB_RE).
 ENTRY_RE_EN_C = re.compile(
-    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)\.(\d+)')
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
 PROSE_RE_EN_C = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)\.(\d+)')
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
 
 # --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
 # Item numbers are Chapter.Section.Item with a ROMAN chapter: I.2.13, II.3.5.
 # The chapter prefix is a roman numeral; section/item are arabic.
-ROMAN_KEY_RE = re.compile(r'([IVXLCDM]+)\.(\d+)[\.\-](\d+)')
 ENTRY_RE_ROMAN = re.compile(
-    r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\.(\d+)[\.\-](\d+))')
+    r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+))')
 PROSE_RE_ROMAN = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*([IVXLCDM]+)\.(\d+)[\.\-](\d+)')
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 
-# --- gm scheme: BOOK-printed forms, roman machine keys ---
+# --- GM (ordinal=ORDINAL_GM): BOOK-printed forms, roman machine keys ---
 # Gelfand-Manin style books print sections per chapter ("## §1. Triangulated
 # Spaces") and item titles as per-section headings; the .md renders them as
 # ATX sub-headings ("### 1. Main Definitions", "### 3. Proposition." — book
@@ -121,20 +146,14 @@ PROSE_RE_ROMAN = re.compile(
 # appear only in prose cross-references.  Machine keys stay `标签I.S-N`
 # (labelled) / `I.S-N` (heading with no label word — mirror of the PDF-side
 # rule in extract/extract_items_gm.py).
-GM_SEC_RE = re.compile(r'^##\s*[§$]?\s*(\d{1,2})[.．、]?\s+\S')
+GM_SEC_RE = re.compile(r'^##\s*[§$]?\s*(\d{1,2})(?:' + GM_SEP + r')?\s+\S')
 GM_ENTRY_RE = re.compile(
-    r'^\s*(?:>\s*)?(?:###\s+|\*\*)(\d{1,3})[.．]\s*([^*\n]{0,80})')
+    r'^\s*(?:>\s*)?(?:###\s+|\*\*)(\d{1,3})(?:' + GM_SEP + r')\s*([^*\n]{0,80})')
 GM_LABELED_RE = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\s*\.?\s*(\d+)\s*\.?\s*(\d+)',
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\s*(?:' + GM_SEP + r')?\s*(\d+)\s*(?:' + GM_SEP + r')?\s*(\d+)',
     re.IGNORECASE)
-# First label keyword inside an item heading ("3. Proposition. ...",
-# "6. Definition (- Lemma). ...", "9. Remarks and Examples", or the CN
-# translations "3. 命题.", "6. 定义（-引理）.").  BOTH EN and CN label words
-# are accepted so the gm scheme verifies the derived CN chapter too (extract
-# keys are already Chinese-canonical via _canon_label).  The optional plural
-# 's' lets "Examples"/"Remarks" match ("1. Main Definitions" matches as
-# Definition+s too) — SAME rule as extract/extract_items_gm.py so both sides
-# build identical keys.
+# First label keyword inside an item heading ("3. Proposition." -> 'Proposition'), or None
+# when the heading carries no label word ("14. Skeleton and Dimension").
 GM_HEAD_LABEL_RE = re.compile(
     r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')s?\b', re.IGNORECASE)
 
@@ -176,20 +195,20 @@ def _first_num(key):
     m = re.search(r'\d+', key)
     return int(m.group()) if m else -1
 
-def keys_in_md(path, scheme='three-level', chapter_roman=None):
+def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None):
     """Entries/all_keys from an .md file.
 
-    For scheme='gm', `chapter_roman` (e.g. 'I') is REQUIRED: the .md headings
-    are bare per-section ordinals with no chapter prefix, so the chapter is
-    known only at the call site (the verify context).
+    `ordinal` is the integer style code (see lib.config ORDINAL_*).  For
+    ORDINAL_GM / ORDINAL_ROMAN, `chapter_roman` (e.g. 'I') is REQUIRED: the
+    .md headings are parsed relative to that roman chapter.
     """
     entries, allk = set(), set()
     cur_sec = None
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
-            if scheme == 'gm':
+            if ordinal == ORDINAL_GM:
                 if chapter_roman is None:
-                    raise ValueError("keys_in_md(scheme='gm') requires chapter_roman")
+                    raise ValueError("keys_in_md(ordinal=ORDINAL_GM) requires chapter_roman")
                 sm = GM_SEC_RE.match(line.strip())
                 if sm:
                     cur_sec = int(sm.group(1))
@@ -206,25 +225,25 @@ def keys_in_md(path, scheme='three-level', chapter_roman=None):
                     entries.add(key); allk.add(key)
                 for m in GM_LABELED_RE.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
-            elif scheme == 'two-level':
+            elif ordinal == ORDINAL_TWO_LEVEL:
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_2.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif scheme == 'en':
+            elif ordinal == ORDINAL_EN:
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif scheme == 'fraleigh':
+            elif ordinal == ORDINAL_FRALEIGH:
                 for m in FR_ENTRY_RE.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in FR_PROSE_RE.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif scheme == 'roman':
+            elif ordinal == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"
                     entries.add(key); allk.add(key)

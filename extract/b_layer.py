@@ -4,6 +4,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json, re
 from collections import defaultdict
 
+# Single source of truth for the separation-mode constants (== not >= semantics).
+from verify.layers.b_layer import SEP_COMBINED, SEP_PER_TYPE
+from lib.regexlib import SEP_NUMERIC
+
 # ---------------------------------------------------------------------------
 # B-LAYER ("extraction blocking") recovery logic.
 # Raw re-scan + auto-recovery of missing items in boundary / internal-gap /
@@ -20,8 +24,8 @@ def _rescan_gap(extract_dir, chapter, sec, p_start, p_end):
     found = []
     if p_end < p_start:
         return found
-    num_re = re.compile(r'(\d+)\s*[\.\-\·\，\s]\s*(\d+)\s*[\-\.\·\，\s]\s*(\d+)')
-    fb = re.compile(r'(\d)(\d)[\s_\-\·]\s*(\d+)')
+    num_re = re.compile(r'(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)')
+    fb = re.compile(r'(\d)(\d)' + SEP_NUMERIC + r'\s*(\d+)')
     for p in range(max(1, p_start), p_end + 1):
         fp = os.path.join(extract_dir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
@@ -82,25 +86,26 @@ def _scan_and_recover(p_start, p_end, sec_num, section_label, extract_dir, chapt
     return recovered
 
 
-def _group_key(it, numbering):
+def _group_key(it, separate_types):
     """Section-grouping key for the missing-number scan.
 
-    - 'combined' (default): 定义/定理/例 share ONE sequence per section
-      (Kreyszig style) -> group by ``C.S`` only.
-    - 'per-type': each item TYPE (定义/定理/引理/例/...) has its OWN sequence
-      per section -> group by ``C.S:LABEL``. ``uncat`` items fall back to the
-      combined key so they are not split into a spurious group of their own.
+    - combined (SEP_COMBINED=0): 定义/定理/例 share ONE sequence per
+      section (Kreyszig style) -> group by ``C.S`` only.
+    - per-type (SEP_PER_TYPE=1): each item TYPE (定义/定理/引理/例/...)
+      has its OWN sequence per section -> group by ``C.S:LABEL``. ``uncat``
+      items fall back to the combined key so they are not split into a
+      spurious group of their own.
     """
     parts = it['key'].split('.')
     sec = f"{parts[0]}.{parts[1].split('-')[0]}"
-    if numbering == 'per-type':
+    if separate_types == SEP_PER_TYPE:
         lab = it.get('label', 'uncat')
         if lab and lab != 'uncat':
             return f"{sec}:{lab}"
     return sec
 
 
-def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, numbering='combined'):
+def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, separate_types=0):
     """Step 5-6: boundary & density checks with auto-recovery (B-LAYER).
 
     Detection 宗旨 (the part that flags missing numbers for the agent to fill):
@@ -115,7 +120,7 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
     Returns (items, warnings, blocking)."""
     by_sec = defaultdict(list)
     for it in items:
-        sec_key = _group_key(it, numbering)
+        sec_key = _group_key(it, separate_types)
         num = int(it['key'].split('-')[1])
         by_sec[sec_key].append((num, it))
 

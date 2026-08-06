@@ -2,7 +2,7 @@
 """
 extract_layer.py — EXTRACT provider (order 0).
 
-Runs the extractor, performs the English two-level (`scheme='en'`) port, runs
+Runs the extractor, performs the English two-level (ordinal=ORDINAL_EN) port, runs
 label-consistency, and computes the STAGE-1 `ignored_hit` (confirmed-noise keys
 removed from the extractor's key set BEFORE the A/B comparison). It also
 populates the context fields the A/B layers depend on:
@@ -21,10 +21,12 @@ import re
 import os
 from collections import defaultdict
 
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 from verify.key_parse import (
     keys_in_md, _canon_label, _first_num, sortkey,
 )
+from lib.regexlib import SEP_TIGHT
+from lib.config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL
 from extract.extract_items import extract_items, extract_items_en
 from extract.extract_items_gm import extract_items_gm, int_to_roman
 
@@ -59,9 +61,9 @@ def _norm_ch(s):
 # raw-text OCR-tolerant heading patterns (block-anchored with ^):
 _CH = r'([0-9A-Za-z])'
 _BOOK_LABEL_RES = [
-    re.compile(r'^\s*(定义|定理|引理|推论|命题)\s*' + _CH + r'\.(\d+)[.\-](\d+)\b'),          # 定义4.7-1
-    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + r'\.(\d+)\b', re.IGNORECASE),  # Definition 4.7
-    re.compile(r'^\s*' + _CH + r'\.(\d+)[.\-](\d+)\s*(定义|定理|引理|推论|命题)'),            # 4.7-1 定义
+    re.compile(r'^\s*(定义|定理|引理|推论|命题)\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\b'),          # 定义4.7-1
+    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)\b', re.IGNORECASE),  # Definition 4.7
+    re.compile(r'^\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\s*(定义|定理|引理|推论|命题)'),            # 4.7-1 定义
 ]
 
 
@@ -108,8 +110,8 @@ def _scan_book_category_items(ch, start, end, ext_dir):
 
 
 def _merged_category_first_missing(ctx, all_keys, blocking):
-    """Q 逻辑并入 B：整类首项缺失检测。仅 three-level 方案启用（en/gm 走各自抽取）。"""
-    if ctx.scheme != 'three-level':
+    """Q 逻辑并入 B：整类首项缺失检测。仅 three_level 方案启用（ordinal=3）。"""
+    if ctx.config.ordinal != ORDINAL_THREE_LEVEL:
         return
     ch = ctx.ch
     book_cat = _scan_book_category_items(ch, ctx.start, ctx.end, ctx.ext_dir)
@@ -139,7 +141,7 @@ def _merged_ocr_overmark_guard(ctx, items, warnings):
         mdtext = open(ctx.md_file, encoding='utf-8').read()
     except Exception:
         return
-    mark_re = re.compile(r'\*\*([^*]*?(\d+)\.(\d+)[.\-](\d+)[^*]*?)\*\*')
+    mark_re = re.compile(r'\*\*([^*]*?(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)[^*]*?)\*\*')
     md_mark = set()
     for m in mark_re.finditer(mdtext):
         if 'OCR无法识别' in m.group(0) or 'OCR无法识别' in m.group(1):
@@ -156,7 +158,7 @@ def _merged_ocr_overmark_guard(ctx, items, warnings):
         if mm:
             book_num.add(f"{mm.group(1)}.{mm.group(2)}-{mm.group(3)}")
     for k in sorted(md_mark):
-        if k in book_num and k not in ctx.ignore_keys:
+        if k in book_num and k not in ctx.ignore:
             warnings.append(
                 f"  ? {k} 标注（OCR无法识别）但书中 OCR 已识别该条目 → 可能误标，请复核")
 
@@ -194,17 +196,15 @@ class ExtractLayer(VerifyLayer):
     auto_fixable = False
 
     def run(self, ctx):
-        manual = None
-        if ctx.manual_path and __import__('os').path.exists(ctx.manual_path):
-            with open(ctx.manual_path, 'r', encoding='utf-8') as f:
-                manual = json.load(f)
+        manual = ctx.manual_overrides
 
-        if ctx.scheme == 'en':
-            # English two-level book: use the EN-aware extractor. Its keys are
-            # "Definition 1.1" (English label + "N.M"); canonicalize to the same
-            # Chinese form keys_in_md('en') produces so the A-layer comparison is
-            # meaningful (Definition->定义, Example->例, ...). Drop any item whose
-            # leading number != ch (forward citations to OTHER chapters).
+        if ctx.config.ordinal == ORDINAL_EN:
+            # English two-level book (ordinal=4): use the EN-aware extractor.
+            # Its keys are "Definition 1.1" (English label + "N.M"); canonicalize
+            # to the same Chinese form keys_in_md(ordinal=ORDINAL_EN) produces so
+            # the A-layer comparison is meaningful (Definition->定义, Example->例,
+            # ...). Drop any item whose leading number != ch (forward citations
+            # to OTHER chapters).
             items = extract_items_en(ctx.ext_dir, ctx.start, ctx.end, want_examples=True)
             kept = []
             for it in items:
@@ -216,33 +216,42 @@ class ExtractLayer(VerifyLayer):
                 kept.append(it)
             items = kept
             warnings, blocking = [], []
-        elif ctx.scheme in ('gm', 'roman'):
-            # Gelfand-Manin style: book-printed headings in the .md, roman
-            # machine keys ("标签I.S-N" / "I.S-N").  'roman' is kept as a legacy
-            # alias for chapter_map.json entries written before the rename.
+        elif ctx.config.ordinal in (ORDINAL_GM, ORDINAL_ROMAN):
+            # Gelfand-Manin style (ordinal=6) / roman (ordinal=5): book-printed
+            # headings in the .md, roman machine keys ("标签I.S-N" / "I.S-N").
             items, warnings, blocking = extract_items_gm(
                 ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
                 manual_overrides=manual)
         else:
+            # Single source of truth for the numbering convention: read
+            # separate_types from the config carried on ctx.config (same as
+            # the MD-side B-layer), not a parallel `numbering` proxy.
+            cfg = ctx.config
             items, warnings, blocking = extract_items(
                 ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
-                manual_overrides=manual, scheme=ctx.scheme, numbering=ctx.numbering)
+                manual_overrides=manual, ordinal=ctx.config.ordinal,
+                separate_types=cfg.separate_types)
 
         label_warns = check_label_consistency(items)
         extracted_raw = {it['key'] for it in items}
         # Stage-1 ignored_hit: confirmed-noise keys present in the extract set.
-        ignored_hit = sorted(extracted_raw & ctx.ignore_keys, key=sortkey)
+        ignored_hit = sorted(extracted_raw & ctx.ignore, key=sortkey)
         # Remove confirmed-noise keys BEFORE the A/B comparison.
-        extracted = extracted_raw - ctx.ignore_keys
+        extracted = extracted_raw - ctx.ignore
 
-        if ctx.scheme in ('gm', 'roman'):
-            # keys_in_md('gm') needs the md's roman chapter prefix, which is
-            # known only here (the .md headings are bare per-section ordinals).
+        if ctx.config.ordinal == ORDINAL_GM:
+            # keys_in_md(ordinal=ORDINAL_GM) needs the md's roman chapter prefix;
+            # the .md headings are bare per-section ordinals.
             entry_keys, all_keys = keys_in_md(
-                ctx.md_file, scheme='gm', chapter_roman=int_to_roman(ctx.ch))
+                ctx.md_file, ordinal=ORDINAL_GM, chapter_roman=int_to_roman(ctx.ch))
+        elif ctx.config.ordinal == ORDINAL_ROMAN:
+            # keys_in_md(ordinal=ORDINAL_ROMAN) parses the roman chapter from the
+            # .md text itself; chapter_roman is passed for symmetry.
+            entry_keys, all_keys = keys_in_md(
+                ctx.md_file, ordinal=ORDINAL_ROMAN, chapter_roman=int_to_roman(ctx.ch))
         else:
-            entry_keys, all_keys = keys_in_md(ctx.md_file, scheme=ctx.scheme)
-        if ctx.scheme == 'en':
+            entry_keys, all_keys = keys_in_md(ctx.md_file, ordinal=ctx.config.ordinal)
+        if ctx.config.ordinal == ORDINAL_EN:
             entry_keys = {k for k in entry_keys if _first_num(k) == ctx.ch}
             all_keys = {k for k in all_keys if _first_num(k) == ctx.ch}
 

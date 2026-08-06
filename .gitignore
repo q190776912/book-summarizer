@@ -16,7 +16,7 @@ dist/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-_*.log
+*.log
 _*.txt
 _*.md
 

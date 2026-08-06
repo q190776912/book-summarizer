@@ -36,7 +36,7 @@
 
 ## 2. 字节契约键集合（代码侧 SSOT）
 
-`verify/registry.py` 的 `DEFAULT_RESULT` 与 `verify/report.py` 的 `print_result` 必须共同覆盖一组 legacy dict 键。**每个层拥有哪些键，由各层专属文档 [`layers/<code>.md`](layers/) 里的 ```` ```contract-keys ```` 代码块声明**——本文件不再硬编码完整清单。
+`verify/layers/base.py` 的 `DEFAULT_RESULT` 与 `verify/report.py` 的 `print_result` 必须共同覆盖一组 legacy dict 键。**每个层拥有哪些键，由各层专属文档 [`layers/<code>.md`](layers/) 里的 ```` ```contract-keys ```` 代码块声明**——本文件不再硬编码完整清单。
 
 - **聚合与防遗漏**：[`verify/tests/test_key_contract.py`](../verify/tests/test_key_contract.py) 扫描 `layers/*.md` 的所有 `contract-keys` 块，断言其并集（加上下方管理器注入键）**完全等于** `DEFAULT_RESULT` 的键集，且 `report.py` 只读取已知键。三者不一致直接 FAIL，杜绝"加层漏改键导致静默漏检"。
 - **管理器注入、不归属任何层的键**（稳定基础设施，加层时不受影响）：`ch`, `md`, `status`, `extract_dir`。
@@ -46,7 +46,7 @@
 1. **`verify/layers/X_layer.py`**：复制 `_template_layer.py` 新建层，定义 `code/order/fix_order/auto_fixable` + `run()`（+`fix()`）。自动注册，无需改 `register_all.py`。若引入新 legacy 结果键，在 `metadata` 中返回。
 2. **`references/layers/x.md`**（新建）：写该层的**全部**内容——一句话目的、语义与检查内容、阻断性/可修复、```` ```contract-keys ```` 声明的字节契约键、实现（code/order/fixable/数据源/关键逻辑）。
 3. **本文件注册表（第 1 节）**：追加一行（code + 名称 + 一句话目的 + 阻断/可fix + 两个链接）。
-4. **`verify/registry.py` 的 `DEFAULT_RESULT`**：追加新键及中性默认值（类型须匹配该层正常 emission）。
+4. **`verify/layers/base.py` 的 `DEFAULT_RESULT`**：追加新键及中性默认值（类型须匹配该层正常 emission）。
 5. **`verify/report.py` 的 `print_result`**：若新键需展示，增加对应读取与输出；否则确保不读取不存在的键。
 6. **护栏**：运行 `python -m pytest verify/tests/ -q`，键集不一致会立即 FAIL，无需手工核对。
 
@@ -59,7 +59,7 @@
 **状态：** Done — 全部层级自包含于 `verify/layers/*.py`，由 `register_all.py` 经 `pkgutil` 自动发现注册（当前层列表见上方 §1 注册表，不在此写死数量）。
 **核心约束（不可破坏）：**
 
-1. CLI 不变：`verify_chapter.py <ch> <start> <end> <md> <ext> [--manual --ignore --ignore-figure --scheme --fix]` 以及 `--all <ext> <book_dir> [...]`
+1. CLI 不变：`verify_chapter.py <ch> <start> <end> <md> <ext> [--manual --ignore --ignore-figure --fix]` 以及 `--all <ext> <book_dir> [...]`（编号模式由 `<ext>/verify_config.json` 的 `ordinal` 决定，无需 `--scheme`）
 2. `--fix` 行为不变：自动修 G/H/I/J/K/L/M/N（含 H 三扩展），O 仅警告不修
 3. `print_result` 输出格式不变（下游 agent 在 Step 4 解析 PASS/FAIL）
 4. exit 0 条件不变（见 §5.2）
@@ -93,7 +93,7 @@
 
 每个层 = 一个 `VerifyLayer` 实例，`run(ctx) -> LayerResult`（其 `.legacy` / `.metadata` 片段并入总 dict），`fix(ctx) -> LayerFixResult`（仅 auto-fixable 层实现）。`verify_one` 返回的 dict 即旧 `verify_one` 返回值（字节级兼容）。
 
-### 4.2 关键接口签名（`verify/registry.py`）
+### 4.2 关键接口签名（`verify/layers/base.py` · `lib/config.py`）
 
 ```python
 class VerifyLayer:
@@ -118,19 +118,22 @@ DEFAULT_RESULT: Dict[str, Any]   # 模块级常量：为每一个 legacy 键注�
 
 > **真实子类只设置** `code`、`order`、`auto_fixable`；仅当 `auto_fixable=True` 时设置 `fix_order`。`depends_on` 事实上从不被任何子类设置（层间顺序完全由 `order`/`fix_order` 决定）。
 
-### 4.3 管理器（`verify/registry.py`）
+### 4.3 管理器（`verify/layers/base.py` · `lib/config.py`）
 
 ```python
 @dataclass
-class ManagerConfig:
-    scheme: str = 'three-level'
-    ignore_keys: Set[str] = set()
-    ignore_fig: Set[str] = set()
-    manual_path: Optional[str] = None
-    disabled: Set[str] = set()
+class BookConfig:                       # lib/config.py；取代旧 ManagerConfig
+    ordinal: int = 3                   # 编号模式整数编码（见 ORDINAL_* 常量）
+    language: str = 'cn'
+    scope: str = 'chapter'
+    separate_types: int = 0
+    strict: bool = True
+    ignore: List[str] = field(default_factory=list)
+    manual: Optional[str] = None
     @classmethod
-    def load_book_config(cls, book_dir: str) -> "ManagerConfig":
-        """读 <book_dir>/verify_config.json {"disable":[...]}，把 code 大写化进 disabled。"""
+    def load_book_config(cls, book_dir: str) -> "BookConfig":
+        """读 <book>/_extract/verify_config.json（回退 <book>/verify_config.json），
+        经 ConfigLoader 解析出 ordinal / ignore / strict 等字段。"""
 
 class VerifyManager:
     def verify_one(self, ch, start, end, md_file, ext_dir) -> Dict[str, Any]: ...
@@ -147,18 +150,16 @@ class VerifyManager:
 
 ```
 verify/
-├── context.py            # VerifyContext
-├── registry.py           # Severity / Finding / LayerResult / LayerFixResult
-│                         #   VerifyLayer / LayerRegistry / ManagerConfig / VerifyManager
-│                         #   DEFAULT_RESULT（模块级常量）
-├── register_all.py       # 导入时经 pkgutil 自动发现 verify/layers/ 下所有层并注册进 LAYER_REGISTRY
 ├── layers/
+│   ├── base.py           # VerifyContext / VerifyLayer / LayerRegistry / VerifyManager
+│   │                     #   LayerResult / LayerFixResult / DEFAULT_RESULT（模块级常量）
 │   ├── extract_layer.py  # EXTRACT：填 ctx.items/entry_keys/all_keys；算 ignored_hit stage1；mandatory
 │   ├── d_layer.py  a_layer.py  b_layer.py  c_layer.py
 │   ├── e_layer.py  f_layer.py
 │   ├── g_layer.py  h_layer.py  i_layer.py  j_layer.py  k_layer.py  l_layer.py  m_layer.py  n_layer.py  o_layer.py  p_layer.py
 │   ├── _fig_common.py    # 内部 helper（'_' 前缀，自动发现跳过）
 │   └── _template_layer.py# 复制起点（'_' 前缀，自动发现跳过）
+├── register_all.py       # 导入时经 pkgutil 自动发现 verify/layers/ 下所有层并注册进 LAYER_REGISTRY
 ├── verify_chapter.py     # main() / verify_one()(薄壳) / verify_all()(薄壳)
 ├── key_parse.py  report.py  manage_ignore.py  review_tool.py
 ```
@@ -167,11 +168,11 @@ verify/
 
 ### 4.5 EXTRACT 层关键逻辑（字节级 gate 的关键）
 
-- **(a) `scheme='en'` 分支必须原样 port。** 英文书专用路径（调 `extract_items_en`、按章过滤前向引用、key 规范化成中文形式、md 侧 `entry_keys`/`all_keys` 限制到当前章）必须完整搬运，否则 EN 书整体漂移。
+- **(a) 英文书分支（`ctx.config.ordinal == ORDINAL_EN`）必须原样 port。** 英文书专用路径（调 `extract_items_en`、按章过滤前向引用、key 规范化成中文形式、md 侧 `entry_keys`/`all_keys` 限制到当前章）必须完整搬运，否则 EN 书整体漂移。
 - **(b) `ignored_hit` 两段式，第二段归 B 层。** EXTRACT 算第一段写入 `ctx.ignored_hit`（stage1）；B 层在产出 `blocking` 后做第二段 regex 抑制、把 `bkeys` 并入 `ctx.ignored_hit` 并在自己的 legacy 片段中回写最终 `ignored_hit`（manager 按 order 合并、B 覆盖 EXTRACT）。禁止只由 EXTRACT 一次性算完。
 - **(c) E/F 在底层返回 None 时必须显式 emit 空列表**（`fig_missing:[]`/`fig_extra:[]` 与 `fig_invalid:[]`/`fig_invalid_warn:[]`），镜像旧 `e_layer['missing'] if e_layer else []` 守卫，防崩溃。
 
-> **EN 书回归要求：** 10+ 本书验收语料中**至少包含 1 本 EN 书**，否则 `scheme='en'` 分支回归盲区。
+> **EN 书回归要求：** 10+ 本书验收语料中**至少包含 1 本 EN 书**，否则 `ordinal == ORDINAL_EN` 分支回归盲区。
 
 ### 4.6 用法示例
 
@@ -199,10 +200,11 @@ class XLayer(VerifyLayer):
 
 ```python
 from verify.register_all import LAYER_REGISTRY
-from verify.registry import VerifyManager, ManagerConfig
+from verify.layers.base import VerifyManager
+from lib.config import BookConfig
 from verify.report import print_result
 
-cfg = ManagerConfig(manual_path=mp, ignore_keys=ik, ignore_fig=ifig, scheme=scheme)
+cfg = BookConfig(ordinal=ordinal, manual=mp, ignore=ik)
 mgr = VerifyManager(LAYER_REGISTRY, cfg)
 legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)
 status = print_result(legacy_dict)
@@ -211,7 +213,7 @@ status = print_result(legacy_dict)
 `--fix` 流程（与现有行为一致）：
 
 ```python
-mgr = VerifyManager(LAYER_REGISTRY, ManagerConfig(manual_path=mp, ignore_keys=ik, ignore_fig=ifig, scheme=scheme))
+mgr = VerifyManager(LAYER_REGISTRY, BookConfig(ordinal=ordinal, manual=mp, ignore=ik))
 changes = mgr.fix(md_file)        # 按 fix_order 跑 H→G→I→J→K→L→M→N
                                   # change-dict 键插入序钉死：h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n
 parts = [f"{k}={v}" for k, v in changes.items() if v > 0]
@@ -222,7 +224,7 @@ legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)   # fix 改盘后
 ### 4.7 Per-book 启用/禁用
 
 ```python
-cfg = ManagerConfig.load_book_config(book_dir)   # 读 verify_config.json {"disable":["O"]}
+cfg = ManagerConfig.load_book_config(book_dir)   # 读 _extract/verify_config.json {"disable":["O"]}
 mgr = VerifyManager(LAYER_REGISTRY, cfg)
 # O 层被跳过：o_subitem_gaps 不出现、不计入；其余完全不变
 # 注意：EXTRACT 永不可禁用（manager 特判 code != 'EXTRACT'）；其余层可按书 disable。
@@ -233,7 +235,7 @@ mgr = VerifyManager(LAYER_REGISTRY, cfg)
 ### 4.8 可扩展性要点
 
 - **加新层 = 新增一个模块，自动发现即生效**，管理器按 `order` 自动调度，无需改 `VerifyManager` / CLI / `register_all.py`。
-- **新增结果键**必须同步更新 `DEFAULT_RESULT`（registry.py）**和** `print_result`（report.py），否则字节契约破裂（由 §2 的护栏测试拦截）。
+- **新增结果键**必须同步更新 `DEFAULT_RESULT`（verify/layers/base.py）**和** `print_result`（report.py），否则字节契约破裂（由 §2 的护栏测试拦截）。
 - `VerifyLayer.depends_on` 属性存在但**任何子类都不设置、manager 也不强制**：层间顺序完全由 `order`/`fix_order` 决定。
 
 ### 4.9 影响与风险
@@ -254,14 +256,14 @@ mgr = VerifyManager(LAYER_REGISTRY, cfg)
 1. **`fig_skipped` 必须 == `e_layer is None`**（含「文件在但本章无图条目」两种情况都 SKIP）。禁止窄化为 `ctx.figure_index is None`。
 2. **H 层 `fix()` 内部子 fix 顺序钉死 `h→h_stmt→h_ul→h_mbq`**；`mgr.fix` 产出的 change-dict 键插入序钉死 `h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n`；字节级 diff 范围包含**完整 `--fix` stdout**（含 `[FIX] Applied:` 行）。
 3. **`ignored_hit` 第二段必须归属 B 层或 post-step**，禁止只由 EXTRACT 算第一段。
-4. **EXTRACT 层必须原样 port `scheme=='en'` 分支**；10+ 书语料须含 ≥1 本 EN 书。
+4. **EXTRACT 层必须原样 port `ordinal == ORDINAL_EN` 分支**；10+ 书语料须含 ≥1 本 EN 书。
 5. **`extract_dir` 作顶层键名**（勿用 `ext`）；`all_keys` 为**新增键、不进入旧契约、不影响输出**。
 
 ### 4.11 迁移计划（历史，已 Done）
 
 - **Phase 1**（门面）：新增 `context.py`/`registry.py`/`register_all.py`，`verify_chapter.py` 变薄壳，`print_result` 不动。字节级 diff 验收。
 - **Phase 2**（实现抽取）：函数体搬入 `layers/*.py`，删原巨型模块。
-- **Phase 3**（per-book 配置）：`ManagerConfig.load_book_config` + `verify_config.json {"disable":[...]}`。
+- **Phase 3**（per-book 配置）：`ManagerConfig.load_book_config` + `<book>/_extract/verify_config.json` 扁平含 `disable` 与 B 编号字段（单一配置文件，无 `b_numbering.json` / `b_numbering` 子键）。
 - **Phase 4**（可选）：新 reporter 遍历 `findings` 渲染，输出可选 JSON。
 - **Phase 5**（零侵入扩展）：新增 `p_layer.py` 自动发现即生效。
 
@@ -326,11 +328,11 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 - 例：按节各自重编（`> **例1**：`）
 
 ### 启用方式
-- 在 `chapter_map.json` 每章加 `"scheme": "two-level"`，`verify --all` 自动启用
-- 或单章显式 `extract/extract_items.py ... --scheme two-level` / `verify/verify_chapter.py ... --scheme two-level`
+- **首选**：在每本书唯一的 `<book>/_extract/verify_config.json` 设 `"ordinal": 2`（两级书；三级书默认 `3`，EN 书 `4`，详见 `lib/config.py` 的 `ORDINAL_*` 常量），与 `ignore` / `strict` 等字段同一份文件，由 `ConfigLoader` 统一读取。
+- 编号模式现已统一定义在 `verify_config.json` 的 `ordinal` 整数里；旧 `chapter_map.json` 的 `"scheme"` 字段与任何 `--scheme` CLI 覆盖**均已废弃、不再被读取**。
 
 ### 判定与处理
-详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树选对 scheme。
+详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树确定 `ordinal`（编号模式）。
 
 > 两级书的**例完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），统一用 `extract/scan_items.py` 做独立连续性核验（权威）。
 
@@ -358,5 +360,5 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 ## 8. 遗漏标签处理策略（OCR 无法识别）
 
 书中确有、但 OCR 未识别其标题的重要概念（定义/定理/引理/推论/命题），导致总结缺失该条目时的标准流程 —— **两步法（Step 1 调参/归一化尝试识别 → Step 2 凭知识库补写 + 标 `（OCR无法识别）` + 登记 `manual_overrides_ch{N}.json`）**、B 层的两项查漏（整类首项缺失 / over-mark 守卫）、序列缺口兜底，详见 [`missing_label_policy.md`](missing_label_policy.md)（SSOT）。该策略无新字节契约键，复用 B 层 `blocking` / `warnings`。
-- **B 层宗旨与缺号检测权威逻辑见 [`layers/b.md`](layers/b.md)**（SSOT）：MD 侧首项检验 / 连续性为权威，提取侧序列缺口 / 尾部校验为辅助，OCR 误报经 MD 存在性过滤后抑制；分组按 `verify_config.json` 的 `numbering`（`combined` / `per-type`）。
+- **B 层宗旨与缺号检测权威逻辑见 [`layers/b.md`](layers/b.md)**（SSOT）：MD 侧首项检验 / 连续性为权威，提取侧序列缺口 / 尾部校验为辅助，OCR 误报经 MD 存在性过滤后抑制；分组按 `verify_config.json` 的 `separate_types`（具名常量 `SEP_COMBINED`/`SEP_PER_TYPE`，**用 `==` 判定、禁用 `>=`**）：`0`=combined 各类共享计数器 / `1`=per-type 每类独立计数器）。
 

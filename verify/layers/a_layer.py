@@ -6,7 +6,7 @@ Every item the extractor detected (minus confirmed-noise) must appear in the
 written .md. Consumes ctx.extracted / ctx.all_keys / ctx.entry_keys populated by
 the EXTRACT provider. Self-contained implementation (bodies relocated from verify_chapter.py during the per-layer split).
 """
-from verify.registry import VerifyLayer, LayerResult
+from verify.layers.base import VerifyLayer, LayerResult
 from verify.key_parse import sortkey
 
 

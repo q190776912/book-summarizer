@@ -15,7 +15,7 @@
 | # | 层 code | 名称 | 一句话目的 | 阻断? | 可 `--fix`? | 层文档 | 代码模块 |
 |---|---------|------|-----------|-------|------------|--------|----------|
 | 0 | EXTRACT | 数据 provider | 提供原始 JSON 数据；必跑、永不可禁用 | 数据缺失→FAIL | 否 | [layers/extract.md](layers/extract.md) | [extract_layer.py](../verify/layers/extract_layer.py) |
-| 1 | D | MISSING SECTION / TAIL ORDINAL | 整节缺失 / 尾部缺口 | 整节缺失阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
+| 1 | D | SECTION CONTINUITY + MISSING | 连续节(节序列内部缺节)+尾节(末尾缺节)（源有节标题+条目但 md 无/缺 `## §`） | 阻断 | 否 | [layers/d.md](layers/d.md) | [d_layer.py](../verify/layers/d_layer.py) |
 | 2 | A | TRULY MISSING | 提取到但 `.md` 无 | 阻断 | 否 | [layers/a.md](layers/a.md) | [a_layer.py](../verify/layers/a_layer.py) |
 | 3 | B | BLOCKING | 缺号检测（MD 侧首项检验/连续性 + 提取侧辅助，OCR 误报经 MD 存在性过滤） | 阻断 | 否 | [layers/b.md](layers/b.md) | [b_layer.py](../verify/layers/b_layer.py) |
 | 4 | C | KATEX ERRORS | KaTeX 渲染失败 | 阻断 | 部分 | [layers/c.md](layers/c.md) | [c_layer.py](../verify/layers/c_layer.py) |

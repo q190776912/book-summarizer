@@ -1,6 +1,6 @@
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 references/layers/d.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
-d_layer.py — D-LAYER (order 1): section-missing & tail-ordinal check.
+d_layer.py — D-LAYER (order 1): section-continuity + missing-tail-section check (BLOCKING).
 
 Self-contained implementation (bodies relocated from verify_chapter.py during the per-layer split). Scans the RAW _extract JSON directly
 and cross-checks against the written .md, INDEPENDENTLY of extract_items' output.
@@ -43,6 +43,30 @@ def _d_is_labeled(txt, m):
     return bool(D_LABEL_KW.search(txt[lo:hi]))
 
 
+def _partition_sections(md_sections, raw_sec_header, raw_labeled_item):
+    """Split source-present-but-md-absent sections into two BLOCKING buckets.
+
+    - continuity_sections: INTERIOR breaks — the chapter's section sequence has
+      a hole (md has a smaller AND a larger section, but this one is missing).
+      This mirrors B layer's item-level continuity, lifted to section
+      granularity (the section analog of "缺号").
+    - missing_sections: TAIL breaks — a section exists in raw (header + labeled
+      item) but beyond md's last written section; the whole trailing section
+      was simply not written.
+
+    A section is only considered "present in source" when the raw JSON shows BOTH
+    a section-header feature AND a labeled item, so chapters that legitimately
+    skip a number are NOT false-flagged.  The two buckets are disjoint by
+    construction (`s <= md_max` vs `s > md_max`).
+    """
+    raw_present = raw_sec_header & raw_labeled_item
+    md_max = max(md_sections) if md_sections else 0
+    missing = sorted(s for s in raw_present if s not in md_sections)
+    continuity = [s for s in missing if s <= md_max]
+    tail = [s for s in missing if s > md_max]
+    return {'continuity_sections': continuity, 'missing_sections': tail}
+
+
 def check_d_layer_gm(ch, start, end, md_file, ext):
     """Gelfand-Manin variant: sections are chapter-local ("## §1."), items are
     bare per-section ordinals ("### N. Title" / legacy "**N. ...**"), machine
@@ -50,47 +74,18 @@ def check_d_layer_gm(ch, start, end, md_file, ext):
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
     md_sections = set()
-    md_item_max = {}
-    cur_sec = None
     for line in md_text.split('\n'):
         sm = GM_SEC_RE.match(line.strip())
         if sm:
-            cur_sec = int(sm.group(1))
-            md_sections.add(cur_sec)
-            continue
-        if cur_sec is None:
-            continue
-        for m in GM_ENTRY_RE.finditer(line):
-            n = int(m.group(1))
-            if n > 40:
-                continue
-            md_item_max.setdefault(cur_sec, n)
-            if n > md_item_max[cur_sec]:
-                md_item_max[cur_sec] = n
-
+            md_sections.add(int(sm.group(1)))
     sections = _load_sections(ext, ch)
     raw_sec_header = set()
-    raw_labeled_item = {}
+    raw_labeled = set()
     for h in scan_gm_blocks(ext, start, end, sections):
         raw_sec_header.add(h['sec'])
-        raw_labeled_item.setdefault(h['sec'], h['num'])
-        if h['num'] > raw_labeled_item[h['sec']]:
-            raw_labeled_item[h['sec']] = h['num']
-
-    missing = sorted(s for s in raw_sec_header
-                     if s in raw_labeled_item and s not in md_sections)
-    tail = {}
-    suspect = {}
-    for s, rmax in raw_labeled_item.items():
-        if s not in md_sections:
-            continue
-        mmax = md_item_max.get(s, 0)
-        if rmax > mmax:
-            if rmax - mmax > 5:
-                suspect[s] = (mmax, rmax)
-            else:
-                tail[s] = (mmax, rmax)
-    return {'missing_sections': missing, 'tail_gaps': tail, 'suspect': suspect}
+        if h['num'] > 0:
+            raw_labeled.add(h['sec'])
+    return _partition_sections(md_sections, raw_sec_header, raw_labeled)
 
 
 def check_d_layer(ch, start, end, md_file, ext, ordinal=ORDINAL_THREE_LEVEL):
@@ -99,25 +94,12 @@ def check_d_layer(ch, start, end, md_file, ext, ordinal=ORDINAL_THREE_LEVEL):
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
     md_sections = set()
-    md_item_max = {}
-    md_nested_secs = set()   # (ch, sec) that own nested subsection headers
     for line in md_text.split('\n'):
         m = D_MD_SEC_RE.match(line.strip())
         if m and int(m.group(1)) == ch:
             md_sections.add(int(m.group(2)))
-        nm = D_MD_NESTED_SEC_RE.match(line.strip())
-        if nm and int(nm.group(1)) == ch:
-            md_nested_secs.add((ch, int(nm.group(2))))
-        if '**' in line:
-            for m in D_ITEM_RE.finditer(line):
-                if int(m.group(1)) != ch or int(m.group(3)) == 0:
-                    continue
-                s = int(m.group(2)); n = int(m.group(3))
-                md_item_max.setdefault(s, n)
-                if n > md_item_max[s]:
-                    md_item_max[s] = n
     raw_sec_header = set()
-    raw_labeled_item = {}
+    raw_labeled_item = set()
     for p in range(start, end + 1):
         fp = os.path.join(ext, f'page_{p:03d}.json')
         if not os.path.exists(fp):
@@ -138,29 +120,10 @@ def check_d_layer(ch, start, end, md_file, ext, ordinal=ORDINAL_THREE_LEVEL):
             for m in D_ITEM_RE.finditer(txt):
                 if int(m.group(1)) != ch or int(m.group(3)) == 0:
                     continue
-                s = int(m.group(2)); n = int(m.group(3))
+                s = int(m.group(2))
                 if _d_is_labeled(txt, m):
-                    raw_labeled_item.setdefault(s, n)
-                    if n > raw_labeled_item[s]:
-                        raw_labeled_item[s] = n
-    missing = sorted(s for s in raw_sec_header
-                     if s in raw_labeled_item and s not in md_sections)
-    tail = {}
-    suspect = {}
-    for s, rmax in raw_labeled_item.items():
-        if s not in md_sections:
-            continue
-        # Section owns nested subsections in .md -> source C.S.N are subsections,
-        # not labeled items. Skip to avoid false tail-ordinal gaps.
-        if (ch, s) in md_nested_secs:
-            continue
-        mmax = md_item_max.get(s, 0)
-        if rmax > mmax:
-            if rmax - mmax > 5:
-                suspect[s] = (mmax, rmax)
-            else:
-                tail[s] = (mmax, rmax)
-    return {'missing_sections': missing, 'tail_gaps': tail, 'suspect': suspect}
+                    raw_labeled_item.add(s)
+    return _partition_sections(md_sections, raw_sec_header, raw_labeled_item)
 
 
 class DLayer(VerifyLayer):

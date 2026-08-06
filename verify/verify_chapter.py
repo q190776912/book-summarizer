@@ -222,9 +222,8 @@ def verify_all(ext, book_dir, extra_ignore=None):
         tm = len(r['truly_missing'])
         bl = len(r['blocking'])
         ke = len(r['katex_lines'])
-        dmiss = len(r['d_layer']['missing_sections'])
-        dtail = len(r['d_layer']['tail_gaps'])
-        dsus = len(r['d_layer']['suspect'])
+        dmiss = len(r['d_layer'].get('missing_sections', []))
+        dcont = len(r['d_layer'].get('continuity_sections', []))
         fgmiss = '-' if r.get('fig_skipped') else len(r.get('fig_missing', []))
         fginv = '-' if r.get('fig_skipped') else len(r.get('fig_invalid', []))
         ggaps = len(r.get('quote_gaps', []))
@@ -240,7 +239,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
         mdm = len(r.get('m_dm_gt', []))
         nbq = len(r.get('n_bq_empty', []))
         osub = len([g for g in r.get('o_subitem_gaps', []) if g.strip().startswith('x')])
-        print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} K:{ke} Dmiss:{dmiss} Dtail:{dtail} Dsus:{dsus} "
+        print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} K:{ke} Dc:{dcont} Dmiss:{dmiss} "
               f"FgMiss:{fgmiss} FgInv:{fginv} G:{ggaps} EG:{epg} H:{hbq} Hstmt:{hstmt} Hul:{hul} Hmbq:{hmbq} I:{isp} J:{jsp} K:{ksp} L:{lsp} Mdm:{mdm} Nbq:{nbq} Osub:{osub}  {os.path.basename(r['md'])}")
 
     pass_count = sum(1 for r in results if r['status'] == 'PASS')

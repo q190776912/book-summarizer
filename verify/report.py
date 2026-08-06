@@ -29,23 +29,21 @@ def print_result(r):
     problems = 0
     ch = r['ch']; md = r['md']
 
-    # D-LAYER FIRST: section-missing & tail-ordinal (independent of extract_items)
+    # D-LAYER FIRST: section continuity + tail-section-missing (independent of extract_items)
     d = r['d_layer']
-    if d['missing_sections']:
+    if d.get('continuity_sections'):
         problems += 1
-        print(f"D-LAYER MISSING SECTION ({len(d['missing_sections'])}): book has these sections "
-              f"(header + labeled item in raw JSON) but the .md has no `## §` for them — MUST be added:")
+        print(f"D-LAYER CONTINUITY GAP ({len(d['continuity_sections'])}): the .md section sequence "
+              f"has a HOLE — source has these sections (header + labeled item) but the .md jumps "
+              f"over them (md has a smaller AND a larger §, yet this one is absent) — MUST be added:")
+        for s in d['continuity_sections']:
+            print(f"  ! Ch{ch} §{ch}.{s}")
+    if d.get('missing_sections'):
+        problems += 1
+        print(f"D-LAYER MISSING TAIL SECTION ({len(d['missing_sections'])}): book has these sections "
+              f"(header + labeled item in raw JSON) beyond the .md's last written § — MUST be added:")
         for s in d['missing_sections']:
             print(f"  ! Ch{ch} §{ch}.{s}")
-    if d['tail_gaps']:
-        print(f"\nD-LAYER TAIL ORDINAL GAP ({len(d['tail_gaps'])}): section present in .md, but raw JSON "
-              f"shows a higher labeled item number — possible missed tail item (review):")
-        for s, (mmax, rmax) in sorted(d['tail_gaps'].items()):
-            print(f"  ~ Ch{ch} §{ch}.{s}: md max = {mmax}, raw labeled max = {rmax}")
-    if d['suspect']:
-        print(f"\nD-LAYER SUSPECT (likely OCR noise, {len(d['suspect'])}):")
-        for s, (mmax, rmax) in sorted(d['suspect'].items()):
-            print(f"  ? Ch{ch} §{ch}.{s}: md max = {mmax}, raw labeled max = {rmax} (gap>{5}, probably misread)")
 
     if r.get('ignored_hit'):
         print(f"\nIGNORED ({len(r['ignored_hit'])}): confirmed-noise keys suppressed via --ignore "
@@ -374,7 +372,8 @@ def print_result(r):
 
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "
-              f"/ {len(r['katex_lines'])} KaTeX / {len(d['missing_sections'])} D-layer missing sections "
+              f"/ {len(r['katex_lines'])} KaTeX / {len(d.get('continuity_sections', []))} D-layer section-gaps "
+              f"/ {len(d.get('missing_sections', []))} D-layer missing tail sections "
               f"/ {len(r.get('fig_missing', []))} fig-missing / {len(r.get('fig_invalid', []))} fig-invalid "
               f"/ {len(r.get('quote_gaps', []))} quote-gaps / {len(r.get('nested_bq', []))} nested-bq "
               f"/ {len(ex_gaps)} ex-proof-gap / {len(h_bq)} h-layer-struct-bq "

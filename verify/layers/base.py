@@ -138,7 +138,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
     'b_gap_warnings': [], 'b_tail_warnings': [],
-    'entry_keys': set(), 'd_layer': {'missing_sections': [], 'tail_gaps': {}, 'suspect': {}},
+    'entry_keys': set(), 'd_layer': {'continuity_sections': [], 'missing_sections': []},
     'ignored_hit': [],
     'fig_missing': [], 'fig_extra': [], 'fig_invalid': [], 'fig_invalid_warn': [], 'fig_skipped': False,
     'quote_gaps': [], 'nested_bq': [],

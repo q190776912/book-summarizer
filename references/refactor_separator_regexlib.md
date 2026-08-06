@@ -2,7 +2,8 @@
 
 > 作者：Bob（架构师） · 类型：**重构（refactor）**，非新功能
 > 范围：`verify/key_parse.py`、`verify/layers/b_layer.py`、`verify/layers/extract_layer.py`、`extract/extract_items*.py`
-> 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `levels`/`scope`/`separate_types`(`SEP_COMBINED=0`/`SEP_PER_TYPE=1`，判定用 `==`)/`known_gaps`/分组逻辑；保留 label-first / number-first 识别逻辑。
+> 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `scope`/`separate_types`(`SEP_COMBINED=0`/`SEP_PER_TYPE=1`，判定用 `==`)/分组逻辑；保留 label-first / number-first 识别逻辑。
+> 注（最终落地与该约束的偏差）：本重构后期把 `levels` 吸收为 `ordinal` 整数编码（见 `lib/config.py` 的 `ORDINAL_*`），`known_gaps` 并入统一的 `ignore` 集合——二者均不再作为独立配置字段存在；`disable` 也已移除（层不再被跳过，噪声走 `ignore` 抑制）。
 
 ---
 

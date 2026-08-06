@@ -8,7 +8,7 @@ _template_layer.py — 新增校验层时的复制起点（非层文件，自动
      `auto_fixable` 及（若可自动修复）`fix_order`。
   3. 实现 `run(self, ctx) -> LayerResult`（返回本层贡献的结果字典键）。
      若层可自动修复，再实现 `fix(self, ctx) -> LayerFixResult`，并把变更数放进
-     `fix_dict`（键名即 fix 契约键，须与 registry.py 的合并逻辑、report.py 的
+     `fix_dict`（键名即 fix 契约键，须与 verify/layers/base.py 的合并逻辑、report.py 的
      展示顺序约定保持一致）。
   4. 本文件以 '_' 开头，register_all.py 的自动发现会跳过它，因此它不会被当作一层。
 

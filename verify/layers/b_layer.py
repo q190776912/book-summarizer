@@ -2,13 +2,13 @@
 """
 b_layer.py — B-LAYER (order 3): 缺号检测（忠于原文）。
 
-权威检测落在 agent 写出的 .md 上，按「每本书的编号编排类型」(BNumberingConfig，
-由 B 层脚本直接从 _extract/ 读 JSON，不依赖任何编排层透传) 正确分组后，
+权威检测落在 agent 写出的 .md 上，按 `ctx.config.ordinal` 决定的编号编排类型
+（由 ConfigLoader 从 verify_config.json 读入，挂在 ctx.config，不依赖任何编排层透传）正确分组后，
 对组内序号做首项/连续性检查。
 
 md 内部的缺号默认是「硬 BLOCKING」（严格模式，不允许遗漏）：任何序号不连续
 都会要求核对。很多书定理/引理类条目本就稀疏（如某章只有 `Lemma 2.5`），这些
-经核对确认是书本身编号、非遗漏的，应在配置文件 `known_gaps` 中登记，以免误报。
+经核对确认是书本身编号、非遗漏的，应在配置文件 `ignore` 中登记，以免误报。
 配置 `strict: false` 才降级为非阻塞警示。硬阻塞也来自提取侧契约（若已接线）。
 语义 / 分组 / 契约键等详见 references/layers/b.md（SSOT）。
 """
@@ -433,7 +433,7 @@ def _md_gap_blocking(ctx):
                     or f"{gk}:{n}" in ignore):
                 return
             msg = (f"{gk} 缺号 {n}（序列 {first}..{last} 不连续 — "
-                   f"严格模式：请核对源书确认是稀疏编号(登记 known_gaps)还是确有遗漏(应补写)）")
+                   f"严格模式：请核对源书确认是稀疏编号(登记 ignore)还是确有遗漏(应补写)）")
             if cfg.strict:
                 blocking.append("  WARN (BLOCKING): " + msg)
             else:

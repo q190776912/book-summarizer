@@ -4,9 +4,9 @@ test_layer_contract.py — schema/contract test for the verify-layer registry.
 Goal (Tessa / Testing Expert):
   Prove that every layer contributes ONLY result keys that already exist in
   `DEFAULT_RESULT` (so the byte-compatible `verify_one` contract in
-  registry.py never breaks when a new layer is added), and that every
+  verify/layers/base.py never breaks when a new layer is added), and that every
   auto-fixable layer's `fix_dict` uses ONLY the known fix-fict keys
-  (`FIX_KEYS`, from registry.py L20-21).
+  (`FIX_KEYS`, from verify/layers/base.py).
 
 Run with stdlib unittest (no pytest dependency, runs anywhere):
   python -m unittest verify/test_layer_contract.py -v
@@ -23,7 +23,7 @@ from verify.layers.base import VerifyContext
 from lib.config import BookConfig
 from lib.config import BookConfig
 
-# Fix-dict contract keys (registry.py L20-21): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
+# Fix-dict contract keys (verify/layers/base.py): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
 FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
 
 # Allowed result-dict keys = the exact legacy contract mirrored by DEFAULT_RESULT.

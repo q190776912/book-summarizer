@@ -144,7 +144,7 @@ class VerifyManager:
 > - `fix()` 遍历 `fixable_ordered()`（按 `(fix_order, order)` 排序），`result.update(fr.fix_dict)`，得到键插入序钉死的 change-dict：`h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n`。
 > - `verify_one()` 对 `all_ordered()` 中每层的 `res.metadata` 做 `merged.update(res.metadata)`（last-writer-wins），再 `final = dict(DEFAULT_RESULT)`；`final.update({ch, md, status, extract_dir, items})`；`final.update(merged)`。
 > - `DEFAULT_RESULT` 为每个 legacy 键预置正确类型，被禁用的层因此保持字节安全。
-> - `print_result` **不是** manager 的方法，来自 `verify.report`；`verify_chapter.verify_one` 先构建 `ManagerConfig` 再 `VerifyManager(LAYER_REGISTRY, cfg).verify_one(...)`。
+> - `print_result` **不是** manager 的方法，来自 `verify.report`；`verify_chapter.verify_one` 先通过 `ConfigLoader` 读取 `BookConfig`，再 `VerifyManager(LAYER_REGISTRY, loader).verify_one(...)`。
 
 ### 4.4 模块布局
 
@@ -180,7 +180,7 @@ verify/
 
 ```python
 # verify/layers/x_layer.py  —— 由 _template_layer.py 复制而来
-from verify.registry import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 from verify.register_all import LAYER_REGISTRY   # 全局注册表，自动发现，无需手动注册
 
 class XLayer(VerifyLayer):
@@ -201,11 +201,11 @@ class XLayer(VerifyLayer):
 ```python
 from verify.register_all import LAYER_REGISTRY
 from verify.layers.base import VerifyManager
-from lib.config import BookConfig
+from lib.config import ConfigLoader
 from verify.report import print_result
 
-cfg = BookConfig(ordinal=ordinal, manual=mp, ignore=ik)
-mgr = VerifyManager(LAYER_REGISTRY, cfg)
+loader = ConfigLoader(extract_dir, book_dir)   # 一次性读入 verify_config.json / chapter_map.json / figure_index.json
+mgr = VerifyManager(LAYER_REGISTRY, loader)
 legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)
 status = print_result(legacy_dict)
 ```
@@ -213,7 +213,8 @@ status = print_result(legacy_dict)
 `--fix` 流程（与现有行为一致）：
 
 ```python
-mgr = VerifyManager(LAYER_REGISTRY, BookConfig(ordinal=ordinal, manual=mp, ignore=ik))
+loader = ConfigLoader(extract_dir, book_dir)
+mgr = VerifyManager(LAYER_REGISTRY, loader)
 changes = mgr.fix(md_file)        # 按 fix_order 跑 H→G→I→J→K→L→M→N
                                   # change-dict 键插入序钉死：h,h_stmt,h_ul,h_mbq,g,i,j,k,l,m,n
 parts = [f"{k}={v}" for k, v in changes.items() if v > 0]
@@ -224,10 +225,10 @@ legacy_dict = mgr.verify_one(ch, start, end, md_file, ext_dir)   # fix 改盘后
 ### 4.7 Per-book 启用/禁用
 
 ```python
-cfg = ManagerConfig.load_book_config(book_dir)   # 读 _extract/verify_config.json {"disable":["O"]}
-mgr = VerifyManager(LAYER_REGISTRY, cfg)
-# O 层被跳过：o_subitem_gaps 不出现、不计入；其余完全不变
-# 注意：EXTRACT 永不可禁用（manager 特判 code != 'EXTRACT'）；其余层可按书 disable。
+loader = ConfigLoader(extract_dir, book_dir)   # 读 _extract/verify_config.json (含 ordinal/ignore 等)
+mgr = VerifyManager(LAYER_REGISTRY, loader)
+# 旧的 `disable`（跳过整层）机制已移除：所有层永远运行；噪声一律经统一的 `ignore`
+# 集合抑制（WARNING 门）。EXTRACT 永远运行、不可绕过；其余层不再可被「禁用」，只可被 `ignore` 抑制。
 ```
 
 > A/B 与 EXTRACT **不存在依赖关系**（无 `depends_on` 机制）。EXTRACT 由 manager 特判为 mandatory，根本不在 `disabled` 的可选范围内。
@@ -261,9 +262,9 @@ mgr = VerifyManager(LAYER_REGISTRY, cfg)
 
 ### 4.11 迁移计划（历史，已 Done）
 
-- **Phase 1**（门面）：新增 `context.py`/`registry.py`/`register_all.py`，`verify_chapter.py` 变薄壳，`print_result` 不动。字节级 diff 验收。
+- **Phase 1**（门面）：新增 `verify/layers/base.py`(契约+编排) / `lib/config.py`(ConfigLoader+BookConfig) / `register_all.py`，`verify_chapter.py` 变薄壳，`print_result` 不动。字节级 diff 验收。
 - **Phase 2**（实现抽取）：函数体搬入 `layers/*.py`，删原巨型模块。
-- **Phase 3**（per-book 配置）：`ManagerConfig.load_book_config` + `<book>/_extract/verify_config.json` 扁平含 `disable` 与 B 编号字段（单一配置文件，无 `b_numbering.json` / `b_numbering` 子键）。
+- **Phase 3**（per-book 配置）：`ConfigLoader` + `<book>/_extract/verify_config.json` 扁平含 `ignore` 与编号字段 `ordinal`（单一配置文件，无 `b_numbering.json` / `b_numbering` 子键）。旧的 `disable`/`known_gaps`/`levels`/`BNumberingConfig` 均已移除，合并为 `ignore` + 整数 `ordinal`。
 - **Phase 4**（可选）：新 reporter 遍历 `findings` 渲染，输出可选 JSON。
 - **Phase 5**（零侵入扩展）：新增 `p_layer.py` 自动发现即生效。
 

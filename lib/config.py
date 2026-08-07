@@ -102,6 +102,11 @@ ORDINAL_SECTION_TYPES = {
     5: [1, 2, 3], 6: [1, 2], 7: [1, 2], 8: [1, 2, 3],
 }
 
+# --- formula sequence-label (Q-LAYER) config ------------------------------
+# Source extraction patterns are DERIVED from the `formula` map in
+# verify_config.json (`type`/`depth` -> component count), not hand-listed.
+# See the `formula:` field doc on the dataclass below for the map shape.
+
 
 @dataclass
 class GroupConfig:
@@ -139,7 +144,7 @@ _LABEL_CANON = {
     'Lemma': '引理', '引理': '引理',
     'Corollary': '推论', '推论': '推论',
     'Proposition': '命题', '命题': '命题',
-    'Example': '练习', '例': '例', '示例': '例',
+    'Example': '例', '例': '例', '示例': '例',
     'Remark': '评注', '评注': '评注', '注释': '评注', '注': '评注', '注记': '评注',
     'Commentary': '评注',
     'Axiom': '公理', '公理': '公理',
@@ -148,8 +153,10 @@ _LABEL_CANON = {
     'Condition': '条件', '条件': '条件',
     'Assumption': '假设', '假设': '假设', '假定': '假设',
     'Algorithm': '算法', '算法': '算法',
-    # exercise-family labels all canonize to 练习 so group.name
-    # ["练习","习题","Example"] matches any of them.
+    # exercise-family labels canonize to 练习; Example canonizes to 例
+    # (例子 ≠ 练习). A book that checks examples uses a group named
+    # ["Example"] (canon -> 例); a book that checks exercises uses
+    # ["练习","习题"] (canon -> 练习). The two are distinct on purpose.
     'Exercise': '练习', '习题': '练习',
 }
 
@@ -261,6 +268,24 @@ class BookConfig:
     # when absent, from ORDINAL_SECTION_TYPES (back-compat).
     section_types: List[int] = field(default_factory=list)
     section_depths: List[int] = field(default_factory=list)
+
+    # --- formula sequence-label audit (Q-LAYER) ----------------------------
+    # Opt-in via a SINGLE `formula` map in verify_config.json (mirrors the
+    # entry-ordinal `ordinal` groups — NOT flat fields). When `formula` is
+    # None the whole Q-LAYER is a pure no-op (neutral `q_*` metadata, no
+    # report, never contributes to FAIL), so the 16 legacy layers and already
+    # finished books are completely untouched.  Map shape:
+    #   {"type": 3, "depth": 3, "scope": 2, "ignore": []}
+    #   type  : ORDINAL_* style code (1..8); selects the DEFAULT depth (from
+    #           ORDINAL_SECTION_TYPES) when `depth` is absent.
+    #   depth : numeric component count of a formula key (2 -> 1.17,
+    #           3 -> 11.1-1). Drives the derived source-extraction regex.
+    #   scope : 1=book / 2=chapter / 3=section — number reset window; the
+    #           cross-chapter guard (first component == current chapter) is
+    #           ON iff scope == 2.
+    #   ignore: list of normalized formula numbers to SKIP in the 1:1
+    #           comparison (neither flagged FABRICATED nor MISSING).
+    formula: Optional[dict] = None
 
     # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
@@ -412,6 +437,8 @@ class BookConfig:
             manual=manual,
             section_types=st,
             section_depths=sd,
+            # --- Q-LAYER (formula sequence-label) opt-in: single `formula` map ---
+            formula=dict(data['formula']) if data.get('formula') else None,
         )
 
 

@@ -14,7 +14,11 @@ from verify.layers._struct_labels import G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE
 
 G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
 
-G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*|\$\$\s*$)')
+# <div> figure blocks cannot live inside a blockquote (CommonMark); they
+# naturally exit it, so treat a <div> as a block terminator. This avoids a
+# false conflict with the C-layer, which requires a truly blank line before
+# a <div> (a `> ` empty-quote line would itself fail C).
+G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*|\$\$\s*$|<div)')
 
 NESTED_BQ = re.compile(r'^>\s*>\s*\S')
 

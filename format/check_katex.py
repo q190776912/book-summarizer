@@ -3,6 +3,7 @@ Usage:
     python check_katex.py <markdown_file>             # validate only (exit 1 on errors)
     python check_katex.py <markdown_file> --fix       # validate + auto-fix fixable errors
     python check_katex.py --fix <markdown_file>       # same (--fix can come first)
+    python check_katex.py <f1.md> <f2.md> ... [--fix] # multiple files (ALL are processed)
     python check_katex.py --dir <directory> [--fix]   # batch mode: check/fix all .md files
 
 WARNING on --fix with Chinese-language files:
@@ -520,9 +521,14 @@ def main():
                 all_ok = False
         sys.exit(0 if all_ok else 1)
     else:
-        path = args[0]
-        ok = process_file(path, fix)
-        sys.exit(0 if ok else 1)
+        # Multiple files may be passed positionally; process ALL of them
+        # (previously only args[0] was used, silently ignoring the rest).
+        all_ok = True
+        for path in args:
+            ok = process_file(path, fix)
+            if not ok:
+                all_ok = False
+        sys.exit(0 if all_ok else 1)
 
 
 if __name__ == '__main__':

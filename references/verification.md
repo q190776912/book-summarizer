@@ -31,6 +31,7 @@
 | 14 | N | BQ EMPTY LINES | 块内空 `>` 行 >1 | 阻断 | 是 | [layers/n.md](layers/n.md) | [n_layer.py](../verify/layers/n_layer.py) |
 | 15 | O | SUBITEM GAP | 编号子项缺口 | 部分阻断 | 否 | [layers/o.md](layers/o.md) | [o_layer.py](../verify/layers/o_layer.py) |
 | 16 | P | VERBOSE 闸门 | 反回归 7 闸门 | 阻断 | 否 | [layers/p.md](layers/p.md) | [p_layer.py](../verify/layers/p_layer.py) |
+| 17 | Q | FORMULA SEQUENCE-LABEL | 公式序标层：总结 `\tag` 编号与书源编号集合 S 1:1 核对（编造/错位/跨章 FAIL，遗漏默认 WARN，公式内容人工对账） | 部分（编造/不一致阻断；遗漏默认仅 WARN） | 否 | [layers/q.md](layers/q.md) | [q_layer.py](../verify/layers/q_layer.py) |
 
 > G 层内含 **G扩展**（嵌套块引用）与 **EG 层**（例–证明空隙）子检查，非独立层；H 的 3 个扩展（stmt-in-bq / unlabeled-bq / missing-bq）仍归属 `code="H"` 单层。
 
@@ -49,6 +50,8 @@
 4. **`verify/layers/base.py` 的 `DEFAULT_RESULT`**：追加新键及中性默认值（类型须匹配该层正常 emission）。
 5. **`verify/report.py` 的 `print_result`**：若新键需展示，增加对应读取与输出；否则确保不读取不存在的键。
 6. **护栏**：运行 `python -m pytest verify/tests/ -q`，键集不一致会立即 FAIL，无需手工核对。
+
+> **Q 层（公式序标层，2026-08-07 接入）已按本清单完成**：新键 `q_checked / q_fabricated / q_inconsistent / q_missing / q_rows` 已同步加入 `DEFAULT_RESULT`（`verify/layers/base.py`）、`print_result`（`verify/report.py`）、`references/layers/q.md` 的 `contract-keys`，并经 `register_all.py` 自动注册（无需改 `register_all.py`）。`formula` map 为 None 时整层 no-op，不影响既有 16 层与已完工书目。
 
 > `SKILL.md` Step 4 只链接本注册表，层级增减**无需改 SKILL.md**。
 

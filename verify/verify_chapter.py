@@ -177,6 +177,46 @@ def _load_page_context(ext, ch, key, items):
     return None
 
 
+def _write_formula_audit(ext, rows):
+    """Aggregate Q-LAYER audit rows across chapters into <ext>/formula_audit.md.
+
+    Machine only checks sequence-label structure; formula CONTENT correctness is
+    left to human reconciliation via the side-by-side summary/source dump.
+    """
+    path = os.path.join(ext, 'formula_audit.md')
+    fab = [r for r in rows if r.get('status') == 'FABRICATED']
+    inc = [r for r in rows if r.get('status') == 'INCONSISTENT']
+    miss = [r for r in rows if r.get('status') == 'MISSING']
+    lines = [
+        "# 公式序标对账报告（Formula Sequence-Label Audit）\n",
+        "> 由 verify Q 层（verify_config.json 配置 `formula` map 时启用）生成。机器仅做**序标结构**校验"
+        "（编造/错位/跨章/遗漏）；公式**内容正确性**请人工对账（本报告并排给出"
+        "总结 LaTeX 与书源文本片段）。\n",
+        "## 汇总\n",
+        f"- 对账行数: {len(rows)}",
+        f"- 编造 FABRICATED: {len(fab)}",
+        f"- 不一致 INCONSISTENT: {len(inc)}",
+        f"- 遗漏 MISSING: {len(miss)}",
+        "",
+        "## 明细\n",
+        "| 序标(normalized) | 状态 | 总结公式LaTeX(截断60字) | 书源文本片段(截断60字) |",
+        "|---|---|---|---|",
+    ]
+    for r in rows:
+        number = (r.get('number') or '').replace('|', '\\|')
+        status = r.get('status', '')
+        sl = (r.get('summary_latex') or '').replace('|', '\\|')
+        st = (r.get('source_text') or '').replace('|', '\\|')
+        lines.append(f"| {number} | {status} | {sl} | {st} |")
+    lines.append("")
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        print(f"\n[Q] formula_audit.md written -> {path}")
+    except Exception as e:  # pragma: no cover - best-effort report
+        print(f"\n[Q] WARNING: failed to write formula_audit.md: {e}")
+
+
 def verify_all(ext, book_dir, extra_ignore=None):
     """Verify all chapters using chapter_map.json (read by ConfigLoader).
     Returns True if all pass."""
@@ -187,6 +227,9 @@ def verify_all(ext, book_dir, extra_ignore=None):
         return False
 
     results = []
+    # Q-LAYER audit aggregation (only meaningful when a chapter enabled the `formula` map).
+    q_active = False
+    all_q_rows = []
     for info in sorted(loader.chapters.values(), key=lambda c: c.ch):
         ch = info.ch
         start, end = info.start, info.end
@@ -218,6 +261,9 @@ def verify_all(ext, book_dir, extra_ignore=None):
             r['status'] = status
             r['md'] = md_display
             results.append(r)
+            if r.get('q_checked'):
+                q_active = True
+                all_q_rows.extend(r.get('q_rows', []) or [])
             print()
 
     # Summary
@@ -248,11 +294,19 @@ def verify_all(ext, book_dir, extra_ignore=None):
         mdm = len(r.get('m_dm_gt', []))
         nbq = len(r.get('n_bq_empty', []))
         osub = len([g for g in r.get('o_subitem_gaps', []) if g.strip().startswith('x')])
+        qf = len(r.get('q_fabricated', []) or [])
+        qi = len(r.get('q_inconsistent', []) or [])
+        qm = len(r.get('q_missing', []) or [])
         print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} K:{ke} Dc:{dcont} Dmiss:{dmiss} "
-              f"FgMiss:{fgmiss} FgInv:{fginv} G:{ggaps} EG:{epg} H:{hbq} Hstmt:{hstmt} Hul:{hul} Hmbq:{hmbq} I:{isp} J:{jsp} K:{ksp} L:{lsp} Mdm:{mdm} Nbq:{nbq} Osub:{osub}  {os.path.basename(r['md'])}")
+              f"FgMiss:{fgmiss} FgInv:{fginv} G:{ggaps} EG:{epg} H:{hbq} Hstmt:{hstmt} Hul:{hul} Hmbq:{hmbq} I:{isp} J:{jsp} K:{ksp} L:{lsp} Mdm:{mdm} Nbq:{nbq} Osub:{osub} "
+              f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
 
     pass_count = sum(1 for r in results if r['status'] == 'PASS')
     print(f"\nPASS: {pass_count}/{len(results)}")
+
+    # Q-LAYER formula audit report — only when some chapter enabled the `formula` map.
+    if q_active and all_q_rows:
+        _write_formula_audit(ext, all_q_rows)
     return all_pass
 
 

@@ -388,6 +388,41 @@ def print_result(r):
         for g in p_proof_verbose:
             print(g)
 
+    # Q-LAYER: formula sequence-label audit (opt-in; no-op when `formula` map absent).
+    # FABRICATED / INCONSISTENT -> always FAIL (blocking).  MISSING -> WARN only
+    # (never blocking; books register genuine gaps in the map's `ignore` list).
+    # Content correctness is left to human reconciliation via
+    # <extract_dir>/formula_audit.md (written by verify_all).
+    q_checked = r.get('q_checked', False)
+    if q_checked:
+        q_fab = r.get('q_fabricated', []) or []
+        q_inc = r.get('q_inconsistent', []) or []
+        q_miss = r.get('q_missing', []) or []
+        if q_fab:
+            problems += 1
+            print(f"\nQ-LAYER FORMULA FABRICATED ({len(q_fab)}): summary \\tag number "
+                  f"not found in the book-source formula-number set S (fabricated / "
+                  f"mis-copied) — must match a real source number 1:1:")
+            for row in q_fab:
+                print(f"  ! {row.get('number', '')}  {row.get('summary_latex', '')}")
+        if q_inc:
+            problems += 1
+            print(f"\nQ-LAYER FORMULA INCONSISTENT ({len(q_inc)}): duplicate \\tag number "
+                  f"or cross-chapter number (first component != ch) — fix numbering:")
+            for row in q_inc:
+                print(f"  ! {row.get('number', '')}  {row.get('summary_latex', '')}")
+        if q_miss:
+            print(f"\nQ-LAYER FORMULA MISSING ({len(q_miss)}) [WARN, non-blocking]: "
+                  f"book-source formula numbers absent from the summary (review / add, "
+                  f"or register in the `formula.ignore` list):")
+            for row in q_miss:
+                print(f"  ~ {row.get('number', '')}  {row.get('source_text', '')}")
+        q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)
+    else:
+        q_fab_n = q_inc_n = q_miss_n = 0
+    q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
+              if q_checked else "")
+
     # B-LAYER BLOCKING 已包含「重要概念首项缺失」(原 Q 层逻辑，2026-08-05 并入 B)：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。
@@ -408,8 +443,9 @@ def print_result(r):
               f"/ {len(p_bare)} p-layer-bare-item / {len(p_miss)} p-layer-missing-sec "
               f"/ {len(p_extra)} p-layer-fabricated-item "
               f"/ {len(p_verbose)} p-layer-verbose-prose / {len(p_proof_verbose)} p-layer-verbose-proof "
-              f"— {os.path.basename(md)}")
+              f"{q_part}— {os.path.basename(md)}")
         return 'FAIL'
     else:
-        print(f"\nPASS: {os.path.basename(md)} (entries={len(r['entry_keys'])}, mentioned-only={len(r['mentioned_only'])})")
+        q_suffix = f" Q:{q_fab_n}/{q_inc_n}/{q_miss_n}" if q_checked else ""
+        print(f"\nPASS: {os.path.basename(md)} (entries={len(r['entry_keys'])}, mentioned-only={len(r['mentioned_only'])}){q_suffix}")
         return 'PASS'

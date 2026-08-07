@@ -357,7 +357,7 @@ class PLayer(VerifyLayer):
             })
         exer = check_exer_blocks(lines)
         noise = check_noise(lines)
-        bare = check_bare_items(lines, ctx.config.ordinal)
+        bare = check_bare_items(lines, ctx.config.primary_type)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
         verbose = check_verbose_paragraphs(lines)

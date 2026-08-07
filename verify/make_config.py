@@ -30,7 +30,7 @@ import glob
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
-from lib.config import ORDINAL_LANGUAGE_DEFAULT
+from lib.config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
 
 # 罗马数字章号形态（chapter_map 的 key / ch 字段全为罗马字母且无阿拉伯数字）
 ROMAN_RE = re.compile(r'^[IVXLCDM]+$')
@@ -140,17 +140,50 @@ def main():
     # ORDINAL_LANGUAGE_DEFAULT already maps en-family ordinals (4/5/6/7) -> 'en'
     # and cn-family (1/2/3) -> 'cn', matching the spec's "<en if 候选==4/5/6/7>".
     language = ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
-    config = {"ordinal": ordinal, "language": language}
+    depth = ORDINAL_DEPTH.get(ordinal, 3)
+    # v2 schema: `ordinal` is a LIST of GroupConfig dicts.  The default is a
+    # SINGLE uncat merged counter (one group).  `scope` and `depth` are two
+    # DISTINCT axes:
+    #   * `depth` = number of numbering components (form-driven from ORDINAL_DEPTH).
+    #   * `scope` = ascending-range / counter-reset boundary:
+    #       1 = book-wide, 2 = chapter-wide reset, 3 = section-wide reset.
+    #   scope is NOT mechanically tied to depth — it is form-driven per book,
+    #   derived from the book's actual ordinal labels (same family as type/depth).
+    #   make_config's best-effort default is chapter (2).  A deeper (e.g. three-
+    #   level) book whose counters reset per chapter stays at scope=2; only bump
+    #   to 3 when the book genuinely recounts per section.
+    # Different groups NEVER merge; a book needing per-label independent counters
+    # must declare multiple groups explicitly (always keeping one
+    # name=["uncat"] fallback).  Default behavior stays a single merged counter
+    # (R2 behavior change: NOT per-type independent).
+    config = {
+        "ordinal": [
+            {
+                "type": ordinal,
+                "name": ["uncat"],
+                "depth": depth,
+                "scope": 2,
+            }
+        ],
+        "strict": True,
+        "language": language,
+    }
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
-    print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}）。")
+    print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
     print(f"   文件路径: {cfg_path}")
     print(f"   文件内容: {json.dumps(config, ensure_ascii=False)}")
-    print("   请人工核对：若为四级子小节书（1.1.1.1），需手动加 "
-          '"section_types": [1,2,3,4], "section_depths": [1,2,3,4]；'
-          "ordinal 检测不准请修正后再跑 verify。")
+    print("   请人工核对后再跑 verify：")
+    print("     · 若原 verify_config.json 是【整型 ordinal】旧格式，校验会直接报错")
+    print("       exit 2；必须用本脚本 --force 重新生成（见")
+    print("       references/verify_config_schema_v2_design.md）。")
+    print("     · 默认产出为「单 uncat 合并计数」组；若要 定理/定义/练习 各自")
+    print("       独立计数，须手动把 ordinal 拆成多个 group（含一个")
+    print('       name=["uncat"] 兜底组）。')
+    print("     · 若为四级子小节书（1.1.1.1），需手动加")
+    print('       "section_types": [1,2,3,4], "section_depths": [1,2,3,4]。')
     return 0
 
 

@@ -160,7 +160,8 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - **文件缺失** → 仅 WARNING + 沿用默认 ordinal=3（`scan_skeleton` 写初稿可继续；存量书兼容，不阻断）。
 - **文件存在但缺 `ordinal`** → 硬报错并退出（`exit 2`）。
 - **`section_types` / `section_depths` 显式但非法**（长度不等 / 分量 <1 / 非法角色码 / 首分量 ≠1）→ 硬报错（`exit 2`）。
-- 配置字段：`ordinal`（必填，1–7，编号风格选择器，判定见 `references/book_patterns.md` 判定树 §4）、`language`、`section_types` / `section_depths`（仅四级及更深小节书需显式声明，否则由 `ordinal` 自动反推，无需手写）。
+- 配置字段：`ordinal`（**必填，数组** `List[GroupConfig]`，每个元素 `{type, name, depth, scope}`，详见 `references/verification.md` §4.3 与 `references/layers/b.md`）、`language`、`strict`、`ignore`。`type` 为编号风格码（1–7，判定树见 `references/book_patterns.md` §4）；`name` 为该组标签词（如 `["Theorem"]`，兜底组用 `["uncat"]`）；`depth` 为编号层级数；`scope` 为编号作用域（1=全书 / 2=章 / 3=节）。数组首元素的 `type` 即 `primary_type`，由它自动反推编号模式与小节层级（`section_types`/`section_depths` 现由 primary_type 自动反推，仅四级子小节书 1.1.1.1 需显式覆盖）。
+  > ⚠️ 旧格式（整型 `ordinal` 如 `3`，或 `separate_types`）已被 `from_dict` 拒绝，并报 `make_config --force` 迁移提示（exit 2）。分组（per-type / combined）现由多个具名 group（per-type）或单个 uncat group（combined）表达，不再有 `separate_types` 开关。
 
 🔴 **配置是校验的硬性前置，但生成时机在「全部源语言初稿完成后」**：配置**不是边写边填**，而是等**源语言**全部章节初稿写完（规则 E 阶段 1 结束）后，由 agent 依据**源语言版** `.md` 一次性生成（规则 E 阶段 2）。**翻译派生版不参与配置生成**。即：**写初稿阶段（阶段 1）不要求配置就位**（scan_skeleton 遇缺失配置仅告警 + 默认 ordinal=3）；**但任何 `verify` 跑起来之前，配置必须完整**（规则 E 阶段 2 → 阶段 3 批量校验）。
 
@@ -374,9 +375,9 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 
 **任何一条不通过都算失败，必须修正后重验。** 本 skill 的全部规则已解耦到 `references/` 下，SKILL.md 仅保留主流程与链接，不再内联任何规则细节 —— 新增 / 修改规则只改对应的 `references/*.md` 与必要代码，**本文件无需改动**：
 
-- **🔴 书级配置校验（规则 H）**：`verify_chapter.py` 入口会先校验 `_extract/verify_config.json` 的完整性。若报 `[CONFIG]` 错误（文件在但缺 `ordinal` / `section_types`/`section_depths` 不合法），先回规则 H 补齐配置再跑 verify。文件缺失仅警告、沿用默认 ordinal=3（存量书兼容）。
+- **🔴 书级配置校验（规则 H）**：`verify_chapter.py` 入口会先校验 `_extract/verify_config.json` 的完整性。若报 `[CONFIG]` 错误（文件在但缺 `ordinal` / `ordinal` 不是合法分组数组 / 首元素 `type` 不合法 / `scope` 不在 1–3），先回规则 H 补齐配置再跑 verify。文件缺失仅警告、沿用默认 ordinal=3（存量书兼容）。`ordinal` 现为分组对象数组，旧整型 / `separate_types` 写法会被拒绝。
 
-- **结构性 / 格式校验层（统一强制关卡）**：由 `verify/verify_chapter.py` 执行，覆盖本 skill 定义的全部校验层。运行 `verify/verify_chapter.py --all <md> <extract_dir>`，**exit 0 才算通过**；`--fix` 可自动修复其中标记为可修复的层，其余须手动确认。各层的顺序、语义、`--fix` 范围、字节契约键集合 —— 全部见 [`references/verification.md`](references/verification.md)（SSOT，唯一权威）。
+- **结构性 / 格式校验层（统一强制关卡）**：由 `verify/verify_chapter.py` 执行，覆盖本 skill 定义的全部校验层。运行 `verify/verify_chapter.py --all <extract_dir> <book_dir>`，**exit 0 才算通过**；`--fix` 可自动修复其中标记为可修复的层，其余须手动确认。各层的顺序、语义、`--fix` 范围、字节契约键集合 —— 全部见 [`references/verification.md`](references/verification.md)（SSOT，唯一权威）。
 - **内容保真 / 写作质量关卡**（OCR 噪声修正、UTF-8 无乱码、粗体标签与 `§` 标识、KaTeX 渲染成功、英文标注、输出语种、一次性写齐、文件命名、图片嵌入、公式忠于原文、非核心内容摘要等）：定义见 [`references/formatting.md`](references/formatting.md) 与 [`references/verification.md`](references/verification.md) 对应章节；顶层「核心原则」亦为本类总纲。
 - **OCR 无法识别的遗漏标签**：书中确有但 OCR 漏识的条目，按两步法补写 + 标注 + 登记，查漏机制与 over-mark 守卫见 [`references/missing_label_policy.md`](references/missing_label_policy.md)。
 

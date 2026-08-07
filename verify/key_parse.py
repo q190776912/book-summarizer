@@ -21,7 +21,7 @@ from lib.regexlib import (
 )
 from lib.config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM, ORDINAL_FRALEIGH,
-    ORDINAL_THREE_LEVEL,
+    ORDINAL_THREE_LEVEL, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS, _canon_label,
 )
 
 # GM (Gelfand-Manin) section/entry separators: the shared wildcard set
@@ -73,35 +73,11 @@ def normkey(s):
         return f'{parts[0]}.{parts[1]}-{parts[2]}'
     return s
 
-# Label -> canonical Chinese label. Bilingual EN books sometimes write item
-# entries in ENGLISH (`**Definition 1.1**`) and sometimes in CHINESE
-# (`**定义 1.1**` / `**注释 5.1**`) even within the same book, so the verifier
-# must canonicalize BOTH forms to one key. EN->CN pairs keep EN/CN aligned;
-# CN synonyms (注释/评注/注 -> 评注) unify the Chinese variants the extractor
-# would emit as Remark->评注.
-_LABEL_CANON = {
-    'Definition': '定义', '定理': '定理', '定义': '定义',
-    'Theorem': '定理',
-    'Lemma': '引理', '引理': '引理',
-    'Corollary': '推论', '推论': '推论',
-    'Proposition': '命题', '命题': '命题',
-    'Example': '例', '例': '例', '示例': '例',
-    'Remark': '评注', '评注': '评注', '注释': '评注', '注': '评注', '注记': '评注',
-    'Commentary': '评注',
-    'Axiom': '公理', '公理': '公理',
-    'Assertion': '断言', '断言': '断言',
-    'Conjecture': '猜想', '猜想': '猜想',
-    'Condition': '条件', '条件': '条件',
-    'Assumption': '假设', '假设': '假设', '假定': '假设',
-    'Algorithm': '算法', '算法': '算法',
-}
+# _LABEL_CANON / EN_LABEL_KINDS / _canon_label are imported from lib.config
+# (single source of truth) so the md-side parser and the extractor agree on
+# bilingual label canonicalization (e.g. Example -> 练习, matching the
+# 练习/习题/Example exercise group).  Do NOT redefine them here.
 
-# English two-level book item regexes (used when ordinal == ORDINAL_EN). Mirror ENTRY_RE_2 /
-# PROSE_RE_2 but include English label kinds AND Example (English summaries
-# write **Example N.M** as a full entry, unlike the CN two-level).
-EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
-                  'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
-                  'Assumption', 'Algorithm', 'Commentary']
 # Chinese label synonyms that appear in bilingual-book .md files.
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
                   '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法']
@@ -170,24 +146,10 @@ def gm_head_label(title):
         raw = raw[:-1]
     return raw[:1].upper() + raw[1:]
 
-def _canon_label(lbl):
-    if lbl in _LABEL_CANON:
-        return _LABEL_CANON[lbl]
-    # Case-insensitive English labels: prose cross-references are written in
-    # the .md as "proposition II.5.15" (lowercase) while the extractor
-    # normalizes them via _norm_label before _canon_label; both sides must
-    # produce the same canonical Chinese label.  Handles 'cor.'/'def.'
-    # abbreviations and plurals ("propositions") the same way.
-    low = lbl.lower()
-    if low in ('cor.', 'def.'):
-        low = {'cor.': 'corollary', 'def.': 'definition'}[low]
-    if low.endswith('s') and len(low) > 1 and \
-            low[:-1] in (k.lower() for k in EN_LABEL_KINDS):
-        low = low[:-1]
-    for k in EN_LABEL_KINDS:
-        if k.lower() == low:
-            return _LABEL_CANON[k]
-    return lbl
+# _canon_label is imported from lib.config (see import above) — single source
+# of truth for bilingual label canonicalization.  The local copy was removed to
+# avoid divergence (e.g. Example must canonize to 练习 on BOTH the md side and
+# the extractor side so the exercise group routes correctly).
 
 def _first_num(key):
     """Return the first integer found in a key string (e.g. leading chapter
@@ -195,18 +157,33 @@ def _first_num(key):
     m = re.search(r'\d+', key)
     return int(m.group()) if m else -1
 
-def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None):
+def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=None):
     """Entries/all_keys from an .md file.
 
-    `ordinal` is the integer style code (see lib.config ORDINAL_*).  For
-    ORDINAL_GM / ORDINAL_ROMAN, `chapter_roman` (e.g. 'I') is REQUIRED: the
-    .md headings are parsed relative to that roman chapter.
+    `groups` is the BookConfig.ordinal GroupConfig array (new v2 form).  When
+    given, EVERY group contributes its branch's keys so a multi-group config
+    (e.g. 定理/定义 + 练习) parses BOTH numbering styles and unions them —
+    the exercise group's two-level keys are captured alongside the theorem
+    group's three-level keys.  When only `ordinal` (int) is supplied it is
+    treated as a single group (back-compat shortcut).  `chapter_roman` is
+    required for any GM/ROMAN group.
     """
+    if groups is None:
+        groups = [GroupConfig(type=int(ordinal) if ordinal is not None else ORDINAL_THREE_LEVEL)]
+    # Any group needing a roman chapter prefix?
+    needs_roman = any(g.type in (ORDINAL_GM, ORDINAL_ROMAN) for g in groups)
+    if needs_roman and chapter_roman is None:
+        raise ValueError("keys_in_md(group with type=ORDINAL_GM/ORDINAL_ROMAN) requires chapter_roman")
     entries, allk = set(), set()
-    cur_sec = None
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if ordinal == ORDINAL_GM:
+    try:
+        lines = open(path, 'r', encoding='utf-8').readlines()
+    except Exception:
+        return entries, allk
+    for g in groups:
+        t = g.type
+        cur_sec = None
+        for line in lines:
+            if t == ORDINAL_GM:
                 if chapter_roman is None:
                     raise ValueError("keys_in_md(ordinal=ORDINAL_GM) requires chapter_roman")
                 sm = GM_SEC_RE.match(line.strip())
@@ -225,25 +202,25 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None):
                     entries.add(key); allk.add(key)
                 for m in GM_LABELED_RE.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
-            elif ordinal == ORDINAL_TWO_LEVEL:
+            elif t == ORDINAL_TWO_LEVEL:
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_2.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif ordinal == ORDINAL_EN:
+            elif t == ORDINAL_EN:
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif ordinal == ORDINAL_FRALEIGH:
+            elif t == ORDINAL_FRALEIGH:
                 for m in FR_ENTRY_RE.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in FR_PROSE_RE.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif ordinal == ORDINAL_ROMAN:
+            elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"
                     entries.add(key); allk.add(key)

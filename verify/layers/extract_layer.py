@@ -26,9 +26,10 @@ from verify.key_parse import (
     keys_in_md, _canon_label, _first_num, sortkey,
 )
 from lib.regexlib import SEP_TIGHT
-from lib.config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL
+from lib.config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, ORDINAL_VAKIL
 from extract.extract_items import extract_items, extract_items_en
 from extract.extract_items_gm import extract_items_gm, int_to_roman
+from extract.extract_items_vakil import extract_items_vakil
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +112,7 @@ def _scan_book_category_items(ch, start, end, ext_dir):
 
 def _merged_category_first_missing(ctx, all_keys, blocking):
     """Q 逻辑并入 B：整类首项缺失检测。仅 three_level 方案启用（ordinal=3）。"""
-    if ctx.config.ordinal != ORDINAL_THREE_LEVEL:
+    if ctx.config.primary_type != ORDINAL_THREE_LEVEL:
         return
     ch = ctx.ch
     book_cat = _scan_book_category_items(ch, ctx.start, ctx.end, ctx.ext_dir)
@@ -197,8 +198,9 @@ class ExtractLayer(VerifyLayer):
 
     def run(self, ctx):
         manual = ctx.manual_overrides
+        cfg = ctx.config
 
-        if ctx.config.ordinal == ORDINAL_EN:
+        if ctx.config.primary_type == ORDINAL_EN:
             # English two-level book (ordinal=4): use the EN-aware extractor.
             # Its keys are "Definition 1.1" (English label + "N.M"); canonicalize
             # to the same Chinese form keys_in_md(ordinal=ORDINAL_EN) produces so
@@ -216,21 +218,25 @@ class ExtractLayer(VerifyLayer):
                 kept.append(it)
             items = kept
             warnings, blocking = [], []
-        elif ctx.config.ordinal in (ORDINAL_GM, ORDINAL_ROMAN):
+        elif ctx.config.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
             # Gelfand-Manin style (ordinal=6) / roman (ordinal=5): book-printed
             # headings in the .md, roman machine keys ("标签I.S-N" / "I.S-N").
             items, warnings, blocking = extract_items_gm(
                 ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
                 manual_overrides=manual)
+        elif ctx.config.primary_type == ORDINAL_VAKIL:
+            # Vakil "Rising Sea": number-first three-level (N.M.item) + lettered
+            # exercises; dedicated extractor returns only numbered items.
+            items, warnings, blocking = extract_items_vakil(
+                ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
+                manual_overrides=manual)
         else:
-            # Single source of truth for the numbering convention: read
-            # separate_types from the config carried on ctx.config (same as
-            # the MD-side B-layer), not a parallel `numbering` proxy.
-            cfg = ctx.config
+            # Single source of truth for the numbering convention: the
+            # BookConfig.ordinal GroupConfig array carried on ctx.config
+            # (same as the MD-side B-layer), not a parallel `numbering` proxy.
             items, warnings, blocking = extract_items(
                 ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
-                manual_overrides=manual, ordinal=ctx.config.ordinal,
-                separate_types=cfg.separate_types)
+                manual_overrides=manual, cfg=cfg)
 
         label_warns = check_label_consistency(items)
         extracted_raw = {it['key'] for it in items}
@@ -239,19 +245,19 @@ class ExtractLayer(VerifyLayer):
         # Remove confirmed-noise keys BEFORE the A/B comparison.
         extracted = extracted_raw - ctx.ignore
 
-        if ctx.config.ordinal == ORDINAL_GM:
-            # keys_in_md(ordinal=ORDINAL_GM) needs the md's roman chapter prefix;
+        if ctx.config.primary_type == ORDINAL_GM:
+            # keys_in_md(group type=ORDINAL_GM) needs the md's roman chapter prefix;
             # the .md headings are bare per-section ordinals.
             entry_keys, all_keys = keys_in_md(
-                ctx.md_file, ordinal=ORDINAL_GM, chapter_roman=int_to_roman(ctx.ch))
-        elif ctx.config.ordinal == ORDINAL_ROMAN:
-            # keys_in_md(ordinal=ORDINAL_ROMAN) parses the roman chapter from the
+                ctx.md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ctx.ch))
+        elif ctx.config.primary_type == ORDINAL_ROMAN:
+            # keys_in_md(group type=ORDINAL_ROMAN) parses the roman chapter from the
             # .md text itself; chapter_roman is passed for symmetry.
             entry_keys, all_keys = keys_in_md(
-                ctx.md_file, ordinal=ORDINAL_ROMAN, chapter_roman=int_to_roman(ctx.ch))
+                ctx.md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ctx.ch))
         else:
-            entry_keys, all_keys = keys_in_md(ctx.md_file, ordinal=ctx.config.ordinal)
-        if ctx.config.ordinal == ORDINAL_EN:
+            entry_keys, all_keys = keys_in_md(ctx.md_file, groups=cfg.ordinal)
+        if ctx.config.primary_type == ORDINAL_EN:
             entry_keys = {k for k in entry_keys if _first_num(k) == ctx.ch}
             all_keys = {k for k in all_keys if _first_num(k) == ctx.ch}
 

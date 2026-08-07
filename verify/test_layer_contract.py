@@ -20,8 +20,7 @@ import unittest
 from verify.register_all import LAYER_REGISTRY
 from verify.layers.base import DEFAULT_RESULT
 from verify.layers.base import VerifyContext
-from lib.config import BookConfig
-from lib.config import BookConfig
+from lib.config import BookConfig, GroupConfig
 
 # Fix-dict contract keys (verify/layers/base.py): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
 FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
@@ -73,7 +72,7 @@ class LayerContractTest(unittest.TestCase):
             end=2,
             md_file=FIXTURE_PATH,
             ext_dir=FIXTURE_DIR,
-            config=BookConfig(ordinal=3),
+            config=BookConfig(ordinal=[GroupConfig(type=3)]),
         )
 
     def test_metadata_keys_subset(self):

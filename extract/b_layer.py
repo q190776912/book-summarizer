@@ -4,8 +4,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json, re
 from collections import defaultdict
 
-# Single source of truth for the separation-mode constants (== not >= semantics).
-from verify.layers.b_layer import SEP_COMBINED, SEP_PER_TYPE
+# (Grouping is now driven by the BookConfig.ordinal GroupConfig array; the old
+# SEP_COMBINED/SEP_PER_TYPE constants are gone — see lib/config.py GroupConfig.)
 from lib.regexlib import SEP_NUMERIC
 
 # ---------------------------------------------------------------------------
@@ -51,6 +51,8 @@ def _try_label_rescan(snippet, active_section_label, label_re):
         raw = lm.group()
         if re.search(r'例|Example', raw):
             return '例'
+        elif re.search(r'练习|习题|Exercise', raw):
+            return '练习'
         elif re.search(r'定义|Definition', raw):
             return '定义'
         elif re.search(r'定理|Theorem', raw):
@@ -86,26 +88,40 @@ def _scan_and_recover(p_start, p_end, sec_num, section_label, extract_dir, chapt
     return recovered
 
 
-def _group_key(it, separate_types):
-    """Section-grouping key for the missing-number scan.
+def _key_prefix_num(key, depth):
+    """Parse a key like 'C.S-N' / 'C.S' / 'C-N' into (prefix_str, num).
 
-    - combined (SEP_COMBINED=0): 定义/定理/例 share ONE sequence per
-      section (Kreyszig style) -> group by ``C.S`` only.
-    - per-type (SEP_PER_TYPE=1): each item TYPE (定义/定理/引理/例/...)
-      has its OWN sequence per section -> group by ``C.S:LABEL``. ``uncat``
-      items fall back to the combined key so they are not split into a
-      spurious group of their own.
+    `prefix_str` is the first ``depth-1`` numeric components joined by '.'
+    (the counter reset-prefix for this group); `num` is the component at
+    index ``depth-1`` (the item number within the group).  Returns
+    ('', 0) for an unparseable key (no digits)."""
+    nums = [int(x) for x in re.findall(r'\d+', key)]
+    if not nums:
+        return '', 0
+    if len(nums) >= depth:
+        prefix = nums[:depth - 1]
+        num = nums[depth - 1]
+        return '.'.join(str(x) for x in prefix), num
+    # Key has fewer components than `depth` (heading-only or two-level form):
+    # treat all components as the prefix, num = last component.
+    return '.'.join(str(x) for x in nums), (nums[-1] if nums else 0)
+
+
+def _group_key(it, cfg):
+    """Section-grouping key for the missing-number scan, NAMESPACED BY GROUP.
+
+    Different BookConfig groups (GroupConfig) share a merged counter; the group
+    index ``gi`` is prepended so counters of different groups NEVER merge.  The
+    prefix length is driven by the matched group's ``depth`` (per the v2 schema).
     """
-    parts = it['key'].split('.')
-    sec = f"{parts[0]}.{parts[1].split('-')[0]}"
-    if separate_types == SEP_PER_TYPE:
-        lab = it.get('label', 'uncat')
-        if lab and lab != 'uncat':
-            return f"{sec}:{lab}"
-    return sec
+    label = it.get('label') or 'uncat'
+    g = cfg.group_for_label(label)
+    gi = cfg.ordinal.index(g)
+    prefix_str, _num = _key_prefix_num(it['key'], g.depth)
+    return f"{gi}:{prefix_str}" if prefix_str else f"{gi}:file"
 
 
-def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, separate_types=0):
+def recover_missing_items(extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, cfg=None):
     """Step 5-6: boundary & density checks with auto-recovery (B-LAYER).
 
     Detection 宗旨 (the part that flags missing numbers for the agent to fill):
@@ -120,8 +136,8 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
     Returns (items, warnings, blocking)."""
     by_sec = defaultdict(list)
     for it in items:
-        sec_key = _group_key(it, separate_types)
-        num = int(it['key'].split('-')[1])
+        sec_key = _group_key(it, cfg)
+        num = int(re.findall(r'\d+', it['key'])[-1])
         by_sec[sec_key].append((num, it))
 
     warnings = []
@@ -132,9 +148,9 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
     auto_recovered = []
 
     def _sec_sort_key(k):
-        a, b = k.split('.', 1)
-        b = b.split(':')[0]
-        return (int(a), float(b))
+        # New key format is "gi:prefix" (group index : numeric prefix).
+        gi_str, prefix = k.split(':', 1)
+        return (int(gi_str), tuple(int(x) for x in re.findall(r'\d+', prefix)))
     sec_order = sorted(by_sec.keys(), key=_sec_sort_key)
 
     # First pass: collect all auto-recoverable items
@@ -145,7 +161,9 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
         last_num = nums_sorted[-1][0]
         first_page = nums_sorted[0][1]['page']
         last_page = nums_sorted[-1][1]['page']
-        sec_num = int(sec_key.split('.')[1].split(':')[0])
+        prefix_part = sec_key.split(':', 1)[1]
+        comps = [int(x) for x in re.findall(r'\d+', prefix_part)]
+        sec_num = comps[1] if len(comps) >= 2 else (comps[0] if comps else 0)
         detected = {n for n, _ in nums_sorted}
 
         # Get active section label (例/定义/etc.) from items in this section

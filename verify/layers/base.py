@@ -202,9 +202,17 @@ class VerifyContext:
             return f.read().split('\n')
 
     # --- config-forwarding properties (single read path) ---
+    # NOTE: `BookConfig.ordinal` is now a List[GroupConfig].  `ctx.ordinal`
+    # forwards the PRIMARY style code (an int) for legacy consumers that still
+    # branch on the integer; use `ctx.config.ordinal` for the group array and
+    # `ctx.primary_type` for the int.
     @property
     def ordinal(self) -> int:
-        return self.config.ordinal
+        return self.config.primary_type
+
+    @property
+    def primary_type(self) -> int:
+        return self.config.primary_type
 
     @property
     def language(self) -> str:

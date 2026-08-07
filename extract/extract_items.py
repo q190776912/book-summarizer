@@ -8,7 +8,7 @@ from extract.b_layer import recover_missing_items
 from extract.extract_items_en import extract_items_en
 from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
 from lib.config import (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH, ORDINAL_THREE_LEVEL,
-                         _LEGACY_ORDINAL_STR)
+                        ORDINAL_DEPTH, BookConfig, GroupConfig)
 
 # Tail gap (pages after a section's last detected item, up to the next section
 # or chapter end) considered "suspicious" rather than silently "resolved" once
@@ -77,7 +77,9 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     lm = label_re.search(ctx_self)
     if lm:
         raw = lm.group()
-        if re.search(r'例|Example', raw):
+        if re.search(r'练习|习题|Example', raw):
+            label = '练习'
+        elif re.search(r'例|Example', raw):
             label = '例'
         elif re.search(r'定义|Definition', raw):
             label = '定义'
@@ -99,14 +101,18 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
             prev_label = label_re.search(prev_txt[-40:])
             if prev_label:
                 raw = prev_label.group()
-                if re.search(r'例|Example|定义|Definition', raw):
+                if re.search(r'练习|习题|Example', raw):
+                    label = '练习'
+                elif re.search(r'例|Example|定义|Definition', raw):
                     label = '例' if re.search(r'例|Example', raw) else '定义'
         if label == 'uncat' and i < len(all_blocks) - 1:
             next_txt = all_blocks[i+1][2]
             next_label = label_re.search(next_txt[:40])
             if next_label:
                 raw = next_label.group()
-                if re.search(r'例|Example|定义|Definition|定理|Theorem', raw):
+                if re.search(r'练习|习题|Example', raw):
+                    label = '练习'
+                elif re.search(r'例|Example|定义|Definition|定理|Theorem', raw):
                     label = '例' if re.search(r'例|Example', raw) else ('定义' if re.search(r'定义|Definition', raw) else '定理')
 
     text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
@@ -244,10 +250,16 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     return items, [], []
 
 
-def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, ordinal=ORDINAL_THREE_LEVEL, separate_types=0):
-    if ordinal == ORDINAL_FRALEIGH:
+def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, cfg=None):
+    # `cfg` is the BookConfig (grouping source of truth).  Dispatch on the
+    # PRIMARY group's style code.  When omitted, fall back to a default
+    # single three-level uncat group (back-compat for direct callers).
+    if cfg is None:
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL)])
+    primary = cfg.primary_type
+    if primary == ORDINAL_FRALEIGH:
         return extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides)
-    if ordinal == ORDINAL_TWO_LEVEL:
+    if primary == ORDINAL_TWO_LEVEL:
         items, warnings, blocking = extract_items_two_level(extract_dir, chapter, start_page, end_page)
         if manual_overrides:
             existing = {it['key']: idx for idx, it in enumerate(items)}
@@ -283,7 +295,16 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     # ---- regexes (defined BEFORE the section-scan loop below) ----
     # Step 2: broader pattern (also catches 1.3.9 → 1.3-9)
     num_re = re.compile(r'(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)')
-    label_re = re.compile(r'(?:定义|定理|引理|推论|命题)\s*（|例(?:子)?|Example|Definition|Theorem|Lemma|Corollary|Proposition')
+    label_re = re.compile(
+        r'(?:定义|定理|引理|推论|命题|练习|习题)\s*（'
+        r'|例(?:子)?|Exercise|Example'
+        r'|Definition|Theorem|Lemma|Corollary|Proposition'
+    )
+    # Two-level 练习 / 习题 / Example pass (R3): CN three-level books number
+    # exercises per chapter.section ("练习 4.1"), which the 3-component num_re
+    # above never matches. Kept separate so the cross-ref filter and the
+    # 3-component pass stay clean.
+    ex_re = re.compile(r'(练习|习题|Example)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
     cite_re = re.compile(r'(见|由|根据|参考|参见|据|Cf\.)')
     # Step 3: section heading (e.g. "§1.1 Name", "1.1 Name"). NOT matching "1.1-1" (numbered items).
     sec_heading_re = re.compile(r'^(?:§\s*)?(\d+)' + SEP_TIGHT + r'(\d+)(?:\s{2,}|\s+[^\d\-])')
@@ -344,6 +365,23 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
                         _add_match(m2, txt, p, i, all_blocks, raw_matches,
                                    active_section_label, chapter, label_re, cite_re, num_re)
 
+        # ---- Pass: two-level 练习 (R3) ----
+        # CN three-level books number 练习 per chapter.section (e.g. 练习 4.1),
+        # which the 3-component num_re above never matches. Emit these so the 练习
+        # group has a real counter and the A-layer truly_missing check stays honest.
+        for m in ex_re.finditer(txt):
+            c = int(m.group(2)); s = int(m.group(3))
+            if c != chapter or s == 0 or s > 50:
+                continue
+            key = f"练习{c}.{s}"
+            # Skip cross-reference forms ("见 练习 4.1" / "由练习 4.1").
+            if cite_re.search(txt[max(0, m.start() - 8):m.start()]):
+                continue
+            if any(rm['key'] == key for rm in raw_matches):
+                continue
+            raw_matches.append({'key': key, 'page': p, 'label': '练习',
+                                'text': txt[max(0, m.start() - 5):m.end() + 80].replace('\n', ' ')})
+
     # ---- Dedup: prefer non-裸 label ----
     seen = {}
     for it in raw_matches:
@@ -370,7 +408,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
 
     # ---- Step 5-6: boundary & density checks with auto-recovery (B-layer) ----
     items, warnings, blocking = recover_missing_items(
-        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, separate_types
+        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, cfg
     )
     return items, warnings, blocking
 
@@ -387,9 +425,12 @@ if __name__ == '__main__':
     ap.add_argument("--examples", action="store_true", help="include Example items (EN only)")
     ap.add_argument("--verbose", action="store_true")
     ns = ap.parse_args()
-    # Back-compat: accept legacy STRING ordinal values (warn + map to int code).
-    if isinstance(ns.ordinal, str):
-        ns.ordinal = _LEGACY_ORDINAL_STR.get(ns.ordinal, ORDINAL_THREE_LEVEL)
+    # Back-compat: `--ordinal N` is a single-group shortcut -> one uncat GroupConfig.
+    # The group scope follows the detected depth (1->book / 2->chapter / 3->section)
+    # so the extraction-side B-layer resets counters at the right boundary.
+    _depth = ORDINAL_DEPTH.get(ns.ordinal, ORDINAL_THREE_LEVEL)
+    cfg = BookConfig(ordinal=[GroupConfig(type=ns.ordinal, name=["uncat"],
+                                          depth=_depth, scope=_depth)])
 
     if ns.lang == "en":
         if len(ns.pos) < 3:
@@ -414,7 +455,7 @@ if __name__ == '__main__':
             with open(ns.manual, 'r', encoding='utf-8') as f:
                 manual = json.load(f)
             print(f"[INFO] Loaded {len(manual)} manual overrides from {ns.manual}")
-        items, warnings, blocking = extract_items(extract_dir, ch, start, end, manual_overrides=manual, ordinal=ns.ordinal)
+        items, warnings, blocking = extract_items(extract_dir, ch, start, end, manual_overrides=manual, cfg=cfg)
         print(f"=== Ch{ch} ITEMS ===")
         cur_sec = ""
         for it in items:

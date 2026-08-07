@@ -20,14 +20,14 @@
 ## 分组（按书的编号习惯，来自 `BookConfig` / `ctx.config.ordinal`）
 配置由 `ConfigLoader`（`lib/config.py`）从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config`；B 层与提取层都读 `ctx.config`（旧的 `load_for_md` 文件 IO 已删除，见下方「实现」段）。
 
-**单一配置文件**：`<book>/_extract/verify_config.json`（扁平，存放编号与抑制字段 `ordinal` / `language` / `scope` / `separate_types` / `strict` / `ignore`）。`<book>/verify_config.json` 仅作为向后兼容的回退位置。不存在 `b_numbering.json` 这种独立文件，也没有 `b_numbering` 子键——一份文件，一种 schema，编号约定与抑制集合共用同一真相源。旧的 `disable` 字段已移除：层不再被跳过，噪声一律经统一的 `ignore` 集合抑制（WARNING 门，非跳过）。
+**单一配置文件**：`<book>/_extract/verify_config.json`（扁平，存放分组与抑制字段 `ordinal`（分组对象数组 `List[GroupConfig]`） / `language` / `strict` / `ignore`）。`<book>/verify_config.json` 仅作为向后兼容的回退位置。不存在 `b_numbering.json` 这种独立文件，也没有 `b_numbering` 子键——一份文件，一种 schema，编号约定与抑制集合共用同一真相源。旧的 `disable` 字段、`separate_types`（含 `SEP_COMBINED`/`SEP_PER_TYPE`）已移除：分组现由 `ordinal` 数组表达（多个具名 group = per-type，单个 uncat group = combined），层不再被跳过，噪声一律经统一的 `ignore` 集合抑制（WARNING 门，非跳过）。
 
-缺省/非法 → 默认 `ordinal=3`(三级CN), `scope=chapter`, `separate_types=1`, `strict=True`。
+缺省/非法 → 默认 `ordinal=[{type:3, name:["uncat"], depth:3, scope:3}]`(三级CN), `strict=True`。旧整型 ordinal / `separate_types` 写法被 `from_dict` 拒绝（报 `make_config --force` 提示）。
 
 `BookConfig` 字段（经 `ConfigLoader` 读入，挂在 `ctx.config`）：
-- `ordinal`：编号体系的**整数编码**（见 `lib/config.py` 的 `ORDINAL_*`）。`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)，`7`=Fraleigh。级数由 `ORDINAL_DEPTH[ordinal]` 推导（如 `4.11-5` 在 `ordinal=3` 下为 3 级）。
-- `scope`：末级序号的重置/连续性边界（`book` 全书 | `chapter` 章内 | `section` 节内）。对 `ordinal` 决定的 k 级编号，有意义的前缀是前 `k-1` 级；其他取值被 `group_prefix_len()` 上限钳到 `depth-1`，错配不会崩溃。
-- `separate_types`：编号粒度（**整数，非布尔**，预留更细分组）。判定必须用 `==` 对比具名常量 `SEP_COMBINED` / `SEP_PER_TYPE`，**严禁 `>=`**：`0`(SEP_COMBINED) → 各类共享一个计数器（combined，组键 = `前缀`）；`1`(SEP_PER_TYPE) → 每类（定理/定义/引理/…）独立计数器（per-type，组键 = `前缀:类型`）；`2+` 预留（更细分组），**当前未定义**——`from_dict` 拒绝未知值并回退 `SEP_COMBINED` + 报警，新增类别时必须显式写分支，绝不静默继承 per-type 行为。
+- `ordinal`：**分组对象数组** `List[GroupConfig]`，每个元素 `{type, name, depth, scope}`（见 `lib/config.py` 的 `GroupConfig`）。`type` 为编号风格码（`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)，`7`=Fraleigh）；数组首元素 `type` 即 `primary_type`。`name` 为该组标签词（如 `["Theorem"]`，兜底组 `["uncat"]`）；`depth` 为编号层级数（由 `ORDINAL_DEPTH[type]` 推导，如 `4.11-5` 在 `type=3` 下为 3 级）；`group_for_label(label)` 把标签映射到其 group，匹配不到的回落 uncat 组。
+- `scope`（**per-group，非顶层字段**）：末级序号的重置/连续性边界（`1`=book 全书 | `2`=chapter 章内 | `3`=section 节内）。`GroupConfig.group_prefix_len()` 取 `sp={1:0,2:1,3:2}[scope]` 并钳到 `min(sp, depth-1)`；错配不会崩溃。
+- 分组粒度（per-type vs combined）**不再有 `separate_types` 开关**：用多个具名 group（如 `Theorem`/`Lemma`/`Definition` 各一个）→ 每类独立计数器（旧 per-type / `SEP_PER_TYPE`）；单个 `uncat` group → 各类共享一个计数器（旧 combined / `SEP_COMBINED`）。`SEP_COMBINED`/`SEP_PER_TYPE` 常量已在 v2 移除。
 - `strict`：`True`（默认）→ md 内部缺口成为 BLOCKING（不允许遗漏）；`False` → 降级为 `b_gap_warnings`。
 - `ignore`：已核对确为书本身稀疏编号（非遗漏）或 OCR 噪声的条目 token 列表（合并了旧 `known_gaps`+`ignore_keys`+`ignore_fig`），如 `["Theorem 12.3","Lemma 2.5"]`。`strict` 下这些被抑制，不误报 FAIL；其余缺口仍硬阻断。填表前须对照源 PDF 核实。
 
@@ -56,7 +56,7 @@ ignored_hit
 ## 实现（`verify/layers/b_layer.py`）
 - `code = 'B'`，`order = 3`，`auto_fixable = False`。
 - 数据源：`ctx.extraction_blocking`（EXTRACT 阶段填）+ MD 侧 `_md_gap_blocking` 结果 + 源 `ctx.items`（尾部校验）。
-- 编号配置由 `lib.config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层与提取层都读 `ctx.config`，**不再各自读文件**（旧的 `load_for_md` 文件 IO 已删除）。编号级数由整数 `ordinal` 决定（见 `lib/config.py` 的 `ORDINAL_DEPTH`），JSON 里可不写。
+- 编号配置由 `lib.config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层与提取层都读 `ctx.config`，**不再各自读文件**（旧的 `load_for_md` 文件 IO 已删除）。分组由 `ordinal` 数组各 group 的 `type`/`depth`/`scope` 决定（见 `lib/config.py` 的 `GroupConfig` / `ORDINAL_DEPTH`），JSON 里 `ordinal` 必填为数组。
 - `BLayer.run`：
   1. `ignored_hit` **第二段** suppression：遍历 `blocking`，若某条引用键全部 ∈ `ignore_keys`，把 `bkeys` 并入 `ctx.ignored_hit` 并从 `blocking` 剔除（最终 `ignored_hit` 由 B 回写，覆盖 EXTRACT 的 stage1）。
   2. 算 MD 侧 `_md_gap_blocking` -> `(md_blocking, md_warnings, present_md, md_tail)`。

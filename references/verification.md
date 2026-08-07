@@ -122,18 +122,18 @@ DEFAULT_RESULT: Dict[str, Any]   # 模块级常量：为每一个 legacy 键注�
 
 ```python
 @dataclass
-class BookConfig:                       # lib/config.py；取代旧 ManagerConfig
-    ordinal: int = 3                   # 编号模式整数编码（见 ORDINAL_* 常量）
-    language: str = 'cn'
-    scope: str = 'chapter'
-    separate_types: int = 0
+class BookConfig:                       # lib/config.py；取代旧 ManagerConfig + BNumberingConfig
+    ordinal: List[GroupConfig] = field(default_factory=lambda: [GroupConfig()])  # v2 分组数组（唯一分组选择器）
+    language: str = 'cn'                # cn / en（可由 primary_type 反推）
     strict: bool = True
-    ignore: List[str] = field(default_factory=list)
-    manual: Optional[str] = None
-    @classmethod
-    def load_book_config(cls, book_dir: str) -> "BookConfig":
-        """读 <book>/_extract/verify_config.json（回退 <book>/verify_config.json），
-        经 ConfigLoader 解析出 ordinal / ignore / strict 等字段。"""
+    ignore: List[str] = field(default_factory=list)        # 统一抑制集（合并旧 known_gaps+ignore_keys+ignore_fig）
+    manual: Optional[str] = None        # 提取覆盖 JSON 路径
+    section_types: List[int] = field(default_factory=list)   # D 层嵌套小节层级 role code，缺省由 primary_type 反推
+    section_depths: List[int] = field(default_factory=list)  # D 层嵌套层级数值分量，缺省同 section_types
+    # --- 关键属性/方法 ---
+    # primary_type  = ordinal[0].type（数组首元素 type，编号风格码 1..7）
+    # primary_group / uncat_group() / group_for_label(label) / default_depth / has_style(*codes)
+    # 旧整型 ordinal / separate_types 已由 from_dict 拒绝（报 make_config --force 提示）
 
 class VerifyManager:
     def verify_one(self, ch, start, end, md_file, ext_dir) -> Dict[str, Any]: ...
@@ -329,8 +329,8 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 - 例：按节各自重编（`> **例1**：`）
 
 ### 启用方式
-- **首选**：在每本书唯一的 `<book>/_extract/verify_config.json` 设 `"ordinal": 2`（两级书；三级书默认 `3`，EN 书 `4`，详见 `lib/config.py` 的 `ORDINAL_*` 常量），与 `ignore` / `strict` 等字段同一份文件，由 `ConfigLoader` 统一读取。
-- 编号模式现已统一定义在 `verify_config.json` 的 `ordinal` 整数里；旧 `chapter_map.json` 的 `"scheme"` 字段与任何 `--scheme` CLI 覆盖**均已废弃、不再被读取**。
+- **首选**：在每本书唯一的 `<book>/_extract/verify_config.json` 设 `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`（两级书；三级书默认 `type=3`，EN 书 `type=4`，详见 `lib/config.py` 的 `ORDINAL_*` 常量），与 `ignore` / `strict` 等字段同一份文件，由 `ConfigLoader` 统一读取。`ordinal` 必须是分组对象数组。
+- 编号模式现已统一定义在 `verify_config.json` 的 `ordinal` 数组（`ordinal[0].type`）里；旧 `chapter_map.json` 的 `"scheme"` 字段与任何 `--scheme` CLI 覆盖**均已废弃、不再被读取**。
 
 ### 判定与处理
 详见 `references/book_patterns.md`（含 OCR 对 `§` 漏识为 `S`/`8` 的现象、`--ignore` 噪声键登记规范、判定树）。遇到新书先对照判定树确定 `ordinal`（编号模式）。
@@ -339,16 +339,16 @@ python verify/verify_chapter.py --all <extract_dir> <book_dir> \
 
 ### 6.x 小节层级配置（section_types / section_depths）
 
-> 🔴 **强制书级配置（规则 H）**：`verify_config.json` 是每本书的强制配置文件，是 `verify` 的**硬性前置**（规则见 `SKILL.md` 规则 H 与 `references/book_patterns.md` §6）。🔴 **配置的生成时机在「源语言全部初稿完成后」**（规则 E 阶段 2），依据**源语言版** `.md` 生成（`verify/make_config.py` 或人工填写），**翻译派生版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（此时 `scan_skeleton` 遇文件缺失仅 WARNING + 默认 ordinal=3），但**任何 `verify` 跑起来前配置必须完整**。`verify_chapter.py` 与 `scan_skeleton.py` 入口均经 `ConfigLoader.require_complete()` 校验其完整性：**文件存在但缺 `ordinal` → 报 `[CONFIG]` 错误并 exit 2**；**文件缺失仅 WARNING 并沿用默认 ordinal=3**（存量书兼容，不阻断）。`section_types` / `section_depths` 仅在本书小节层级深于 `ordinal` 默认反推时显式声明（如四级子小节书 `1.1.1.1` 需写 `[1,2,3,4]`），且一旦显式给出就必须合法（等长 / 各分量 ≥1 / 角色码 ∈ {1,2,3,4} / `depths[0]==1`），否则同样报 `[CONFIG]` 硬错误。
+> 🔴 **强制书级配置（规则 H）**：`verify_config.json` 是每本书的强制配置文件，是 `verify` 的**硬性前置**（规则见 `SKILL.md` 规则 H 与 `references/book_patterns.md` §6）。🔴 **配置的生成时机在「源语言全部初稿完成后」**（规则 E 阶段 2），依据**源语言版** `.md` 生成（`verify/make_config.py` 或人工填写），**翻译派生版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（此时 `scan_skeleton` 遇文件缺失仅 WARNING + 默认 ordinal=3），但**任何 `verify` 跑起来前配置必须完整**。`verify_chapter.py` 与 `scan_skeleton.py` 入口均经 `ConfigLoader.require_complete()` 校验其完整性：**文件存在但缺 `ordinal` → 报 `[CONFIG]` 错误并 exit 2**；**文件缺失仅 WARNING 并沿用默认 ordinal=3**（存量书兼容，不阻断）。`section_types` / `section_depths` 仅在本书小节层级深于 `primary_type`（`ordinal` 数组首元素 type）默认反推时显式声明（如四级子小节书 `1.1.1.1` 需写 `[1,2,3,4]`），且一旦显式给出就必须合法（等长 / 各分量 ≥1 / 角色码 ∈ {1,2,3,4} / `depths[0]==1`），否则同样报 `[CONFIG]` 硬错误。
 
 D 层（§1 注册表第 1 行）默认按书号模式校验「整节缺失」，但不同书的**小节嵌套深度**不同。为支持任意小节层级（1–4 级：章 / 节 / 小节 / 子小节），`verify_config.json` 新增两个可选字段：
 
 - `section_types`（List[int]）：每一层级承担的角色码（`SECTION_ROLE_*`：1=章 / 2=节 / 3=小节 / 4=子小节）。
 - `section_depths`（List[int]）：每一层级对应的**编号分量数**，必须与 `section_types` 等长、且首个分量恒为 1（章首分量）。
 
-**向后兼容**：两字段均可省略。省略时按 `ordinal` 反推（见下表）。仅当某书的小节层级与默认不符（如 4 级子小节书）才需在 `verify_config.json` 显式声明。
+**向后兼容**：两字段均可省略。省略时按 `primary_type`（`ordinal` 数组首元素 `type`）反推（见下表）。仅当某书的小节层级与默认不符（如 4 级子小节书）才需在 `verify_config.json` 显式声明。
 
-| `ordinal` | 名称 | 默认 `section_types` | 默认 `section_depths` | D 层校验层级 |
+| `type` (primary_type) | 名称 | 默认 `section_types` | 默认 `section_depths` | D 层校验层级 |
 |---|---|---|---|---|
 | 1 | single | `[1]` | `[1]` | 仅章 |
 | 2 | two_level | `[1, 2]` | `[1, 2]` | 章 + 节 |
@@ -358,13 +358,13 @@ D 层（§1 注册表第 1 行）默认按书号模式校验「整节缺失」�
 | 6 | gm | `[1, 2]` | `[1, 2]` | 章 + 节（章内本地，无 `levels`） |
 | 7 | fraleigh | `[1, 2]` | `[1, 2]` | 章 + 节 |
 
-> ⚠️ **回归风险**：`ordinal` = 3 或 5 的书现在会**首次真正校验 1.1.1 小节层级**（旧 `D_MD_NESTED_SEC_RE` 是死代码，从未生效）。此前已 PASS 的语料可能因新增的小节连续性/尾节 finding 而转变为 FAIL，需对三级书语料重新跑 `verify` 回归。
+> ⚠️ **回归风险**：`primary_type` = 3 或 5 的书（即 `ordinal` 数组首元素 `type`）现在会**首次真正校验 1.1.1 小节层级**（旧 `D_MD_NESTED_SEC_RE` 是死代码，从未生效）。此前已 PASS 的语料可能因新增的小节连续性/尾节 finding 而转变为 FAIL，需对三级书语料重新跑 `verify` 回归。
 
 `verify_config.json` 样例（显式声明三级小节层级）：
 
 ```json
 {
-  "ordinal": 3,
+  "ordinal": [{"type":3,"name":["uncat"],"depth":3,"scope":3}],
   "language": "cn",
   "ignore": [],
   "strict": true,
@@ -397,5 +397,5 @@ D 层（§1 注册表第 1 行）默认按书号模式校验「整节缺失」�
 ## 8. 遗漏标签处理策略（OCR 无法识别）
 
 书中确有、但 OCR 未识别其标题的重要概念（定义/定理/引理/推论/命题），导致总结缺失该条目时的标准流程 —— **两步法（Step 1 调参/归一化尝试识别 → Step 2 凭知识库补写 + 标 `（OCR无法识别）` + 登记 `manual_overrides_ch{N}.json`）**、B 层的两项查漏（整类首项缺失 / over-mark 守卫）、序列缺口兜底，详见 [`missing_label_policy.md`](missing_label_policy.md)（SSOT）。该策略无新字节契约键，复用 B 层 `blocking` / `warnings`。
-- **B 层宗旨与缺号检测权威逻辑见 [`layers/b.md`](layers/b.md)**（SSOT）：MD 侧首项检验 / 连续性为权威，提取侧序列缺口 / 尾部校验为辅助，OCR 误报经 MD 存在性过滤后抑制；分组按 `verify_config.json` 的 `separate_types`（具名常量 `SEP_COMBINED`/`SEP_PER_TYPE`，**用 `==` 判定、禁用 `>=`**）：`0`=combined 各类共享计数器 / `1`=per-type 每类独立计数器）。
+- **B 层宗旨与缺号检测权威逻辑见 [`layers/b.md`](layers/b.md)**（SSOT）：MD 侧首项检验 / 连续性为权威，提取侧序列缺口 / 尾部校验为辅助，OCR 误报经 MD 存在性过滤后抑制；分组按 `verify_config.json` 的 `ordinal` 数组（v2）：每个具名 group（如 `{"type":4,"name":["Theorem"]}`）独立计数（即旧 per-type / `SEP_PER_TYPE`），单个 `uncat` group（如 `{"type":4,"name":["uncat"]}`）共享一个计数器（即旧 combined / `SEP_COMBINED`）。`SEP_COMBINED`/`SEP_PER_TYPE` 常量已在 v2 重构中移除，分组现完全由 `ordinal` 数组表达。
 

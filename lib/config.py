@@ -6,13 +6,15 @@ This module replaces the old `ManagerConfig` (verify/registry.py) +
 through a `ConfigLoader` instance (constructed ONCE per run), never by
 re-reading files or by receiving config field-by-field through a context object.
 
-Config schema (per the 2026-08-06 refactor decision):
+Config schema (per the verify_config_schema_v2 refactor):
 
-  * `ordinal` is the ONE numbering-style selector, encoded as a single INTEGER
-    (see the ORDINAL_* constants below).  It ABSORBS the old `levels` numeric
-    depth (1/2/3) AND the old `scheme` family (single/two_level/three_level/
-    en/gm/roman/fraleigh) into one field.  The old `scheme` field is GONE —
-    it is no longer read.  Values (integer codes):
+  * `ordinal` is a LIST of `GroupConfig` — each group is a set of entry labels
+    (定理/定义/练习/Example/...) that share ONE merged counter.  This replaces
+    the old single-integer `ordinal` + `separate_types` (SEP_COMBINED/
+    SEP_PER_TYPE) switch: different groups NEVER merge, an unmatched label
+    falls into the `uncat` fallback group.  Group fields: `type` (ORDINAL_* 1..7),
+    `name` (label categories), `depth` (numeric components), `scope` (1 book /
+    2 chapter / 3 section — the counter reset boundary).  Values for `type`:
         1 single | 2 two_level(CN) | 3 three_level(CN, default)
         4 en (EN two-level) | 5 roman | 6 gm | 7 fraleigh
   * `language` (cn/en) is an orthogonal axis, defaulted from `ordinal`.
@@ -39,12 +41,12 @@ class ConfigError(Exception):
     """
 
 
-# --- separation modes for `separate_types` ---------------------------------
-# ALWAYS compare with `==` against these NAMED constants — never `>=`.
-# A greater number must NOT silently inherit the per-type behaviour; each new
-# mode MUST get its own explicit branch.
-SEP_COMBINED = 0   # 0: all entry types share ONE counter per scope
-SEP_PER_TYPE = 1   # 1: each entry type (Thm/Lem/Def/Ex/...) its own counter
+# --- grouping scope (per GroupConfig) --------------------------------------
+# Replaces the old SEP_COMBINED / SEP_PER_TYPE `separate_types` switch.  Each
+# GroupConfig now carries its own `scope` (the counter reset boundary), so a
+# book can mix e.g. a depth-3 theorem group (chapter scope) with a depth-2
+# exercise group (chapter scope) without a global binary toggle.
+SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 
 # --- ordinal style codes (single integer selector) -------------------------
 # ONE integer encodes BOTH the numbering depth and the structural style.
@@ -58,18 +60,19 @@ ORDINAL_EN = 4             # EN two-level (N.M, chapter-first; rich EN labels)
 ORDINAL_ROMAN = 5          # three-level with ROMAN chapter (e.g. I.2.3)
 ORDINAL_GM = 6             # two-level, bare per-section ordinals (no chapter)
 ORDINAL_FRALEIGH = 7       # two-level, section-based numbering (no chapter)
+ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 7)
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 7, 8)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
     4: 'en', 5: 'roman', 6: 'gm', 7: 'fraleigh',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3}
 # Structural style per ordinal code (None = common depth-driven parsing).
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 7: 'fraleigh'}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 7: 'en'}
+ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 7: 'en', 8: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -96,12 +99,86 @@ SECTION_ROLE_CODES = (1, 2, 3, 4)
 #   * ordinal 1 is single-level (chapter only).
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
-    5: [1, 2, 3], 6: [1, 2], 7: [1, 2],
+    5: [1, 2, 3], 6: [1, 2], 7: [1, 2], 8: [1, 2, 3],
 }
 
 
+@dataclass
+class GroupConfig:
+    """One numbering group: a set of entry labels sharing ONE merged counter.
+
+    Replaces the old `separate_types` (SEP_COMBINED/SEP_PER_TYPE) switch.  Items
+    whose label matches `name` share a counter; different groups NEVER merge; an
+    item whose label matches no group falls into the `uncat` fallback group.
+    """
+    type: int = ORDINAL_THREE_LEVEL          # ORDINAL_* style code (1..7)
+    name: List[str] = field(default_factory=lambda: ["uncat"])  # label categories
+    depth: int = 3                           # numeric components of an item key
+    scope: int = SCOPE_CHAPTER               # 1=book / 2=chapter / 3=section
+
+    @property
+    def is_uncat(self) -> bool:
+        return "uncat" in self.name
+
+    def group_prefix_len(self) -> int:
+        """Number of leading numeric components that form the counter's
+        reset-prefix (e.g. chapter for scope=chapter).  Mirrors the old
+        BookConfig.group_prefix_len() but computed per-group."""
+        sp = {SCOPE_BOOK: 0, SCOPE_CHAPTER: 1, SCOPE_SECTION: 2}.get(self.scope, 1)
+        return min(sp, max(0, self.depth - 1))
+
+
+# --- label canonicalization (shared by config + key_parse) ---------------
+# Maps a raw label (CN or EN, any case) to a canonical Chinese label so that
+# `group_for_label` can match group `name` entries against item labels across
+# languages.  This is the SINGLE SOURCE OF TRUTH — key_parse imports it from
+# here (lib/ stays import-clean; key_parse depends on lib, never the reverse).
+_LABEL_CANON = {
+    'Definition': '定义', '定理': '定理', '定义': '定义',
+    'Theorem': '定理',
+    'Lemma': '引理', '引理': '引理',
+    'Corollary': '推论', '推论': '推论',
+    'Proposition': '命题', '命题': '命题',
+    'Example': '练习', '例': '例', '示例': '例',
+    'Remark': '评注', '评注': '评注', '注释': '评注', '注': '评注', '注记': '评注',
+    'Commentary': '评注',
+    'Axiom': '公理', '公理': '公理',
+    'Assertion': '断言', '断言': '断言',
+    'Conjecture': '猜想', '猜想': '猜想',
+    'Condition': '条件', '条件': '条件',
+    'Assumption': '假设', '假设': '假设', '假定': '假设',
+    'Algorithm': '算法', '算法': '算法',
+    # exercise-family labels all canonize to 练习 so group.name
+    # ["练习","习题","Example"] matches any of them.
+    'Exercise': '练习', '习题': '练习',
+}
+
+EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
+                  'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
+                  'Assumption', 'Algorithm', 'Commentary']
+
+
+def _canon_label(lbl):
+    """Canonicalize a raw item label (CN/EN, any case) to a stable Chinese label."""
+    if not lbl:
+        return lbl
+    if lbl in _LABEL_CANON:
+        return _LABEL_CANON[lbl]
+    low = lbl.lower()
+    if low in ('cor.', 'def.'):
+        low = {'cor.': 'corollary', 'def.': 'definition'}[low]
+    if low.endswith('s') and len(low) > 1 and low[:-1] in (k.lower() for k in EN_LABEL_KINDS):
+        low = low[:-1]
+    for k in EN_LABEL_KINDS:
+        if k.lower() == low:
+            return _LABEL_CANON.get(k, lbl)
+    return lbl
+
+
 def ordinal_depth(ordinal: int) -> int:
-    """Numeric component count for an ordinal code (old `levels` value)."""
+    """@deprecated: numeric component count for an ordinal code.  Depth is now
+    per-group (GroupConfig.depth); this helper only survives for make_config's
+    default.  Do NOT add new callers."""
     return ORDINAL_DEPTH.get(int(ordinal), 3)
 
 
@@ -158,10 +235,11 @@ class BookConfig:
     plain data; the only IO happens inside `ConfigLoader`.
 
     Schema:
-      * `ordinal` (int) — the ONE numbering-style selector.  Encodes both the
-        depth (1/2/3) and the structural style (cn/en/roman/gm/fraleigh) as a
-        single integer code (see ORDINAL_* constants).  The old `levels`
-        (numeric depth) and `scheme` (family) fields are GONE — folded in here.
+      * `ordinal` (List[GroupConfig]) — the ONE grouping selector.  Each group
+        encodes a numbering style (`type`), the label categories it covers
+        (`name`), the key depth (`depth`) and the counter reset scope (`scope`).
+        This replaces the old single integer + `separate_types` switch.  See
+        GroupConfig and references/verify_config_schema_v2_design.md.
       * `language` (cn/en) is an orthogonal axis, defaulted from `ordinal`.
       * `ignore` is ONE unified list merging the old `known_gaps` +
         `ignore_keys` + `ignore_fig` semantics.
@@ -170,14 +248,12 @@ class BookConfig:
       * `disable` is GONE — every layer always runs; suppression is via
         `ignore` + the warning gate.
     """
-    ordinal: int = ORDINAL_THREE_LEVEL
+    ordinal: List[GroupConfig] = field(default_factory=lambda: [GroupConfig()])
     language: str = 'cn'
-    scope: str = 'chapter'
-    separate_types: int = SEP_PER_TYPE
     strict: bool = True
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
-    # --- nested section hierarchy (D-layer) -----------------------------------
+    # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
     # `section_types`  : role code per level   (e.g. [1, 2, 3] = chapter/section/subsection)
     # `section_depths`: numeric component count per level (parallel to section_types;
     #                   always starts at 1 so level 1 is the chapter prefix).
@@ -186,24 +262,53 @@ class BookConfig:
     section_types: List[int] = field(default_factory=list)
     section_depths: List[int] = field(default_factory=list)
 
-    # --- derived helpers (kept as methods so grouping logic stays config-side) ---
+    # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
-    def depth(self) -> int:
-        return ORDINAL_DEPTH.get(self.ordinal, 3)
+    def primary_group(self) -> 'GroupConfig':
+        """First non-uncat group; falls back to [0] if all are uncat."""
+        for g in self.ordinal:
+            if not g.is_uncat:
+                return g
+        return self.ordinal[0]
+
+    @property
+    def primary_type(self) -> int:
+        return self.primary_group.type
+
+    @property
+    def default_depth(self) -> int:
+        return max(g.depth for g in self.ordinal)
+
+    def uncat_group(self) -> 'GroupConfig':
+        return next((g for g in self.ordinal if g.is_uncat), self.ordinal[0])
+
+    def has_style(self, *codes: int) -> bool:
+        return any(g.type in codes for g in self.ordinal)
+
+    def group_for_label(self, label: str) -> 'GroupConfig':
+        """Return the group whose `name` matches `label` (CN/EN, any case).
+
+        Uses `_canon_label` so bilingual labels align (定理↔Theorem,
+        练习↔Exercise).  Unknown labels fall back to the uncat group."""
+        if not label:
+            return self.uncat_group()
+        canon = _canon_label(label)
+        for g in self.ordinal:
+            if g.is_uncat:
+                continue
+            for nm in g.name:
+                if _canon_label(nm) == canon:
+                    return g
+        return self.uncat_group()
 
     @property
     def structure(self) -> Optional[str]:
-        # Internal derived helper (NOT a config field) — selects the structural
-        # variant parser for roman/gm/fraleigh. Common books return None.
-        return ORDINAL_STRUCTURE.get(self.ordinal)
+        # Driven by the primary group's style code (common books -> None).
+        return ORDINAL_STRUCTURE.get(self.primary_type)
 
     @property
     def family(self) -> str:
         return self.structure or ('en' if self.language == 'en' else 'cn')
-
-    def group_prefix_len(self) -> int:
-        sp = {'book': 0, 'chapter': 1, 'section': 2}.get(self.scope, 1)
-        return min(sp, max(0, self.depth - 1))
 
     # --- nested section-hierarchy helpers (D-layer) --------------------------
     # NOTE: `max_level` / `section_depth` / `section_role` are ORTHOGONAL to the
@@ -227,52 +332,48 @@ class BookConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BookConfig':
-        import warnings
         if not isinstance(data, dict):
             data = {}
 
-        # --- ordinal: single integer selector (depth + structural style) ---
-        # The old `scheme` field is NO LONGER READ.  The old `levels` (numeric
-        # depth 1/2/3) is accepted as a graceful fallback (maps directly to
-        # ordinal 1/2/3).  Legacy STRING ordinal values are mapped with a warning.
-        if 'ordinal' in data:
-            v = data['ordinal']
-            if isinstance(v, str):
-                ordinal = _LEGACY_ORDINAL_STR.get(v)
-                if ordinal is None:
-                    warnings.warn(
-                        f"verify_config: unknown ordinal string '{v}'; "
-                        f"falling back to {ORDINAL_THREE_LEVEL} (three_level).")
-                    ordinal = ORDINAL_THREE_LEVEL
-                else:
-                    warnings.warn(
-                        f"verify_config: numeric ordinal expected; "
-                        f"mapped string '{v}' -> {ordinal}.")
-            else:
-                ordinal = int(v)
-        elif 'levels' in data:
-            lv = int(data['levels'])
-            if lv not in (1, 2, 3):
-                warnings.warn(
-                    f"verify_config: levels={lv} out of range; "
-                    f"falling back to {ORDINAL_THREE_LEVEL}.")
-                lv = ORDINAL_THREE_LEVEL
-            ordinal = lv
+        # --- ordinal: MUST be a GroupConfig ARRAY (old int/str/levels REJECTED) ---
+        raw = data.get('ordinal')
+        if isinstance(raw, int):
+            raise ConfigError(
+                "[CONFIG] verify_config.json 仍使用旧版整型 ordinal，已废弃。"
+                "请重新运行：python verify/make_config.py --force <book>/_extract"
+                " 生成数组形式（见 references/verify_config_schema_v2_design.md）。")
+        if isinstance(raw, str):
+            raise ConfigError(
+                "[CONFIG] ordinal 必须是 GroupConfig 数组，字符串格式已废弃。")
+        if not isinstance(raw, list) or not raw:
+            # No ordinal / empty array -> default single uncat group (let
+            # require_complete() decide whether to hard-fail or use the default).
+            groups = [GroupConfig()]
         else:
-            ordinal = ORDINAL_THREE_LEVEL
-        if ordinal not in ORDINAL_CODES:
-            warnings.warn(
-                f"verify_config: unknown ordinal {ordinal}; "
-                f"falling back to {ORDINAL_THREE_LEVEL}.")
-            ordinal = ORDINAL_THREE_LEVEL
+            groups = []
+            for i, g in enumerate(raw):
+                if not isinstance(g, dict):
+                    raise ConfigError(f"[CONFIG] ordinal[{i}] 必须是对象（GroupConfig）")
+                t = int(g.get('type', ORDINAL_THREE_LEVEL))
+                if t not in ORDINAL_CODES:
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 1..7）")
+                nm = g.get('name') or ["uncat"]
+                if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
+                dp = int(g.get('depth', ORDINAL_DEPTH.get(t, 3)))
+                if dp < 1:
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].depth={dp} 必须 >=1")
+                sc = int(g.get('scope', SCOPE_CHAPTER))
+                if sc not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].scope={sc} 非法（应 1/2/3）")
+                groups.append(GroupConfig(type=t, name=list(nm), depth=dp, scope=sc))
 
-        # --- nested section hierarchy (D-layer) -------------------------------
+        rep = groups[0].type
+
+        # --- nested section hierarchy (D-layer, orthogonal) --------------------
         # Backward compatible: when `section_types` is absent, derive it from the
-        # ordinal via ORDINAL_SECTION_TYPES. `section_depths` defaults to a copy
-        # of `section_types` (role code == component count) unless explicitly
-        # given with the same length and all entries >= 1. Level 1 (chapter) must
-        # always have depth 1.
-        st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(ordinal, [1])
+        # primary group's type via ORDINAL_SECTION_TYPES.
+        st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(rep, [1])
         st = [int(x) for x in st if int(x) in SECTION_ROLE_CODES] or [1]
         sd = data.get('section_depths')
         if sd:
@@ -284,8 +385,8 @@ class BookConfig:
         if sd[0] != 1:
             sd[0] = 1
 
-        # --- language (orthogonal; default derived from ordinal) ---
-        language = str(data.get('language', ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')))
+        # --- language (orthogonal; default derived from primary type) ---
+        language = str(data.get('language', ORDINAL_LANGUAGE_DEFAULT.get(rep, 'cn')))
 
         # --- ignore: merge known_gaps + ignore_keys + ignore_fig into ONE set ---
         ignore: List[str] = list(data.get('ignore', []) or [])
@@ -303,20 +404,9 @@ class BookConfig:
         # --- manual path (manual_path legacy alias) ---
         manual = data.get('manual', data.get('manual_path'))
 
-        # --- separation mode (named constants, never `>=`) ---
-        sep = int(data.get('separate_types', SEP_PER_TYPE))
-        if sep not in (SEP_COMBINED, SEP_PER_TYPE):
-            warnings.warn(
-                f"BookConfig: unknown separate_types={sep!r}; "
-                f"falling back to SEP_COMBINED (0). Add an explicit branch "
-                f"for this mode in b_layer.py (grouping + _group_key).")
-            sep = SEP_COMBINED
-
         return cls(
-            ordinal=ordinal,
+            ordinal=groups,
             language=language,
-            scope=str(data.get('scope', 'chapter')),
-            separate_types=sep,
             strict=bool(data.get('strict', True)),
             ignore=ignore,
             manual=manual,
@@ -371,13 +461,15 @@ class ConfigLoader:
                     data = {}
                 break
         # Record WHICH candidate (if any) was actually loaded, plus whether the
-        # raw data explicitly declared an ordinal (the old `levels` count counts
-        # as an ordinal declaration). `require_complete()` needs these to tell
-        # "file present but no ordinal" (hard error) from "file absent"
-        # (warning + default) — `BookConfig.from_dict` silently defaults ordinal
-        # to 3, so we cannot infer absence from the resolved value alone.
+        # raw data explicitly declared an `ordinal` ARRAY (the new required form).
+        # `require_complete()` needs this to tell "file present but no ordinal"
+        # (hard error) from "file absent" (warning + default) — `BookConfig.from_dict`
+        # silently defaults ordinal to a single uncat group, so we cannot infer
+        # absence from the resolved value alone.
         self.book_config_path = hit_path
-        self.book_config_has_ordinal = ('ordinal' in data) or ('levels' in data)
+        self.book_config_has_ordinal = (
+            isinstance(data.get('ordinal'), list) and len(data.get('ordinal')) > 0
+        )
         return BookConfig.from_dict(data)
 
     def require_complete(self, allow_absent: bool = True) -> None:
@@ -414,21 +506,31 @@ class ConfigLoader:
                 "请先创建 <book>/_extract/verify_config.json（至少含 ordinal）。"
             )
 
-        # --- ordinal present & legal (1..7) ---
-        # `from_dict` clamps an illegal ordinal to 3, so the `has_ordinal` flag is
-        # the reliable "was it declared" signal; the ORDINAL_CODES check is a
-        # defensive backstop for any future path that bypasses clamping.
+        # --- ordinal array present & every group legal (1..7) ---
+        # `from_dict` already rejects the old int/str/levels formats and appends a
+        # default uncat group, so `book_config_has_ordinal` (== "ordinal is a
+        # non-empty list") is the reliable "was it declared" signal.
         if not self.book_config_has_ordinal:
             raise ConfigError(
-                f"[CONFIG] {self.book_config_path} 未声明 ordinal"
-                f"（应在 1..7）。请显式填写，例如 {{\"ordinal\": 3}}。"
+                f"[CONFIG] {self.book_config_path} 未声明 ordinal 数组"
+                f"（应为 GroupConfig 数组，例如 "
+                f'[{{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}}]）。'
+                f" 旧版整型 ordinal 已废弃，请运行 "
+                f"python verify/make_config.py --force <book>/_extract 重新生成。"
             )
-        if cfg.ordinal not in ORDINAL_CODES:
-            raise ConfigError(
-                f"[CONFIG] {self.book_config_path} 未声明合法 ordinal"
-                f"（应在 1..7）。请显式填写，例如 {{\"ordinal\": 3}}。"
-            )
-
+        for gi, g in enumerate(cfg.ordinal):
+            if g.type not in ORDINAL_CODES:
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].type={g.type}"
+                    f" 非法（应 1..7）。")
+            if g.depth < 1:
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].depth={g.depth}"
+                    f" 必须 >=1。")
+            if g.scope not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
+                raise ConfigError(
+                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].scope={g.scope}"
+                    f" 非法（应 1/2/3）。")
         # --- section_types / section_depths (only when explicitly given) ---
         if cfg.section_types or cfg.section_depths:
             if len(cfg.section_types) != len(cfg.section_depths):

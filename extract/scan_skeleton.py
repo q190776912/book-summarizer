@@ -79,9 +79,18 @@ EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 # Map an integer `ordinal` (lib.config) to scan_skeleton's parsing mode.
 # Returns one of 'three-level' (default western 3-level), 'two-level'
 # (western/EN/GM/Fraleigh 2-level), or 'cn' (Chinese 3-level).
-def _mode_for_ordinal(ordinal):
+def _mode_for_ordinal(ordinal, language=None):
     o = int(ordinal)
     depth = ORDINAL_DEPTH.get(o, ORDINAL_THREE_LEVEL)
+    # Explicit book `language` (from verify_config.json) wins: a three-level
+    # EN book (e.g. Vakil, ordinal=8 / 3 + language=en) numbers western-style
+    # (number-first, N.S.item) and must use the `three-level` parser, NOT the
+    # `cn` parser (which expects Chinese labels like 定义1.4.1).
+    if language == 'en':
+        return 'three-level' if depth >= 3 else 'two-level'
+    if language == 'cn':
+        return 'cn'
+    # No explicit language: fall back to the type's default language.
     lang = ORDINAL_LANGUAGE_DEFAULT.get(o, 'cn')
     if lang == 'cn':
         return 'cn'
@@ -181,17 +190,18 @@ def main():
     # override. We reuse the same ConfigLoader gate as verify_chapter.py so the
     # mandatory book-config rule (H) is enforced consistently: file absent ->
     # warning + default ordinal=3 (back-compat); file present but no ordinal ->
-    # ConfigError (exit 2). Either way `loader.book.ordinal` is a valid default.
+    # ConfigError (exit 2). Either way `loader.book.primary_type` is a valid int
+    # default (the v2 `ordinal` is a List[GroupConfig]; primary_type is its int code).
     cfg_path = os.path.join(extract_dir, 'verify_config.json')
     try:
         loader = ConfigLoader(extract_dir,
                               os.path.dirname(extract_dir.rstrip('/')) or extract_dir)
         loader.require_complete()
-        ordinal = loader.book.ordinal
+        ordinal = loader.book.primary_type
     except ConfigError as e:
         print(e)
         return 2
-    mode = _mode_for_ordinal(ordinal)
+    mode = _mode_for_ordinal(ordinal, loader.book.language)
 
     cm_path = os.path.join(extract_dir, 'chapter_map.json')
     with open(cm_path, encoding='utf-8') as fh:

@@ -24,7 +24,7 @@
 把它们报成永远无法消除的 `TRULY MISSING`。
 
 ### 处理决策（已内置到 skill）
-- `extract/extract_items.py` 对两级书按 `ordinal` 路由（`<book>/_extract/verify_config.json` 设 `"ordinal": 2`）：直接按 `标签 章.号` 提取，
+- `extract/extract_items.py` 对两级书按 `ordinal` 路由（`<book>/_extract/verify_config.json` 设 `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`，即数组首元素 `type=2`）：直接按 `标签 章.号` 提取，
   产出 `定义1.1`、`定理1.1` 等键，**不再使用三级 N.S-N 正则**，从根本上杜绝幻影键（命令行亦可显式 `extract/extract_items.py 1 20 82 _extract --ordinal 2`）。
 - `verify/verify_chapter.py` 的 `keys_in_md` 同样支持两级：解析 `**定义1.1**：` 等 bold 键；
   编号模式由 `<book>/_extract/verify_config.json` 的 `ordinal` 决定，`--all` 时自动启用。
@@ -61,45 +61,47 @@ python extract/scan_items.py 1 20 82 _extract
 ## 3. 三级编号（默认，大多数书）
 
 `章.节-号`（N.S-N），例如 `1.1-2`、`3.2-7`。这是 `extract/extract_items.py` 的默认
-编号模式（`ordinal=3`，三级），`verify/verify_chapter.py` 也默认三级。绝大多数教材（含英文书）
-属此类，无需任何额外配置。
+编号模式（`ordinal` 数组首元素 `type=3`，三级），`verify/verify_chapter.py` 也默认三级。绝大多数教材（含英文书）
+属此类，无需任何额外配置。v2 下对应 `verify_config.json`：`{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":3}],"strict":true}`（`scope:3` = 节内重置；CN 三级书通常设 `scope:3`，**不要用 make_config 默认的 `scope:2`**）。
 
 ---
 
 ## 4. 判定树：遇到新书先看编号
 
-> 🔴 **`verify_config.json` 是校验的硬性前置（规则 H），但生成时机在「源语言全部初稿完成后」**：先写完**源语言**全部章节初稿（规则 E 阶段 1），再依据**源语言版** `.md` 生成 `<book>/_extract/verify_config.json`（至少含 `ordinal`），然后才批量校验（阶段 3）。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal` 会令 `verify_chapter.py` / `scan_skeleton.py` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写初稿阶段可继续，存量书兼容）。可用 `python verify/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在源语言初稿全部完成后批量进行。
+> 🔴 **`verify_config.json` 是校验的硬性前置（规则 H），但生成时机在「源语言全部初稿完成后」**：先写完**源语言**全部章节初稿（规则 E 阶段 1），再依据**源语言版** `.md` 生成 `<book>/_extract/verify_config.json`（至少含数组形式 `ordinal`，见 §6），然后才批量校验（阶段 3）。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal`（或 `ordinal` 非合法分组数组）会令 `verify_chapter.py` / `scan_skeleton.py` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写初稿阶段可继续，存量书兼容）。可用 `python verify/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在源语言初稿全部完成后批量进行。
 
 ```
-读 TOC / 抽一页原文，看编号长什么样？（判定树只用于确定 ordinal，配置在源语言初稿全部完成后统一生成）
+读 TOC / 抽一页原文，看编号长什么样？（判定树只用于确定 `ordinal` 数组的首元素 `type`，配置在源语言初稿全部完成后统一生成）
 │
 ├─ 编号形如  定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）
 │     → 两级 + 双计数器（周民强型）
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 2
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]
 │     → 批量校验后用 extract/scan_items.py 做连续性核验
 │
 ├─ 编号形如  1.1-2 / 3.2-7（三级 章.节-号）
 │     → 默认 three-level
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 3（默认可不写，但仍建议显式）
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":3,"name":["uncat"],"depth":3,"scope":3}]（默认可不写，默认即 type=3 单组，但仍建议显式）
 │
 ├─ 英文书编号形如  Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 4
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":4,"name":["uncat"],"depth":2,"scope":2}]
 │
 ├─ 罗马数字章号  I.2.3 / II.1.1 …（章号是 I/II/III…）
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 5
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":5,"name":["uncat"],"depth":3,"scope":3}]
 │
 ├─ Gelfand–Manin 风格  §2 标题 + 条目从 1 起号（gm，两级、章内本地）
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 6
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":6,"name":["uncat"],"depth":2,"scope":2}]
 │
 ├─ Fraleigh 风格  按节编号、无章号位（fraleigh，两级）
-│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": 7
+│     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":7,"name":["uncat"],"depth":2,"scope":2}]
 │
 └─ 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）
       → 几乎肯定是三级正则误吃公式/枚举
       → 先用 extract/scan_items.py 或人工核对确认真实条目齐全
-      → 若确为两级书：设 ordinal=2（两级）
+      → 若确为两级书：设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]（两级）
       → 若确为三级书但有几个真·OCR 噪点：用 --ignore 登记
         （写入 _extract/ignore_ch{N}.json，附 ignore_ch{N}.md 举证）
+
+> 💡 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 §6.1 与 `references/layers/b.md`）。
 ```
 
 ---
@@ -124,38 +126,39 @@ python extract/scan_items.py 1 20 82 _extract
 
 ## 6. 书级配置与小节层级（verify_config.json）
 
-> 🔴 **本规则由 SKILL.md「规则 H」强制前置**：`verify_config.json` 配置（ordinal / section_types / section_depths / language）由**源语言**内容派生，是 `verify` 的硬性前置。配置在**源语言全部初稿完成后**（规则 E 阶段 2）依据**源语言版** `.md` 生成，至少含 `ordinal`；**翻译版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（scan_skeleton 遇缺失仅告警 + 默认 ordinal=3），但任何 `verify` 跑起来前配置必须完整。
+> 🔴 **本规则由 SKILL.md「规则 H」强制前置**：`verify_config.json` 配置（`ordinal` 数组 / `language`；`section_types`/`section_depths` 由 primary_type 自动反推，仅四级子小节书显式覆盖）由**源语言**内容派生，是 `verify` 的硬性前置。配置在**源语言全部初稿完成后**（规则 E 阶段 2）依据**源语言版** `.md` 生成，至少含数组形式 `ordinal`；**翻译版不参与配置生成**。写初稿阶段（阶段 1）不要求配置就位（scan_skeleton 遇缺失仅告警 + 默认 ordinal=3），但任何 `verify` 跑起来前配置必须完整。
 
-### 6.1 `ordinal` —— 必填（1–7）
+### 6.1 `ordinal` —— 必填（分组对象数组 `List[GroupConfig]`）
 
-`ordinal` 是编号风格选择器（整数编码，见 `lib/config.py` 的 `ORDINAL_*` 常量）。它是**必填**字段；文件存在但缺 `ordinal` 会令 `verify_chapter.py` / `scan_skeleton.py` 直接报 `[CONFIG]` 错误并 exit 2。判定树（§4）每个分支都对应一个 `ordinal` 值：
+`ordinal` 是**分组对象数组**，每个元素 `{type, name, depth, scope}`（见 `lib/config.py` 的 `GroupConfig`）。它是**必填**字段；文件存在但缺 `ordinal` / `ordinal` 不是合法数组会令 `verify_chapter.py` / `scan_skeleton.py` 直接报 `[CONFIG]` 错误并 exit 2。数组首元素的 `type` 即 `primary_type`（编号风格码 1–7，判定树 §4 每个分支对应一个 `type` 值）。
+> ⚠️ **旧版整型 `ordinal`（如 `3`）或 `separate_types` 字段已被 `from_dict` 拒绝**，并报 `make_config --force` 迁移提示。分组（per-type / combined）现由多个具名 group（per-type）或单个 uncat group（combined）表达。
 
-| 编号形态 | `ordinal` | 说明 |
-|---|---|---|
-| 两级 + 双计数器（周民强型） | `2` | 定义1.1 / 定理1.1 共用连续号 |
-| 三级 章.节-号（默认） | `3` | 1.1-2 / 3.2-7 |
-| EN 两级（Theorem 1.2） | `4` | 无章号位 |
-| 罗马数字章号（I.2.3） | `5` | 章号为 I/II/III… |
-| gm（§2 + 章内本地号） | `6` | Gelfand–Manin 风格 |
-| fraleigh（按节编号） | `7` | 无章号位 |
+| 编号形态 | `type` (ordinal[0].type) | 说明 | 最简 `verify_config.json`（单组） |
+|---|---|---|---|
+| 两级 + 双计数器（周民强型） | `2` | 定义1.1 / 定理1.1 共用连续号 | `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}` |
+| 三级 章.节-号（默认） | `3` | 1.1-2 / 3.2-7 | `{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":3}]}` |
+| EN 两级（Theorem 1.2） | `4` | 无章号位 | `{"ordinal":[{"type":4,"name":["uncat"],"depth":2,"scope":2}]}` |
+| 罗马数字章号（I.2.3） | `5` | 章号为 I/II/III… | `{"ordinal":[{"type":5,"name":["uncat"],"depth":3,"scope":3}]}` |
+| gm（§2 + 章内本地号） | `6` | Gelfand–Manin 风格 | `{"ordinal":[{"type":6,"name":["uncat"],"depth":2,"scope":2}]}` |
+| fraleigh（按节编号） | `7` | 无章号位 | `{"ordinal":[{"type":7,"name":["uncat"],"depth":2,"scope":2}]}` |
 
-### 6.2 `section_types` / `section_depths` —— 仅四级（及更深）书显式声明
+### 6.2 `section_types` / `section_depths` —— 仅四级（及更深）书显式声明（D 层嵌套小节层级，与分组正交）
 
-绝大多数书**不需要**手写这两个字段：省略时由 `ordinal` 自动反推（见下表的「默认反推」），D 层据此校验小节层级连续性。`from_dict` 还会兜底清洗（长度不等 / 含 <1 / 含非法角色码 → 回退到反推值）。
+绝大多数书**不需要**手写这两个字段：省略时由 `ordinal` 数组首元素 `type`（即 `primary_type`）经 `ORDINAL_SECTION_TYPES` 自动反推（见下表的「默认反推」），D 层据此校验小节层级连续性。
 
-**只有在书的小节层级深于 `ordinal` 默认反推时**，才需在 `verify_config.json` 显式声明。典型例子：四级子小节书（编号形如 `1.1.1.1`），其 `ordinal=3`（三级默认反推只到 1.1.1），要校验到第四级必须手写：
+**只有在书的小节层级深于 `primary_type` 默认反推时**，才需在 `verify_config.json` 显式声明。典型例子：四级子小节书（编号形如 `1.1.1.1`），其 `type=3`（三级默认反推只到 1.1.1），要校验到第四级必须手写（注意 `ordinal` 仍是数组）：
 
 ```json
 {
-  "ordinal": 3,
+  "ordinal": [{"type":3,"name":["uncat"],"depth":3,"scope":3}],
   "section_types": [1, 2, 3, 4],
   "section_depths": [1, 2, 3, 4]
 }
 ```
 
-反推表（`ordinal` → 默认 `section_types` / `section_depths`，即 D 层默认校验层级）：
+反推表（`primary_type`（即 `ordinal` 数组首元素 `type`）→ 默认 `section_types` / `section_depths`，即 D 层默认校验层级）：
 
-| `ordinal` | 名称 | 默认 `section_types` | 默认 `section_depths` |
+| `type` (primary_type) | 名称 | 默认 `section_types` | 默认 `section_depths` |
 |---|---|---|---|
 | 1 | single | `[1]` | `[1]` |
 | 2 | two_level | `[1, 2]` | `[1, 2]` |

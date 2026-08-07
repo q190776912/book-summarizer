@@ -74,6 +74,18 @@ I_ITEM_EXAMPLE_RE = re.compile(
     r'^> \*\*(?:例|Example|\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example))'
 )
 
+# i_layer：编号在前体例（Kreyszig 等把编号印在标签前，如
+#   **4.2-1 汉恩-巴拿赫定理（…）** / **4.1-5 例（…）** / > **4.1-8 应用（…）**）。
+# 同时覆盖「顶层」与「块引用」两种位置（(?\:\s*>\s*)? 使 > 前缀可选）。
+# 标签可位于「编号+名称」之后（如「汉恩-巴拿赫定理」末字才是「定理」），故用 .*? 透传中间名称。
+# 证明思路/证明等内部块不含下列结构性标签，不会被误判为 item。
+I_ITEM_NUMFIRST_RE = re.compile(
+    r'^(?:\s*>\s*)?\*\*\d{1,3}(?:[.．\-]\d{1,3}){1,2}\s'
+    r'.*?'
+    r'(?:定义|定理|引理|推论|命题|断言|公理|应用|例|注|'
+    r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Example|Application|Remark)'
+)
+
 # g_layer._EX_RE。
 # 同时识别「编号在前」体例：> **N.M-K 例（…）**。
 G_EX_RE = re.compile(

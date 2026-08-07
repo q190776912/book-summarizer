@@ -1,16 +1,19 @@
 """Targeted regression tests for the D-layer "nested section hierarchy"
-feature (book-summarizer, 2026-08-06 incremental change).
+feature (book-summarizer, 2026-08-06 incremental change) — REWRITTEN for the
+verify_config v2 schema (GroupConfig ARRAY, not int `ordinal`).
 
 Covers:
-  * BookConfig.from_dict — back-compat ordinal inference, explicit 4-level
-    declaration, length-mismatch fallback, sd[0]!=1 forced to 1, illegal role
-    codes filtered, and the max_level / section_depth / section_role helpers.
+  * BookConfig.from_dict — back-compat section_types/section_depths inference
+    (now driven by the primary GroupConfig `type`, NOT an int `ordinal`);
+    explicit 4-level declaration; length-mismatch fallback; sd[0]!=1 forced to
+    1; illegal role codes filtered; and the max_level / section_depth /
+    section_role helpers.
   * d_layer._partition_sections_by_level — per-level continuity / tail split,
     merged list relative-to-chapter path strings, ancestor-prefix auto-existence.
   * d_layer.check_d_layer (end-to-end, synthetic md + raw page JSON) for 1/2/3/4
     level books — proves ordinal=3/5 three-level books verify 1.1.1 for the
     first time (no false positive) AND two-level books do NOT emit subsection
-    findings.
+    findings.  Configs are built as `BookConfig(ordinal=[GroupConfig(...)])`.
   * d_layer.check_d_layer_gm — returns a structure WITHOUT a 'levels' key
     (gm / roman path must not trigger the per-level report block).
   * report.print_result — the per-level block must NOT double-count problems.
@@ -19,6 +22,7 @@ No pytest dependency: runs under stdlib unittest
   python verify/tests/test_d_section_levels.py
 or
   python -m unittest verify.tests.test_d_section_levels -v
+(verify.tests is not a package in this repo, so prefer the direct-module form.)
 """
 import os
 import sys
@@ -33,7 +37,8 @@ if SKILL_ROOT not in sys.path:
     sys.path.insert(0, SKILL_ROOT)
 
 from lib.config import (
-    BookConfig, ORDINAL_SINGLE, ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
+    BookConfig, GroupConfig, ORDINAL_DEPTH, SCOPE_CHAPTER,
+    ORDINAL_SINGLE, ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
     ORDINAL_ROMAN, ORDINAL_GM, SECTION_ROLE_CHAPTER, SECTION_ROLE_SECTION,
     SECTION_ROLE_SUBSECTION, SECTION_ROLE_SUBSUBSECTION, SECTION_ROLE_CODES,
     ORDINAL_SECTION_TYPES,
@@ -70,38 +75,42 @@ def _sets(*levels):
 
 
 # ==========================================================================
-# 1) BookConfig.from_dict
+# 1) BookConfig.from_dict  (v2: ordinal is a GroupConfig ARRAY)
 # ==========================================================================
 class TestBookConfigFromDict(unittest.TestCase):
 
     def test_empty_dict_defaults_to_three_level(self):
         cfg = BookConfig.from_dict({})
-        self.assertEqual(cfg.ordinal, ORDINAL_THREE_LEVEL)
+        self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_3_infers_three_level(self):
-        cfg = BookConfig.from_dict({"ordinal": 3})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
+        self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_2_infers_two_level(self):
-        cfg = BookConfig.from_dict({"ordinal": 2})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 2, "depth": 2, "scope": 2}]})
+        self.assertEqual(cfg.primary_type, ORDINAL_TWO_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2])
         self.assertEqual(cfg.section_depths, [1, 2])
         self.assertEqual(cfg.max_level, 2)
 
     def test_ordinal_1_infers_single_level(self):
-        cfg = BookConfig.from_dict({"ordinal": 1})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 1, "depth": 1, "scope": 2}]})
+        self.assertEqual(cfg.primary_type, ORDINAL_SINGLE)
         self.assertEqual(cfg.section_types, [1])
         self.assertEqual(cfg.section_depths, [1])
         self.assertEqual(cfg.max_level, 1)
 
     def test_ordinal_5_roman_infers_three_level(self):
         # roman (ordinal=5) is a three-level book -> subsection level now live.
-        cfg = BookConfig.from_dict({"ordinal": 5})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 5, "depth": 3, "scope": 2}]})
+        self.assertEqual(cfg.primary_type, ORDINAL_ROMAN)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
         self.assertEqual(cfg.max_level, 3)
@@ -159,7 +168,9 @@ class TestBookConfigFromDict(unittest.TestCase):
 
     # -- helpers: max_level / section_depth / section_role --
     def test_helpers_on_three_level(self):
-        cfg = BookConfig.from_dict({"ordinal": 3})
+        cfg = BookConfig.from_dict(
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
+        self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.max_level, 3)
         self.assertEqual(cfg.section_depth(1), 1)
         self.assertEqual(cfg.section_depth(2), 2)
@@ -325,13 +336,22 @@ class TestPartitionByLevel(unittest.TestCase):
 class TestCheckDLayerE2E(unittest.TestCase):
     """Drive the full scan: read .md section headers + scan raw page JSON."""
 
-    def _case(self, ordinal, md_content, page_texts):
+    def _case(self, primary_type, md_content, page_texts,
+              section_types=None, section_depths=None):
         tmp = tempfile.mkdtemp(prefix="d_layer_e2e_")
         md = os.path.join(tmp, "ch.md")
         _write_md(md, md_content)
         ext = os.path.join(tmp, "_extract")
         _make_page(os.path.join(ext, "page_001.json"), page_texts)
-        cfg = BookConfig(ordinal=ordinal)
+        cfg = BookConfig(
+            ordinal=[GroupConfig(
+                type=primary_type,
+                depth=ORDINAL_DEPTH.get(primary_type, 3),
+                scope=SCOPE_CHAPTER,
+            )],
+            section_types=list(section_types or []),
+            section_depths=list(section_depths or []),
+        )
         return check_d_layer(1, 1, 1, md, ext, cfg=cfg), tmp
 
     def test_three_level_subsection_continuity_e2e(self):
@@ -366,29 +386,20 @@ class TestCheckDLayerE2E(unittest.TestCase):
         pages = ["§1.1.1.2 子小节二", "1.1.1.2 定义 子小节定义",
                  "§1.1.1.1 子小节一", "1.1.1.1 定义 已有",
                  "§1.1.1.3 子小节三", "1.1.1.3 定义 已有"]
-        cfg = BookConfig(ordinal=3, section_types=[1, 2, 3, 4],
-                         section_depths=[1, 2, 3, 4])
         tmp = tempfile.mkdtemp(prefix="d4_")
         md_path = os.path.join(tmp, "ch.md")
         _write_md(md_path, md)
         ext = os.path.join(tmp, "_extract")
         _make_page(os.path.join(ext, "page_001.json"), pages)
+        cfg = BookConfig(
+            ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL, depth=3,
+                                 scope=SCOPE_CHAPTER)],
+            section_types=[1, 2, 3, 4],
+            section_depths=[1, 2, 3, 4],
+        )
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertEqual(out["levels"][4]["continuity"], ["1.1.2"])
         self.assertEqual(out["continuity_sections"], ["1.1.2"])
-
-    def test_cfg_none_reconstructs_from_ordinal(self):
-        # Legacy call path: no cfg -> inferred from ordinal (three-level).
-        md = "# Chapter 1\n\n## §1\n\n### §1.1\n\n#### §1.1.1\n\n#### §1.1.3\n"
-        tmp = tempfile.mkdtemp(prefix="d_none_")
-        md_path = os.path.join(tmp, "ch.md")
-        _write_md(md_path, md)
-        ext = os.path.join(tmp, "_extract")
-        _make_page(os.path.join(ext, "page_001.json"),
-                   ["§1.1.2 小节", "1.1.2 定义 x"])
-        out = check_d_layer(1, 1, 1, md_path, ext)  # cfg=None
-        self.assertIn("levels", out)
-        self.assertEqual(out["levels"][3]["continuity"], ["1.2"])
 
 
 # ==========================================================================
@@ -413,7 +424,8 @@ class TestCheckDLayerGM(unittest.TestCase):
         md_path, ext, _ = self._gm_setup(
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=ORDINAL_GM)
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM, depth=2,
+                                             scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)
         self.assertIn("continuity_sections", out)
@@ -429,7 +441,8 @@ class TestCheckDLayerGM(unittest.TestCase):
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1},
                 {"sec": 2, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=ORDINAL_GM)
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM, depth=2,
+                                             scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)
         # gm path returns chapter-local INTEGER section numbers (legacy
@@ -444,7 +457,8 @@ class TestCheckDLayerGM(unittest.TestCase):
         md_path, ext, _ = self._gm_setup(
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=ORDINAL_ROMAN)
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_ROMAN, depth=3,
+                                             scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)
 

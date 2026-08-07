@@ -376,7 +376,7 @@ def _main_impl():
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
         print("  --fix: auto-correct G/H/I/J layer issues before verification")
-        print("  ordinal / language / scope / separate_types / strict / ignore / manual are")
+        print("  ordinal(数组) / language / strict / ignore / manual are")
         print("  configured in <book>/_extract/verify_config.json (see references/verification.md).")
         print("  ordinal / section_types / section_depths 必须在 <book>/_extract/verify_config.json")
         print("  显式配置（缺失 ordinal 将直接报错 exit 2；缺失文件仅警告并沿用默认 ordinal=3）。")

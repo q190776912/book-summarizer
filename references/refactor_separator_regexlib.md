@@ -2,7 +2,8 @@
 
 > 作者：Bob（架构师） · 类型：**重构（refactor）**，非新功能
 > 范围：`verify/key_parse.py`、`verify/layers/b_layer.py`、`verify/layers/extract_layer.py`、`extract/extract_items*.py`
-> 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `scope`/`separate_types`(`SEP_COMBINED=0`/`SEP_PER_TYPE=1`，判定用 `==`)/分组逻辑；保留 label-first / number-first 识别逻辑。
+> 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `scope`(现为 per-group `GroupConfig.scope`)/分组逻辑（现为 `ordinal` 数组的具名 group vs uncat group）；保留 label-first / number-first 识别逻辑。
+> ⚠️ **v2 重构更新**：本约束中「保留 `separate_types`(`SEP_COMBINED`/`SEP_PER_TYPE`)」已不适用——`separate_types` 与 `SEP_*` 常量已在 `ordinal` 数组化重构中移除，分组现由 `ordinal` 数组表达（见 L124 注记与 `references/verification.md` §4.3、`references/layers/b.md`）。
 > 注（最终落地与该约束的偏差）：本重构后期把 `levels` 吸收为 `ordinal` 整数编码（见 `lib/config.py` 的 `ORDINAL_*`），`known_gaps` 并入统一的 `ignore` 集合——二者均不再作为独立配置字段存在；`disable` 也已移除（层不再被跳过，噪声走 `ignore` 抑制）。
 
 ---
@@ -121,7 +122,7 @@ def normkey(s: str) -> str:
 - L485 `present_md` key、L526 `emit` 的 `full`、L306 尾部 `full`：**保持 `C.S-N` dash 形态不变**（耦合安全，见 §1.3.2）。可选：抽出 `md_item_key(prefix_str, item_num)` 助手统一三处构造，防未来漂移。
 - L501/529-530 `known = {_norm_sep(x)...}` / `_norm_sep(token)...` → 全部替换为 `canon_token_numeric(...)`（raw 与 canon-label 两种形态分别归一后比对，逻辑同现）。
 - L575/L595 `bkeys` 构造（`f"{sec}-{n}"` / `f"{sec}{n.strip()}"`）保持 dash 形式不变。
-- **严禁改动**：`SEP_COMBINED`/`SEP_PER_TYPE` 常量、`from_dict` 的 `==` 判定、`group_prefix_len`、label-first/number-first 分支、`_is_header_boundary`/`_after_label_boundary`（本轮不动，见 §4）。
+- **v2 重构更新**：`SEP_COMBINED`/`SEP_PER_TYPE` 常量已在 `ordinal` 数组化重构中**移除**，分组现由 `ordinal` 数组的多个具名 group（per-type）或单个 uncat group（combined）表达；本「严禁改动 SEP 常量」约束对旧常量已不再适用（见 `lib/config.py` 的 `GroupConfig` / `BookConfig.group_for_label` 与 `references/layers/b.md`）。其余仍应保留：`group_prefix_len`（现为 `GroupConfig.group_prefix_len`，per-group 计算）、label-first/number-first 分支、`_is_header_boundary`/`_after_label_boundary`（本轮不动，见 §4）。
 
 ### T04 — `verify/layers/extract_layer.py` 改造：通配匹配型正则  【P0，依赖 T01】
 - 顶部新增 `from verify.regexlib import SEP`（或 `SEP_TIGHT`）。

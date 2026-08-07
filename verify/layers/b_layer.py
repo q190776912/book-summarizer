@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from verify.layers.base import VerifyLayer, LayerResult
 from verify.key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
-from lib.config import SEP_COMBINED, SEP_PER_TYPE
 
 # Tail-check tolerance: source max minus md max beyond this is treated as a
 # likely OCR phantom / alien-numbering and collapses to ONE summary warning
@@ -71,8 +70,13 @@ def _numpath_regexes(levels):
     return exact, cap, label_first, num_first
 
 # Structural entry labels (Chinese + English).  These open a numbered item.
+# NOTE: extended forms (例子/例题/注记/评注) MUST precede their short stem
+# (例/注) so the regex matches the longest label first.  Otherwise a header
+# like "7.6-2 例子（…）" matches only "例" and the trailing Han char ("子")
+# is then treated as prose by _after_label_boundary and the entry is dropped
+# (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
-    r'定理|定义|引理|推论|命题|例|注|公理|问题|练习|习题|引例|附注'
+    r'定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
     r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Remark'
     r'|Exercise|Problem|Note|Axiom'
 )
@@ -82,7 +86,8 @@ _ENTRY_LABELS = (
 # written in English also suppress the CN (or any-language) counterpart.
 _LABEL_NORM = {
     '定理': 'Theorem', '定义': 'Definition', '引理': 'Lemma', '推论': 'Corollary',
-    '命题': 'Proposition', '例': 'Example', '注': 'Remark', '公理': 'Axiom',
+    '命题': 'Proposition', '例子': 'Example', '例题': 'Example', '例': 'Example',
+    '注记': 'Remark', '评注': 'Remark', '注': 'Remark', '公理': 'Axiom',
     '问题': 'Problem', '练习': 'Exercise', '习题': 'Exercise', '引例': 'Example',
     '附注': 'Remark',
 }
@@ -223,13 +228,16 @@ def _parse_entry(inner, levels):
     return None
 
 
-def _source_item_comps_label(it, levels):
-    """Map an extraction item (ctx.items, the source contract) to (comps, label)
-    using the SAME wildcard separator and `levels` as the MD parse, so source +
-    md groups align 1:1 for the tail check.
+def _source_item_comps_label(it, cfg):
+    """Map an extraction item (ctx.items, the source contract) to
+    (comps, label, group) using the SAME wildcard separator and the item's
+    OWN group depth (from cfg.group_for_label) — so source + md groups align
+    1:1 for the tail check regardless of which group the item belongs to.
 
-    * EN / two-level normalized keys carry the label inline:
-      '定理1.1' / 'Definition 1.1'  -> label-first parse.
+    `levels` is replaced by `cfg` so each item is parsed at its group's depth
+    (a two-level 练习 item is parsed at depth 2, a three-level 定理 at depth 3).
+    * EN / two-level normalized keys carry the label inline ('定理1.1' /
+      'Definition 1.1') -> label-first parse.
     * three-level keys are bare numpaths ('4.1-5') with the category in the
       separate `label` field -> use it['label'].
     * gm / roman keys (chapter is a roman numeral) cannot be split by the
@@ -240,16 +248,17 @@ def _source_item_comps_label(it, levels):
     key = (it.get('key') or '').strip()
     if not key:
         return None
-    _exact, _cap, re_label_first, _nf = _numpath_regexes(levels)
+    lab = it.get('label')
+    g = cfg.group_for_label(lab) if lab and lab != 'uncat' else cfg.uncat_group()
+    _exact, _cap, re_label_first, _nf = _numpath_regexes(g.depth)
     m = re_label_first.match(key)
     if m:
         comps = [int(x) for x in SEP_SPLIT_RE.split(m.group(1))]
         label = re.match(r'^(?:' + _ENTRY_LABELS + r')', key).group(0)
-        return comps, label
-    comps = _split_numpath(key, levels)
-    lab = it.get('label')
+        return comps, label, g
+    comps = _split_numpath(key, g.depth)
     if comps is not None and lab and lab != 'uncat':
-        return comps, lab
+        return comps, lab, g
     return None
 
 
@@ -267,44 +276,45 @@ def _md_tail_warnings(ctx, cfg, groups):
     items = ctx.items
     if not items:
         return []
-    gpl = cfg.group_prefix_len()
     known = ctx.ignore
     ignore = ctx.ignore
 
-    # source max per (canon_label, prefix_tuple)
+    # source max per (group_index, prefix_tuple) — keyed by GROUP, not label,
+    # so a merged (combined) counter aligns correctly regardless of item label.
     src_max = {}
     for it in items:
-        cl = _source_item_comps_label(it, cfg.depth)
+        cl = _source_item_comps_label(it, cfg)
         if not cl:
             continue
-        comps, label = cl
+        comps, label, g = cl
         if not comps:
             continue
+        gpl = g.group_prefix_len()
         gpl_e = min(gpl, len(comps) - 1)
         prefix = tuple(comps[:gpl_e])
         num = comps[gpl_e] if gpl_e < len(comps) else 0
         if num <= 0:
             continue
-        clabel = _canon_label(label)
-        key = (clabel, prefix)
+        gi = cfg.ordinal.index(g)
+        key = (gi, prefix)
         if num > src_max.get(key, 0):
             src_max[key] = num
 
     warnings = []
     for gk, pairs in sorted(groups.items()):
-        # `gk` is now the sole grouping key; derive prefix_str / label.
-        if gk.startswith('file'):
-            label = gk.split(':', 1)[1] if ':' in gk else 'uncat'
-            prefix_str = ''
-        elif ':' in gk:
-            prefix_str, label = gk.rsplit(':', 1)
+        # `gk` is "{gi}:<body>" where <body> is the numeric prefix string,
+        # "file" (uncat), or "file:<label>".
+        body = gk.split(':', 1)[1] if ':' in gk else gk
+        if body == 'file':
+            prefix_str, label = '', 'uncat'
+        elif body.startswith('file:'):
+            prefix_str, label = '', body[len('file:'):]
         else:
-            prefix_str = gk
-            label = 'uncat'
+            prefix_str, label = body, 'uncat'
         last = max(n for n, _ in pairs)
-        clabel = _canon_label(label)
         prefix = tuple(int(x) for x in prefix_str.split('.')) if prefix_str else ()
-        smax = src_max.get((clabel, prefix), 0)
+        gi = int(gk.split(':', 1)[0]) if ':' in gk else 0
+        smax = src_max.get((gi, prefix), 0)
         if smax <= last:
             continue
         gap = smax - last
@@ -316,7 +326,7 @@ def _md_tail_warnings(ctx, cfg, groups):
         for n in range(last + 1, smax + 1):
             full = (prefix_str + '-' if prefix_str else '') + str(n)
             token = f"{label} {full}" if label and label != 'uncat' else full
-            token_norm = f"{clabel} {full}"
+            token_norm = f"{_norm_label(label)} {full}" if label and label != 'uncat' else full
             if (token in known or token_norm in known
                     or f"{gk}:{n}" in known or f"{gk}:{n}" in ignore):
                 continue
@@ -326,14 +336,12 @@ def _md_tail_warnings(ctx, cfg, groups):
     return warnings
 
 
-# ------------------------------------------------------------------ config
-# Separation modes for `BookConfig.separate_types` (single source of truth:
-#
-# ALWAYS compare with `==` against these NAMED constants — never `>=`.
-# A greater number must NOT silently inherit the per-type behavior; each new
-# mode MUST get its own explicit branch, so introducing one later forces a code
-# change here instead of quietly mis-grouping.  Unknown values fall back to
-# SEP_COMBINED (the safe default) WITH a loud warning — see from_dict().
+# ------------------------------------------------------------------ grouping
+# Grouping is driven by the BookConfig.ordinal GroupConfig array (see
+# lib.config.GroupConfig).  Each entry's label is mapped to its group via
+# cfg.group_for_label(); the group index namespaces the counter key so
+# different groups NEVER merge.  The old `separate_types` (SEP_COMBINED /
+# SEP_PER_TYPE) switch is gone.
 
 
 
@@ -360,28 +368,40 @@ def _md_gap_blocking(ctx):
     except Exception:
         return [], [], set()
 
-    gpl = cfg.group_prefix_len()
+    # Grouping is now driven by the BookConfig.ordinal GroupConfig array.  For
+    # each entry we parse its (comps, label) at the MOST SPECIFIC depth that
+    # matches (descending over the distinct group depths), then map the label
+    # to its group and use THAT group's prefix length.  Parsing at the highest
+    # depth first means a three-level "4.1-5" is captured fully even when a
+    # two-level 练习 group also declares depth 2.
+    _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
     entries = []  # (group_key, item_num, unique_key, label, prefix_str)
     for span in _SPAN_RE.finditer(txt):
         inner = span.group(1).strip()
-        parsed = _parse_entry(inner, cfg.depth)
+        parsed = None
+        for lv in _depth_candidates:
+            parsed = _parse_entry(inner, lv)
+            if parsed:
+                break
         if not parsed:
             continue
         comps, label = parsed
         if not comps:
             continue
+        g = cfg.group_for_label(label)
+        gi = cfg.ordinal.index(g)
+        gpl = g.group_prefix_len()
         # Per-entry cap so a mismatched `levels` can never index out of range.
         gpl_e = min(gpl, len(comps) - 1)
         prefix = tuple(comps[:gpl_e])
         item_num = comps[gpl_e] if gpl_e < len(comps) else 0
         prefix_str = '.'.join(str(c) for c in prefix)
-        if cfg.separate_types == SEP_PER_TYPE and label and label != 'uncat':
-            # `gk` MUST carry the JOINED prefix string (not the tuple repr), so
-            # downstream code that re-derives prefix_str/label from `gk` (the
-            # grouping loop + tail check) gets a clean "C.S" form, never "(1,)".
-            gk = f"{prefix_str}:{label}" if prefix else f"file:{label}"
+        if prefix_str:
+            gk = f"{gi}:{prefix_str}"
+        elif label and label != 'uncat':
+            gk = f"{gi}:file:{label}"
         else:
-            gk = prefix_str if prefix else "file"
+            gk = f"{gi}:file"
         # present_md key uses the dash form ("C.S-N") so the extraction-side
         # OCR-suppression filter (which builds "sec-num") can match it.
         key = f"{prefix_str}-{item_num}" if prefix_str else str(item_num)
@@ -404,17 +424,33 @@ def _md_gap_blocking(ctx):
     blocking, warnings = [], []
 
     for gk, pairs in sorted(groups.items()):
-        # `gk` is now the sole grouping key.  Derive prefix_str / label:
-        #   per-type keys embed the label  ("C.S:LABEL")
-        #   combined keys / the prefix-less "file" key carry no label.
-        if gk.startswith('file'):
-            label = gk.split(':', 1)[1] if ':' in gk else 'uncat'
-            prefix_str = ''
-        elif ':' in gk:
-            prefix_str, label = gk.rsplit(':', 1)
+        # `gk` is "{gi}:<body>" where <body> is the numeric prefix string,
+        # "file" (prefix-less, uncat label), or "file:<label>" (prefix-less,
+        # labelled).  The group index `gi` namespaces counters so different
+        # groups never merge.
+        body = gk.split(':', 1)[1] if ':' in gk else gk
+        if body == 'file':
+            prefix_str, label = '', 'uncat'
+        elif body.startswith('file:'):
+            prefix_str, label = '', body[len('file:'):]
         else:
-            prefix_str = gk
-            label = 'uncat'
+            prefix_str, label = body, 'uncat'
+        # Recover the human-readable label(s) carried by this group so the emit
+        # token matches `ignore` / `known_gaps` entries written as e.g.
+        # "Theorem 12.3".  v2 groups by `gi:prefix` (the group index `gi`
+        # encodes the label via group_for_label), so the label is NOT part of
+        # the grouping key and must be re-derived here.  Without this, per-type
+        # groups emit a bare "12-3" token that never matches a "Theorem 12.3"
+        # ignore entry -> confirmed-sparse numbers false-BLOCK (regression vs
+        # the old label-bearing token from separate_types:1 mode).
+        label_candidates = [label]
+        try:
+            gi = int(gk.split(':', 1)[0])
+            g = cfg.ordinal[gi]
+            if not g.is_uncat:
+                label_candidates = list(g.name)
+        except (ValueError, IndexError):
+            pass
         nums = sorted(n for n, _ in pairs)
         present = {n for n, _ in pairs}
         first, last = nums[0], nums[-1]
@@ -424,14 +460,18 @@ def _md_gap_blocking(ctx):
             # Human-readable token used for known_gaps / ignore matching, e.g.
             # "Theorem 12.3".  Both the raw token (original label language) and
             # the EN-normalized token are accepted, so a known_gaps entry
-            # written in English also suppresses its Chinese counterpart.
+            # written in English also suppresses its Chinese counterpart.  For
+            # per-type groups the label is re-derived from the group index
+            # (label_candidates) so an ignore entry "Theorem 12.3" matches the
+            # emitted token even though the grouping key only carries `gi`.
             full = (prefix_str + '-' if prefix_str else '') + str(n)
-            token = f"{label} {full}" if label and label != 'uncat' else full
-            token_norm = f"{_norm_label(label)} {full}" if label and label != 'uncat' else full
-            if (_norm_sep(token) in known or _norm_sep(token_norm) in known
-                    or _norm_sep(f"{gk}:{n}") in known
-                    or f"{gk}:{n}" in ignore):
-                return
+            for lab in label_candidates:
+                token = f"{lab} {full}" if lab and lab != 'uncat' else full
+                token_norm = f"{_norm_label(lab)} {full}" if lab and lab != 'uncat' else full
+                if (_norm_sep(token) in known or _norm_sep(token_norm) in known
+                        or _norm_sep(f"{gk}:{n}") in known
+                        or f"{gk}:{n}" in ignore):
+                    return
             msg = (f"{gk} 缺号 {n}（序列 {first}..{last} 不连续 — "
                    f"严格模式：请核对源书确认是稀疏编号(登记 ignore)还是确有遗漏(应补写)）")
             if cfg.strict:

@@ -7,7 +7,9 @@ from verify.layers.base import VerifyLayer, LayerResult, LayerFixResult
 
 import re
 
-from verify.layers._struct_labels import I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE
+from verify.layers._struct_labels import (
+    I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
+)
 
 def check_i_separators(md_file):
     """I-LAYER: check that consecutive items are separated by `---`.
@@ -25,8 +27,10 @@ def check_i_separators(md_file):
     # Collect all item-starting line numbers
     item_lines = []
     for i, ln in enumerate(lines):
-        if I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln):
+        if (I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)
+                or I_ITEM_NUMFIRST_RE.match(ln)):
             item_lines.append(i)
+    item_lines = sorted(set(item_lines))
     # Check consecutive pairs
     for idx in range(len(item_lines) - 1):
         i = item_lines[idx]
@@ -63,8 +67,10 @@ def fix_i_separators(md_file):
 
     item_lines = []
     for i, ln in enumerate(lines):
-        if I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln):
+        if (I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)
+                or I_ITEM_NUMFIRST_RE.match(ln)):
             item_lines.append(i)
+    item_lines = sorted(set(item_lines))
 
     insertions = []
     for idx in range(len(item_lines) - 1):

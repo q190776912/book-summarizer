@@ -1,5 +1,6 @@
 """Regression / acceptance tests for the "rule H — 书级配置强制前置" change
-(book-summarizer incremental change B, 2026-08-06).
+(book-summarizer incremental change B, 2026-08-06) — REWRITTEN for the
+verify_config v2 schema (GroupConfig ARRAY, not int `ordinal`).
 
 Covers the new mandatory book-config gate:
 
@@ -7,39 +8,35 @@ Covers the new mandatory book-config gate:
   * `verify/verify_chapter.py` entry — `require_complete()` invoked inside
     `_make_loader()`; `main()` catches `ConfigError` -> print + exit 2.
   * `extract/scan_skeleton.py` entry — constructs `ConfigLoader`, calls
-    `require_complete()`, reads `loader.book.ordinal`.
-  * `verify/make_config.py` — best-effort starter-config generator.
+    `require_complete()`, reads `loader.book.primary_type` (int).
+  * `verify/make_config.py` — best-effort starter-config generator (now emits
+    the v2 array form).
 
-Contract under test (per SKILL.md 规则 H / verification.md §6.x /
-book_patterns.md §6):
-  (a) file ABSENT            -> WARNING + keep default ordinal=3 (back-compat),
-                                verify/scan must NOT hard-fail.
-  (b) file ABSENT + allow_absent=False -> raise ConfigError.
-  (c) file PRESENT but no `ordinal` -> raise ConfigError (exit 2).
-  (d) file PRESENT + legal ordinal -> no raise.
-
-KNOWN GAP (documented, routed to engineer — see QA report):
-  The task spec cases ⑤ (`ordinal:99` -> raise) and ⑥ (illegal
-  `section_types`/`section_depths` -> raise), and the docs
-  (verification.md §6.x, book_patterns.md §6.2), claim illegal ordinal /
-  illegal section configs raise ConfigError. In the ACTUAL implementation
-  `BookConfig.from_dict` SILENTLY clamps an illegal ordinal to 3 and
-  sanitizes illegal section configs, so `require_complete`'s corresponding
-  checks are unreachable and NO hard error is raised. Those paths are
-  captured below as "is NOT hard error" tests (they prove current behaviour
-  and the gap); they must be flipped to `assertRaises(ConfigError)` once the
-  engineer fixes the clamp/sanitize so the gate actually fires.
+v2 schema contract (per SKILL.md 规则 H / references/verify_config_schema_v2_design.md):
+  * `ordinal` is a LIST of `GroupConfig` dicts
+    (`{type:int 1..7, name:[str], depth:int>=1, scope:1|2|3}`).
+  * `BookConfig.from_dict` REJECTS the old int/str `ordinal` with a ConfigError
+    carrying the "make_config --force" migration hint.
+  * `require_complete()`:
+      (a) file ABSENT            -> WARNING + keep default (single uncat
+                                    GroupConfig, primary_type=3, back-compat),
+                                    verify/scan must NOT hard-fail.
+      (b) file ABSENT + allow_absent=False -> raise ConfigError.
+      (c) file PRESENT but no `ordinal` array -> raise ConfigError (exit 2).
+      (d) file PRESENT + legal ordinal array -> no raise.
+  * R6 override: `from_dict` does NOT auto-append an uncat group, and
+    `require_complete` does NOT hard-require one. A config declaring groups
+    with NO uncat group is ACCEPTED; `uncat_group()` falls back to `ordinal[0]`.
 
 No pytest dependency: runs under stdlib unittest
   python verify/tests/test_config_complete.py
 or
   python -m unittest verify.tests.test_config_complete -v
+(verify.tests is not a package in this repo, so prefer the direct-module form.)
 """
 import os
 import sys
-import io
 import json
-import shutil
 import tempfile
 import subprocess
 import unittest
@@ -49,15 +46,15 @@ SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if SKILL_ROOT not in sys.path:
     sys.path.insert(0, SKILL_ROOT)
 
-from lib.config import ConfigLoader, ConfigError  # noqa: E402
+from lib.config import (ConfigLoader, ConfigError, BookConfig, GroupConfig)  # noqa: E402
 
 PY = sys.executable
 VERIFY_CLI = os.path.join(SKILL_ROOT, "verify", "verify_chapter.py")
 SCAN_CLI = os.path.join(SKILL_ROOT, "extract", "scan_skeleton.py")
 MAKE_CLI = os.path.join(SKILL_ROOT, "verify", "make_config.py")
 
-# Real corpus books (read-only use; generated files cleaned up afterwards).
-REAL_HAS_CFG = r"D:\study\book\基础\泛函分析导论及应用\_extract"      # ordinal=3
+# Real corpus book (read-only use; generated files cleaned up afterwards).
+REAL_HAS_CFG = r"D:\study\book\基础\泛函分析导论及应用\_extract"      # v2 ordinal array, type=3
 
 # A real NO_CFG book is discovered at runtime (the corpus changes); we do not
 # hard-code one because a book that used to lack config may gain one.
@@ -83,7 +80,7 @@ def _find_real_no_cfg_book():
 
 
 # --------------------------------------------------------------------------
-# Part A — pure unit tests for ConfigLoader.require_complete()
+# Part A — pure unit tests for ConfigLoader.require_complete()  (v2 array API)
 # --------------------------------------------------------------------------
 def _loader_with_config(cfg):
     """Build a ConfigLoader whose only candidate config is `cfg` (dict) or
@@ -104,7 +101,11 @@ class TestRequireComplete(unittest.TestCase):
         msg = str(cm.warning)
         self.assertIn("verify_config.json", msg)
         self.assertIn("ordinal=3", msg)
-        self.assertEqual(loader.book.ordinal, 3)  # default back-compat
+        # v2: default is a single uncat GroupConfig with primary_type 3.
+        self.assertEqual(loader.book.primary_type, 3)
+        self.assertIsInstance(loader.book.ordinal, list)
+        self.assertEqual(len(loader.book.ordinal), 1)
+        self.assertTrue(loader.book.ordinal[0].is_uncat)
 
     # --- (b) file absent, allow_absent=False -> raise ----------------------
     def test_missing_file_allow_absent_false_raises(self):
@@ -123,51 +124,85 @@ class TestRequireComplete(unittest.TestCase):
         self.assertIn("[CONFIG]", msg)
         self.assertIn("ordinal", msg)
 
-    # --- (d) file present + legal ordinal -> no raise ----------------------
-    def test_valid_ordinal_3_no_raise(self):
-        loader = _loader_with_config({"ordinal": 3})
+    # --- (d) file present + legal ordinal array -> no raise ---------------
+    def test_valid_array_ordinal_3_no_raise(self):
+        loader = _loader_with_config(
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
         loader.require_complete()  # must not raise
-        self.assertEqual(loader.book.ordinal, 3)
+        self.assertEqual(loader.book.primary_type, 3)
+        self.assertEqual(len(loader.book.ordinal), 1)
+        self.assertEqual(loader.book.ordinal[0].type, 3)
+        self.assertEqual(loader.book.ordinal[0].depth, 3)
+        self.assertEqual(loader.book.ordinal[0].scope, 2)
 
     # --- valid explicit four-level declaration -> no raise ----------------
-    def test_valid_four_level_ordinal_4_no_raise(self):
-        cfg = {"ordinal": 4,
+    def test_valid_array_ordinal_4_with_section_hierarchy_no_raise(self):
+        cfg = {"ordinal": [{"type": 4, "depth": 2, "scope": 2}],
                "section_types": [1, 2, 3, 4],
                "section_depths": [1, 2, 3, 4]}
         loader = _loader_with_config(cfg)
         loader.require_complete()  # must not raise
-        self.assertEqual(loader.book.ordinal, 4)
+        self.assertEqual(loader.book.primary_type, 4)
         self.assertEqual(loader.book.section_types, [1, 2, 3, 4])
         self.assertEqual(loader.book.section_depths, [1, 2, 3, 4])
 
-    # --- KNOWN GAP: illegal ordinal is NOT a hard error (per spec case ⑤) --
-    def test_illegal_ordinal_99_is_not_hard_error(self):
-        # Task spec case ⑤ & docs require illegal ordinal -> ConfigError.
-        # ACTUAL: from_dict clamps 99 -> 3 (UserWarning only); require_complete
-        # does NOT raise (its ORDINAL_CODES check is unreachable). Proof below.
-        loader = _loader_with_config({"ordinal": 99})
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                loader.require_complete()
-        except ConfigError:
-            self.fail("require_complete raised on ordinal=99; current code "
-                      "clamps to 3 instead of raising per spec/docs.")
-        self.assertEqual(loader.book.ordinal, 3)  # proves silent clamp
+    # --- v2: old int ordinal is REJECTED with the migration hint ----------
+    def test_old_int_ordinal_rejected_with_migration_hint(self):
+        # from_dict REJECTS the deprecated int ordinal and points the user to
+        # `make_config.py --force`. This is the v2 gate behaviour (was a KNOWN
+        # GAP under the old clamp-and-silent design). The actual emitted text
+        # is "make_config.py --force"; assert both tokens are present.
+        with self.assertRaises(ConfigError) as ctx:
+            _loader_with_config({"ordinal": 3})
+        msg = str(ctx.exception)
+        self.assertIn("make_config", msg)
+        self.assertIn("--force", msg)
+
+    def test_old_int_ordinal_99_rejected(self):
+        # Any int ordinal (not just a "legal" code) is rejected at construction.
+        with self.assertRaises(ConfigError) as ctx:
+            _loader_with_config({"ordinal": 99})
+        msg = str(ctx.exception)
+        self.assertIn("make_config", msg)
+        self.assertIn("--force", msg)
+
+    # --- v2: old str ordinal is REJECTED -----------------------------------
+    def test_old_str_ordinal_rejected(self):
+        with self.assertRaises(ConfigError) as ctx:
+            _loader_with_config({"ordinal": "three_level"})
+        self.assertIn("数组", str(ctx.exception))
+
+    # --- R6: no uncat group declared -> ACCEPTED, no auto-append ----------
+    def test_r6_no_uncat_group_accepted_no_auto_append(self):
+        # R6 override: a config declaring groups with NO uncat group must be
+        # accepted by both from_dict and require_complete. from_dict must NOT
+        # auto-append an uncat; uncat_group() falls back to ordinal[0].
+        cfg = {"ordinal": [{"type": 3, "name": ["定理"], "depth": 3, "scope": 2}]}
+        bc = BookConfig.from_dict(cfg)
+        self.assertEqual([g.name for g in bc.ordinal], [["定理"]])
+        self.assertEqual(bc.uncat_group().name, ["定理"])  # fallback to ordinal[0]
+        loader = _loader_with_config(cfg)
+        loader.require_complete()  # must NOT raise
+        self.assertEqual(loader.book.uncat_group().name, ["定理"])
 
     # --- KNOWN GAP: illegal section config is NOT a hard error (spec ⑥) ----
     def test_illegal_section_config_is_not_hard_error(self):
         # Task spec case ⑥ & docs require illegal section_types/section_depths
-        # -> ConfigError. ACTUAL: from_dict sanitizes (length mismatch / d<1 /
+        # -> ConfigError. ACTUAL: from_dict SANITIZES (length mismatch / d<1 /
         # invalid role / depths[0]!=1), so require_complete never sees an
         # illegal value and does NOT raise. Each variant below is a legal
-        # post-sanitization config -> no raise.
+        # post-sanitization config -> no raise. (Now uses the v2 ordinal ARRAY.)
         bad_variants = [
-            {"ordinal": 3, "section_types": [1, 2], "section_depths": [1, 9]},
-            {"ordinal": 3, "section_types": [1, 2, 9], "section_depths": [1, 2, 3]},
-            {"ordinal": 3, "section_types": [1, 2, 3], "section_depths": [1, 2]},
-            {"ordinal": 3, "section_types": [1, 2], "section_depths": [1, 0]},
-            {"ordinal": 3, "section_types": [2, 2], "section_depths": [2, 2]},
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+             "section_types": [1, 2], "section_depths": [1, 9]},
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+             "section_types": [1, 2, 9], "section_depths": [1, 2, 3]},
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+             "section_types": [1, 2, 3], "section_depths": [1, 2]},
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+             "section_types": [1, 2], "section_depths": [1, 0]},
+            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+             "section_types": [2, 2], "section_depths": [2, 2]},
         ]
         for bad in bad_variants:
             loader = _loader_with_config(bad)
@@ -212,7 +247,7 @@ def _build_synthetic_book(with_config, config_obj, with_page=True):
 
 def _run(args, expect_exists=None):
     p = subprocess.run([PY, args[0]] + args[1:], cwd=SKILL_ROOT,
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=300)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -241,7 +276,8 @@ class TestVerifyChapterEntry(unittest.TestCase):
 
 class TestScanSkeletonEntry(unittest.TestCase):
     def test_scan_real_book_with_config_exit_0(self):
-        # Real book with ordinal=3 config: scan must read ordinal and exit 0.
+        # Real book with a v2 array ordinal config: scan must read
+        # primary_type and exit 0.
         # (side effect: creates ch1_skeleton.txt in the real _extract — removed
         # afterwards so the corpus is left untouched)
         skel = os.path.join(REAL_HAS_CFG, "ch1_skeleton.txt")
@@ -294,13 +330,15 @@ class TestMakeConfig(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(ext, "verify_config.json")),
                         "make_config must write verify_config.json")
         self.assertIn("人工核对", out + err)
-        # sanity: the generated ordinal is a legal code 1..7
+        # v2: the generated ordinal is a LIST of GroupConfig dicts.
         gen = json.load(open(os.path.join(ext, "verify_config.json"), encoding="utf-8"))
-        self.assertIn(gen["ordinal"], (1, 2, 3, 4, 5, 6, 7))
+        self.assertIsInstance(gen["ordinal"], list)
+        self.assertEqual(len(gen["ordinal"]), 1)
+        self.assertIn(gen["ordinal"][0]["type"], (1, 2, 3, 4, 5, 6, 7))
 
     def test_make_config_existing_config_skips_exit_0(self):
-        # Real book that already has verify_config.json: non --force -> skip,
-        # exit 0 (read-only, corpus untouched).
+        # Real book that already has verify_config.json (v2 array form):
+        # non --force -> skip, exit 0 (read-only, corpus untouched).
         rc, out, err = _run([MAKE_CLI, REAL_HAS_CFG])
         self.assertEqual(rc, 0,
                          "make_config on existing-config book (no --force) must "

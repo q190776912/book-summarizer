@@ -339,14 +339,29 @@ def fix_unlabeled_blockquotes(md_file):
 def check_labels_missing_blockquote(md_file):
     """H-LAYER ext (missing BQ): flag labels (证明/证/例/注/说明/注记/脚注)
     found at TOP LEVEL — they MUST be inside `>`. Returns list of violation
-    strings. Empty = pass."""
+    strings. Empty = pass.
+
+    Display math ($$...$$ fences) is skipped: CD commutative-diagram rows
+    like `{...} @>>> ...` legitimately start a line with `{` and are NOT
+    blockquote labels, so scanning them here causes false positives."""
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
     except Exception:
         return []
     out = []
+    in_math = False
     for i, ln in enumerate(lines):
+        s = ln.strip()
+        # Toggle display-math state on fences. A single-line `$$ ... $$`
+        # block does not persist in_math across lines.
+        if s == '$$':
+            in_math = not in_math
+            continue
+        if s.startswith('$$') and s.endswith('$$'):
+            continue
+        if in_math:
+            continue
         st = ln.strip()
         if st.startswith('>'):
             continue
@@ -359,14 +374,26 @@ def check_labels_missing_blockquote(md_file):
 
 def fix_labels_missing_blockquote(md_file):
     """H-LAYER ext auto-fix: wrap top-level 证明/证/例/注/说明/注记/脚注
-    labels with `> `. Returns number of lines changed."""
+    labels with `> `. Returns number of lines changed.
+
+    Display math ($$...$$ fences) is skipped so legitimate CD-diagram rows
+    starting with `{` are never wrapped — see check_labels_missing_blockquote."""
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
     except Exception:
         return 0
     changes = 0
+    in_math = False
     for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s == '$$':
+            in_math = not in_math
+            continue
+        if s.startswith('$$') and s.endswith('$$'):
+            continue
+        if in_math:
+            continue
         st = ln.strip()
         if st.startswith('>'):
             continue

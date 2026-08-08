@@ -7,6 +7,30 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 
 This skill converts a textbook into structured chapter-by-chapter markdown summaries suitable for review, reference, or spaced repetition.
 
+> **📑 目录（点击锚点跳转）** · 本文件约 670 行，建议用锚点导航。
+>
+> **⏱️ 30 秒速览**
+> - 英文原著书 → **CN+EN 双语**（英文源版先写先校验，中文派生版后写后校验）；中文书 → 中文单语。
+> - 所有数学走 **KaTeX**；OCR 公式须**理解后重写**，绝不照抄。
+> - 公式序标铁律：书无号**不编造**；已标须**正确、不重复、不跨章**。
+> - 主流程 **Step 0 → 4**；收尾必须 `verify_chapter.py --all <extract_dir> <book_dir>` **exit 0** 才算通过。
+
+- [When to Use](#wtu)
+- [📌 文档架构（SSOT 约定）](#doc-arch)
+- [🔴 语言模式铁律（最高优先级）](#lang-rule)
+- [Core Principle](#core-principle)
+- [保真分级与摘要策略](#tiers)
+- [目录结构](#dir-struct)
+- [Workflow（Step 0–4）](#workflow)
+  - [Step 3.5 嵌入图片](#step35)
+  - [Step 3.6 公式 manifest 保真对账](#step36)
+  - [Step 4 逐条校验](#step4)
+- [Skill Scripts Reference](#scripts-ref)
+- [常见问题处理](#faq)
+  - [KaTeX 问题识别与修复](#katex-faq)
+
+<a id="wtu"></a>
+
 ## When to Use
 
 Use this skill when the user wants to:
@@ -14,6 +38,8 @@ Use this skill when the user wants to:
 - Create detailed chapter notes from a book in your knowledge base
 - Produce structured markdown with definitions, theorems, and proofs
 - Generate KaTeX-friendly math notes from a source
+
+<a id="doc-arch"></a>
 
 ## 📌 文档架构（SSOT 约定 / Single Source of Truth）
 
@@ -29,6 +55,8 @@ Use this skill when the user wants to:
 
 ---
 
+<a id="lang-rule"></a>
+
 ## 🔴 语言模式铁律（最高优先级，2026-08-04 用户强调整顿）
 
 > **英文 / 他语种原著书：必须先有「源语言总结」，中文总结只能由源语言派生。没有源语言总结就写中文 = 整批作废。**
@@ -39,6 +67,8 @@ Use this skill when the user wants to:
 - **🔴 禁止「只有中文、没有英文」**：若目录下只有 `第N章_*.md` 而没有对应 `ChapterN_*.md`，说明流程从根上错了——中文并非源于源语言，该章（及依赖它的后续章）必须重做。中文总结的存在**以英文源版存在且校验通过为前提**。
 - **中英两版必须 1:1 同构**：条目、编号、公式、图片位置逐一对应，不得增删或自行发挥；英文版修补后中文版须同步修补（单向：先英后中）。
 - 自检：`ls` 本书目录，**英文书必须成对出现** `ChapterN_*.md` 与 `第N章_*.md`；缺英文版即视为「未开始」，不得上报完成。
+
+<a id="core-principle"></a>
 
 ## Core Principle
 
@@ -54,6 +84,8 @@ Faithful to source, correct OCR noise, don't fabricate:
   - **🔴 非核心内容必须「摘要」而非「整段照抄」（2026-08-02 立，2026-08-02 细化，2026-08-06 修订 Tier 2）**：总结是**摘要**，不是书的副本，但**摘要不等于丢内容**。按内容类型分三档处理（详规见「保真分级与摘要策略」）：① **Tier 1 高保真**——定义/定理/引理/推论/命题/公理的**陈述**、**例子**的**陈述（题面）**、**练习**的**题目**、**注记（Remark/Aside）**，须原汁原味（注记**保留完整、少修改**，只修 OCR 噪声）、保留关键公式与精确术语；② **Tier 2 描述性内容**——动机/直观/背景/过渡/导语等描述性内容须**保留其中的公式与概念**（忠实重写、精简冗余表述，但**不得省略、不得一句话带过**）；禁止整段照抄原书文本流；③ **Tier 3 证明/解答只列核心步骤**——证明与例子的**解答/证明**不逐字重写，只列**核心步骤**：用 `1. 2. 3. …` 按序标号（**步数按实际需数，不限定 3 条**；「1,2,3」只是示意写法），每步一句话点出关键动作（关键引理 / 恒等式 / 归纳 / 构造 / 交换图），结尾给一句结论。**判据：某段散文只是在复述原书文字（整段照抄）才需压缩；若删掉了原段的公式或概念，则无论多短都是保真失败。**（真实事故：Vakil《The Rising Sea》前几章被写成书的逐段英文副本，丧失摘要价值；verify **P 层 `p_verbose` / `p_proof_verbose`** 会据此判 FAIL——但含公式的段落已豁免 `p_verbose`，忠实保留公式的描述不会因此被误杀。）
 
 ---
+
+<a id="tiers"></a>
 
 ## 保真分级与摘要策略（Summary Fidelity Tiers, 2026-08-02 立）
 
@@ -90,6 +122,8 @@ Faithful to source, correct OCR noise, don't fabricate:
 
 ---
 
+<a id="dir-struct"></a>
+
 ## 目录结构
 
 ```
@@ -111,6 +145,8 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 > **临时文件隔离规则**：Agent 生成的所有临时脚本、日志等中间文件，**必须放入 `_extract\` 目录**。根目录只允许 `.pdf`、`.md`、`_extract\` 三类。
 
 ---
+
+<a id="workflow"></a>
 
 ## Workflow
 
@@ -236,6 +272,10 @@ while True:
         从目录页读取章名和书页码，写 chapter_map.json
         chapter_map_ready = True
 
+    2.5. 若 current_max_page 自上次 MM audit 以来增长：
+        执行 Step 2.5 多模态低置信补全（MM Repair Gate）
+        > 若当前模型不支持看图，记日志 `MM_UNAVAILABLE` 并跳过，直接进入 3.
+
     3. 对 chapter_map 中每个未写章节：
        if info.end <= current_max_page → 该章可写
 
@@ -253,6 +293,74 @@ while True:
 > **增量 figure**：`figure_index.json` 也按章增量生成，与总结并行。写章总结时可直接引用该章的 `figure_index.json` 用于 E/F 校验。
 
 > 🔴 **本循环是 规则 E 阶段 1（写源语言初稿）**：只产出源语言 `.md` 初稿 + 嵌图，**不跑任何 verify**。源语言初稿全部完成后，按 规则 E 阶段 2 生成 `verify_config.json`、阶段 3 批量校验源语言、阶段 4 再派生翻译版。
+
+---
+
+### Step 2.5：多模态低置信补全（MM Repair Gate）
+
+> **🔴 总结前必须先执行的步骤**。若当前运行模型不支持看图（非多模态），记录 `MM_UNAVAILABLE` 后直接跳过本步，进入 Step 3 总结。
+
+目的：对 OCR / 公式识别置信度不足的区域，用多模态能力重新识别并写回 `page_*.json`，减少后续写作的 OCR 噪声。
+
+触发时机：Step 2 轮询循环中，当 `current_max_page` 自上次 MM audit 以来增长时执行。脚本**幂等**：已 `mm_repaired` / `mm_reviewed` 的条目不再重复处理。
+
+参数（默认值按用户确认）：
+- 文本置信度阈值 `--text-thresh 0.90`：OCR `text[].score < 0.90` 才触发。
+- 公式置信度阈值 `--formula-conf 0.50`：MFD `formulas[].conf < 0.50` 触发。
+- 公式错误标记：`latex` 含 `[MFR_ERR` / `[MFR_SKIPPED` / `.notdef` / 替换字符 `�` 也触发。
+
+流程：
+
+1. **审计脚本**（纯 CPU，无需看图）：
+   ```powershell
+   python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_audit.py" "<pdf_path>" "<_extract_dir>" --text-thresh 0.90 --formula-conf 0.50
+   ```
+   产出：
+   - `<_extract_dir>/_mm_repair/manifest.json`（全部待审条目，稳定 key 为 `text:I` / `formula:I`）
+   - `<_extract_dir>/_mm_repair/page_NNN_sheet.png`（每页拼版图，带 key 标签，便于批量看）
+   - `<_extract_dir>/_mm_repair/page_NNN/*.png`（单个裁图备用）
+
+2. **若无标记**：审计脚本输出 `MM_AUDIT DONE: nothing flagged`，直接跳到 Step 3。
+
+3. **Agent 视觉审读**：读取每个 `page_NNN_sheet.png` 和 manifest，按标签判断：
+   - OCR/latex **正确** → 在 `repairs.json` 的 `ok` 列表记录该 key；
+   - OCR/latex **错误** → 在 `repairs.json` 的 `corrections` 写正确文本 / LaTeX；
+   - **实为公式（OCR 把整行公式误当文本行）** → 在 `repairs.json` 的 `to_formula` 写该 `text:I` 对应的正确 LaTeX（apply 会转成 `formulas[]` 新条目，见下）。
+
+   写 `repairs.json` 到 `<_extract_dir>/_mm_repair/repairs.json`，格式：
+   ```json
+   {
+     "corrections": {
+       "117": { "text:32": "正确文本或 LaTeX", "formula:21": "\\frac{k-np}{\\sqrt{npq}}" }
+     },
+     "ok": {
+       "117": ["text:2", "text:4", "formula:22"]
+     },
+     "to_formula": {
+       "180": { "text:37": "f(1) = \\sum_{n} a_n = f(1) = b - a" }
+     }
+   }
+   ```
+   `to_formula` 仅用于「OCR 把整行公式误当文本行」：key 必须是 `text:I`，值为该公式的正确 LaTeX。
+
+4. **应用脚本**（把修正写回 page JSON）：
+   ```powershell
+   python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_apply.py" "<_extract_dir>"
+   ```
+   - **转公式条目**（`to_formula`）：被 OCR 误判为文本的整行公式 → 在 `formulas[]` 末尾新增一条（`bbox` 由该 text 的 `poly` 求包围盒得到，`latex` 取 agent 提供的正确公式，加 `"mm_converted": true`），**并直接从 `text[]` 数组中删除该原 text 项**（不保留低置信原 OCR 文本，不存 `text_ocr`，不留空槽位）。删除在循环外按索引降序进行，避免后续 text 条目索引错位。
+   - 修正条目：`text`/`latex` 更新为正确值，原值存入 `text_ocr`/`latex_ocr`，并加 `"mm_repaired": true`。
+   - 确认 OK 条目：加 `"mm_reviewed": true`（值不变，避免下次重复审计）。
+
+5. 完成后再回到 Step 2 循环继续写总结。
+
+> **📌 Summary 阶段如何使用这些标记**：
+> - `text[].mm_repaired` / `formulas[].mm_repaired`：已用多模态修正，**直接信任** `text`/`latex`，不再依赖 OCR 噪声原文。
+> - `text[].mm_reviewed`：OCR 原文正确，按原文使用。
+> - `formulas[].mm_converted`：由 `to_formula` 转来的公式（原 text 项已删除），summary 正常遍历 `formulas[]` 用 KaTeX 渲染即可；`conf=null` 表示非 MFD 检测、由多模态补全得到。无需特殊处理，因为对应 text 项已不存在。
+
+> **阈值提示**：`--text-thresh 0.90` 在实测 130 页书上标出约 1000 条（其中 0.8–0.9 区间多数是正确短片段）。若某书标记量过大，可改用 `--text-thresh 0.80` 或 `0.75` 降低审阅量；但会漏掉部分轻微噪声。阈值可参数化，按书调整。
+
+---
 
 #### 实用脚本
 
@@ -333,6 +441,8 @@ for p in range(start, end+1):
 
 ---
 
+<a id="step35"></a>
+
 ### Step 3.5：嵌入图片到总结（强制，位于 Step 4 校验之前）
 
 > **🔴 这是强制步骤，不是可选建议。** 只要该书跑过图片流水线、且 `_extract/figure_index.json` 中存在本章条目（对应 PNG 已在 `_extract/figure/`），写章总结时就**必须**执行本步；跳过它，Step 4 的 E 层（图片嵌入）检查会判 FAIL。
@@ -371,6 +481,62 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 
 ---
 
+<a id="step36"></a>
+
+### Step 3.6：公式 manifest 产出与保真对账（位置+内容保真，位于 Step 4 之前）
+
+> **为什么需要**：`verify_chapter.py` 的 Q 层只做「归一化编号的集合成员」匹配——只验证 summary 的 `\tag{X}` 是否落在书源编号集里，**不查编号落在哪一节、也不查公式内容**。因此「编号挂错公式 / 错位 / 内容被改写」都能 PASS。要真正保真，必须记录每条公式的**书页 + 真实书标 + 页中位置（纵坐标）**，与书源 `page_*.json` 做逐条对账。
+
+**A. 新书写总结时（推荐）**：写完章 `.md`（并过完 Step 3.5 嵌图）后，跑提取器产出 `formulas.json`；写作者可在每条公式上方加一行 HTML 注释锚点，直接记录书侧真相，使对账退化为「相等比对」而非脆弱的自动对齐：
+
+```bash
+python formula/formula_manifest.py "<book>/ChapterN_*.md" \
+    -o "<book>/_extract/ChapterN_formulas.json" \
+    --chapter-map "<book>/_extract/chapter_map.json" --chapter N
+```
+
+可选内联注释（写在公式所在行或上一行）：
+
+```
+<!-- book:2.6 p62 y0.33 §2.3.2 Thm2.2 -->
+```
+
+- `book:2.6` = 书里该公式的**真实**序标（无标号则写 `book: p62 ...`，省略数字）；
+- `p62` = 书 PDF 页码；`y0.33` = 该页内纵坐标（0 顶→1 底，可省略，回填时用书源 `poly` 自动补）；
+- 其余自由文本 = 上下文（定理/例子名）。
+
+**B. 已总结、无 manifest 的书（回填）**：用 `backfill_all.py` 一键对全书自动抽取+建书侧+填空+对账，产出每章 `<base>_formulas.json` / `<base>_filled.json` / `book_chN_formulas.json` 并汇总 `backfill_report.txt`：
+
+```bash
+python formula/backfill_all.py --book-root "<book>" --extract-dir _extract
+```
+
+**对账脚本（单次）**：
+
+```bash
+python formula/build_book_manifest.py --extract-dir _extract \
+    --chapter-map _extract/chapter_map.json --chapter N -o _extract/book_chN_formulas.json
+python formula/fill_book_labels.py _extract/ChapterN_formulas.json \
+    _extract/book_chN_formulas.json -o _extract/ChapterN_filled.json
+python formula/diff_formula_manifest.py _extract/ChapterN_filled.json \
+    _extract/book_chN_formulas.json
+```
+
+**diff 判定（display 公式）**：
+
+- `FABRICATED`：summary 标号不在书源集 → 编造/错章引用，修 summary；
+- `MISSING`：书源标号未在 summary 出现 → summary 漏写，修 summary；
+- `ORDER_MISMATCH`：summary 标号文档顺序 ≠ 书源阅读顺序（页,纵坐标）→ 错位/漏插导致序列偏移；
+- `MISPLACED`：summary 公式所在 `section` 与书源 `book_section`（最近上游 OCR 标题）在 `C.N` 两级不一致 → 标号挂错节；
+- `OMITTED`：summary 未标号但书源有号 → 漏标号；
+- `UNLABELED`（警告）：summary 未标号 display，需人工确认书里也确无号（否则属 OMITTED）。
+
+> ⚠️ **自动化边界**：上述检查保「标号集合 / 阅读顺序 / 小节定位」三层结构保真，但**公式内容保真**与「同小节内标号互换」仍需人工对照书源（书源 `formulas[].latex` 是 LaTeX-OCR 噪声，不可机比）。这是回填时「人工核对」的真正对象。
+
+---
+
+<a id="step4"></a>
+
 ### Step 4：逐条校验全部规则
 
 **任何一条不通过都算失败，必须修正后重验。** 本 skill 的全部规则已解耦到 `references/` 下，SKILL.md 仅保留主流程与链接，不再内联任何规则细节 —— 新增 / 修改规则只改对应的 `references/*.md` 与必要代码，**本文件无需改动**：
@@ -378,10 +544,14 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 - **🔴 书级配置校验（规则 H）**：`verify_chapter.py` 入口会先校验 `_extract/verify_config.json` 的完整性。若报 `[CONFIG]` 错误（文件在但缺 `ordinal` / `ordinal` 不是合法分组数组 / 首元素 `type` 不合法 / `scope` 不在 1–3），先回规则 H 补齐配置再跑 verify。文件缺失仅警告、沿用默认 ordinal=3（存量书兼容）。`ordinal` 现为分组对象数组，旧整型 / `separate_types` 写法会被拒绝。
 
 - **结构性 / 格式校验层（统一强制关卡）**：由 `verify/verify_chapter.py` 执行，覆盖本 skill 定义的全部校验层。运行 `verify/verify_chapter.py --all <extract_dir> <book_dir>`，**exit 0 才算通过**；`--fix` 可自动修复其中标记为可修复的层，其余须手动确认。各层的顺序、语义、`--fix` 范围、字节契约键集合 —— 全部见 [`references/verification.md`](references/verification.md)（SSOT，唯一权威）。
+- **🔴 Q 层（公式序标）执行前置**：跑校验前**必须确认** `<extract_dir>/verify_config.json` 含 `"formula"` map；若缺失，agent 须先按书实际公式编号推导并写入——扫该书 `page_*.json` 的 `text[]` 实测编号段数（`C.N`→`depth=2`，`C.S.N`/`C.S-N`→`depth=3`），章级编号 `C.N`→`scope=2`（开启跨章守卫），再写 `"formula": {"type": <风格码>, "depth": <段数>, "scope": 2, "ignore": []}`。**严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"**。代码已加护栏：总结含 `\tag{}` 但 `formula` 缺失时 `q_layer.py` 会向 stderr 打 `[Q-LAYER WARN]`。详见 [`references/layers/q.md`](references/layers/q.md) 的「执行前置（Pre-flight，强制）」。
+
 - **内容保真 / 写作质量关卡**（OCR 噪声修正、UTF-8 无乱码、粗体标签与 `§` 标识、KaTeX 渲染成功、英文标注、输出语种、一次性写齐、文件命名、图片嵌入、公式忠于原文、非核心内容摘要等）：定义见 [`references/formatting.md`](references/formatting.md) 与 [`references/verification.md`](references/verification.md) 对应章节；顶层「核心原则」亦为本类总纲。
 - **OCR 无法识别的遗漏标签**：书中确有但 OCR 漏识的条目，按两步法补写 + 标注 + 登记，查漏机制与 over-mark 守卫见 [`references/missing_label_policy.md`](references/missing_label_policy.md)。
 
 ---
+
+<a id="scripts-ref"></a>
 
 ## Skill Scripts Reference
 
@@ -407,6 +577,8 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 | `format/fmt_extras.py` | 显示公式/块引用后处理：`dedent` / `normalize` / `split` / `fixgap`（G 层修复）子命令 |
 | `format/split_chapters.py` | **规则 D**：把超 60000 字符的章总结按「节」拆成每节一个文件；节标题按两种格式识别：`§N` 节标题式（gm 风格）与 `N.M` 单小数点编号式（Vakil 风格）；`--threshold` 可调，`--dry-run` 只预览不写；拆分成功后默认删源文件，`--keep` 可保留 |
 | `figure/inspect_tool.py` | 排查工具：`page`（看单页 OCR）、`raw`（合并某范围纯文本）、`find`（扫编号项）子命令 |
+| `mm_repair/mm_repair_audit.py` | **【Step 2.5】** 扫描低置信 `text[]` / `formulas[]`，裁图并生成每页拼版 + `manifest.json`（纯 CPU，无需看图） |
+| `mm_repair/mm_repair_apply.py` | **【Step 2.5】** 把 agent 审读后的 `repairs.json` 写回 `page_*.json`，打 `mm_repaired` / `mm_reviewed` 标记并保留原值 |
 | `extract/write_chapter_map.py` | `chapter_map.json` 模板工具 |
 | `launch_pipeline.sh` | 流水线启动器（bash，空格路径安全） |
 
@@ -418,8 +590,15 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 | `pipeline/make_summary.py` | 生成全书级概要 |
 | `verify/review_tool.py` | 总结复核辅助 |
 | `verify/manage_ignore.py` | 维护校验忽略清单（ignore keys / figures） |
+| `formula/formula_manifest.py` | 抽取章 `.md` 每条公式（display/inline、含 blockquote `$$`）→ `formulas.json`（ord/kind/summary_label/section/line/content）；支持 `<!-- book:... -->` 内联书侧锚点 |
+| `formula/build_book_manifest.py` | 从 `page_*.json` 的 `text[]` 抽序标+纵坐标(`poly`)+上下文+最近上游标题(`book_section`)，产出 `book_chN_formulas.json`（书侧清单） |
+| `formula/fill_book_labels.py` | 回填：把 summary 标号对齐到书侧，标记 ok / label_not_in_book / unlabeled_summary |
+| `formula/diff_formula_manifest.py` | 公式保真对账（FABRICATED/MISSING/ORDER_MISMATCH/MISPLACED/OMITTED），有硬错 exit 1 |
+| `formula/backfill_all.py` | 全书批量回填驱动器，汇总 `backfill_report.txt` |
 
 ---
+
+<a id="faq"></a>
 
 ## 常见问题处理
 
@@ -434,8 +613,11 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 | Chinese mojibake | 写入用 `encoding='utf-8'`，写完后用 `read` 检查 |
 | PDF 路径含空格启动静默失败 | 改用 `launch_pipeline.sh`（bash，空格路径安全） |
 | **figure/ 目录生成 0 个 PNG（但 JSON 有数据）** | OpenCV 的 `cv2.imwrite` 在 Windows 上对含非 ASCII（中文）字符的路径会**静默失败**，所以检测阶段只写出了 `figure_detect.json` / `figure_index.json` 的元数据，但 `figure/` 下没有实际 PNG。本 skill 的 `figure/extract_figures.py` 已改为 PIL 保存，回跑即可生成；若 `_extract/` 已是历史遗留数据没有 PNG，可写一个 `regen_figures.py` 用 fitz 渲染 + PIL 裁剪，按 `figure_index.json` 的 `page+bbox+file` 重建（参考 `泛函分析导论及应用/_extract/regen_figures.py`） |
+| **扫描页倾斜（skew / 歪页）** | 提取阶段可自动矫正：页面渲染后经 Hough 变换估角（对稠密文本页稳健，直页返回 ~0° 不误动），MFD/MFR/OCR 与图检测**共用同一去斜渲染**，坐标空间一致。`--deskew` 三档：`auto`（默认，仅当 `|角|>0.5°` 且文本足够才旋转，数字原生 PDF 自动不动）/ `off`（关闭）/ `force`（强制旋转）；旋转角写入 `page_NNN.json` 的 `deskew.angle_deg`。改三处：`extract_pipeline.py`、`extract_book.py`、`figure/extract_figures.py` 均已接通 `pipeline/deskew.py`。对**扫描歪页的书**建议显式传 `--deskew auto`（默认即 auto，但若担心误伤数字原生书可设 `off`）。 |
 
 ---
+
+<a id="katex-faq"></a>
 
 ### KaTeX 问题识别与修复
 
@@ -449,7 +631,7 @@ python figure/embed_figures.py "<book_dir>" --dry-run
 |---|---------|---------|------|
 | 1 | **`$formula，` 未闭合 `$`** | 极高 | 中文逗号/句号放在 `$` 内而未补 `$`。`$` 缺少闭合导致数学模式吞噬后续内容，**尤其会吞掉紧随的 `$$` 定界符** |
 | 2 | **`$$` 包裹非数学内容** | 高 | `fix_v*.py` 错误地在包含中文或 `$...$` 的行外加了 `$$...$$` |
-| 3 | **断裂的命令（`\in t` → `\int`）** | 中等 | `mathify_plaintext.py` 或后续修复脚本替换时破坏命令间距 |
+| 3 | **断裂的命令（`\int` → `\int`）** | 中等 | `mathify_plaintext.py` 或后续修复脚本替换时破坏命令间距 |
 | 4 | **`$$` 包裹 `## §` 节标题** | 中等 | 同上，自动脚本误把标题行也包进 `$$` |
 | 5 | **CD 交换图语法错误** | 低 | `@A\int A` 在 KaTeX CD 中无法正确解析（`\int` 作为上箭头标签）；`@VV\text{RN} A` 尾字符应为 `V` |
 | 6 | **集合符号 `{x` 花括号未转义** | 低 | `$A_n={x$` → 缺少 `\{` / `\}` |
@@ -495,14 +677,12 @@ python format/check_katex.py <file>
 # ❌ 另一常见变体
 对 $t>0,
 [空行]
-$$
 ...
 # 未闭合 $ 吞掉了 $$ 的首个 $ 字符
 
 # ✅ 正确
 对 $t>0$，
 [空行]
-$$
 ...
 ```
 

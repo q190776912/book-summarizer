@@ -40,6 +40,12 @@ CLI:
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
+from pipeline.deskew import (
+    render_page as _deskew_render_page,
+    DEFAULT_MAX_ANGLE as DESKEW_MAX_ANGLE,
+    DEFAULT_THRESHOLD as DESKEW_THRESHOLD,
+)
+
 import os
 import re
 import sys
@@ -90,13 +96,18 @@ except Exception:
 DEFAULT_WEIGHTS = r"D:\study\model\PDF-Extract-Kit\models\Layout\YOLO\doclayout_yolo_ft.pt"
 
 
-def render_page(doc, pno, dpi):
-    """Render pdf page `pno` (0-based) at `dpi`; return (BGR ndarray, (W,H))."""
-    page = doc[pno]
-    pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0))
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    arr = np.array(img)[:, :, ::-1].copy()  # RGB->BGR for cv2
-    return arr, (pix.width, pix.height)
+def render_page(doc, pno, dpi, deskew_mode="auto",
+                max_angle=DESKEW_MAX_ANGLE, threshold=DESKEW_THRESHOLD):
+    """Render pdf page `pno` (0-based) at `dpi`; return (BGR ndarray, (W,H)).
+
+    Delegates to the shared ``pipeline.deskew.render_page`` so that figure
+    bounding boxes live in the SAME coordinate space as the text/formula
+    boxes produced by ``extract_book.py`` (both must use the identical
+    deskew render, otherwise caption matching and the E/F layers break).
+    """
+    img_bgr, (W, H), _ = _deskew_render_page(
+        doc, pno, dpi, mode=deskew_mode, max_angle=max_angle, threshold=threshold)
+    return img_bgr, (W, H)
 
 
 def load_ocr_text(json_path):
@@ -298,7 +309,7 @@ def detected_pages_set(out_dir):
 
 def detect_pages_range(pdf_path, out_dir, start, end, model=None,
                        weights=DEFAULT_WEIGHTS, dpi=200, conf=0.25,
-                       imgsz=1280, device="0", chap_map=None):
+                       imgsz=1280, device="0", chap_map=None, deskew="auto"):
     """Incremental detection on pages start..end (1-based), appending to
     existing figure_detect.json.
 
@@ -327,7 +338,7 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
     doc = fitz.open(pdf_path)
     new_entries = []
     for pno in range(start, end + 1):
-        arr, (W, H) = render_page(doc, pno - 1, dpi)
+        arr, (W, H) = render_page(doc, pno - 1, dpi, deskew_mode=deskew)
         json_path = os.path.join(out_dir, f"page_{pno:03d}.json")
         ocr_items = load_ocr_text(json_path)
         ch = chapter_for_page(pno, chap_map)
@@ -352,7 +363,7 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
 
 
 def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
-                  dpi=200, conf=0.25, imgsz=1280, device="0"):
+                  dpi=200, conf=0.25, imgsz=1280, device="0", deskew="auto"):
     """Detection phase: detect figures on every page (1..N), assign chapter via
     chapter_map.json (pages outside any range -> ch 0), write one global
     figure_detect.json. Detection crops get positional names det_pNNN_KK.png;
@@ -383,7 +394,7 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
     total = doc.page_count
     all_entries, all_md = [], []
     for pno in range(1, total + 1):
-        arr, (W, H) = render_page(doc, pno - 1, dpi)
+        arr, (W, H) = render_page(doc, pno - 1, dpi, deskew_mode=deskew)
         json_path = os.path.join(out_dir, f"page_{pno:03d}.json")
         ocr_items = load_ocr_text(json_path)
         ch = chapter_for_page(pno, chap_map)
@@ -402,7 +413,7 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
 
 
 def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
-                dpi=200, conf=0.25, imgsz=1280, device="0"):
+                dpi=200, conf=0.25, imgsz=1280, device="0", deskew="auto"):
     """Re-detect a single chapter's pages; merge into the existing global
     figure_detect.json and remove this chapter's previously-saved det crops
     (by page range) first."""
@@ -428,7 +439,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
     doc = fitz.open(pdf_path)
     entries, md = [], []
     for pno in range(start, end + 1):
-        arr, (W, H) = render_page(doc, pno - 1, dpi)
+        arr, (W, H) = render_page(doc, pno - 1, dpi, deskew_mode=deskew)
         json_path = os.path.join(out_dir, f"page_{pno:03d}.json")
         ocr_items = load_ocr_text(json_path)
         e, m = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,

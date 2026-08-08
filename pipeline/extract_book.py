@@ -9,6 +9,7 @@ A simple free-VRAM check halves the batch when <1 GB remains.
 Usage (inside `pdfextract` conda env):
     python extract_book.py <pdf_path> [--out DIR] [--start N] [--end N] [--dpi 200]
                                         [--mfr-batch-size 64]
+                                        [--deskew auto|off|force]
 
 Arguments:
     pdf_path         path to the source PDF (required)
@@ -66,6 +67,11 @@ import paddle
 from PIL import Image
 import pdf_extract_kit.tasks  # registers all tasks (incl. OCR)
 from pdf_extract_kit.utils.config_loader import initialize_tasks_and_models
+from pipeline.deskew import (
+    render_page as deskew_render_page,
+    DEFAULT_MAX_ANGLE as DESKEW_MAX_ANGLE,
+    DEFAULT_THRESHOLD as DESKEW_THRESHOLD,
+)
 
 
 def build_config():
@@ -119,7 +125,8 @@ def init_models(log=None):
 
 
 def process_batch(tasks, mfr_model, mfr_proc, device,
-                  pdf_path, out_dir, start, end, mfr_batch_size, dpi, log):
+                  pdf_path, out_dir, start, end, mfr_batch_size, dpi, log,
+                  deskew_mode="auto"):
     """Process pages start..end with already-initialized models.
 
     Loads MFD+OCR for Phase 1, then unloads them for Phase 2 (MFR),
@@ -146,12 +153,12 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
 
     for pno in range(start, end + 1):
         t0 = time.time()
-        page = doc[pno - 1]
-        pix = page.get_pixmap(dpi=dpi)
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-            pix.height, pix.width, pix.n)[:, :, :3]
-        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        pil = Image.fromarray(img)
+        img_bgr, (W, H), skew = deskew_render_page(
+            doc, pno - 1, dpi, deskew_mode=deskew_mode,
+            max_angle=DESKEW_MAX_ANGLE, threshold=DESKEW_THRESHOLD)
+        pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        if skew:
+            log(f"  deskew page {pno}: rotated {skew:+.2f}°")
         t1 = time.time()
 
         res = mfd.predict([img_bgr], None)[0]
@@ -165,7 +172,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
         for b, c, cf in zip(boxes, clss, confs):
             x0, y0, x1, y1 = [int(v) for v in b]
             x0, y0 = max(0, x0), max(0, y0)
-            x1, y1 = min(img.shape[1], x1), min(img.shape[0], y1)
+            x1, y1 = min(img_bgr.shape[1], x1), min(img_bgr.shape[0], y1)
             if x1 - x0 < 4 or y1 - y0 < 4:
                 continue
             crop = pil.crop((x0, y0, x1, y1))
@@ -189,7 +196,8 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
                              "score": item[1][1] if len(item[1]) > 1 else None})
         t3 = time.time()
 
-        page_data.append({"pno": pno, "crops_meta": crops_meta, "text": text})
+        page_data.append({"pno": pno, "crops_meta": crops_meta,
+                          "text": text, "skew": skew})
         render_total += t1 - t0
         mfd_total += t2 - t1
         ocr_total += t3 - t2
@@ -364,7 +372,10 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
         formulas = []
         for (bbox, c, cf, _), latex in zip(pg["crops_meta"], all_pred_strs[s_idx:e_idx]):
             formulas.append({"bbox": bbox, "cls": c, "conf": cf, "latex": latex})
-        out = {"page": pno, "formulas": formulas, "text": pg["text"]}
+        skew = pg.get("skew", 0.0)
+        out = {"page": pno, "formulas": formulas, "text": pg["text"],
+               "deskew": {"angle_deg": round(skew, 3),
+                          "mode": deskew_mode}}
         with open(os.path.join(out_dir, f"page_{pno:03d}.json"), "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False)
         log(f"  Write page {pno}: {len(formulas)}F {len(pg['text'])}T")
@@ -388,6 +399,9 @@ def main():
     ap.add_argument("--dpi", type=int, default=200, help="render DPI")
     ap.add_argument("--mfr-batch-size", type=int, default=64,
                      help="MFR batch size hint (default: 64); actual per-tier batch is fixed to 32")
+    ap.add_argument("--deskew", default="auto", choices=["auto", "off", "force"],
+                    help="skew correction for scanned pages: auto (correct only when "
+                         "confidently skewed, default), off (disabled), force (always rotate)")
     ap.add_argument("--logfile", default=None,
                     help="persistent log file path (default: <out>/extract.log)")
     ap.add_argument("--no-figures", action="store_true",
@@ -421,7 +435,8 @@ def main():
     tasks, mfr_model, mfr_proc, device = init_models(log)
     process_batch(tasks, mfr_model, mfr_proc, device,
                   pdf_path, out_dir, args.start, end,
-                  args.mfr_batch_size, args.dpi, log)
+                  args.mfr_batch_size, args.dpi, log,
+                  deskew_mode=args.deskew)
 
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -441,7 +456,7 @@ def main():
             from figure.extract_figures import run_full_book
             from figure.assign_figures import run_book as assign_figures_book
             log("Figure phase (1/2 detection): extracting figures on all pages...")
-            run_full_book(pdf_path, out_dir)
+            run_full_book(pdf_path, out_dir, deskew=args.deskew)
             log("Figure detection done.")
             log("Figure phase (2/2 assignment): naming figures 图X.X.X...")
             assign_figures_book(pdf_path, out_dir)

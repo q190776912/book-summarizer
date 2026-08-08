@@ -6,6 +6,26 @@
 ## 一句话目的
 总结里带 `\tag{X}` 的公式，其序标必须与**书源公式编号集合 S** 1:1 对应；编造/错位/跨章阻断 FAIL，遗漏默认 WARN，公式内容人工对账。
 
+## ⚠️ 执行前置（Pre-flight，强制）
+> **本层是 opt-in，配置缺失会静默 no-op**——若 `verify_config.json` 没有 `formula` 块，Q 层直接返回中性 `q_*` 元数据、不写报告、不计入 FAIL。**这会让执行者误以为"公式校验已通过"，实际根本没跑。** 因此运行本层前，agent 必须完成以下前置，缺一不可：
+
+1. **先确认配置存在**：检查 `<extract_dir>/verify_config.json` 是否含 `"formula"` map。
+2. **缺失则按书实际编号推导并写入**（agent 负责，不要跳过）：
+   - **扫书实测**：遍历该书若干章的 `page_{start:03d}.json … page_{end:03d}.json` 的 `text[].text`，用公式标签正则（覆盖 `（C.N）`/`(C.N)`/`Eq. C.N`/`Equation C.N`/`式（C.N）`/裸 `C.N`）看实际编号长什么样。
+   - **`depth`** = 编号数值段数（实测决定，不要用默认值猜）：
+     - `C.N`（如 `2.6`）→ `depth = 2`
+     - `C.S.N` 或 `C.S-N`（如 `11.1-1`）→ `depth = 3`
+   - **`scope`**：默认 `2`（章级编号 `C.N`，开启跨章守卫——首分量 ≠ 当前章号判 INCONSISTENT）；若全书为全局连续编号则用 `1`（关闭跨章守卫）；若每节重置（如 Kreyszig `(1)`）用 `3`。
+   - **`type`**：取与 `depth` 对应的 ORDINAL 风格码（2 段→`4`，3 段→`3`），作为 `depth` 的兜底默认值；显式给了 `depth` 时 `type` 仅作兜底。
+   - `ignore`：先给空数组 `[]`；跑出 MISSING 且确认属合理省略时再加。
+   - 写入示例（章级两段编号书）：
+     ```json
+     "formula": {"type": 4, "depth": 2, "scope": 2, "ignore": []}
+     ```
+3. **配置错会降级**：若 `formula` 配了但 `depth` 不对导致书源抽不到编号（S 空），层只做结构检查并 WARN「书源公式编号未抽到，请检查 formula 配置」，**不判编造/遗漏 FAIL**——此时须回头修正 `depth/scope`，不要当成"通过"。
+
+- **代码护栏**：`q_layer.py` 的 `run()` 网关已实现——当 `formula` 为 `None` **且**该章总结含 `\tag{...}` 时，会向 stderr 打印醒目的 `[Q-LAYER WARN]`，明确提示"公式序标未校验，不可报通过"。无 `\tag` 的书仍静默 no-op（合法）。agent 看到该 WARN 必须停下补全配置，禁止继续宣称公式校验通过。
+
 ## 语义与检查内容
 - **门控（opt-in）**：`BookConfig.formula` 为 `None`（默认）时整层 no-op——返回中性 `q_*` 元数据、不写报告、不计入 FAIL，确保既有 16 层与已完工书目零变化。仅当某书在 `verify_config.json` 显式配置 `formula` map 后才启用。
 - **配置形状**（与条目序标 `ordinal` 配置同构，非平铺字段）：

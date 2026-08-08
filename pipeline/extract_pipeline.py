@@ -60,6 +60,8 @@ def main():
                     help="restart from page 1, ignoring existing pages")
     ap.add_argument("--no-figures", action="store_true",
                     help="skip figure detection and assignment entirely")
+    ap.add_argument("--deskew", default="auto", choices=["auto", "off", "force"],
+                    help="skew correction for scanned pages (see extract_book.py --deskew)")
     args = ap.parse_args()
 
     global LOG_FILE
@@ -106,7 +108,8 @@ def main():
                 try:
                     process_batch(tasks, mfr_model, mfr_proc, device,
                                   PDF, EXTRACT_DIR, start, end,
-                                  MFR_BS, DPI, blog_log)
+                                  MFR_BS, DPI, blog_log,
+                                  deskew_mode=args.deskew)
                     blog_log(f"Batch {start}–{end} done")
                 except Exception as e:
                     blog_log(f"Batch {start}–{end} FAILED: {e}")
@@ -120,7 +123,8 @@ def main():
             if not args.no_figures:
                 try:
                     layout_model, new_ents = detect_pages_range(
-                        PDF, EXTRACT_DIR, start, end, model=layout_model)
+                        PDF, EXTRACT_DIR, start, end, model=layout_model,
+                        deskew=args.deskew)
                     log(f"Figure detect pages {start}–{end}: {len(new_ents)} crops")
 
                     # Per-chapter assignment: for any chapter whose pages are
@@ -168,7 +172,7 @@ def main():
                         log(f"Detecting {len(undetected)} previously undetected pages...")
                         layout_model, _ = detect_pages_range(
                             PDF, EXTRACT_DIR, undetected[0], undetected[-1],
-                            model=layout_model)
+                            model=layout_model, deskew=args.deskew)
                     detected = detected_pages_set(EXTRACT_DIR)
                     for ch, info in chap_map.items():
                         s, e = info.get("start"), info.get("end")

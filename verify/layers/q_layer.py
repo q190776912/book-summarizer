@@ -403,6 +403,96 @@ def _first_component(n: str) -> str:
     return n.split('.')[0] if '.' in n else n
 
 
+def _validate_formula_config(ctx, formula, ncomp, patterns):
+    """Pre-flight sanity check of the `formula` map against the actual book.
+
+    Runs BEFORE the structural compare loop.  Returns ``None`` when the config
+    is consistent with the book, or an ERROR string describing a fatal
+    depth/scope mismatch.  The caller prints it to stderr and returns a
+    ``q_inconsistent=[err_row]`` result so report.py FAILs the chapter instead
+    of letting a mis-config silently mis-judge every ``\\tag`` (the Kreyszig
+    type4/depth2/scope2 vs real type1/depth1/scope3 case).
+
+    Agnostic probe: a UNION of the 1- and 2-component patterns, so it finds
+    formula numbers regardless of how the book actually numbers them.
+    """
+    def _count_shapes(ext_dir, start, end):
+        # Count OCCURRENCES (not distinct numbers) of single-component (N) vs
+        # two-component (C.N) formula shapes across the chapter's pages.
+        # Occurrence counts survive the per-section restart of single-component
+        # books (every section repeats (1)..(N)), so a single-component book is
+        # correctly seen as single-dominated — unlike a distinct-number SET,
+        # which collapses to a handful of values and lets a few stray dotted
+        # matches flip the classification.
+        single_re = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
+        dotted_paren = re.compile(r'[（(]\s*(\d+\.\d+)\s*[）)]')
+        dotted_eq = re.compile(r'\b(?:Eq\.?|Equation)\s+(\d+\.\d+)')
+        dotted_cn = re.compile(r'式\s*[（(]?\s*(\d+\.\d+)')
+        single = dotted = 0
+        for pg in range(int(start), int(end) + 1):
+            fp = os.path.join(ext_dir, f'page_{pg:03d}.json')
+            if not os.path.exists(fp):
+                continue
+            try:
+                with open(fp, encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            for b in data.get('text', []) or []:
+                t = b.get('text', '') if isinstance(b, dict) else ''
+                if not t:
+                    continue
+                single += len(single_re.findall(t))
+                dotted += (len(dotted_paren.findall(t))
+                           + len(dotted_eq.findall(t))
+                           + len(dotted_cn.findall(t)))
+        return single, dotted
+
+    # 1) Configured patterns extract nothing but the book clearly HAS formulas.
+    agnostic = SourceFormulaIndex(
+        ctx.ext_dir,
+        build_formula_patterns(1) + build_formula_patterns(2),
+        chapter_prefix=False)
+    agnostic.build(ctx.ch, ctx.start, ctx.end)
+    agnostic_nums = agnostic.all_numbers()
+
+    configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False)
+    configured.build(ctx.ch, ctx.start, ctx.end)
+    configured_nums = configured.all_numbers()
+
+    if len(configured_nums) == 0 and len(agnostic_nums) > 0:
+        return (f"`formula` 配置 (type={formula.get('type')}, "
+                f"depth={formula.get('depth')}, scope={formula.get('scope', 2)}) "
+                f"在本章书源中抽不到任何公式编号，但 agnostic 探测抽到 "
+                f"{len(agnostic_nums)} 个编号；depth/scope 与书实际公式形态不符，"
+                f"请按书源真实编号重配 formula（例如单分量节级重排书应 "
+                f"type=1/depth=1/scope=3）。")
+
+    # 2) Summary \tag are all single-component but config asks for multi-component.
+    tags = _extract_summary_tags(ctx.md_file)
+    tag_ncomps = [len(t.normalized.split('.')) for t in tags if t.normalized]
+    max_tag_ncomp = max(tag_ncomps) if tag_ncomps else 0
+    if max_tag_ncomp == 1 and ncomp >= 2:
+        return (f"总结中的 \\tag 编号均为单分量（如 (N)），但 formula.depth={ncomp} "
+                f"（多分量）；公式应配置为 type=1/depth=1/scope=3 "
+                f"（节级单分量编号，每节从 1 重排）。")
+
+    # 3) scope == 2 (chapter-wide cross-chapter guard) but the book's formulas
+    #    are single-component -> every \tag{N} would be mis-judged cross-chapter
+    #    INCONSISTENT.  Decide single- vs multi-component by OCCURRENCE counts
+    #    (robust to the per-section restart), NOT by the distinct-number set.
+    scope = formula.get('scope', 2)
+    if scope == 2:
+        s, d = _count_shapes(ctx.ext_dir, ctx.start, ctx.end)
+        if s > d and s > 0:
+            return (f"书源公式为单分量编号（如 (N)，单分量 {s} ≫ 多分量 {d}），"
+                    f"但 formula.scope=2（章级跨章守卫）会把每个 \\tag{{N}} 误判为"
+                    f"跨章 INCONSISTENT；应改为 scope=3（节级重置）。"
+                    f"请按书实际编号重配 formula。")
+
+    return None
+
+
 def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
              chapter_prefix: bool = True,
              ignore: Optional[Set[str]] = None) -> tuple:
@@ -666,6 +756,30 @@ class QLayer(VerifyLayer):
         chapter_prefix = (scope == 2)
         ncomp = fdepth or _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
         patterns = build_formula_patterns(ncomp)
+
+        # Pre-flight: validate the formula config against the actual book BEFORE
+        # the structural compare loop.  A depth/scope mismatch would otherwise
+        # silently mis-judge every \tag (e.g. Kreyszig mis-set as type4/depth2/
+        # scope2 makes each \tag{N} a false cross-chapter INCONSISTENT -> FAIL,
+        # which operators "fix" by deleting all \tag).  Surface it as a clear
+        # ERROR and FAIL the chapter instead.
+        err = _validate_formula_config(ctx, formula, ncomp, patterns)
+        if err is not None:
+            err_row = {
+                'number': '',
+                'status': 'ERROR',
+                'summary_latex': '',
+                'source_text': err,
+            }
+            print(f"[Q-LAYER ERROR] {err}", file=sys.stderr)
+            return LayerResult(code='Q', metadata={
+                'q_checked': True,
+                'q_fabricated': [],
+                'q_inconsistent': [err_row],
+                'q_missing': [],
+                'q_rows': [err_row],
+                'q_error': err,
+            })
 
         if section_scoped:
             md_text = ''

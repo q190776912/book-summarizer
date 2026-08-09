@@ -80,7 +80,7 @@ def build_config():
             "formula_detection": {
                 "model": "formula_detection_yolo",
                 "model_config": {
-                    "model_path": MFD_WEIGHT, "device": "cuda",
+                    "model_path": MFD_WEIGHT, "device": "cuda" if torch.cuda.is_available() else "cpu",
                     "conf_thres": 0.25, "iou_thres": 0.45, "img_size": 1280,
                 },
             },
@@ -93,10 +93,10 @@ def build_config():
             "ocr": {
                 "model": "ocr_ppocr",
                 "model_config": {
-                    "lang": "ch", "use_gpu": True, "show_log": False,
+                    "lang": "ch", "use_gpu": torch.cuda.is_available(), "show_log": False,
                     "det_model_dir": OCR_DET, "rec_model_dir": OCR_REC,
                     "det_db_box_thresh": 0.3,
-                    "rec_batch_num": int(os.environ.get("PEK_OCR_BS", "2")),  # per-book override: PEK_OCR_BS=1
+                    "rec_batch_num": int(os.environ.get("PEK_OCR_BS", "1")),  # per-book override: PEK_OCR_BS=1
                 },
             },
         }
@@ -154,7 +154,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
     for pno in range(start, end + 1):
         t0 = time.time()
         img_bgr, (W, H), skew = deskew_render_page(
-            doc, pno - 1, dpi, deskew_mode=deskew_mode,
+            doc, pno - 1, dpi, mode=deskew_mode,
             max_angle=DESKEW_MAX_ANGLE, threshold=DESKEW_THRESHOLD)
         pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
         if skew:

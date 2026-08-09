@@ -16,12 +16,15 @@
      - `C.N`（如 `2.6`）→ `depth = 2`
      - `C.S.N` 或 `C.S-N`（如 `11.1-1`）→ `depth = 3`
    - **`scope`**：默认 `2`（章级编号 `C.N`，开启跨章守卫——首分量 ≠ 当前章号判 INCONSISTENT）；若全书为全局连续编号则用 `1`（关闭跨章守卫）；若每节重置（如 Kreyszig `(1)`）用 `3`。
+   - ⚠️ **scope:3 ⇒ depth 必为 1**：节级重置必为裸 `(N)`，不可能带 `C.N`（若出现 `C.N` 则必 scope:2）。
    - **`type`**：取与 `depth` 对应的 ORDINAL 风格码（2 段→`4`，3 段→`3`），作为 `depth` 的兜底默认值；显式给了 `depth` 时 `type` 仅作兜底。
+   - **type 1 = 单分量 standalone `(N)`**：节级重置（Kreyszig 风格），`depth` 必为 1，`scope` 通常为 3。是单分量公式书唯一合法码。
    - `ignore`：先给空数组 `[]`；跑出 MISSING 且确认属合理省略时再加。
    - 写入示例（章级两段编号书）：
      ```json
      "formula": {"type": 4, "depth": 2, "scope": 2, "ignore": []}
      ```
+     ⚠️ 此示例为**章级两段编号书**，仅作章级参考；**不可照抄到节级单分量书**（Kreyszig 每节重置应为 `{"type":1,"depth":1,"scope":3}`）。
 3. **配置错会降级**：若 `formula` 配了但 `depth` 不对导致书源抽不到编号（S 空），层只做结构检查并 WARN「书源公式编号未抽到，请检查 formula 配置」，**不判编造/遗漏 FAIL**——此时须回头修正 `depth/scope`，不要当成"通过"。
 
 - **代码护栏**：`q_layer.py` 的 `run()` 网关已实现——当 `formula` 为 `None` **且**该章总结含 `\tag{...}` 时，会向 stderr 打印醒目的 `[Q-LAYER WARN]`，明确提示"公式序标未校验，不可报通过"。无 `\tag` 的书仍静默 no-op（合法）。agent 看到该 WARN 必须停下补全配置，禁止继续宣称公式校验通过。
@@ -36,6 +39,8 @@
   - `depth`：公式编号的数值分量数（2 → `1.17`，3 → `11.1-1`），驱动源抽取正则的分量数。
   - `scope`：1=book / 2=chapter / 3=section——编号重置窗口；**跨章守卫**（首分量 ≠ 当前章号判 INCONSISTENT）当且仅当 `scope == 2` 开启，book/section 作用域关闭该守卫。
   - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。
+
+- **scope/depth 耦合不变量（配置必守）**：scope:3⇒depth:1（节级裸`(N)`）；scope:2⇒depth≥2（章级带 C. 前缀）；scope:1 通常 depth:1 全局连续。违反即非法，`require_complete` 应拒。
 - **书源编号抽取**：`SourceFormulaIndex.build()` 遍历 `page_{start:03d}.json .. page_{end:03d}.json`，对每页 `text[].text` 用**由 `depth` 派生**的正则抽编号（`build_formula_patterns(ncomp)` 覆盖 `（1.17）`/`(1.17)`/`Eq. 1.17`/`Equation 1.17`/`式（1.17）`/裸 `1.17` 六种变体，每式单捕获组），`norm()` 归一后归入本章集合 S。**只读 text，不读被扫花的 `formulas[].latex`**。
 - **序标校验（自动 FAIL）**：
   - `q_fabricated`(FABRICATED)：总结 `\tag` 编号归一后**不在 S**（编造/串号）→ 始终 FAIL。

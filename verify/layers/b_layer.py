@@ -225,6 +225,29 @@ def _parse_entry(inner, levels):
             comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
             return comps, 'uncat'
         return None
+    # Fallback: number-first with a header-boundary open paren directly after
+    # the numpath and no explicit label word (e.g. "2.6-1（线性算子）").
+    # Require the paren content not to be a citation so references like
+    # "2.6-1（见定理）" are still rejected.
+    paren_re = re.compile(r'^' + _cap.pattern + r'\s*[（(]')
+    m2 = paren_re.match(inner)
+    if m2:
+        numpath = m2.group(1)
+        tail = inner[m2.end():].strip()
+        if tail and not _is_reference_tail(tail):
+            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+            return comps, 'uncat'
+    # Fallback: label preceded by a name/attribution (e.g.
+    # "黎斯 (Riesz) 引理2.5-4（Riesz's lemma）").  Search for LABEL numpath
+    # anywhere in the span; the header-boundary check after numpath rejects
+    # prose references that happen to contain a label-number pair.
+    m3 = re.search(r'(?:' + _ENTRY_LABELS + r')\s*' + _cap.pattern, inner)
+    if m3:
+        numpath = m3.group(1)
+        if _is_header_boundary(inner[m3.end():]):
+            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+            label = re.match(r'^(?:' + _ENTRY_LABELS + r')', inner[m3.start():], re.IGNORECASE).group(0)
+            return comps, label
     return None
 
 
@@ -530,11 +553,25 @@ class BLayer(VerifyLayer):
         if blocking and present_md:
             kept = []
             for msg in blocking:
+                sec = None
+                nums_str = None
                 mm = re.search(r'(\d+\.\d+)\s+missing items\s+([-\d,\s]+)', msg)
                 if mm:
                     sec = mm.group(1)
-                    # 消息中每个号已带前导 '-'（"missing items -4"），直接拼接即可。
-                    bkeys = {f"{sec}{n.strip()}" for n in mm.group(2).split(',') if n.strip()}
+                    nums_str = mm.group(2)
+                else:
+                    # Extraction-side head-gap report: "0:2.1 starts at -3, items
+                    # -2 still missing after auto-recovery". If the reported
+                    # missing numbers are actually present in the written .md,
+                    # this is an OCR miss, not a real gap.
+                    sm = re.search(r'(\d+\.\d+)\s+starts at -(\d+).*?items\s+([-\d,\s]+)\s+still missing', msg)
+                    if sm:
+                        sec = sm.group(1)
+                        nums_str = sm.group(3)
+                if sec and nums_str:
+                    # 消息中每个号已带前导 '-'（"missing items -4" 或
+                    # "items -2 still missing"），直接拼接即可。
+                    bkeys = {f"{sec}{n.strip()}" for n in nums_str.split(',') if n.strip()}
                     if bkeys and bkeys <= present_md:
                         ignored_hit = sorted(set(ignored_hit) | bkeys, key=sortkey)
                         continue

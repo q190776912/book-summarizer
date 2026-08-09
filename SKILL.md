@@ -196,6 +196,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - **文件缺失** → 仅 WARNING + 沿用默认 ordinal=3（`scan_skeleton` 写初稿可继续；存量书兼容，不阻断）。
 - **文件存在但缺 `ordinal`** → 硬报错并退出（`exit 2`）。
 - **`section_types` / `section_depths` 显式但非法**（长度不等 / 分量 <1 / 非法角色码 / 首分量 ≠1）→ 硬报错（`exit 2`）。
+- **存在 `formula` 块但字段非法** → 强制校验并 `exit 2`：若存在 `formula` 块，强制校验：`type`∈合法码(1–8)；`depth`≥1；`scope`∈{1,2,3}；`ignore` 归一化为字符串列表；并**与书实测编号对账**（depth/scope 须匹配全量扫出公式形态，违反 scope/depth 不变量即 exit 2）。
 - 配置字段：`ordinal`（**必填，数组** `List[GroupConfig]`，每个元素 `{type, name, depth, scope}`，详见 `references/verification.md` §4.3 与 `references/layers/b.md`）、`language`、`strict`、`ignore`。`type` 为编号风格码（1–7，判定树见 `references/book_patterns.md` §4）；`name` 为该组标签词（如 `["Theorem"]`，兜底组用 `["uncat"]`）；`depth` 为编号层级数；`scope` 为编号作用域（1=全书 / 2=章 / 3=节）。数组首元素的 `type` 即 `primary_type`，由它自动反推编号模式与小节层级（`section_types`/`section_depths` 现由 primary_type 自动反推，仅四级子小节书 1.1.1.1 需显式覆盖）。
   > ⚠️ 旧格式（整型 `ordinal` 如 `3`，或 `separate_types`）已被 `from_dict` 拒绝，并报 `make_config --force` 迁移提示（exit 2）。分组（per-type / combined）现由多个具名 group（per-type）或单个 uncat group（combined）表达，不再有 `separate_types` 开关。
 
@@ -259,7 +260,16 @@ bash "C:/Users/ye190/.workbuddy/skills/book-summarizer/launch_pipeline.sh" \
 
 ### Step 2：Agent 自动轮询循环（强制并行）
 
-> **🔴 启动后台提取后立即进入此循环，不得等待。**
+> **🚨 主 Agent 行为铁律（防停滞，最高优先级）**：用 `run_in_background` 启动后台提取后，**主 Agent 必须立刻进入下方 `while True` 轮询循环，严禁以下行为**：
+> - ❌ 调用 `TaskOutput(block=True)` 或任何会 **block 等待后台提取任务结束** 的工具——后台提取是另一条线程，主 Agent 不该等它；
+> - ❌ 干等"提取完成通知"才推进——通知只是可选提示，主 Agent 必须靠**自己轮询**驱动；
+> - ❌ 把"提取"和"MM 修复 / 写初稿"排成串行任务链——它们是**双线并行**，边提取边对已稳定落盘的页码做后续工作。
+>
+> **轮询做法（每轮非阻塞）**：用 `ls _extract/page_*.json | wc -l` / 取最大页码，判断「已落盘多少页」。每当落盘页码增长，就对「新增的稳定区间」（已写出、且提取进程不会再改写的 `page_*.json`）增量并行启动 MM 修复（audit→视觉补全→apply）与写源语言初稿。循环永不因"等后台"而停滞。
+
+> **🔴 提取与 MM 修复门可并行**：后台提取按批落盘 `page_*.json`（每批在批末一次性写出、批与批互不触碰）。因此「对已稳定（批次已写完）页码跑 MM 修复」可与「后台继续提取后续批次」同时进行——只要 MM 修复只针对已落盘的页码，就绝不会与提取进程写同一文件冲突。
+>
+> **⚠️ 关键：agent 视觉审读才是 MM 修复门真正的瓶颈**，audit 抠图只是前置的纯 CPU 步骤。轮询中每多出一个稳定批次，主 agent 必须**立即**开始读该批次的 `page_NNN_sheet.png` 做视觉识别、写 `repairs.json`、跑 `apply`，绝不能等整本书提取完再统一看。视觉审读本身也可按页/按批次拆给多个子代理并行处理。
 
 ```
 total_chapters = len(chapter_map)
@@ -272,9 +282,13 @@ while True:
         从目录页读取章名和书页码，写 chapter_map.json
         chapter_map_ready = True
 
-    2.5. 若 current_max_page 自上次 MM audit 以来增长：
-        执行 Step 2.5 多模态低置信补全（MM Repair Gate）
-        > 若当前模型不支持看图，记日志 `MM_UNAVAILABLE` 并跳过，直接进入 3.
+    2.5. 若 current_max_page 自上次 MM audit 以来增长（建议阈值：新增 ≥1 个稳定批次，如 50 页；或后台提取任务已结束）：
+         对「新增的稳定落盘区间」执行 Step 2.5 的完整链路：
+         a. 跑 `mm_repair_audit.py`（纯 CPU，把低置信区裁图拼版成 `page_NNN_sheet.png`）
+         b. **主 agent 立即读这些 sheet 图做视觉审读**（不能等全部提取完）；按页/批次拆给多个子代理并行也可
+         c. 写 `_mm_repair/repairs.json` 后跑 `mm_repair_apply.py`
+         > MM audit / apply 脚本幂等：只处理未 mm_repaired/mm_reviewed 的条目，重复跑安全，可随时触发
+         > 若当前模型不支持看图，记日志 `MM_UNAVAILABLE` 并跳过 b/c，直接进入 3.
 
     3. 对 chapter_map 中每个未写章节：
        if info.end <= current_max_page → 该章可写
@@ -287,7 +301,7 @@ while True:
 
     5. if 源语言已写章数 == total_chapters:  break   # 源语言全部初稿写完，转入 规则 E 阶段2/3
 
-    6. if 没有新章节可写:  sleep 5s
+    6. if 没有新章节可写 and current_max_page 未增长:  sleep 5s  # 继续轮询，绝不退出等待外部通知
 ```
 
 > **增量 figure**：`figure_index.json` 也按章增量生成，与总结并行。写章总结时可直接引用该章的 `figure_index.json` 用于 E/F 校验。
@@ -298,22 +312,31 @@ while True:
 
 ### Step 2.5：多模态低置信补全（MM Repair Gate）
 
-> **🔴 总结前必须先执行的步骤**。若当前运行模型不支持看图（非多模态），记录 `MM_UNAVAILABLE` 后直接跳过本步，进入 Step 3 总结。
+> **🔴 总结前必须先执行的步骤**。分三种模式（A / B / C），但**文本类书推荐「混合策略」**：
+> - **模式 A（多模态 / agent 视觉审读）**：模型支持看图 → 走 **步骤 3a**，读 `page_NNN_sheet.png` + manifest 逐条修正。
+> - **模式 B（文本层补偿，无需看图）**：书籍为**文本类（非扫码/扫描版，PDF 含可选中数字文本层）** → 走 **步骤 3b**，从 PDF 抽干净数字文本与低置信 OCR 比对修正。
+> - **模式 C（扫描版跳过）**：书籍为**扫描/扫码版（无可用文本层）** → 记录 `MM_UNAVAILABLE` 后直接跳过本步。
+>
+> **🔶 混合策略（文本类书的标准做法）**：文本类书**先跑模式 B**把「文本层干净的文字」修准/确认（标 `mm_repaired`/`mm_reviewed`），把**公式 + 文本层不可信的文字**保持未解决；随后**若模型支持看图**，**重跑 audit**（已修文字因 page JSON 标记被跳过，公式/不可信文字会重新标出）→ 走**模式 A** 由 agent 视觉读取真实印刷页处理剩余项。这样把便宜准确的文本层补偿吃干抹净，只把贵且慢的视觉识别用在它不可替代的公式与坏文本层区域。
+> 若模型不支持看图（纯模式 B），则模式 B 把不可信文字也按「信任 OCR」记 `ok` 收尾，公式交 summary 规则 G。
+>
+> 文本类 vs 扫描版可用 `mm_repair_text_compare.py` 的自动探测（取样页可选中词数），或用 `--force-text` / `--force-scan` 强制覆盖。
 
 目的：对 OCR / 公式识别置信度不足的区域，用多模态能力重新识别并写回 `page_*.json`，减少后续写作的 OCR 噪声。
 
-触发时机：Step 2 轮询循环中，当 `current_max_page` 自上次 MM audit 以来增长时执行。脚本**幂等**：已 `mm_repaired` / `mm_reviewed` 的条目不再重复处理。
+触发时机：Step 2 轮询循环中，当 `current_max_page` 自上次 MM audit 以来增长时执行（**可趁后台提取仍在跑后续批次时，对已达成的页码并行做本步**，见上方并行说明）。脚本**幂等**：已 `mm_repaired` / `mm_reviewed` 的条目不再重复处理。
 
-参数（默认值按用户确认）：
-- 文本置信度阈值 `--text-thresh 0.90`：OCR `text[].score < 0.90` 才触发。
-- 公式置信度阈值 `--formula-conf 0.50`：MFD `formulas[].conf < 0.50` 触发。
+参数（默认 `--text-thresh 0.80` / `--formula-conf 0.30`，按用户确认）：
+- 文本置信度阈值 `--text-thresh 0.80`：OCR `text[].score < 0.80` 才触发（进入 Agent 视觉审读）。
+- 公式置信度阈值 `--formula-conf 0.30`：MFD `formulas[].conf < 0.30` 触发。
 - 公式错误标记：`latex` 含 `[MFR_ERR` / `[MFR_SKIPPED` / `.notdef` / 替换字符 `�` 也触发。
+- 纵向留白 `--vpad-lines 0.5`：裁图时在被标区域**上下各加 `0.5` 个平均行高**（约半行），用于覆盖低置信区常见的小倾斜导致的裁切不全；横向保留小 context pad。若倾斜明显可调大（如 `0.75`/`1.0`）。
 
 流程：
 
 1. **审计脚本**（纯 CPU，无需看图）：
    ```powershell
-   python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_audit.py" "<pdf_path>" "<_extract_dir>" --text-thresh 0.90 --formula-conf 0.50
+   python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_audit.py" "<pdf_path>" "<_extract_dir>" --text-thresh 0.80 --formula-conf 0.30 --vpad-lines 0.5
    ```
    产出：
    - `<_extract_dir>/_mm_repair/manifest.json`（全部待审条目，稳定 key 为 `text:I` / `formula:I`）
@@ -322,7 +345,13 @@ while True:
 
 2. **若无标记**：审计脚本输出 `MM_AUDIT DONE: nothing flagged`，直接跳到 Step 3。
 
-3. **Agent 视觉审读**：读取每个 `page_NNN_sheet.png` 和 manifest，按标签判断：
+2.5 **模式判定（选择 A / B / C）**：审计已标出条目后，按顶层「三种模式」说明分流：
+   - 书籍为扫描/扫码版（无文本层，自动探测不通过且非 `--force-text`）→ **模式 C** → 记录 `MM_UNAVAILABLE`，跳过本步进入 Step 3。
+   - 书籍为文本类（PDF 有可选中数字文本层，`mm_repair_text_compare.py` 自动探测通过或用 `--force-text`）：
+     - **混合策略（推荐）**：先走 **模式 B（步骤 3b，加 `--hybrid`）** 修准/确认文字；随后若模型支持看图 → **重跑 audit** → 走 **模式 A（步骤 3a）** 处理公式与不可信文字残留。
+     - 模型不支持看图（纯模式 B，无后续视觉补偿）→ 走 **模式 B（步骤 3b，不加 `--hybrid`）**，不可信文字按信任 OCR 记 `ok` 收尾，公式交 summary 规则 G。
+
+3a. **【模式 A】Agent 视觉审读**（需多模态）：读取每个 `page_NNN_sheet.png` 和 manifest，按标签判断：
    - OCR/latex **正确** → 在 `repairs.json` 的 `ok` 列表记录该 key；
    - OCR/latex **错误** → 在 `repairs.json` 的 `corrections` 写正确文本 / LaTeX；
    - **实为公式（OCR 把整行公式误当文本行）** → 在 `repairs.json` 的 `to_formula` 写该 `text:I` 对应的正确 LaTeX（apply 会转成 `formulas[]` 新条目，见下）。
@@ -343,6 +372,28 @@ while True:
    ```
    `to_formula` 仅用于「OCR 把整行公式误当文本行」：key 必须是 `text:I`，值为该公式的正确 LaTeX。
 
+3b. **【模式 B】文本层补偿**（文本类书，无需看图）：用 `mm_repair_text_compare.py` 从 PDF 抽取低置信 `text` 条目所在区域的干净数字文本，与 OCR 文本比对并自动产出 `repairs.json`：
+   ```powershell
+   # 混合策略（推荐）：加 --hybrid，公式与不可信文字保持未解决，留给后续模式 A
+   python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_text_compare.py" "<pdf_path>" "<_extract_dir>" --src-dpi 200 --hybrid
+   # 纯模式 B（无后续视觉补偿）：省略 --hybrid，不可信文字按信任 OCR 记 ok
+   python "...mm_repair_text_compare.py" "<pdf_path>" "<_extract_dir>" --src-dpi 200
+   # 可选：--force-text 强制按文本类处理；--force-scan 强制跳过；--expand-pt 2.0 区域外扩
+   ```
+   - 对每个 flagged `text:I`：按其 `poly` 换算成 PDF 点，取**词中心**落在 poly 的 (y,x) 带内的数字文字（不用 clip 相交，避免 Koopman 等行距极窄的书吞入相邻行），按行内 x 顺序拼接；
+     - 数字文字干净且与 OCR 不同 → 写入 `corrections`（以数字文字为准修正，**标 resolved**）；
+     - 数字文字与 OCR 一致 / 为空 → 写入 `ok`（确认 OCR 可用，**标 resolved**）；
+     - 数字文字含白名单外字符（乱码/tofu）/ 与 OCR 差异过大 → 「不可信」：
+       · **`--hybrid` 模式**：**保持未解决**，标记 `text_deferred`，写入 `repairs.json` 的 `deferred`，留给后续模式 A（agent 视觉读真实印刷页更准）；
+       · **纯模式 B**：保守信任 OCR，写入 `ok`（标 resolved）收尾。
+   - 公式条目无文本层可取 → **保持未解决**，标记 `text_mode_skipped`（仅作信息），**不在此模式补偿**；随后若有视觉能力则交模式 A，否则 summary 阶段按规则 G（理解后重写）处理。
+   - ⚠️ **关键**：模式 B **绝不**把公式/不可信文字标成 resolved，以便混合策略下**重跑 audit 时它们会被重新标出**交给模式 A（已修文字因 page JSON 的 `mm_repaired`/`mm_reviewed` 标记被 audit 跳过）。
+   - 文本类/扫描版自动探测：取样页可选中词数 ≥ 30/页判为文本类；可用 `--force-text` / `--force-scan` 覆盖探测结果。
+   - 随后照常走步骤 4 应用脚本写回（仅写回 corr/ok；`deferred` 与公式条目不在此步改动）。
+
+   > ⚠️ **文本层损坏（tofu）风险——模式 B 不成立的情形**：部分文本类书（尤其公式密集的数学教材，如 Ross《A First Course in Probability》）的 PDF 文本层 CMap 错乱：**正文 prose 干净，但公式/数学区域会吐出 `𝐸ሾ𝑋ሿ` / `ଵ` / `ቆ` 这类乱码**（数学字母符号块 U+1D400–U+1D7FF、埃塞俄比亚/马拉雅拉姆/奥里亚等生僻文字）。此时数字文本层反不如 OCR（OCR 读的是视觉字形，公式区更准）。本脚本用**白名单** `is_clean` 严格校验：数字文本含白名单外字符即判不可信 → 保守 KEEP OCR，绝不把 tofu 写回。
+   > **判定准则**：跑完 `text_compare` 后，若 `corrections` 里几乎全是上述乱码、绝大多数条目被 KEEP，说明该书文本层损坏，**应放弃模式 B**（当作 `--force-scan` / `MM_UNAVAILABLE` 跳过），公式区改由 summary 规则 G（理解后重写）处理；不要强行用损坏文本层覆盖正确 OCR。
+
 4. **应用脚本**（把修正写回 page JSON）：
    ```powershell
    python "C:\Users\ye190\.workbuddy\skills\book-summarizer\mm_repair\mm_repair_apply.py" "<_extract_dir>"
@@ -354,11 +405,32 @@ while True:
 5. 完成后再回到 Step 2 循环继续写总结。
 
 > **📌 Summary 阶段如何使用这些标记**：
-> - `text[].mm_repaired` / `formulas[].mm_repaired`：已用多模态修正，**直接信任** `text`/`latex`，不再依赖 OCR 噪声原文。
-> - `text[].mm_reviewed`：OCR 原文正确，按原文使用。
+> - `text[].mm_repaired` / `formulas[].mm_repaired`：已用多模态或文本层补偿修正，**直接信任** `text`/`latex`，不再依赖 OCR 噪声原文。
+> - `text[].mm_reviewed`：OCR 原文正确（或在模式 B 中经数字文本层确认一致），按原文使用。
 > - `formulas[].mm_converted`：由 `to_formula` 转来的公式（原 text 项已删除），summary 正常遍历 `formulas[]` 用 KaTeX 渲染即可；`conf=null` 表示非 MFD 检测、由多模态补全得到。无需特殊处理，因为对应 text 项已不存在。
+> - `entry.text_mode_skipped`：仅在**模式 B** 出现——该条目（多为公式）无文本层可取、本模式不补偿，**保持未解决**；混合策略下交后续模式 A 处理，否则 summary 阶段按规则 G（理解后重写）处理；summary 不要把它当成「已确认无误」。
+> - `entry.text_deferred`：仅在**模式 B + `--hybrid`** 出现——该文字条目的数字文本层不可信（tofu），本模式不补偿、**保持未解决**，交后续模式 A 由 agent 视觉读取真实印刷页修正。
+>
+> **📌 规则 G 的本质（必须明确）**：规则 G（OCR/公式噪声「理解后重写」）是 **summary 写作阶段由 agent 在 `.md` 里判断并落笔**的规则，**不属于提取/修复流程，绝不修改 `page_*.json`**。模式 B/A 写回的是 `page_*.json`（结构化数据），规则 G 改的是最终章节 `.md` 的公式渲染。两类残留最终都汇聚到这里：公式类（无文本层）→ 规则 G；文字类若模式 A 也不可用 → 规则 G。两者互不冲突，且只有规则 G 触碰 `.md`。
 
-> **阈值提示**：`--text-thresh 0.90` 在实测 130 页书上标出约 1000 条（其中 0.8–0.9 区间多数是正确短片段）。若某书标记量过大，可改用 `--text-thresh 0.80` 或 `0.75` 降低审阅量；但会漏掉部分轻微噪声。阈值可参数化，按书调整。
+> **阈值提示**：默认 `--text-thresh 0.80` 已比早期 0.90 宽松（0.8–0.9 区间多为正确短片段，不必逐条看）。若某书标记量仍过大，可降到 `0.75` 降低审阅量，但会漏掉部分轻微噪声；阈值可参数化，按书调整。公式默认 `--formula-conf 0.30`：仅 `conf<0.30` 或 `latex` 含错误标记才触发，0.3–0.5 区间的轻微偏差不进审读；若某书公式噪声偏高，可调高（如 `0.50`）以扩大审读面。
+
+> **🔶 混合策略完整命令序列（文本类书 · 模型支持看图）**：
+> ```powershell
+> # 1) 审计（标出低置信条目 + 渲染裁图）
+> python mm_repair_audit.py "<pdf>" "<_extract>" --src-dpi 200
+> # 2) 模式 B（混合）：修准/确认文字，公式与不可信文字保持未解决
+> python mm_repair_text_compare.py "<pdf>" "<_extract>" --src-dpi 200 --hybrid
+> # 3) 写回模式 B 的修正（仅 corr/ok；deferred 与公式不动）
+> python mm_repair_apply.py "<_extract>"
+> # 4) 重跑审计：已修文字被跳过，公式/不可信文字重新标出 → 交给模式 A
+> python mm_repair_audit.py "<pdf>" "<_extract>" --src-dpi 200
+> # 5) 模式 A：agent 读 *_sheet.png + manifest，写 repairs.json（含公式与 deferred 文字的修正）
+> # 6) 写回模式 A 的修正
+> python mm_repair_apply.py "<_extract>"
+> # 7) 回到 Step 2 循环写总结（规则 G 在 summary 阶段处理仍残留的公式噪声）
+> ```
+> 若模型不支持看图（纯模式 B）：省略 `--hybrid` 与步骤 4–6，模式 B 把不可信文字记 `ok`、公式交规则 G。
 
 ---
 
@@ -579,6 +651,7 @@ python formula/diff_formula_manifest.py _extract/ChapterN_filled.json \
 | `figure/inspect_tool.py` | 排查工具：`page`（看单页 OCR）、`raw`（合并某范围纯文本）、`find`（扫编号项）子命令 |
 | `mm_repair/mm_repair_audit.py` | **【Step 2.5】** 扫描低置信 `text[]` / `formulas[]`，裁图并生成每页拼版 + `manifest.json`（纯 CPU，无需看图） |
 | `mm_repair/mm_repair_apply.py` | **【Step 2.5】** 把 agent 审读后的 `repairs.json` 写回 `page_*.json`，打 `mm_repaired` / `mm_reviewed` 标记并保留原值 |
+| `mm_repair/mm_repair_text_compare.py` | **【Step 2.5 模式 B】** 非多模态 + 文本类书时用：从 PDF 抽干净数字文本与低置信 OCR `text` 条目比对，自动产出 `repairs.json`（文本修正/确认）；公式条目标记 `text_mode_skipped` |
 | `extract/write_chapter_map.py` | `chapter_map.json` 模板工具 |
 | `launch_pipeline.sh` | 流水线启动器（bash，空格路径安全） |
 

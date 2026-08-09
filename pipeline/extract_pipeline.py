@@ -12,7 +12,7 @@ Incremental figure workflow (runs interleaved with extraction batches):
     figure_index.json as soon as each chapter is done, without waiting for all pages.
 """
 
-import sys, os, json, time, glob, re, gc, argparse
+import sys, os, json, time, glob, re, gc, argparse, traceback
 from pathlib import Path
 import torch
 
@@ -113,6 +113,8 @@ def main():
                     blog_log(f"Batch {start}–{end} done")
                 except Exception as e:
                     blog_log(f"Batch {start}–{end} FAILED: {e}")
+                    blog_log("TRACEBACK:\n" + traceback.format_exc())
+                    traceback.print_exc()
                     log(f"Batch {start}–{end} FAILED — see {batch_log.name}")
                     if device == "cuda":
                         torch.cuda.empty_cache()

@@ -6,7 +6,7 @@
 
 用法:
     python mm_repair_audit.py <pdf_path> <extract_dir>
-        [--text-thresh 0.90] [--formula-conf 0.50]
+        [--text-thresh 0.80] [--formula-conf 0.30] [--vpad-lines 0.5]
         [--src-dpi 200] [--dpi 300]
 
 扫描 <extract_dir> 下所有 page_*.json：
@@ -71,8 +71,24 @@ def poly_to_bbox(poly, scale):
     return [x0 * scale, y0 * scale, x1 * scale, y1 * scale]
 
 
-def render_page_crops(doc, pno, dpi, src_dpi, entries, out_dir, page_prefix):
+def page_avg_line_h(data):
+    """Estimate average text line height (src coords) from text polys."""
+    hs = []
+    for t in data.get("text", []):
+        poly = t.get("poly")
+        if poly and len(poly) >= 8:
+            ys = [poly[i + 1] for i in range(0, len(poly), 2)]
+            h = max(ys) - min(ys)
+            if h > 0:
+                hs.append(h)
+    return (sum(hs) / len(hs)) if hs else None
+
+
+def render_page_crops(doc, pno, dpi, src_dpi, entries, out_dir, page_prefix,
+                      avg_line_h=None, vpad_lines=0.5):
     """entries: list of (key, kind, region) where region is poly or bbox in src coords.
+    avg_line_h: 该页平均行高(src coords)，用于计算纵向 padding；None 时回退小 padding。
+    vpad_lines: 纵向 padding = avg_line_h * vpad_lines，默认 0.5（上下各半行，覆盖小倾斜）。
     Returns list of (key, crop_path, pil_crop)."""
     scale = dpi / src_dpi
     page = doc[pno - 1]
@@ -93,10 +109,15 @@ def render_page_crops(doc, pno, dpi, src_dpi, entries, out_dir, page_prefix):
         y1 = min(img.height, y1)
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
-        # pad a little for context
-        pad = max(4, int((y1 - y0) * 0.05))
-        x0 = max(0, x0 - pad); y0 = max(0, y0 - pad)
-        x1 = min(img.width, x1 + pad); y1 = min(img.height, y1 + pad)
+        # 纵向 padding：上下各加 vpad_lines 个平均行高，覆盖低置信区域的小倾斜
+        if avg_line_h and avg_line_h > 0:
+            vpad = int(round(avg_line_h * scale * vpad_lines))
+        else:
+            vpad = max(4, int((y1 - y0) * 0.05))
+        # 横向 padding：保留小 context，避免裁掉相邻字符边缘
+        hpad = max(4, int((x1 - x0) * 0.05))
+        x0 = max(0, x0 - hpad); y0 = max(0, y0 - vpad)
+        x1 = min(img.width, x1 + hpad); y1 = min(img.height, y1 + vpad)
         crop = img.crop((x0, y0, x1, y1))
         crop_path = os.path.join(out_dir, f"{page_prefix}_{key.replace(':', '_')}.png")
         crop.save(crop_path)
@@ -143,7 +164,8 @@ def make_sheet(page_crops, out_path, font):
     canvas.save(out_path)
 
 
-def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi):
+def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
+          vpad_lines=0.5):
     mm_dir = os.path.join(extract_dir, REPAIR_DIRNAME)
     os.makedirs(mm_dir, exist_ok=True)
     font = load_font(20)
@@ -177,6 +199,7 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi):
         pno = int(m.group(1))
         data = json.load(open(pf, encoding="utf-8"))
         page_prefix = f"page_{pno:03d}"
+        avg_line_h = page_avg_line_h(data)
 
         flagged = []  # (key, kind, region, current, score)
         # text
@@ -210,7 +233,8 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi):
         os.makedirs(page_out_dir, exist_ok=True)
         entries_for_render = [(k, kind, region) for (k, kind, region, *_rest) in flagged]
         page_crops = render_page_crops(doc, pno, dpi, src_dpi, entries_for_render,
-                                       page_out_dir, page_prefix)
+                                       page_out_dir, page_prefix,
+                                       avg_line_h=avg_line_h, vpad_lines=vpad_lines)
 
         entries = []
         for (key, kind, region, current, *rest) in flagged:
@@ -268,19 +292,22 @@ def main():
     ap = argparse.ArgumentParser(description="Audit low-confidence page_*.json entries")
     ap.add_argument("pdf_path")
     ap.add_argument("extract_dir")
-    ap.add_argument("--text-thresh", type=float, default=0.90)
-    ap.add_argument("--formula-conf", type=float, default=0.50)
+    ap.add_argument("--text-thresh", type=float, default=0.80)
+    ap.add_argument("--formula-conf", type=float, default=0.30)
     ap.add_argument("--src-dpi", type=int, default=200,
                     help="DPI used during extraction (poly/bbox coords are in this space)")
     ap.add_argument("--dpi", type=int, default=300,
                     help="DPI to render crops at (higher = clearer)")
+    ap.add_argument("--vpad-lines", type=float, default=0.5,
+                    help="纵向 padding = 平均行高 × 此值，加在被标区域上下两侧，"
+                         "用于覆盖小倾斜导致的裁切不全（默认 0.5 = 上下各半行）")
     args = ap.parse_args()
 
     if not os.path.isfile(args.pdf_path):
         print(f"ERROR: PDF not found: {args.pdf_path}")
         sys.exit(1)
     audit(args.pdf_path, args.extract_dir, args.text_thresh,
-          args.formula_conf, args.src_dpi, args.dpi)
+          args.formula_conf, args.src_dpi, args.dpi, args.vpad_lines)
 
 
 if __name__ == "__main__":

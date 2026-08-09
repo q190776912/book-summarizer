@@ -214,7 +214,7 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
                 flagged.append((key, "text", t.get("poly"), t.get("text", ""), score))
         # formula
         for i, f in enumerate(data.get("formulas", [])):
-            if f.get("mm_repaired") or f.get("mm_reviewed"):
+            if f.get("mm_repaired") or f.get("mm_reviewed") or f.get("mm_converted"):
                 continue
             conf = f.get("conf")
             latex = f.get("latex")

@@ -63,7 +63,7 @@ def _norm_ch(s):
 _CH = r'([0-9A-Za-z])'
 _BOOK_LABEL_RES = [
     re.compile(r'^\s*(定义|定理|引理|推论|命题)\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\b'),          # 定义4.7-1
-    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)\b', re.IGNORECASE),  # Definition 4.7
+    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)(?:' + SEP_TIGHT + r'(\d+))?\b', re.IGNORECASE),  # Definition 4.7[-N]
     re.compile(r'^\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\s*(定义|定理|引理|推论|命题)'),            # 4.7-1 定义
 ]
 
@@ -92,9 +92,10 @@ def _scan_book_category_items(ch, start, end, ext_dir):
                 if ri == 0:                      # 定义4.7-1
                     cat = m.group(1); chc = m.group(2)
                     sec = int(m.group(3)); num = int(m.group(4))
-                elif ri == 1:                    # Definition 4.7
+                elif ri == 1:                    # Definition 4.7[-N]
                     cat = EN_TO_CN.get(m.group(1).title(), '定义')
-                    chc = m.group(2); sec = int(m.group(3)); num = int(m.group(4))
+                    chc = m.group(2); sec = int(m.group(3))
+                    num = int(m.group(4)) if m.group(4) is not None else 0
                 else:                            # 4.7-1 定义
                     chc = m.group(1); sec = int(m.group(2)); num = int(m.group(3))
                     tail = t[m.end():m.end() + 8]

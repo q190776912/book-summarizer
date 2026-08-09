@@ -32,12 +32,16 @@ _H_UL_OPENERS = re.compile(
     r'^\s*>\s*\*\*(?:'
     r'(?:\d{1,3}[.．]\s*)?(?:'
     r'(?:证明|证|例|注|说明'
-    r'|Proof|Example|Note|Remark'
+    r'|Proof|Example|Solution|Note|Remark'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
     r')'
     # number-first form:  > **N.M-K 例  (some books print 编号在前, e.g. Kreyszig `8.1-6 例子`)
     r'|(?:\d{1,3}(?:[.．-]\d{1,3}){1,2})\s*'
-    r'(?:例|Example|注|Note|Remark|证明|证|说明)'
+    r'(?:例|Example|Solution|注|Note|Remark|证明|证|说明)'
+    # bold-led catch-all: any `>**Label...**` is an intentional (English/number) label
+    # block — e.g. Kreyszig `**Solution (core steps).**`, `**Crucial distinction.**`,
+    # `**3.7-1 Legendre polynomials.**`. Avoids mis-flagging legit proof/example blocks.
+    r'|[A-Z0-9].*?\*\*'
     r')'
 )
 
@@ -46,7 +50,7 @@ _H_UL_FOOTNOTE = re.compile(r'^\s*>\s*\^\{')
 _H_MISSING_BQ = re.compile(
     r'^\s*\*\*(?:'
     r'(?:证明|证|证明思路|证明概要|注记|说明'
-    r'|Proof|Example|Note|Remark)'
+    r'|Proof|Example|Solution|Note|Remark)'
     r'|例(?:\s*\d[\d.]*)?'
     r'|注(?:\s*\d[\d.]*)?'
     r')\*\*'
@@ -75,7 +79,11 @@ def _h_ext_is_legit_bq(s):
     if re.match(r'^\*\*\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example|注|Note|Remark|证明|证|说明)', inner):
         return True
     # English openers (bilingual support)
-    if re.match(r'^\*\*(?:Proof|Example|Note|Remark|Exercise)\b', inner):
+    if re.match(r'^\*\*(?:Proof|Example|Solution|Note|Remark|Exercise)\b', inner):
+        return True
+    # bold-led catch-all (English/number labels like `**Crucial distinction.**`,
+    # `**3.7-1 Legendre polynomials.**`, `**Solution (core steps).**`)
+    if re.match(r'^\*\*[A-Z0-9]', inner):
         return True
     return False
 

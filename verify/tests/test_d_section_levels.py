@@ -26,28 +26,43 @@ or
 """
 import os
 import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+import os
+import sys
 import io
 import json
 import tempfile
 import unittest
 import contextlib
 
-SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if SKILL_ROOT not in sys.path:
-    sys.path.insert(0, SKILL_ROOT)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from lib.config import (
+from verify_config import (
     BookConfig, GroupConfig, ORDINAL_DEPTH, SCOPE_CHAPTER,
     ORDINAL_SINGLE, ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
     ORDINAL_ROMAN, ORDINAL_GM, SECTION_ROLE_CHAPTER, SECTION_ROLE_SECTION,
     SECTION_ROLE_SUBSECTION, SECTION_ROLE_SUBSUBSECTION, SECTION_ROLE_CODES,
     ORDINAL_SECTION_TYPES,
 )
-from verify.layers.d_layer import (
+from section_continuity import (
     _project, _rel_path, _split_num, _build_item_re,
     _partition_sections_by_level, check_d_layer, check_d_layer_gm,
 )
-from verify.layers.base import DEFAULT_RESULT
+from verify.layers.script.base import DEFAULT_RESULT
 
 
 # --------------------------------------------------------------------------
@@ -469,7 +484,7 @@ class TestCheckDLayerGM(unittest.TestCase):
 class TestReportNoDoubleCount(unittest.TestCase):
 
     def test_levels_block_does_not_double_count(self):
-        from verify.report import print_result
+        from verify.script.report import print_result
         r = dict(DEFAULT_RESULT)
         r["d_layer"] = {
             "continuity_sections": ["1.2"],
@@ -489,7 +504,7 @@ class TestReportNoDoubleCount(unittest.TestCase):
         self.assertNotIn("2 D-layer section-gaps", out)
 
     def test_levels_block_with_no_findings_skips(self):
-        from verify.report import print_result
+        from verify.script.report import print_result
         r = dict(DEFAULT_RESULT)
         r["d_layer"] = {"continuity_sections": [], "missing_sections": [],
                         "levels": {1: {"continuity": [], "missing": []}}}

@@ -16,7 +16,7 @@ separator is WILDCARDED:
 
 This module depends only on ``re`` / ``functools`` (standalone, no cv2/torch),
 and contains NO label knowledge — label-embedded regexes stay in
-``verify/key_parse.py``.
+``verify/script/key_parse.py``.
 
 Imported as ``from lib.regexlib import ...`` (the skill root is on sys.path).
 """
@@ -82,8 +82,47 @@ def split_numpath(s, levels):
 
 # --- shared label-FREE compiled regexes (all built from SEP_TIGHT) ----------
 # Label-embedded regexes (ENTRY_RE_ROMAN, FR_*, ENTRY_RE_2, ENTRY_RE_EN*,
-# GM_LABELED_RE …) live in verify/key_parse.py, which imports SEP_TIGHT from
+# GM_LABELED_RE …) live in verify/script/key_parse.py, which imports SEP_TIGHT from
 # here and rebuilds them with the wildcard separator.
 KEY_RE = re.compile(r'(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+' + SEP_TIGHT + r'\d+' + SEP_TIGHT + r'\d+)[^*]*\*+')
 ROMAN_KEY_RE = re.compile(r'([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
+
+
+# --- shared label-bearing / domain regexes (centralised 2026-08-09) --------
+# Only BYTE-IDENTICAL, same-semantics duplicates across packages are merged
+# here.  Semantically divergent duplicates (e.g. g_layer.G_TERM vs
+# fmt_extras.G_TERM, or the #{1,6} vs #{2,6} SEC_RE in wrap_examples_bq) are
+# intentionally left local — blind merging would change behaviour.
+# Consumers import with `as` aliases to keep local call-sites untouched.
+
+# Chinese-scheme section-heading detectors (extract.scan_skeleton +
+# verify.script.audit_counts).  OCR noise: §→8, glue of §/number, no space before title.
+SEC_CN = re.compile(
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})'
+    r'[\.\．·。]?(?!\s+[\u4e00-\u9fff])(?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
+SECBARE_CN = re.compile(
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})$')
+SECGLUE_CN = re.compile(
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
+    r'[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
+
+# Blockquote head line (verify.layers.g_layer + format.fmt_extras).
+G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
+
+# Figure OCR markers (figure.build_figure_index + figure.build_precise_anchors).
+FIG_ITEM_SEC_RE = re.compile(r'^\s*(\d{1,2})\.(\d{1,2})\b\s*[:.]?\s*[A-Za-z]')
+FIG_PAGE_RE = re.compile(r'=====\s*PAGE\s*(\d+)\s*=====')
+
+# Format-package section heading / horizontal rule (#{2,6} variant; the
+# #{1,6} variant in wrap_examples_bq is kept local on purpose).
+FMT_SEC_RE = re.compile(r'^#{2,6}\s')
+FMT_HR_RE = re.compile(r'^\s*---\s*$')
+
+# Formula-number detectors (make_config + config/verify_config/tests +
+# verify.layers.formula_tag via FMT_* names).  Half/full-width parens both matched;
+# negative lookbehind rejects function-call parens like x(0)/f(0).
+F_SINGLE_RE = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
+F_DOT_RE = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+\.\d+)\s*[）)]')
+F_EQ_RE = re.compile(r'\b(?:Eq\.?|Equation)\s+(\d+\.\d+)')
+F_CN_EQ_RE = re.compile(r'式\s*[（(]?\s*(\d+\.\d+)')

@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""fmt_extras.py — consolidated display-math / blockquote post-processing helpers.
+
+Merged from the previously-standalone scripts:
+  dedent_display_math.py, normalize_display_math.py,
+  split_displaymath.py, fix_quote_gaps.py
+
+All subcommands are idempotent unless noted.
+
+  dedent    <file.md> [--fix] | --dir <dir> [--fix]
+            Strip list-indentation from non-blockquote `$$` blocks so they
+            render as top-level display math instead of a code block.
+
+  normalize <file.md> [--fix] | --dir <dir> [--fix]
+            Rebuild every `$$ ... $$` block cleanly (plain or blockquote):
+            dedent + blank lines + restore `>` on blockquote closers.
+
+  split     <file.md> [<file.md> ...]
+            Split single-line `$$ ... $$` into multi-line `$$` blocks (in place).
+
+  fixgap    <file.md> [<file.md> ...]
+            G-layer fixes (in place): quote-gap -> `> ` empty line, flatten
+            nested blockquotes, prefix intra-block bare `$$` with `> `.
+"""
+import os
+import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+
+import os, sys
+
+import sys, os, re, glob, argparse
+
+
+# --------------------------------------------------------------------------
+# dedent_display_math
+# --------------------------------------------------------------------------
+def dedent(lines):
+    out = list(lines)
+    changed = False
+    in_block = False
+    stack = []  # indices of indented open `$$` lines
+    for idx, line in enumerate(out):
+        s = line.strip()
+        if s != '$$':
+            continue
+        is_bq = line.lstrip().startswith('>')
+        lead = len(line) - len(line.lstrip(' '))
+        if not in_block:
+            in_block = True
+            if not is_bq and lead > 0:
+                stack.append(idx)
+        else:
+            in_block = False
+            if stack:
+                oi = stack.pop()
+                g = len(out[oi]) - len(out[oi].lstrip(' '))
+                if g > 0:
+                    for j in range(oi, idx + 1):
+                        if out[j].strip() == '':
+                            continue
+                        ls = len(out[j]) - len(out[j].lstrip(' '))
+                        remove = min(g, ls)
+                        out[j] = out[j][remove:]
+                    changed = True
+    return out, changed
+
+
+# --------------------------------------------------------------------------
+# normalize_display_math
+# --------------------------------------------------------------------------
+def normalize(lines):
+    out = list(lines)
+    res = []
+    i = 0
+    n = len(out)
+    while i < n:
+        line = out[i]
+        s = line.strip()
+        if s == '$$':
+            is_bq = line.lstrip().startswith('>')
+            # collect interior lines until the closing $$ (exclusive)
+            j = i + 1
+            interior = []
+            while j < n and out[j].strip() != '$$':
+                interior.append(out[j])
+                j += 1
+            close_idx = j  # index of the closing $$ line
+            formulas = []
+            for bl in interior:
+                st = bl.lstrip()
+                if st.startswith('>'):
+                    st = st[1:].lstrip()
+                formulas.append(st.rstrip('\n'))
+            # blank line BEFORE the block
+            if res:
+                pv = res[-1]
+                if pv.strip() != '':
+                    if pv.lstrip().startswith('>'):
+                        if pv.strip() != '>':
+                            res.append('> \n')
+                    else:
+                        res.append('\n')
+            # emit the clean block
+            if is_bq:
+                res.append('> $$\n')
+                for f in formulas:
+                    if f.strip() != '':
+                        res.append('> ' + f + '\n')
+                res.append('> $$\n')
+            else:
+                res.append('$$\n')
+                for f in formulas:
+                    if f.strip() != '':
+                        res.append(f + '\n')
+                res.append('$$\n')
+            # blank line AFTER the block
+            nxt = out[close_idx + 1] if close_idx + 1 < n else ''
+            if nxt.strip() != '':
+                if nxt.lstrip().startswith('>'):
+                    res.append('> \n')
+                else:
+                    res.append('\n')
+            i = close_idx + 1
+        else:
+            res.append(line)
+            i += 1
+    return res
+
+
+# --------------------------------------------------------------------------
+# split_displaymath
+# --------------------------------------------------------------------------
+def split_math(text):
+    out = []
+    for line in text.split('\n'):
+        # blockquote single-line display math:  > $$ ... $$
+        m = re.match(r'^>\s*\$\$(.+)\$\$$', line)
+        if m:
+            out.append('> $$')
+            out.append('> ' + m.group(1))
+            out.append('> $$')
+            continue
+        # non-blockquote single-line display math:  $$ ... $$
+        m = re.match(r'^\$\$(.+)\$\$$', line)
+        if m:
+            out.append('$$')
+            out.append(m.group(1))
+            out.append('$$')
+            continue
+        out.append(line)
+    return '\n'.join(out)
+
+
+# --------------------------------------------------------------------------
+# fix_quote_gaps  (G-layer: mirrors verify_chapter.check_g_quote_continuity)
+# --------------------------------------------------------------------------
+from lib.regexlib import G_HEAD
+G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*)')
+
+
+def fix_text(text):
+    lines = text.split('\n')
+    n = len(lines)
+    out = list(lines)
+    in_block = False
+    changed = 0
+    for i in range(n):
+        ln = lines[i]
+        if G_HEAD.match(ln):
+            in_block = True
+            continue
+        if G_TERM.match(ln) and not ln.lstrip().startswith('>'):
+            in_block = False
+            continue
+        if in_block and ln.strip() == '':
+            j = i + 1
+            while j < n and lines[j].strip() == '':
+                j += 1
+            if j >= n:
+                continue
+            nx = lines[j]
+            if G_HEAD.match(nx):
+                continue
+            if G_TERM.match(nx) and not nx.lstrip().startswith('>'):
+                continue
+            out[i] = '> '
+            changed += 1
+        elif in_block and ln.strip().startswith('$$') and not ln.lstrip().startswith('>'):
+            out[i] = '> ' + ln.strip()
+            changed += 1
+    # flatten nested blockquotes to single level
+    for i in range(n):
+        if re.match(r'^\s*>\s+>', out[i]):
+            out[i] = re.sub(r'^(?:\s*>\s*)+', '> ', out[i])
+            changed += 1
+    return '\n'.join(out), changed
+
+
+# --------------------------------------------------------------------------
+# file drivers + CLI
+# --------------------------------------------------------------------------
+def _process_file_dedent(path, fix):
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    new, changed = dedent(lines)
+    if fix and changed:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.writelines(new)
+        print(f"[DEDENT] rewrote {os.path.basename(path)} (dedented)")
+    else:
+        print(f"[DEDENT] {os.path.basename(path)}: "
+              f"{'WOULD dedent (run with --fix to apply)' if changed else 'nothing to dedent'}")
+    return changed
+
+
+def _process_file_normalize(path, fix):
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    new = normalize(lines)
+    changed = new != lines
+    if fix and changed:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.writelines(new)
+        print(f"[NORM] rewrote {os.path.basename(path)} (rebuilt $$ blocks)")
+    else:
+        print(f"[NORM] {os.path.basename(path)}: "
+              f"{'WOULD rebuild (run with --fix to apply)' if changed else 'nothing to rebuild'}")
+    return changed
+
+
+def _split_file(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        text = f.read()
+    new = split_math(text)
+    if new != text:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(new)
+        print(f"[SPLIT] rewrote {os.path.basename(path)}")
+    else:
+        print(f"[SPLIT] {os.path.basename(path)}: nothing to split")
+
+
+def _fix_file(path):
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    new, changed = fix_text(text)
+    if changed:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(new)
+        print(f"  fixed {changed} line(s) in {os.path.basename(path)}")
+    return changed
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Display-math / blockquote post-processing helpers.")
+    sub = ap.add_subparsers(dest='cmd', required=True)
+
+    p_d = sub.add_parser('dedent', help='dedent non-blockquote $$ blocks')
+    p_d.add_argument('path', nargs='?')
+    p_d.add_argument('--dir', help='process all *.md in this dir')
+    p_d.add_argument('--fix', action='store_true')
+
+    p_n = sub.add_parser('normalize', help='rebuild every $$ block cleanly')
+    p_n.add_argument('path', nargs='?')
+    p_n.add_argument('--dir', help='process all *.md in this dir')
+    p_n.add_argument('--fix', action='store_true')
+
+    p_s = sub.add_parser('split', help='split single-line $$ blocks')
+    p_s.add_argument('paths', nargs='+')
+
+    p_g = sub.add_parser('fixgap', help='G-layer quote-gap / nested flatten fixes')
+    p_g.add_argument('paths', nargs='+')
+
+    args = ap.parse_args()
+
+    if args.cmd == 'dedent':
+        if args.dir:
+            for fp in sorted(glob.glob(os.path.join(args.dir, '*.md'))):
+                _process_file_dedent(fp, args.fix)
+        elif args.path:
+            _process_file_dedent(args.path, args.fix)
+        else:
+            ap.error('dedent needs <path> or --dir')
+    elif args.cmd == 'normalize':
+        if args.dir:
+            for fp in sorted(glob.glob(os.path.join(args.dir, '*.md'))):
+                _process_file_normalize(fp, args.fix)
+        elif args.path:
+            _process_file_normalize(args.path, args.fix)
+        else:
+            ap.error('normalize needs <path> or --dir')
+    elif args.cmd == 'split':
+        for p in args.paths:
+            if os.path.isfile(p) and p.endswith('.md'):
+                _split_file(p)
+    elif args.cmd == 'fixgap':
+        total = 0
+        for p in args.paths:
+            if os.path.isfile(p) and p.endswith('.md'):
+                total += _fix_file(p)
+        print(f"TOTAL changed lines: {total}")
+
+
+if __name__ == '__main__':
+    main()

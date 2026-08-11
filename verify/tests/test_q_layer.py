@@ -19,20 +19,35 @@ Run (stdlib unittest or pytest):
 """
 import os
 import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+import os
+import sys
 import json
 import tempfile
 import unittest
 
-SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if SKILL_ROOT not in sys.path:
-    sys.path.insert(0, SKILL_ROOT)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from lib.config import BookConfig                                            # noqa: E402
-from verify.layers.base import VerifyContext                               # noqa: E402
-from verify.layers.q_layer import (                                         # noqa: E402
+from verify_config import BookConfig                                            # noqa: E402
+from verify.layers.script.base import VerifyContext                               # noqa: E402
+from formula_tag import (                               # noqa: E402
     QLayer, SourceFormulaIndex, _extract_summary_tags, _compare, FormulaTag,
     build_formula_patterns)
-from verify.register_all import LAYER_REGISTRY                             # noqa: E402
+from verify.script.register_all import LAYER_REGISTRY                             # noqa: E402
 
 
 def _ctx(ch, start, end, md_file, ext_dir, formula=None):
@@ -61,8 +76,13 @@ class NormTest(unittest.TestCase):
 
     def test_unparseable_returns_none(self):
         n = SourceFormulaIndex.norm
-        for raw in ['', None, 'abc', '（lol）', 'x.y.z', '1']:
+        for raw in ['', None, 'abc', '（lol）', 'x.y.z']:
             self.assertIsNone(n(raw), msg=f"norm({raw!r}) should be None")
+        # Single-component formula numbers (Kreyszig per-section bare `(N)`,
+        # `(N)a`) ARE valid formula labels — norm keeps them as-is (scope:3
+        # ⇒ depth:1 ⇒ 节级裸 `(N)`，见 formula_tag.md 不变量)。
+        self.assertEqual(n('1'), '1')
+        self.assertEqual(n('2a'), '2a')
 
 
 class ExtractTagsTest(unittest.TestCase):

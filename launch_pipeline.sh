@@ -6,10 +6,11 @@
 # Use this instead of the .bat/.ps1 launchers — those are blocked by this env's
 # security policy / silently fail on space-containing paths.
 #
-# Usage:  bash launch_pipeline.sh <pdf_path> <total_pages> [--force]
+# Usage:  bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...]
 #   <pdf_path>  absolute path to the PDF, e.g. "D:/study/book/Koopman Operator/Koopman Operator.pdf"
-#   <total_pages> page count, e.g. 568
-#   --force      optional, re-run from page 1 ignoring existing JSON
+#   [--start N] first page to extract (default 1).
+#   [--end N]   last page to extract (inclusive). Omitted -> auto-detected PDF total page count.
+#   [flags]     any flag understood by extract_pipeline.py is passed through (--force, --deskew ...)
 set -e
 
 ENV="D:/anaconda3/envs/pdfextract"
@@ -20,14 +21,28 @@ NV="$ENV/lib/site-packages/nvidia"
 export PATH="$ENV/lib/site-packages/torch/lib;$NV/cublas/bin;$NV/cuda_runtime/bin;$NV/cufft/bin;$NV/curand/bin;$NV/cusolver/bin;$NV/cusparse/bin;$NV/nvjitlink/bin;$ENV/Library/bin;$ENV/Scripts;$ENV;$PATH"
 
 PY="$ENV/python.exe"
-SCRIPT="C:/Users/ye190/.workbuddy/skills/book-summarizer/pipeline/extract_pipeline.py"
+SCRIPT="C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/extract/pipeline/script/pipeline/extract_pipeline.py"
 
 PDF="$1"
-PAGES="$2"
-FORCE="${3:-}"
+EXTRA=()
+# $2.. are passthrough args for extract_pipeline.py (--start/--end/--force/--deskew...).
+# Flags that take a value (--start/--end/--deskew) consume the following token; valueless
+# flags (--force) are passed through as-is.
+i=2
+while [ $i -le $# ]; do
+  a="${!i}"
+  case "$a" in
+    --force) EXTRA+=("$a") ;;
+    --start|--end|--deskew) i=$((i+1)); EXTRA+=("$a" "${!i}") ;;
+    --deskew=*) EXTRA+=("$a") ;;
+    --*) echo "unsupported flag: $a" >&2; exit 1 ;;
+    *)   echo "unexpected positional arg: $a (only <pdf_path> is positional)" >&2; exit 1 ;;
+  esac
+  i=$((i+1))
+done
 
-if [ -z "$PDF" ] || [ -z "$PAGES" ]; then
-  echo "Usage: bash launch_pipeline.sh <pdf_path> <total_pages> [--force]" >&2
+if [ -z "$PDF" ]; then
+  echo "Usage: bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...]" >&2
   exit 1
 fi
 
@@ -36,11 +51,11 @@ EXTRACT_DIR="$(dirname "$PDF")/_extract"
 mkdir -p "$EXTRACT_DIR"
 LOG="$EXTRACT_DIR/extract_pipeline.log"
 
-if [ -n "$FORCE" ]; then
-  nohup "$PY" "$SCRIPT" "$PDF" "$PAGES" "$FORCE" > "$LOG" 2>&1 &
-else
-  nohup "$PY" "$SCRIPT" "$PDF" "$PAGES" > "$LOG" 2>&1 &
-fi
+# Build args: pdf, then any passthrough flags.
+ARGS=("$PDF")
+ARGS+=("${EXTRA[@]}")
+
+nohup "$PY" "$SCRIPT" "${ARGS[@]}" > "$LOG" 2>&1 &
 
 echo "launched PID $! ; log -> $LOG"
 echo "tail -f \"$LOG\"   to watch progress"

@@ -18,15 +18,30 @@ Run:  python verify/tests/smoke_d_sections.py
 """
 import os
 import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+import os
+import sys
 import io
 import json
 import shutil
 import tempfile
 import subprocess
 
-SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PY = sys.executable
-CLI = os.path.join(SKILL_ROOT, "verify", "verify_chapter.py")
+CLI = os.path.join(_ROOT, "verify/script/verify_chapter.py")
 
 
 def _page(path, texts, y=200):
@@ -43,7 +58,7 @@ def _cfg(path, obj):
 
 
 def _run(args):
-    p = subprocess.run([PY, CLI] + args, cwd=SKILL_ROOT,
+    p = subprocess.run([PY, CLI] + args, cwd=_ROOT,
                        capture_output=True, text=True, timeout=120)
     return p.returncode, p.stdout, p.stderr
 

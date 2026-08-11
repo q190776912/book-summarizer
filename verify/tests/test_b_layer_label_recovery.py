@@ -28,14 +28,29 @@ Run (stdlib unittest, no pytest dependency):
 """
 import os
 import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+import os
+import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, 'C:/Users/ye190/.agents/skills/book-summarizer')
 
-from lib.config import BookConfig, GroupConfig
-from verify.layers.b_layer import _md_gap_blocking
-from verify.layers.base import VerifyContext
+from verify_config import BookConfig, GroupConfig
+from numbering_gap import _md_gap_blocking
+from verify.layers.script.base import VerifyContext
 
 
 def _ctx_with_md(md_text, config):

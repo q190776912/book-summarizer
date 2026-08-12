@@ -1,16 +1,12 @@
 # Sub-flow: extract / skeleton（结构骨架契约 / extract 末尾强制生成）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在文本提取 100% 完成、config（生成 `verify_config.json`）与 figure_detection 之后，**批量**为全书每一章生成"结构骨架"——按原书页码顺序列出全部 `SEC`（节标题）/ `ITEM`（编号条目）/ `EXER`（练习），作为**写作契约**（不是参考）。骨架在 extract 阶段一次性产出，write-source 阶段直接消费，无需每章临时生成。
-
-## 触发
-- `extract` 流程第 5 步（最终步骤之一）：文本提取 100% + config 子流程 + figure_detection 子流程全部完成后，批量跑 `scan_skeleton` 覆盖全书所有章。
-
+**批量**为全书每一章生成"结构骨架"——按原书页码顺序列出全部 `SEC`（节标题）/ `ITEM`（编号条目）/ `EXER`（练习），作为**写作契约**（不是参考）。骨架在 extract 阶段一次性产出，write-source 阶段直接消费，无需每章临时生成。
 ## 前置
 - 全书 `page_*.json` 已落盘且过 MM Repair（extract 主流程出口满足）。
-- `verify_config.json` 已由 config 子流程生成（骨架的编号模式由 `ordinal` 自动判定，config 已完成则必存在；图检测是否完成不影响骨架）。
+- `verify_config.json` 已就绪（骨架的编号模式由 `ordinal` 自动判定；图检测是否完成不影响骨架）。
 
 ## 步骤（有序）
 ```powershell

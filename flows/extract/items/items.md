@@ -1,16 +1,12 @@
 # Sub-flow: extract / items（编号项清单 / extract 末尾强制生成）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在文本提取 100% 完成、config 与 figure_detection 之后，**批量**为全书每一章枚举"编号项清单"——所有带编号的条目（定义 / 定理 / 引理 / 推论 / 命题 / 例 等）的 `键 / 标签 / 页码` 列表。它是 verify 阶段 data_provider 层判定「条目齐全、无缺失、无重复」的权威基准，也是 write-source 写章时与骨架交叉核对的清单。
-
-## 触发
-- `extract` 流程第 6 步（skeleton 之后，最终步骤）：config + figure_detection 完成后，批量枚举全书编号项。
-
+**批量**为全书每一章枚举"编号项清单"——所有带编号的条目（定义 / 定理 / 引理 / 推论 / 命题 / 例 等）的 `键 / 标签 / 页码` 列表。它是 verify 阶段 data_provider 层判定「条目齐全、无缺失、无重复」的权威基准，也是 write-source 写章时与骨架交叉核对的清单。
 ## 前置
 - 全书 `page_*.json` 已落盘且过 MM Repair。
-- `verify_config.json` 已由 config 子流程生成（编号模式 `ordinal` 决定抽哪条路径）。
+- `verify_config.json` 已就绪（含 `ordinal` 编号模式，决定抽哪条路径）。
 
 ## 步骤（有序）
 1. **主抽取器 `extract_items.py`**（三级 `N.S-N` 默认；内部按 `ordinal` 自动选路到 two_level / fraleigh / gm / 英文 `extract_items_en` 等变体）：
@@ -25,10 +21,10 @@
    ```
 
 ## 本阶段规则（🔴 内联）
-- **编号项类型必须真实匹配，禁止强制归入 `uncat`**（呼应 `config_setting` 规则5）：未匹配上的类型不得硬塞近似类型或临时 hack；agent 找不到匹配时可增量引入新类型（在 `ordinal` 新增 `type` 码 + `name`，必要时加脚本并登记 `../../../lib/boot.py` 与 `verify.md` 注册表）。
+- **编号项类型必须真实匹配，禁止强制归入 `uncat`**：未匹配上的类型不得硬塞近似类型或临时 hack；agent 找不到匹配时可增量引入新类型（在 `ordinal` 新增 `type` 码 + `name`，必要时加脚本并登记 `../../../lib/boot.py` 与 `verify.md` 注册表）。
 - **两级书走 `scan_items.py`，不强行三级 `extract_items` 模式**：否则 `1.1-1` 之类会被正则在公式 / 枚举片段里造出永不匹配的伪键。
 - **清单是 verify 的权威基准**：verify 阶段 data_provider 层直接复用 `extract_items()` 重新派生，与本书目清单同源；write-source 写章前应与 `ch<N>_items.txt` 交叉核对，确保无遗漏。
-- **B 层断号由 `b_layer.recover_missing_items` 兜底**：扫描遇边界 / 尾部残页时自动重扫修复，产出 `BLOCKING` 阻断项须先解决再写作（见 `verify` 层 B）。
+- **B 层断号由 `b_layer.recover_missing_items` 兜底**：扫描遇边界 / 尾部残页时自动重扫修复，产出 `BLOCKING` 阻断项须先解决再写作。
 
 ## 出口条件
 - 出口：全书每章编号项已枚举（`<extract_dir>/ch<N>_items.txt` 或 scan_items 报告），作为 verify 基准与 write-source 核对清单。

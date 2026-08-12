@@ -68,7 +68,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 ## 4. 判定树：遇到新书先看编号
 
-> 🔴 **`verify_config.json` 是校验的硬性前置（config_setting 流程 规则1），但生成时机在「extract 出口后」**：先完成 **extract**（所有页面提取 100% 且每页过 MM Repair，extract/mm_repair 流程 规则1），再依据**源 `page_*.json`** 生成 `<book>/_extract/verify_config.json`（至少含数组形式 `ordinal`，见 §6），然后才批量校验（阶段 4）。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal`（或 `ordinal` 非合法分组数组）会令 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写源阶段可继续，存量书兼容）。可用 `python config/verify_config/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在 extract 完成后批量进行。
+> 🔴 **`verify_config.json` 是校验的硬性前置，但生成时机在「extract 出口后」**：先完成 **文本提取**（所有页面提取 100% 且每页过 MM Repair），再依据**源 `page_*.json`** 生成 `<book>/_extract/verify_config.json`（至少含数组形式 `ordinal`，见 §6），然后才批量校验。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal`（或 `ordinal` 非合法分组数组）会令 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写源阶段可继续，存量书兼容）。可用 `python config/verify_config/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在 extract 完成后批量进行。
 
 ```
 读 TOC / 抽一页原文，看编号长什么样？（判定树只用于确定 `ordinal` 数组的首元素 `type`，配置在源语言初稿全部完成后统一生成）
@@ -119,7 +119,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 ## 6. 书级配置与小节层级（verify_config.json）
 
-> 🔴 **本规则由 config_setting 流程 规则1 强制前置**：`verify_config.json` 配置（`ordinal` 数组 / `language`；`section_types`/`section_depths` 由 primary_type 自动反推，仅四级子小节书显式覆盖）由**源语言**内容派生，是 `verify` 的硬性前置。配置在**extract 出口后**（config_setting 流程 规则1）依据**源 `page_*.json`** 生成，至少含数组形式 `ordinal`；**翻译版不参与配置生成**。写源阶段（阶段 3）不要求配置就位（scan_skeleton 遇缺失仅告警 + 默认 ordinal=3），但任何 `verify` 跑起来前配置必须完整。
+> 🔴 **`verify_config.json` 配置是 `verify` 的硬性前置**：配置（`ordinal` 数组 / `language`；`section_types`/`section_depths` 由 primary_type 自动反推，仅四级子小节书显式覆盖）由**源语言**内容派生，须先于校验就绪。配置在**extract 出口后**依据**源 `page_*.json`** 生成，至少含数组形式 `ordinal`；**翻译版不参与配置生成**。写源阶段不要求配置就位（scan_skeleton 遇缺失仅告警 + 默认 ordinal=3），但任何 `verify` 跑起来前配置必须完整。
 
 ### 6.1 `ordinal` —— 必填（分组对象数组 `List[GroupConfig]`）
 
@@ -163,9 +163,9 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 > 角色码 `section_types` ∈ `{1=章, 2=节, 3=小节, 4=子小节}`；`section_depths` 与 `section_types` 等长、各分量 ≥1、且 `section_depths[0]==1`。若显式给出但不合法（长度不等 / 含 <1 / 含非法角色码 / 首分量非 1），`require_complete()` 会直接报 `[CONFIG]` 硬错误。
 >
-> ⚠️ 存量书（无 `verify_config.json`）跑 `verify` / `scan_skeleton` 只会有 WARNING 并沿用默认 ordinal=3，不阻断；新流程之所以允许沿用默认，是为了**不误伤存量书**，但 config_setting 流程 规则1 要求**新建书必须显式填写**，不得依赖静默默认值。
+> ⚠️ 存量书（无 `verify_config.json`）跑 `verify` / `scan_skeleton` 只会有 WARNING 并沿用默认 ordinal=3，不阻断；新流程之所以允许沿用默认，是为了**不误伤存量书**，但配置完整性要求**新建书必须显式填写**，不得依赖静默默认值。
 
 ### 6.3 生成 / 校验工具
 
 - `python config/verify_config/make_config.py <extract_dir>` —— best-effort 生成起始配置（判定不清时仍以本判定树为准，人工核对）。
-- `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 入口均经 `ConfigLoader.require_complete()` 校验完整性（config_setting 流程 规则1 主防线在**工作流规则**，不在单脚本行为上）。
+- `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 入口均经 `ConfigLoader.require_complete()` 校验完整性（配置完整性主防线在**工作流规则**，不在单脚本行为上）。

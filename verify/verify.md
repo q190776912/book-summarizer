@@ -1,6 +1,6 @@
 # Flow: verify（批量校验 / 通用校验关卡 / Stage 4）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
 > `verify-source`（源语言）与 `derive-translate`（翻译版）都引用本流程，区别仅在于被校验的是哪个语言目录。
 >
@@ -10,10 +10,6 @@
 
 ## 目的
 某语言全部初稿写完后，**一次性批量校验该语言全部章节**，未过则用 `--fix` 自动修复后重验，直至 `verify PASS + KaTeX OK`。
-
-## 触发
-- `config` 阶段生成完整 `verify_config.json` 后（任一语言版本准备校验时）。
-
 ## 前置
 - 待校验语言的全部章节初稿写完。
 - `_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式）。
@@ -56,10 +52,10 @@
 5. （可选，位置+内容保真）跑公式 manifest 对账（见子流程 `formula-manifest`）。
 
 ## 本阶段规则（🔴 内联）
-- **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → Stage 2 生成完整配置 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
-  - 原因：书级配置在阶段 2 才定型，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；A–Q 若干判定需整章 / 整书上下文。
-- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按 write-source 规则3 节文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（A 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
-- **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译，见 `derive-translate`）。
+- **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
+  - 原因：书级配置需待全书编号形态定型后，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；A–Q 若干判定需整章 / 整书上下文。
+- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（A 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
+- **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
 
 ## 出口条件
 - 出口：`verify/script/verify_chapter.py --all` 对**该语言全部章节 `exit 0`**（`verify PASS + KaTeX OK`）。
@@ -69,7 +65,7 @@
 - `script/register_all.py`：遍历 `verify/layers/*/script/` 自动发现并注册校验层模块。
 - `layers/script/base.py`：`VerifyLayer` / `LayerRegistry` / `VerifyManager` / `DEFAULT_RESULT` / `VerifyContext`（所有层的基类与编排入口）。
 - `script/report.py`：`print_result` 字节输出（与 `DEFAULT_RESULT` 键集同步）。
-- `../config/verify_config/make_config.py`：配置生成（见 `config_setting` 流程）。
+- `../config/verify_config/make_config.py`：配置生成。
 - `../config/ignore_chN/manage_ignore.py`：维护忽略清单（ignore keys / figures）。
 
 ## 子流程
@@ -80,6 +76,6 @@
 1. 在 `verify/layers/<snake>/script/` 下新建 `<snake>.py` 模块（`<snake>` 为小写蛇形语义名）。
 2. 在 `<snake>.py` 中定义 `VerifyLayer` 子类，设 `code='<唯一大写字母或 EXTRACT>'`、`name='<语义名>'`、`order=<整数>`、`auto_fixable=<bool>`（可修复再设 `fix_order`）；无需 `__init__.py`，`register_all` 遍历 `verify/layers/<snake>/script/` 发现该模块。
    共用 helper 放 `layers/script/_fig_common.py` / `_struct_labels.py`（下划线前缀，自动跳过注册）。
-3. 写入 `<snake>.md`：按统一模板（目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）写本层 SSOT；若声明字节契约键，用 ```` ```contract-keys ```` 块。
+3. 写入 `<snake>.md`：按统一模板（目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）写本层 SSOT；若声明字节契约键，用 ```` ```contract-keys ```` 块。
 4. `script/register_all.py` 经 `pkgutil` 扫描自动发现，**无需手动登记**；将本层加入上方注册表表格。
 5. 如需被其他消费者单独引用，在入口脚本跑过 `lib.boot.setup()` 后直接 `from <snake> import <Class>` 即可（裸名 import，boot 已将 `**/script` 注入 sys.path）。

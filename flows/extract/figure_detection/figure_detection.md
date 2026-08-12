@@ -1,13 +1,9 @@
 # Flow: figure_detection（图检测 + 分配 / extract 子流程）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在 **config 子流程完成后**，对全书做一次图检测（DocLayout-YOLO 版面检测）与图分配（语义命名 `图X.X.X`），产出 `figure_detect.json` + `figure_index.json`，供写章阶段的图嵌入消费。本子流程是 extract 阶段里**唯一读 `figure.labels`** 的环节，因此必须排在 config 之后。
-
-## 触发
-- 父流程 `extract` 的**文本提取 + MM Repair 完成、config 子流程已生成 `verify_config.json`** 之后。
-
+对全书做一次图检测（DocLayout-YOLO 版面检测）与图分配（语义命名 `图X.X.X`），产出 `figure_detect.json` + `figure_index.json`，供写章阶段的图嵌入消费。本子流程是 extract 阶段里**唯一读 `figure.labels`** 的环节，图号前缀由该字段决定，故执行前须确保 `figure.labels` 已配置。
 ## 前置
 - 全部 `page_*.json` 已落盘（文本提取阶段出口）。
 - `chapter_map.json` 就绪（检测阶段需把每页归到章节；分配阶段按章命名）。
@@ -22,7 +18,7 @@
    - 读 `figure_detect.json` + 章内 OCR 图注，给每张检测到的图赋语义号：优先从 caption 文本提 `图X.X.X`，否则同页最近 `图X.X.X` 位置匹配；匹配到的重命名为 `figure/chNN_figX.X.X.png`，未匹配为 `figure/chNN_unnamed_K.png`，写出 `figure_index.json` + `figure_index.md`。
 
 ## 本阶段规则（🔴 内联）
-- **规则1 — 配置先行（最高优先级）**：本子流程**必须**在 config 子流程之后跑（见 `config_setting` 规则4：`figure` 块**强制显式**——自定义前缀→`labels` 非空、无图序标→`labels` 显式空数组 `[]`，二者皆不可"字段缺失"）。`figure.labels` 决定图号前缀识别：缺配置则退化默认前缀，自定义前缀书的 caption 合并会漏；显式空数组 `[]` 则表示"本书确无图号"，下游返回零匹配、不会误匹配默认 `Figure`/`图` 等词。
+- **规则1 — `figure.labels` 必须显式配置（最高优先级）**：图号前缀由 `figure.labels` 决定，因此该字段**强制显式**——自定义前缀→`labels` 非空、无图序标→`labels` 显式空数组 `[]`，二者皆不可"字段缺失"。`figure.labels` 决定图号前缀识别：缺配置则退化默认前缀，自定义前缀书的 caption 合并会漏；显式空数组 `[]` 则表示"本书确无图号"，下游返回零匹配、不会误匹配默认 `Figure`/`图` 等词。
 - **规则2 — 图与公式模型不同**：检测用 DocLayout-YOLO（只取 `figure` 类），公式框由 extract 文本阶段的 MFD 给、文本由 PaddleOCR 给；三者分工不重叠。
 - **规则3 — 带序标才合并 caption**：仅当配对 caption 含序标（`parse_fig_label` 命中 `figure.labels`）才把图 + caption 裁成一张；否则只裁图。若配置为显式空数组 `[]`（本书无图序标），`parse_fig_label` 恒返回 `None`，所有图都只裁图本身，不会误把正文里的 `Figure`/`图` 当图号合并。
 - **规则4 — 检测/分配异常不阻断**：任一脚本抛异常仅记日志，不影响已落盘产物；未命名图（`label==null`）仍由写章阶段以"图(未标号)"嵌入，不视为 FAIL。

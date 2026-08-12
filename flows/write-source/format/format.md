@@ -1,16 +1,12 @@
 # Sub-flow: write-source / format（格式与保真规则）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 > 📌 **本子流程的强制完整规则以同目录 [`formatting.md`](ref/formatting.md) 为准（SSOT）**。本文件只给大类速览与入口；新增 / 修改格式规则只改 `formatting.md`，不在此重复。
 
 ## 目的
 定义章节总结的格式与保真规则：标题体系、条目标签、块引用、分隔线、公式、图片嵌入、练习收录、双语规则、KaTeX 规则、保真分级（Tier 1/2/3）。
-
-## 触发
-- `write-source` 流程写作与格式后处理阶段持续引用。
-
 ## 前置
-- 已读 `skeleton` 契约。
+- 写作对象为源语言初稿（章节 `.md` 文件）。
 
 ## 步骤（有序）
 写作时遵循以下大类（细节点开 `formatting.md`）：
@@ -38,5 +34,5 @@
 - 同目录支撑文档：`ref/formatting.md`（SSOT）、`ref/separator_regexlib.md`（分隔符正则库）、`ref/book_patterns.md`（书目编号体系判定树）。
 
 ## 子流程
-- [`write-source/figures`](../figures/figures.md) — 嵌入图片（Step 3.5）
+- [`write-source/figures`](../figures/figures.md) — 嵌入图片（见 `figures` 子流程）
 - [`write-source/format/katex`](ref/katex.md) — KaTeX 问题识别与修复速查

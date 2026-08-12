@@ -1,13 +1,9 @@
 # Flow: config_setting（生成书级配置 / extract 子流程）
 
-> 统一模板：目的 / 触发 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
+> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在 extract 的**文本提取 + MM Repair 全部完成**后（`_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性生成 `<book>/_extract/verify_config.json`——它是 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。**本子流程必须在图检测（figure_detection 子流程）之前完成**，否则图检测读不到本书的 `figure.labels`，只能退回到默认图号前缀。
-
-## 触发
-- 父流程 `extract` 的**文本提取与 MM Repair 全部完成后、图检测（figure_detection 子流程）之前**触发（`_extraction_done.json` 存在）。
-
+在 extract 的**文本提取 + MM Repair 全部完成**后（`_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性生成 `<book>/_extract/verify_config.json`——它是 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。图检测子流程依赖本书的 `figure.labels`（未配置会退化默认前缀、自定义前缀书漏识 caption），故 `figure` 块必须显式出现。
 ## 前置
 - **整书文本提取完成**（`_extraction_done.json` 存在，所有 `page_*.json` 已落盘并经 MM Repair）。
 - 🔴 **翻译派生版不参与配置生成**。
@@ -19,7 +15,7 @@
    - **图序标体例（🔴 强制显式生成，不得留缺）**：无论书是否用自定义图号前缀，`verify_config.json` **必须**显式包含 `figure` 块（见 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)）：
      - 书以非默认前缀标注图（如 `Scheme` / `Illustration` / 仅 `图` / 仅 `Fig`）→ 写 `"figure": {"labels": [...]}` 列出**本书全部**图号前缀词；
      - 书**完全没有**图序标（正文不出现任何图号前缀）→ **显式写 `"figure": {"labels": []}`**（空数组即"无图序标"的**标记号**），与"`figure` 字段缺失→回落默认 `FIGURE_LABELS_DEFAULT`"严格区分：空数组表示"本书确无图号、禁止匹配任何前缀"，字段缺失才会静默用默认前缀（会误匹配无图号书里碰巧出现的 `Figure`/`图` 等词）。
-     - **图检测子流程严格依赖此字段**，且必须在图检测之前完成本决策（见 规则4）。
+     - **图检测子流程严格依赖此字段**。
 2. 生成配置：
    ```powershell
    python config/verify_config/make_config.py <extract_dir>   # 半自动探测 + 人工核对（公用配置脚本）
@@ -42,7 +38,7 @@
   - **允许增量扩展**：agent 找不到匹配时，**可以**增量式引入新类型：在 `verify_config.json` 的 `ordinal` 中新增一个 `type` 码（沿用既有 1–7 判定树，超出则顺延新码，如 `8`）+ 对应 `name` 标签；若该新类型需要新的抽取/匹配/校验脚本，agent **可增量添加相关脚本**（置于对应 flow 的 `script/` 下，并登记到 `../../../lib/boot.py` 注入路径与 `verify.md` 注册表），而非临时 hack 或强塞。
   - **判定不清仍须回归全书**：新类型的判定同样适用 规则2（回归全部 `page_*.json` 上下文），不得抽样定稿。
   - 补充：本规则与 `missing_label_policy.md` 互补——后者管"已识别类别但 OCR 漏抽的条目"（§2 凭知识库补写），本规则管"类别本身未知、需要扩展类型体系"的情形。
-- **生成时机 = 文本提取完成后、图检测之前**：配置**不是边写边填**，而是 extract 文本阶段出口后、进入 figure_detection 子流程前一次性生成。`scan_skeleton`（extract 末尾 skeleton 子流程调用）对缺失配置仅告警、不阻断（安全网）；但**任何 `verify` 跑起来之前，配置必须完整**；且**图检测跑起来之前**配置必须已含显式 `figure` 块（自定义前缀→`labels` 非空、无图序标→`labels` 显式空数组 `[]`，二者皆不可"字段缺失"）。
+- **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `figure` 块必须显式出现（自定义前缀→`labels` 非空、无图序标→`labels` 显式空数组 `[]`，二者皆不可"字段缺失"）。
 - **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–7，判定树见 [`../../write-source/format/ref/book_patterns.md`](../../write-source/format/ref/book_patterns.md)）。
 
 ## 出口条件

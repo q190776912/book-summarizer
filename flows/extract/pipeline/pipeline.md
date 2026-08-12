@@ -1,9 +1,9 @@
 # 提取流水线（extract / pipeline）
 
-> 本文档是一份独立的书籍**文本**提取流程说明：描述 `extract_pipeline.py` 如何将归位后的书籍 PDF 批量转为结构化 `page_*.json`（公式 LaTeX + 正文文本），支持断点续跑。**图检测 + 分配已拆为独立子流程 `figure_detection`（见 `../figure_detection/figure_detection.md`），在 config 子流程之后单独跑**，不在本文档内。无需参考其他文档即可阅读。
+> 本文档是一份独立的书籍**文本**提取流程说明：描述 `extract_pipeline.py` 如何将归位后的书籍 PDF 批量转为结构化 `page_*.json`（公式 LaTeX + 正文文本），支持断点续跑。**图检测 + 分配已拆为独立子流程 `figure_detection`（见 `../figure_detection/figure_detection.md`）**，不在本文档内。无需参考其他文档即可阅读。
 
 ## 目的
-将书籍 PDF 批量提取为结构化 `page_*.json`（公式 LaTeX + 正文文本）；支持断点续跑。本流程只产出"原料"，不做任何校验（OCR 噪声修复等由 MM Repair 等后续阶段处理）。**图检测不在本流程内**——文本提取出口后，由父流程 `extract` 接续：先跑 **config 子流程**（生成 `verify_config.json`）→ 再跑 **figure_detection 子流程**（图检测 + 分配）。
+将书籍 PDF 批量提取为结构化 `page_*.json`（公式 LaTeX + 正文文本）；支持断点续跑。本流程只产出"原料"，不做任何校验（OCR 噪声修复等由 MM Repair 等后续阶段处理）。**图检测不在本流程内**——由 `figure_detection` 子流程（见 `../figure_detection/figure_detection.md`）另行处理。
 
 ## 运行方式
 直接运行主程序：
@@ -31,7 +31,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 **Step 2 — 断点续跑判定（缺口优先，非最大页码+1）**
 - 默认：扫描已落盘 `page_*.json` 得到 `existing_pages`，**从 1 起数第一个不连续缺口**作为续跑起点（`find_first_gap`），而非"最大页码+1"。例：已存在 1–10 与 15–20，则续跑点为 11（不是 21）。
 - 把所有缺失页拆成连续区间 `missing_ranges`；提取阶段**循环遍历各缺失区间、逐个补提，直至覆盖到最后一页 END**（已存在页绝不重提）。例：1–10、15–20 已落盘，END=20 → 仅补 `[11,14]`，补完即到末页。
-- 结束页判定同样遵循缺口逻辑：若 1..END 内已无缺口（`find_first_gap > END`）→ 跳过提取阶段，直接进入 figure 收尾（Step 5 / Step 6）。
+- 结束页判定同样遵循缺口逻辑：若 1..END 内已无缺口（`find_first_gap > END`）→ 跳过提取阶段，直接进入图检测阶段。
 
 **Step 3 — 模型单次初始化（跨批复用）**
 - `init_models()` 一次性加载 MFD + MFR + OCR（GPU fp16，CUDA 可用时）。
@@ -49,7 +49,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 - 批次失败处理：单批抛异常 → 写 `batch_*.log` 的 TRACEBACK、清显存、`gc.collect()`，然后 `break` 停止整个循环（一批失败即停，不继续后续批）。
 
 **Step 5 —（图检测已拆出，不在本流程）**
-- 图检测 + 分配**不在本流程内**。文本提取（Step 1–4）全部完成后，由父流程 `extract` 接续：先跑 **config 子流程**（生成 `verify_config.json`，含 `figure.labels`）→ 再跑 **figure_detection 子流程**（见 [`../figure_detection/figure_detection.md`](../figure_detection/figure_detection.md)）做全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配。这样图检测**必定读到本书图号前缀**，而非默认兜底——顺序由父流程保证，本脚本不负责图。
+- 图检测 + 分配**不在本流程内**，由 `figure_detection` 子流程（见 [`../figure_detection/figure_detection.md`](../figure_detection/figure_detection.md)）做全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配，必定读到本书图号前缀，而非默认兜底。
 
 ## 本阶段规则
 - **规则1 — 失败即停**：任一批异常只记日志并 `break`，不继续下一批；需人工看 `batch_*.log` 定位（常见：CUDA OOM、PDF 损坏页）。后续可依赖断点续跑从失败批之后继续补提。
@@ -57,7 +57,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 - **规则3 — 幂等 / 缺口安全**：`--force` 从头重跑，覆盖请求的整段（从 `--start` 起所有页）；非 `--force` 续跑**只补 1..END 内缺失的区间**（含中间缺口），已存在页不动（安全可重复）。
 
 ## 出口条件
-- 出口：1..END 内所有页 `page_*.json` 均已落盘（**无缺口**），`extract_pipeline.log` 末尾 `Pipeline finished.`。图产物（`figure_index.json` 等）由 figure_detection 子流程在其后生成。
+- 出口：1..END 内所有页 `page_*.json` 均已落盘（**无缺口**），`extract_pipeline.log` 末尾 `Pipeline finished.`。图产物（`figure_index.json` 等）由图检测阶段生成。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/extract/pipeline/script/pipeline/extract_pipeline`：主程序（断点续跑 + 分批提取，文本 only）。
@@ -66,5 +66,5 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 - 图检测相关代码（DocLayout-YOLO 检测 / `图X.X.X` 分配）见 figure_detection 子流程文档 [`../figure_detection/figure_detection.md`](../figure_detection/figure_detection.md) 的「相关代码」。
 
 ## 产物去向（上下文说明，非阅读依赖）
-- `page_*.json` 作为原料供 MM Repair（修 OCR 噪声）、config 子流程（探测编号形态）与写章阶段消费。
-- 图产物（`figure_detect.json` / `figure_index.json` / `figure/`）由 figure_detection 子流程在 config 之后生成，供写章阶段的图嵌入 / 引用消费。
+- `page_*.json` 作为原料供 MM Repair（修 OCR 噪声）、配置探测（编号形态）与写章阶段消费。
+- 图产物（`figure_detect.json` / `figure_index.json` / `figure/`）由图检测阶段生成，供写章阶段的图嵌入 / 引用消费。

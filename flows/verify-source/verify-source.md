@@ -2,16 +2,12 @@
 
 > 本流程是 [`verify`](../../verify/verify.md) 公用流程的**薄壳**。
 > 校验逻辑本身**语言无关**——源语言总结与翻译语言总结共用同一套 `verify` 校验层。
-> 本流程仅在 Stage 4 把 `verify` 指向"源语言总结目录"，不含任何独立校验代码。
+> 本流程仅把 `verify` 指向"源语言总结目录"，不含任何独立校验代码。
 
 ## 目的
 源语言全部初稿写完后，调用通用 `verify` 流程**一次性批量校验源语言全部章节**，直至 `verify PASS + KaTeX OK`。
-
-## 触发
-- `config` 阶段生成完整 `verify_config.json` 后。
-
 ## 前置
-- 源语言全部章节初稿写完（合并文件 `ChapterN_*.md` 或按 write-source 规则3 节文件 `ChapterN_M...`）。
+- 源语言全部章节初稿写完（合并文件 `ChapterN_*.md` 或按节拆分的 `ChapterN_M...` 文件）。
 - `_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式）。
 
 ## 步骤（有序）

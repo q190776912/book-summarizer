@@ -13,15 +13,9 @@
 支持**任意嵌套深度（1–4 级：章 / 节 / 小节 / 子小节）**，由 `<book>/_extract/verify_config.json` 的 `section_types` / `section_depths` 驱动（详见 `../../verify.md` §6）。未显式声明时按 `ordinal` 反推（`ORDINAL_SECTION_TYPES`）：ordinal 2/4/6/7 仅校验章+节两级；ordinal 3/5 额外校验小节（1.1.1）层级（旧 `D_MD_NESTED_SEC_RE` 是死代码，本次首次真正生效）；ordinal 1 仅章级。
 
 > 节的**条目级**尾部缺口（节在、末号丢了）仍由 **B 层** `_md_tail_warnings` 负责（md 末号 vs 抽取契约）。D 不重复做条目级尾部，只做“整节”层面的两件事。
-## 触发
-
-由 `verify` 总流程（见 [`../../verify.md`](../../verify.md) 与注册表 [`..`](.)）
-按 `order` 自动调度；亦可被其他消费者（如 `../../../flows/verify-source`、`../../../flows/derive-translate`
-或外部 skill）单独引用本子流程，针对单章 / 单文件运行该校验层。
-
 ## 前置
 
-- `<book>/_extract/verify_config.json` 完整合法（config_setting 流程 规则1）。
+- `<book>/_extract/verify_config.json` 完整合法。
 - 依赖数据的层需 EXTRACT 层已填充 `ctx.items / entry_keys / all_keys`
 （见 [data_provider](../data_provider/data_provider.md)）。
 

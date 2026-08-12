@@ -21,12 +21,12 @@
 
 ## 架构概览
 
-图片提取分成两段：**阶段 1 检测（detection）** 与 **阶段 2 命名（assignment）**。这两段**不再内联在文本提取流水线里**，而是由独立的 `figure_detection` 子流程统一执行——在 **config 子流程生成 `verify_config.json`（含 `figure.labels`）之后**、全书文本落盘之后跑一次全本（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。
+图片提取分成两段：**阶段 1 检测（detection）** 与 **阶段 2 命名（assignment）**。这两段**不再内联在文本提取流水线里**，而是由独立的 `figure_detection` 子流程统一执行——在 **`verify_config.json`（含 `figure.labels`）配置就绪**、全书文本落盘之后跑一次全本（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。
 
 - **阶段 1 检测（detection，`flows/script/figure/extract_figures`）**：`run_full_book()` 对全书每页做 DocLayout-YOLO 检测，裁图存 `figure/det_p{PAGE:03d}_{IDX:02d}.png`（**位置名，无图号**，不带"图6.1.1"这种语义名），写出 `figure_detect.json`。**只有带序标（`图 X.X` / `Fig X.X` / `Scheme X.X` 等）的图，才把其下方 caption（标号 + 说明）一并裁入同一张图**；无标号 caption 的图只裁图本身。
 - **阶段 2 命名（assignment，`flows/script/figure/assign_figures`）**：`run_book()` 读 `figure_detect.json` + 章内 OCR 图注，根据 **bbox 位置 + OCR 图注文本** 判断每张检测到的图对应哪个"图 X.X.X"，重命名为 `figure/chNN_figX.X.X.png`（匹配）或 `chNN_unnamed_K.png`（未匹配），写出 `figure_index.json`（`../../../../verify/script/verify_chapter.py` 的 E/F 层消费）。
 
-**为什么拆出去**：图检测是 extract 阶段里**唯一读 `figure.labels`** 的环节。若把它内联在文本提取流水线（文本提取先于 config），`figure.labels` 还不存在，自定义前缀书（Scheme / Illustration 等）的 caption 会被漏识、退化成默认 `["图","Figure","Fig"]`。拆成 config 之后的独立子流程，从源头保证 `figure.labels` 先就位。本书确实无图时，直接跳过该子流程即可（`figure_index.json` 保持缺失，无需开关）。
+**为什么拆出去**：图检测是 extract 阶段里**唯一读 `figure.labels`** 的环节。若在内联执行时 `figure.labels` 尚未配置，自定义前缀书（Scheme / Illustration 等）的 caption 会被漏识、退化成默认 `["图","Figure","Fig"]`。拆成独立子流程、待配置就绪后运行，从源头保证 `figure.labels` 先就位。本书确实无图时，直接跳过该子流程即可（`figure_index.json` 保持缺失，无需开关）。
 
 **背景**：PDF-Extract-Kit 的 `layout_detection` 任务**只定位** figure 的边界框（画可视化叠加图），并不把图裁成单独文件。所以"把图裁下来存 `figure/`"靠 `extract_figures.py` 实现——用 PDF-Extract-Kit 的 DocLayout-YOLO 权重给出 figure 框，再用同一 200-DPI 渲染页把框内区域扣出来存 PNG。
 
@@ -100,13 +100,13 @@
 
 ## 工作流衔接（figure_detection 子流程）
 
-图检测 / 分配**不再是文本提取流水线的内联增量步骤**，而是 extract 阶段里排在 **config 之后**的独立子流程 `figure_detection`（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。触发顺序：
+图检测 / 分配**不再是文本提取流水线的内联增量步骤**，而是 extract 阶段里待 `figure.labels` 配置就绪后运行的独立子流程 `figure_detection`（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。执行衔接：
 
-1. **文本提取（pipeline 子流程）**：`extract_pipeline.py` 只产出 `page_*.json`（公式 LaTeX + 正文），**不做任何图检测**。
-2. **config 子流程**：文本 100% 落盘后，依据 `page_*.json` 一次性生成 `_extract/verify_config.json`，其中 `figure.labels` 决定图号前缀。
-3. **figure_detection 子流程**：config 完成后，对全书做一次 `run_full_book()`（检测，覆盖写 `figure_detect.json`）+ `run_book()`（分配，写 `figure_index.json`）。`figure.labels` 此时已就位，caption 合并不漏识。
+1. **文本提取（pipeline 子流程）**：`extract_pipeline.py` 产出 `page_*.json`（公式 LaTeX + 正文），**不做任何图检测**。
+2. **配置（`verify_config.json`）**：依据 `page_*.json` 生成，其中 `figure.labels` 决定图号前缀；该字段须先于图检测就绪。
+3. **figure_detection 子流程**：对全书做一次 `run_full_book()`（检测，覆盖写 `figure_detect.json`）+ `run_book()`（分配，写 `figure_index.json`）。`figure.labels` 已就位，caption 合并不漏识。
 
-**为什么这样排（关键）**：图检测是 extract 阶段唯一读 `figure.labels` 的环节。若内联在文本流水线（文本先于 config），`figure.labels` 还不存在，自定义前缀书的 caption 退化成默认 `["图","Figure","Fig"]`。拆到 config 之后从源头解决。
+**为什么需要配置先就绪（关键）**：图检测是 extract 阶段唯一读 `figure.labels` 的环节。若 `figure.labels` 尚未配置，自定义前缀书的 caption 退化成默认 `["图","Figure","Fig"]`。拆成独立子流程、待配置就绪后运行，从源头解决。
 
 **断点 / 重跑（修漏检）**：默认是"全书一次跑完"。若某章 E 层报"图 X.X.X missing"（真漏检），用区间 / 单章重跑即可，不必重跑全书：
 - 重跑检测区间：`detect_pages_range(pdf, out, start, end)`（追加合并，保留其他页结果）

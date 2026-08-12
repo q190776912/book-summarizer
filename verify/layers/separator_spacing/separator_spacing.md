@@ -9,15 +9,9 @@
 
 ## 一句话目的
 `---` 分隔线上下需有空行。
-## 触发
-
-由 `verify` 总流程（见 [`../../verify.md`](../../verify.md) 与注册表 [`..`](.)）
-按 `order` 自动调度；亦可被其他消费者（如 `../../../flows/verify-source`、`../../../flows/derive-translate`
-或外部 skill）单独引用本子流程，针对单章 / 单文件运行该校验层。
-
 ## 前置
 
-- `<book>/_extract/verify_config.json` 完整合法（config_setting 流程 规则1）。
+- `<book>/_extract/verify_config.json` 完整合法。
 - 依赖数据的层需 EXTRACT 层已填充 `ctx.items / entry_keys / all_keys`
 （见 [data_provider](../data_provider/data_provider.md)）。
 

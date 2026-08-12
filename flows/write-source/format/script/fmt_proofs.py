@@ -52,8 +52,8 @@ import re
 import glob
 import subprocess
 
-from format.bq_core import merge_example_block, stage1, remove_heading_seps
-from format.proof_steps import stage2
+from bq_core import merge_example_block, stage1, remove_heading_seps
+from proof_steps import stage2
 
 
 # Regex: example+proof on same line (`> **例**：...**证明梗概**：...`)

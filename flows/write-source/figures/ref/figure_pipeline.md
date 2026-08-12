@@ -23,8 +23,8 @@
 
 图片提取分成两段：**阶段 1 检测（detection）** 与 **阶段 2 命名（assignment）**。这两段**不再内联在文本提取流水线里**，而是由独立的 `figure_detection` 子流程统一执行——在 **`verify_config.json`（含 `figure.labels`）配置就绪**、全书文本落盘之后跑一次全本（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。
 
-- **阶段 1 检测（detection，`flows/script/figure/extract_figures`）**：`run_full_book()` 对全书每页做 DocLayout-YOLO 检测，裁图存 `figure/det_p{PAGE:03d}_{IDX:02d}.png`（**位置名，无图号**，不带"图6.1.1"这种语义名），写出 `figure_detect.json`。**只有带序标（`图 X.X` / `Fig X.X` / `Scheme X.X` 等）的图，才把其下方 caption（标号 + 说明）一并裁入同一张图**；无标号 caption 的图只裁图本身。
-- **阶段 2 命名（assignment，`flows/script/figure/assign_figures`）**：`run_book()` 读 `figure_detect.json` + 章内 OCR 图注，根据 **bbox 位置 + OCR 图注文本** 判断每张检测到的图对应哪个"图 X.X.X"，重命名为 `figure/chNN_figX.X.X.png`（匹配）或 `chNN_unnamed_K.png`（未匹配），写出 `figure_index.json`（`../../../../verify/script/verify_chapter.py` 的 E/F 层消费）。
+- **阶段 1 检测（detection，`flows/script/extract_figures`）**：`run_full_book()` 对全书每页做 DocLayout-YOLO 检测，裁图存 `figure/det_p{PAGE:03d}_{IDX:02d}.png`（**位置名，无图号**，不带"图6.1.1"这种语义名），写出 `figure_detect.json`。**只有带序标（`图 X.X` / `Fig X.X` / `Scheme X.X` 等）的图，才把其下方 caption（标号 + 说明）一并裁入同一张图**；无标号 caption 的图只裁图本身。
+- **阶段 2 命名（assignment，`flows/script/assign_figures`）**：`run_book()` 读 `figure_detect.json` + 章内 OCR 图注，根据 **bbox 位置 + OCR 图注文本** 判断每张检测到的图对应哪个"图 X.X.X"，重命名为 `figure/chNN_figX.X.X.png`（匹配）或 `chNN_unnamed_K.png`（未匹配），写出 `figure_index.json`（`../../../../verify/script/verify_chapter.py` 的 E/F 层消费）。
 
 **为什么拆出去**：图检测是 extract 阶段里**唯一读 `figure.labels`** 的环节。若在内联执行时 `figure.labels` 尚未配置，自定义前缀书（Scheme / Illustration 等）的 caption 会被漏识、退化成默认 `["图","Figure","Fig"]`。拆成独立子流程、待配置就绪后运行，从源头保证 `figure.labels` 先就位。本书确实无图时，直接跳过该子流程即可（`figure_index.json` 保持缺失，无需开关）。
 
@@ -51,11 +51,11 @@
 
 ```bash
 # 全本
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" \
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" \
   "<pdf>" --out "<extract>" --book
 
 # 单章重跑
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" \
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" \
   "<pdf>" --out "<extract>" --ch N --start S --end E
 ```
 
@@ -88,11 +88,11 @@
 
 ```bash
 # 全本
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" \
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" \
   "<pdf>" --out "<extract>" --book
 
 # 单章
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" \
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" \
   "<pdf>" --out "<extract>" --ch N --start S --end E
 ```
 
@@ -148,11 +148,11 @@
 
 ## 嵌入后处理
 
-`../../../script/figure/embed_figures.py`（Step 3.5）自动完成缩进进块、连续性修复、flex 包装。
+`../../../script/embed_figures.py`（Step 3.5）自动完成缩进进块、连续性修复、flex 包装。
 
 ### 自动锚点匹配的局限
 
-`../../../script/figure/embed_figures.py` 用启发式匹配图注（caption）与条目标签（`**定义X.X**`, `**定理X.X**` 等）。当 OCR 图注文本噪声大、或图无文字标注（如图1.1 Venn 图只有 "图1.1" 而无 "定义1.4" 字样）时，匹配会失败，脚本输出 `no item ref`。
+`../../../script/embed_figures.py` 用启发式匹配图注（caption）与条目标签（`**定义X.X**`, `**定理X.X**` 等）。当 OCR 图注文本噪声大、或图无文字标注（如图1.1 Venn 图只有 "图1.1" 而无 "定义1.4" 字样）时，匹配会失败，脚本输出 `no item ref`。
 
 **对此情况，必须创建 `_extract/figure_embed_overrides.json` 手动声明锚点**。其字段（`anchors` / `is_proof`）、JSON 示例与自动产出脚本见 [`../../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../../data/figure_embed_overrides/figure_embed_overrides.md)。
 
@@ -170,7 +170,7 @@
 - 只取 `figure`(class 3) 裁，**不裁表格/公式块**（模型另有 `table`(5)/`isolate_formula`(8) 类，脚本忽略）
 - 图注序标识别**跟随本书体例**：前缀词由 `_extract/verify_config.json` 的 `figure.labels` 决定（默认 `["图","Figure","Fig"]`，可扩成 `Scheme` / `Illustration` 等），不再写死中英语词表；caption 无图号且同页邻近无该书图号时命名为 `chNN_unnamed_K.png`
 - `--conf` 默认 0.25；觉得误检多就调高，漏检多就调低
-- **Windows + 非 ASCII 路径的静默失败**：OpenCV 的 `cv2.imwrite` 在 Windows 上对含中文等非 ASCII 字符的路径会**静默返回 False**（已知 OpenCV 缺陷），导致检测阶段只生成 `figure_detect.json` / `figure_index.json` 元数据但 `figure/` 下没有 PNG。`../../../script/figure/extract_figures.py` 已改为 PIL 保存，回跑即修复；若 `_extract/` 已是历史遗留数据没有 PNG，可写 `regen_figures.py` 用 fitz 渲染 + PIL 裁剪，按 `figure_index.json` 的 `page+bbox+file` 重建
+- **Windows + 非 ASCII 路径的静默失败**：OpenCV 的 `cv2.imwrite` 在 Windows 上对含中文等非 ASCII 字符的路径会**静默返回 False**（已知 OpenCV 缺陷），导致检测阶段只生成 `figure_detect.json` / `figure_index.json` 元数据但 `figure/` 下没有 PNG。`../../../script/extract_figures.py` 已改为 PIL 保存，回跑即修复；若 `_extract/` 已是历史遗留数据没有 PNG，可写 `regen_figures.py` 用 fitz 渲染 + PIL 裁剪，按 `figure_index.json` 的 `page+bbox+file` 重建
 
 ---
 
@@ -178,20 +178,20 @@
 
 ```bash
 # 全本 detection（pdf_path 可省略，自动从 --out 上级目录发现 PDF）
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" --out "<extract>" --book
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" "<pdf>" --out "<extract>" --book
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" --out "<extract>" --book
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" "<pdf>" --out "<extract>" --book
 
 # 单章重跑 detection
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" --out "<extract>" --ch N --start S --end E
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/extract_figures" "<pdf>" --out "<extract>" --ch N --start S --end E
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" --out "<extract>" --ch N --start S --end E
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/extract_figures" "<pdf>" --out "<extract>" --ch N --start S --end E
 
 # 全本 assignment（pdf_path 可省略，自动发现；实际不读 PDF，仅作对称参数）
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" --out "<extract>" --book
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" "<pdf>" --out "<extract>" --book
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" --out "<extract>" --book
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" "<pdf>" --out "<extract>" --book
 
 # 单章重跑 assignment
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" --out "<extract>" --ch N --start S --end E
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/figure/assign_figures" "<pdf>" --out "<extract>" --ch N --start S --end E
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" --out "<extract>" --ch N --start S --end E
+"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/script/assign_figures" "<pdf>" --out "<extract>" --ch N --start S --end E
 
 # 手动补图
 "<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/config/figure_manual_chN/apply_manual_figures.py" "<extract>" <ch> --pdf "<pdf>"

@@ -24,4 +24,4 @@
 
 - `build_precise_anchors.py`：按页纵坐标定位「图上方最近条目」，**调用 `figure_embed_overrides.py` 的 `write_figure_embed_overrides(overrides, path)` 写出**骨架 `figure_embed_overrides.json`（`figure_index.json` 保持不动）；锚点计算留在本脚本，JSON 实例化归 `..`（流程脚本无裸 `json.dump`）。
 - `../figure_index/figure_index.py`：在生成 `figure_index.json` 时一并写出本文件骨架。
-- 两者均可后续手填 / 手改；重嵌前可用 `../../flows/script/figure/strip_figure_embeds.py` 剥离旧嵌入再据本文件重嵌。
+- 两者均可后续手填 / 手改；重嵌前可用 `../../flows/script/strip_figure_embeds.py` 剥离旧嵌入再据本文件重嵌。

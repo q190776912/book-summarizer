@@ -1,6 +1,6 @@
 """Page deskew (skew correction) for scanned PDF pages.
 
-Both `extract_book.py` (MFD/MFR/OCR) and `flows/script/figure/extract_figures.py`
+Both `extract_book.py` (MFD/MFR/OCR) and `flows/script/extract_figures.py`
 (DocLayout-YOLO figure detection) render the PDF page independently,
 so they MUST share the SAME render+deskew routine.  Otherwise the
 text/formula boxes (`poly` / `bbox`) would live in the deskewed

@@ -64,7 +64,7 @@ import numpy as np
 # ----------------------------------------------------------------------------
 # reuse detection helpers (kept in extract_figures.py)
 # ----------------------------------------------------------------------------
-from figure.extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
+from extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
 from lib.figure_io import load_fig_labels, build_fig_label_re  # noqa: E402
 
 

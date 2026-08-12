@@ -64,7 +64,7 @@ The Chinese text MUST be valid, readable UTF-8. Historically files were written 
 
 - **Write the file as UTF-8** and verify it opens as readable Chinese. Never write through a toolchain that re-encodes (e.g. passing Chinese filenames through `cmd /c` or a non-UTF-8 shell mangles them).
 - **After writing each file, spot-read the first few lines** (with the `read` tool) to confirm the Chinese is legible.
-- When running `../script/format/check_katex.py` on Chinese-path files, pass the paths **directly** to the `pdfextract` Python executable, NOT through `cmd /c`.
+- When running `../script/check_katex.py` on Chinese-path files, pass the paths **directly** to the `pdfextract` Python executable, NOT through `cmd /c`.
 
 ### 2. Format — Bold Inline Labels for Items, Blockquote for Examples, NO Item-Headings
 
@@ -100,7 +100,7 @@ Definitions, theorems, propositions, corollaries, lemmas, axioms, and remarks MU
   > **证明（定理 续）**：由引理 33.5 … 证毕。
   ```
 
-> 此类「标签被吞进块引用」的缺陷，旧版 `../script/format/fmt_proofs.py` 的 `repair_leaked_bq` 也会自动制造（它曾把一书的 48 章中 34 处独立 `**定理**` 误包进前一个证明）。**当前版 `../script/format/fmt_proofs.py` 已修复**：默认只跑 stage1（补 `---`、把独立证明包进引用），不再运行会吞并标签的 repair 步骤，且把独立成行的结构性标签识别为硬边界，绝不吞并。写作时仍须主动遵守本规则，不要依赖后处理兜底。
+> 此类「标签被吞进块引用」的缺陷，旧版 `../script/fmt_proofs.py` 的 `repair_leaked_bq` 也会自动制造（它曾把一书的 48 章中 34 处独立 `**定理**` 误包进前一个证明）。**当前版 `../script/fmt_proofs.py` 已修复**：默认只跑 stage1（补 `---`、把独立证明包进引用），不再运行会吞并标签的 repair 步骤，且把独立成行的结构性标签识别为硬边界，绝不吞并。写作时仍须主动遵守本规则，不要依赖后处理兜底。
 
 ### 2a. Theorems/Propositions and Their Proofs — No Separator Between
 

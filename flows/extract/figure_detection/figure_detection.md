@@ -28,8 +28,8 @@
 - 出口：`figure_detect.json` 与 `figure_index.json` 均存在，且 `figure_index.json` 涵盖全部已建章节（或本书无图而跳过）。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/script/figure/extract_figures`（`run_full_book` / `run_chapter` / `detect_pages_range` / `parse_fig_label`）：DocLayout-YOLO 检测 + 裁图 + caption 合并。`run_full_book` 为全本书检测入口（被本子流程调用）。
-- `flows/script/figure/assign_figures`（`run_book` / `run_chapter` / `gather_refs`）：章内 OCR 图注 → 语义号分配。`run_book` 为全本书分配入口（被本子流程调用）。
+- `flows/script/extract_figures`（`run_full_book` / `run_chapter` / `detect_pages_range` / `parse_fig_label`）：DocLayout-YOLO 检测 + 裁图 + caption 合并。`run_full_book` 为全本书检测入口（被本子流程调用）。
+- `flows/script/assign_figures`（`run_book` / `run_chapter` / `gather_refs`）：章内 OCR 图注 → 语义号分配。`run_book` 为全本书分配入口（被本子流程调用）。
 - `../../../data/figure_detect/figure_detect.py`（`FigureDetect`）：`figure_detect.json` 数据结构。
 - `../../../data/figure_index/figure_index.py`：`figure_index.json` 数据结构。
 - `../../../lib/figure_io.py`（`load_fig_labels` / `build_fig_label_re` / `FIGURE_LABELS_DEFAULT`）：图号前缀的跨流程唯一读取点。

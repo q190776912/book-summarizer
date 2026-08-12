@@ -11,9 +11,9 @@
 
 ## 步骤（有序，脚本自动化、幂等）
 ```bash
-python flows/script/figure/embed_figures "<book_dir>"            # 整本书（已嵌入自动跳过）
-python flows/script/figure/embed_figures "<book_dir>" --chapter 3 # 只嵌某章
-python flows/script/figure/embed_figures "<book_dir>" --dry-run   # 仅预览
+python flows/script/embed_figures "<book_dir>"            # 整本书（已嵌入自动跳过）
+python flows/script/embed_figures "<book_dir>" --chapter 3 # 只嵌某章
+python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 ```
 脚本会：① 用 OCR 噪声容忍的"图注→条目锚点"启发式匹配；② 自动补 `_extract/` 路径前缀（不会写出坏链）；③ 嵌入后自动跑结构扫描——把落在 `> **证明/例**` 块内却写成顶层的图缩进进块（`> <img ...>`），并把块内裸空行转成 `> ` 保证引用块连续；④ 自动 flex 包装：所有 `<img>` 统一包裹 `<div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center">`，连续小图并排、单张居中。
 
@@ -32,8 +32,8 @@ python flows/script/figure/embed_figures "<book_dir>" --dry-run   # 仅预览
 - 出口：本章（或全书）被引用图已嵌入、flex 格式合规。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/script/figure/embed_figures`：嵌图（幂等）。
-- `flows/script/figure/extract_figures` / `flows/script/figure/assign_figures`：图片检测 / 命名（产出 `figure_index.json`）。
+- `flows/script/embed_figures`：嵌图（幂等）。
+- `flows/script/extract_figures` / `flows/script/assign_figures`：图片检测 / 命名（产出 `figure_index.json`）。
 - `../../../config/figure_manual_chN/apply_manual_figures.py`：E 层 FAIL 时手动补图。
 - 完整图片流水线见 [`figure_pipeline.md`](ref/figure_pipeline.md)（SSOT）。
 

@@ -24,7 +24,7 @@ proof_steps.py — 证明步骤编号（从 fmt_proofs.py 迁移，逻辑不变�
 import os, sys
 
 import re
-from format.bq_core import MARKER_RE, PROF_LINE_RE
+from bq_core import MARKER_RE, PROF_LINE_RE
 
 
 def number_proof(text):

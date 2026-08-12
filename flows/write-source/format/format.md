@@ -30,7 +30,7 @@
 - 出口：写作与格式后处理完成，章节符合 `formatting.md` 全部规则。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/write-source/format/script/format/wrap_examples_bq` / `flows/write-source/format/script/format/fmt_proofs` / `flows/write-source/format/script/format/fix_katex` / `flows/write-source/format/script/format/check_katex`：格式后处理。
+- `flows/write-source/format/script/wrap_examples_bq` / `flows/write-source/format/script/fmt_proofs` / `flows/write-source/format/script/fix_katex` / `flows/write-source/format/script/check_katex`：格式后处理。
 - 同目录支撑文档：`ref/formatting.md`（SSOT）、`ref/separator_regexlib.md`（分隔符正则库）、`ref/book_patterns.md`（书目编号体系判定树）。
 
 ## 子流程

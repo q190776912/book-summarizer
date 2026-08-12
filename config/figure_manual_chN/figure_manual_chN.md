@@ -8,7 +8,7 @@ JSON **字典**，键为图号（`"1.3.1"`），值为：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `page` | `int` | 该图被引用的页（以原文 / `../../flows/script/figure/inspect_tool.py` 定位）。 |
+| `page` | `int` | 该图被引用的页（以原文 / `../../flows/script/inspect_tool.py` 定位）。 |
 | `bbox` | `[int,int,int,int]` | 图的像素裁剪框 `[x0, y0, x1, y1]`，以 200-DPI 渲染图坐标为准。 |
 | `rotate` | `int?` | 可选。PDF 旋转存放角度（如 `90`）。 |
 | `caption` | `str` | 图注文本（如 `"图 1.3.1 动力系统分类框架（旋转 90° 存放）"`）。 |

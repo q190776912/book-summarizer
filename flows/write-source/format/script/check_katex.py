@@ -79,7 +79,7 @@ import re
 import glob
 
 
-from format.katex_heuristics import (
+from katex_heuristics import (
     BAD_MACRO_PATTERNS,
     find_raw_arrow_errors,
     find_naked_command_errors,
@@ -87,7 +87,7 @@ from format.katex_heuristics import (
     find_bare_math_errors,
     _fence_looks_like_math,
 )
-from format.katex_render import run_render_check
+from katex_render import run_render_check
 
 
 def process_file(path, fix):

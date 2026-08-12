@@ -372,14 +372,16 @@ def print_result(r):
             print(g)
     if p_miss:
         problems += 1
-        print(f"\nP-LAYER MISSING SECTION vs SKELETON ({len(p_miss)}): ch{ch}_skeleton.txt is "
-              f"the writing contract — every SEC must be emitted in order; add the missing `## §`:")
+        print(f"\nP-LAYER MISSING SECTION vs CONTRACT ({len(p_miss)}): structure contract "
+              f"(ch{ch}_structure.json) is the writing contract — "
+              f"every section must be emitted in order; add the missing `## §`:")
         for g in p_miss:
             print(g)
     if p_extra:
         problems += 1
-        print(f"\nP-LAYER FABRICATED ITEM vs SKELETON ({len(p_extra)}): ch{ch}_skeleton.txt is "
-              f"the writing contract — do NOT invent numbered items the source lacks "
+        print(f"\nP-LAYER FABRICATED ITEM vs CONTRACT ({len(p_extra)}): structure contract "
+              f"(ch{ch}_structure.json) is the writing contract — "
+              f"do NOT invent numbered items the source lacks "
               f"(e.g. a `**X.1.1（Implicit）：**` where §X.1 is prose); delete or demote to prose/remark:")
         for g in p_extra:
             print(g)

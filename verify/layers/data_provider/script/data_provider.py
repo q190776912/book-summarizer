@@ -43,10 +43,9 @@ from verify.script.key_parse import (
     keys_in_md, _canon_label, _first_num, sortkey,
 )
 from lib.regexlib import SEP_TIGHT
-from verify_config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, ORDINAL_VAKIL
-from extract.extract_items import extract_items, extract_items_en
-from extract.extract_items_gm import extract_items_gm, int_to_roman
-from extract.extract_items_vakil import extract_items_vakil
+from verify_config import (ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL,
+                           ORDINAL_VAKIL, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH)
+from extract_items_gm import int_to_roman
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +181,62 @@ def _merged_ocr_overmark_guard(ctx, items, warnings):
                 f"  ? {k} 标注（OCR无法识别）但书中 OCR 已识别该条目 → 可能误标，请复核")
 
 
+# ---------------------------------------------------------------------------
+# 统一结构 JSON 消费（extract/structure 产物 ch<N>_structure.json，SSOT）。
+# data_provider 唯一数据来源就是此 JSON，不再调用抽取器、不再保留旧书回退。
+# 旧书须先重跑 build_structure。
+# ---------------------------------------------------------------------------
+_TYPE_TO_LABEL = {
+    'definition': '定义', 'theorem': '定理', 'lemma': '引理',
+    'corollary': '推论', 'proposition': '命题', 'example': '例',
+    'remark': '评注', 'uncat': 'uncat',
+}
+
+
+def _read_structure_items(ext_dir, ch):
+    """读 ch<N>_structure.json，展平为非 exercise 的编号项列表。
+
+    返回 None 表示 JSON 不存在/损坏；返回 list（可能为空）表示已采用 JSON 路径。
+    exercise / chapter / section 节点被排除。
+    """
+    p = os.path.join(ext_dir, 'ch%d_structure.json' % ch)
+    if not os.path.exists(p):
+        return None
+    try:
+        tree = json.load(open(p, encoding='utf-8'))
+    except Exception:
+        return None
+    items = []
+
+    def _walk(node):
+        t = node.get('type')
+        if t in ('chapter', 'section'):
+            for k in node.get('sub_sec', []):
+                _walk(k)
+            return
+        if t == 'exercise':
+            return
+        items.append({
+            'key': node.get('key', ''),
+            'label': _TYPE_TO_LABEL.get(t, 'uncat'),
+            'page': node.get('page_start', 0),
+            'text': node.get('name', ''),
+        })
+    _walk(tree)
+    return items
+
+
+def _dispatch_items(ctx):
+    """编号项来源：统一读 ch<N>_structure.json（extract/structure 产物，SSOT）。
+    旧书须先重跑 build_structure 生成 JSON，不再回退抽取器（无兼容性代码）。"""
+    items = _read_structure_items(ctx.ext_dir, ctx.ch)
+    if items is None:
+        # 旧书未生成 JSON：不保留兼容性代码。verify 前应先对本书跑 build_structure；
+        # 此处给空列表，由 B 层如实报「缺失项」提示该书尚未生成契约。
+        items = []
+    return items, [], []
+
+
 def check_label_consistency(items):
     """Return list of warning strings for items with label-vs-text mismatch."""
     import re
@@ -216,46 +271,10 @@ class ExtractLayer(VerifyLayer):
     auto_fixable = False
 
     def run(self, ctx):
-        manual = ctx.manual_overrides
         cfg = ctx.config
 
-        if ctx.config.primary_type == ORDINAL_EN:
-            # English two-level book (ordinal=4): use the EN-aware extractor.
-            # Its keys are "Definition 1.1" (English label + "N.M"); canonicalize
-            # to the same Chinese form keys_in_md(ordinal=ORDINAL_EN) produces so
-            # the A-layer comparison is meaningful (Definition->定义, Example->例,
-            # ...). Drop any item whose leading number != ch (forward citations
-            # to OTHER chapters).
-            items = extract_items_en(ctx.ext_dir, ctx.start, ctx.end, want_examples=True)
-            kept = []
-            for it in items:
-                lab, _, num = it['key'].partition(' ')
-                chpart = num.split('.')[0]
-                if chpart.isdigit() and int(chpart) != ctx.ch:
-                    continue
-                it['key'] = f"{_canon_label(lab)}{num}"
-                kept.append(it)
-            items = kept
-            warnings, blocking = [], []
-        elif ctx.config.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
-            # Gelfand-Manin style (ordinal=6) / roman (ordinal=5): book-printed
-            # headings in the .md, roman machine keys ("标签I.S-N" / "I.S-N").
-            items, warnings, blocking = extract_items_gm(
-                ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
-                manual_overrides=manual)
-        elif ctx.config.primary_type == ORDINAL_VAKIL:
-            # Vakil "Rising Sea": number-first three-level (N.M.item) + lettered
-            # exercises; dedicated extractor returns only numbered items.
-            items, warnings, blocking = extract_items_vakil(
-                ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
-                manual_overrides=manual)
-        else:
-            # Single source of truth for the numbering convention: the
-            # BookConfig.ordinal GroupConfig array carried on ctx.config
-            # (same as the MD-side B-layer), not a parallel `numbering` proxy.
-            items, warnings, blocking = extract_items(
-                ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
-                manual_overrides=manual, cfg=cfg)
+        # 编号项来源：统一结构 JSON（ch<N>_structure.json，SSOT），无旧书回退。
+        items, warnings, blocking = _dispatch_items(ctx)
 
         label_warns = check_label_consistency(items)
         extracted_raw = {it['key'] for it in items}

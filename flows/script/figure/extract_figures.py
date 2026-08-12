@@ -62,7 +62,7 @@ from lib.figure_io import load_fig_labels, build_fig_label_re, FIGURE_LABELS_DEF
 
 import os, sys
 
-from pipeline.deskew import (
+from deskew import (
     render_page as _deskew_render_page,
     DEFAULT_MAX_ANGLE as DESKEW_MAX_ANGLE,
     DEFAULT_THRESHOLD as DESKEW_THRESHOLD,
@@ -122,7 +122,7 @@ def render_page(doc, pno, dpi, deskew_mode="auto",
                 max_angle=DESKEW_MAX_ANGLE, threshold=DESKEW_THRESHOLD):
     """Render pdf page `pno` (0-based) at `dpi`; return (BGR ndarray, (W,H)).
 
-    Delegates to the shared ``pipeline.deskew.render_page`` so that figure
+    Delegates to the shared ``deskew.render_page`` so that figure
     bounding boxes live in the SAME coordinate space as the text/formula
     boxes produced by ``extract_book.py`` (both must use the identical
     deskew render, otherwise caption matching and the E/F layers break).

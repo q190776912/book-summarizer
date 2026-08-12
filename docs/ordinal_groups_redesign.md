@@ -23,7 +23,7 @@
 
 ### 1.1 难点
 
-1. **分组语义从「模式开关」变成「数据声明」**：旧 `separate_types=0/1` 控制「全共享计数器 vs 每类独立计数器」；新模型把分组信息编码进 `ordinal` 数组的每个元素（via `name`）。两侧（提取侧 `../flows/extract/script/extract/b_layer.py` 与 MD 侧 `verify/layers/b_layer.py`）的 `_group_key` 逻辑都要替换为 `name → group` 匹配。
+1. **分组语义从「模式开关」变成「数据声明」**：旧 `separate_types=0/1` 控制「全共享计数器 vs 每类独立计数器」；新模型把分组信息编码进 `ordinal` 数组的每个元素（via `name`）。两侧（提取侧 `../flows/extract/script/b_layer.py` 与 MD 侧 `verify/layers/b_layer.py`）的 `_group_key` 逻辑都要替换为 `name → group` 匹配。
 2. **多组可能异构**：同本书可声明多组，每组有独立 `type`(风格族 1–7)、`depth`(段数)、`scope`(计数边界)。解析层（MD 侧 `_md_gap_blocking`、`key_parse.keys_in_md`）过去按「单一 `ordinal` 决定深度」解析，现在要**逐组**解析。
 3. **`extractor_family` 派生**：`extract_layer.py` 过去用 `ctx.config.ordinal`（单 int）选提取器分支（en/gm/roman/fraleigh vs 默认 CN）。新模型要从 `groups` 推导「本书结构族」`extractor_family()`，且 50 本存量书均为单一结构族（make_config 只产单组），故推导规则需保证回归一致。
 4. **D 层小节默认值**：`d_layer.py` 用 `ORDINAL_SECTION_TYPES.get(cfg.ordinal)` 推导缺省小节层级。新模型无单 int，需 `cfg.primary_type()`（取主导风格组的 `type`）替代。
@@ -42,15 +42,15 @@
 |---|---|---|
 | `../config/verify_config/verify_config.py` | **核心重构** | 新增 `GroupConfig`；`BookConfig.ordinal: List[GroupConfig]`；`from_dict` 解析数组 + 拒旧格式；`require_complete` 逐组校验；新增 `primary_type()` / `extractor_family()` / `match_group()` / `uncat_group()`；删除 `separate_types` 字段、`SEP_COMBINED/SEP_PER_TYPE` 常量、`BookConfig.depth`、`group_prefix_len()`；`book_config_has_ordinal` 改「非空数组」检测 |
 | `../config/verify_config/make_config.py` | **输出格式** | 输出数组形式（单默认组 `{type, name:["uncat"], depth, scope:2}`）；打印迁移提示 |
-| `../flows/extract/script/extract/extract_items.py` | **签名/分组** | `extract_items(..., groups=...)` 替换 `ordinal=, separate_types=`；传入 `recover_missing_items(groups=...)` |
-| `../flows/extract/script/extract/b_layer.py` | **分组逻辑** | `_group_key(it, separate_types)` → `_group_key(it, groups)`（name→group 匹配）；删除 `from verify.layers.script.b_layer import SEP_*`；`recover_missing_items(groups=...)` |
+| `../flows/extract/structure/script/extract_items.py` | **签名/分组** | `extract_items(..., groups=...)` 替换 `ordinal=, separate_types=`；传入 `recover_missing_items(groups=...)` |
+| `../flows/extract/script/b_layer.py` | **分组逻辑** | `_group_key(it, separate_types)` → `_group_key(it, groups)`（name→group 匹配）；删除 `from verify.layers.script.b_layer import SEP_*`；`recover_missing_items(groups=...)` |
 | `verify/layers/b_layer.py` | **MD 侧分组** | `_md_gap_blocking` 逐组解析（label→group→该组 depth）+ 分组键 `(gi\|prefix)`；移除 `SEP_*` import/使用；`cfg.depth` → `group.depth`；`group_prefix_len()` → `group.prefix_len()` |
 | `verify/key_parse.py` | **md 解析** | `keys_in_md(path, groups, chapter_roman=None)`：逐组按 `type` 选解析器，union 成 flat `entry_keys/all_keys`（保持 A 层不变） |
 | `verify/layers/extract_layer.py` | **派发** | `cfg.extractor_family()` 选提取器；`extract_items(groups=cfg.ordinal)`；`keys_in_md(md, cfg.ordinal, ...)`；`_merged_category_first_missing` 网关改 `cfg.has_cn_three_level()` |
 | `verify/layers/base.py` | **属性** | `ordinal` property 改为返回 `self.config.ordinal`（list），并更新 `extract_layer`/`p_layer`/`d_layer` 的 int 比较调用点改用 `cfg.extractor_family()` / `cfg.primary_type()` |
 | `verify/layers/p_layer.py` | **适配** | `check_bare_items(lines, ordinal)` → `check_bare_items(lines, family)`（传 `cfg.extractor_family()`） |
 | `verify/layers/d_layer.py` | **适配** | `cfg.ordinal in (GM,ROMAN)` → `cfg.primary_type() in (GM,ROMAN)`；`ORDINAL_SECTION_TYPES.get(cfg.ordinal)` → `ORDINAL_SECTION_TYPES.get(cfg.primary_type())` |
-| `../flows/extract/script/extract/scan_skeleton.py` | **适配/打印** | `loader.book.ordinal` → `loader.book.primary_type()` 喂 `_mode_for_ordinal(int)`；skeleton 头部 `ordinal=%s` 改为打印 groups 摘要 |
+| `../flows/extract/structure/script/scan_skeleton.py` | **适配/打印** | `loader.book.ordinal` → `loader.book.primary_type()` 喂 `_mode_for_ordinal(int)`；skeleton 头部 `ordinal=%s` 改为打印 groups 摘要 |
 | `verify/verify_chapter.py` | **帮助文本** | 仅更新 usage/help 文本中关于 `ordinal`/`separate_types` 的描述（代码逻辑经 `require_complete` 已覆盖，无需改校验逻辑） |
 | `verify/report.py` | **无改动** | 仅消费 `verify_one` 结果 dict，不触碰 `ordinal`，无需改 |
 | `../config/verify_config/tests/test_config_complete.py` | **测试** | 更新/新增：旧 `{"ordinal": int}` 抛 `ConfigError`；`require_complete` 逐组校验用例；`from_dict` 单组默认；make_config 新数组输出 |
@@ -248,7 +248,7 @@ def _parse_group(g):
 
 ### 5.3 b_layer 分组重设计（name→group 匹配）
 
-**提取侧 `../flows/extract/script/extract/b_layer.py`：**
+**提取侧 `../flows/extract/script/b_layer.py`：**
 - 删除 `from verify.layers.script.b_layer import SEP_COMBINED, SEP_PER_TYPE`。
 - `_group_key(it, separate_types)` → `_group_key(it, groups)`：
   ```python
@@ -327,7 +327,7 @@ def _parse_group(g):
 1. **双语 / 异构 type 同书（高风险）**：用户示例混合 `type 3`（CN 三级，裸键 `C.S-N`）与 `type 4`（EN 二级，标签键 `Definition 1.1`）。MD 侧解析器对两类键形态不同，A 层 `keys_in_md` 用 union 覆盖尚可，但 B 层连续性「同组共享计数器」在混合族下语义复杂（EN 组与 CN 组的 key 形态不互通）。**建议**：`make_config` 只产单组；混合族书（罕见）由人工写多组并自测。已在设计里允许但**不保证**自动正确。
 2. **gm/roman 风格在数组下（中风险）**：`extract_items_gm` / roman 路径的机器键含罗马章号，`_md_gap_blocking` 的 numpath 解析需按 `group.structure` 选 roman/gm 解析器（复用 `key_parse` 的 `ENTRY_RE_ROMAN`/`GM_*`）。`keys_in_md` 同理需 `chapter_roman` 参数透传。**回归要求**：确认 Koopman(Kreyszig? 实为 GM) / 含 roman 书在重生配置下仍 PASS（见 QA）。
 3. **循环 import**：`config.py` 不能 import `key_parse`（后者 import `config`）。`match_group` 的 canonicalization 在 `config.py` 内用聚焦副本解决；`from_dict` 存 canonical `name`。需人工确保两份 canon map 同步。
-4. **`SEP_*` 删除的波及**：`SEP_COMBINED/SEP_PER_TYPE` 在 `config.py`、`verify/layers/b_layer.py`、`../flows/extract/script/extract/b_layer.py` 三处定义/引用。删除时三处须同步，且 `flows/write-source/format/ref/separator_regexlib.md:124` 曾标注「严禁改动 SEP 常量」——本次变更需在该文档注明「本约束已被 2026-XX 分组重构取代」。
+4. **`SEP_*` 删除的波及**：`SEP_COMBINED/SEP_PER_TYPE` 在 `config.py`、`verify/layers/b_layer.py`、`../flows/extract/script/b_layer.py` 三处定义/引用。删除时三处须同步，且 `flows/write-source/format/ref/separator_regexlib.md:124` 曾标注「严禁改动 SEP 常量」——本次变更需在该文档注明「本约束已被 2026-XX 分组重构取代」。
 5. **`base.py` `ordinal` property 语义变更（int→list）**：所有 `ctx.config.ordinal` / `ctx.ordinal` 的 int 比较点（`extract_layer` 6 处、`p_layer`、`d_layer`）必须改为 `extractor_family()`/`primary_type()`，遗漏会导致 `int == tuple` 永远 False 或 AttributeError。已逐点列出。
 6. **`require_complete` 旧测试契约翻转**：`test_config_complete.py` 现假设「非法 ordinal 被静默 clamp、不抛错」（KNOWN GAP）。新设计对旧 `{"ordinal": int}` **主动抛 `ConfigError`**，与旧测试预期相反——必须同步更新测试（见任务 T04）。
 7. **`keys_in_md` 签名变更**：所有调用点（仅 `extract_layer.py`）需更新；若有其他脚本直接 import `keys_in_md`，一并改。
@@ -350,14 +350,14 @@ def _parse_group(g):
 - 子步骤：①GroupConfig ②BookConfig 字段/删除 ③from_dict ④require_complete ⑤helpers ⑥常量清理。
 
 ### T02 — 双侧分组重构（提取侧 + MD 侧）【P0，依赖 T01】
-**文件**：`../flows/extract/script/extract/extract_items.py`、`../flows/extract/script/extract/b_layer.py`、`verify/layers/b_layer.py`、`verify/key_parse.py`
+**文件**：`../flows/extract/structure/script/extract_items.py`、`../flows/extract/script/b_layer.py`、`verify/layers/b_layer.py`、`verify/key_parse.py`
 - `extract_items.py`：`extract_items(..., groups=...)` 替换 `ordinal=, separate_types=`；传 `groups` 给 `recover_missing_items`。
-- `../flows/extract/script/extract/b_layer.py`：删除 `SEP_*` import；`_group_key(it, groups)`（name→group 匹配，`f"{gi}|{prefix}"`）；`recover_missing_items(groups=...)`。
+- `../flows/extract/script/b_layer.py`：删除 `SEP_*` import；`_group_key(it, groups)`（name→group 匹配，`f"{gi}|{prefix}"`）；`recover_missing_items(groups=...)`。
 - `verify/layers/b_layer.py`：删除 `SEP_*` import/使用；`_md_gap_blocking` 逐组解析（`match_group`→`group.depth`，gm/roman 用 roman/gm 解析器）；`cfg.depth`/`group_prefix_len()`/`cfg.separate_types` 全部替换为 `group.prefix_len()`；分组键 `f"{gi}|{prefix}"`。
 - `verify/key_parse.py`：`keys_in_md(path, groups, chapter_roman=None)`：逐组按 `type` 选解析器 union 成 flat `entry_keys/all_keys`。
 
 ### T03 — 各层 ordinal→groups 适配 + make_config【P0，依赖 T01、T02】
-**文件**：`verify/layers/extract_layer.py`、`verify/layers/base.py`、`verify/layers/p_layer.py`、`verify/layers/d_layer.py`、`../flows/extract/script/extract/scan_skeleton.py`、`verify/verify_chapter.py`、`../config/verify_config/make_config.py`
+**文件**：`verify/layers/extract_layer.py`、`verify/layers/base.py`、`verify/layers/p_layer.py`、`verify/layers/d_layer.py`、`../flows/extract/structure/script/scan_skeleton.py`、`verify/verify_chapter.py`、`../config/verify_config/make_config.py`
 - `extract_layer.py`：`cfg.extractor_family()` 派发提取器；`extract_items(groups=cfg.ordinal)`；`keys_in_md(md, cfg.ordinal, ...)`；`_merged_category_first_missing` 网关改 `cfg.has_cn_three_level()`。
 - `base.py`：`ordinal` property 返回 `self.config.ordinal`（list）；清理 int 比较点。
 - `p_layer.py`：`check_bare_items(lines, family)`（传 `cfg.extractor_family()`）。

@@ -27,14 +27,14 @@
 
 **Step 2 — 审计（纯 CPU，无需看图）**〔原第一步〕
 ```powershell
-python flows/extract/mm_repair/script/mm_repair/mm_repair_audit.py "<pdf_path>" "<_extract_dir>" --text-thresh 0.80 --formula-conf 0.30 --vpad-lines 0.5
+python flows/extract/mm_repair/script/mm_repair_audit.py "<pdf_path>" "<_extract_dir>" --text-thresh 0.80 --formula-conf 0.30 --vpad-lines 0.5
 ```
 产出：`_mm_repair/manifest.json`（待审条目）、`_mm_repair/page_NNN_sheet.png`（拼版图）、`_mm_repair/page_NNN/*.png`（单裁图）。无标记则输出 `MM_AUDIT DONE: nothing flagged`，本步完成，返回 extract 轮询循环。
 
 **Step 3 — 模式 B（仅文本类书籍）**
 - 若书籍为文本类 → 跑模式 B（加 `--hybrid`，公式与不可信文字保持未解决交模式 A）：
 ```powershell
-python flows/extract/mm_repair/script/mm_repair/mm_repair_text_compare.py "<pdf_path>" "<_extract_dir>" --src-dpi 200 --hybrid
+python flows/extract/mm_repair/script/mm_repair_text_compare.py "<pdf_path>" "<_extract_dir>" --src-dpi 200 --hybrid
 ```
   - 数字文字干净且与 OCR 不同 → `corrections`（标 resolved）；一致 / 为空 → `ok`（标 resolved）；
   - 含白名单外字符（tofu）/ 差异过大 → 保持未解决（`deferred` 交模式 A）；
@@ -52,7 +52,7 @@ python flows/extract/mm_repair/script/mm_repair/mm_repair_text_compare.py "<pdf_
 
 **Step 5 — 应用（写回 page JSON）**
 ```powershell
-python flows/extract/mm_repair/script/mm_repair/mm_repair_apply.py "<_extract_dir>"
+python flows/extract/mm_repair/script/mm_repair_apply.py "<_extract_dir>"
 ```
   - `to_structured`：双向结构化转换，作用于两类被误判的条目：
     - **作用于 text 项**（OCR 误当文本、实为公式）：转成 `formulas[]` 新条目 + 行内文本段；
@@ -70,14 +70,14 @@ python flows/extract/mm_repair/script/mm_repair/mm_repair_apply.py "<_extract_di
 ```powershell
 # Step 1：能力判定（运行时评估，无命令）
 # Step 2：审计
-python flows/extract/mm_repair/script/mm_repair/mm_repair_audit.py      "<pdf>" "<_extract>" --src-dpi 200
+python flows/extract/mm_repair/script/mm_repair_audit.py      "<pdf>" "<_extract>" --src-dpi 200
 # Step 3：模式 B（文本类，--hybrid 把公式/deferred 留给模式 A）
-python flows/extract/mm_repair/script/mm_repair/mm_repair_text_compare.py "<pdf>" "<_extract>" --src-dpi 200 --hybrid
+python flows/extract/mm_repair/script/mm_repair_text_compare.py "<pdf>" "<_extract>" --src-dpi 200 --hybrid
 # （可选）重跑审计：模式 B 已修文字跳过，仅公式/deferred 重新标出交模式 A
-python flows/extract/mm_repair/script/mm_repair/mm_repair_audit.py      "<pdf>" "<_extract>" --src-dpi 200
+python flows/extract/mm_repair/script/mm_repair_audit.py      "<pdf>" "<_extract>" --src-dpi 200
 # Step 4：模式 A —— agent 读 *_sheet.png + manifest 写 repairs.json（含 to_structured）
 # Step 5：应用写回
-python flows/extract/mm_repair/script/mm_repair/mm_repair_apply.py      "<_extract>"
+python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 ```
 
 ## 本阶段规则（🔴 内联）
@@ -90,11 +90,11 @@ python flows/extract/mm_repair/script/mm_repair/mm_repair_apply.py      "<_extra
 - 出口：`_mm_repair/` 存在且所有条目 resolved（或已记 `MM_UNAVAILABLE` 表示无视觉且非文本类跳过）。
 
 ## 相关代码（路径相对 skill 根目录）
-- `script/mm_repair/mm_repair_audit.py`：扫描低置信条目 + 裁图拼版（纯 CPU）。
-- `script/mm_repair/mm_repair_text_compare.py`：模式 B 文本层补偿（含 `--hybrid`）。
-- `script/mm_repair/mm_repair_apply.py`：把 `repairs.json` 写回 page JSON（含 `to_structured` 转换）。
+- `script/mm_repair_audit.py`：扫描低置信条目 + 裁图拼版（纯 CPU）。
+- `script/mm_repair_text_compare.py`：模式 B 文本层补偿（含 `--hybrid`）。
+- `script/mm_repair_apply.py`：把 `repairs.json` 写回 page JSON（含 `to_structured` 转换）。
 - `../../../data/repairs/repairs.py`（数据结构见 [data/repairs/repairs.md](../../../data/repairs/repairs.md)）：合并多 agent 的 `repairs.json`。
-- `script/mm_repair/rereview_montage.py`：重审拼版辅助。
+- `script/rereview_montage.py`：重审拼版辅助。
 
 ## 子流程
 无。

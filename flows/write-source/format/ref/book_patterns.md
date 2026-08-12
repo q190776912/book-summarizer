@@ -6,6 +6,8 @@
 以及对应的处理决策。遇到新的书时先对照「判定树」，确定编号模式（ordinal），
 可避免大量假阳性（phantom key）误报。
 
+> 🔴 **合并结构契约**：上述各编号体系的「骨架扫描（`scan_skeleton`）」与「编号项提取（`extract_items`）」现已统一由 `flows/extract/structure/script/build_structure` 合并为单产物 `ch<N>_structure.json`（SSOT 见 `flows/extract/structure/structure.md`）。write-source 与 verify（`data_provider`）均直接消费该 JSON；编号项的**连续性核验**现移交 `verify`（消费 `structure.json` 的 A/B/D 层），不再有独立的 `scan_items` 扫描脚本。本文件对各编号体系的抽取器路由说明仍然有效，只是调用入口改为 `build_structure`，不再直接消费两份单产物。
+
 ---
 
 ## 1. 两级编号 + 双计数器（周民强《实变函数论》第三版）
@@ -24,21 +26,19 @@
 把它们报成永远无法消除的 `TRULY MISSING`。
 
 ### 处理决策（已内置到 skill）
-- `flows/extract/script/extract/extract_items` 对两级书按 `ordinal` 路由（`<book>/_extract/verify_config.json` 设 `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`，即数组首元素 `type=2`）：直接按 `标签 章.号` 提取，
-  产出 `定义1.1`、`定理1.1` 等键，**不再使用三级 N.S-N 正则**，从根本上杜绝幻影键（命令行亦可显式 `flows/extract/script/extract/extract_items 1 20 82 _extract --ordinal 2`）。
+- `flows/extract/structure/script/extract_items` 对两级书按 `ordinal` 路由（`<book>/_extract/verify_config.json` 设 `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`，即数组首元素 `type=2`）：直接按 `标签 章.号` 提取，
+  产出 `定义1.1`、`定理1.1` 等键，**不再使用三级 N.S-N 正则**，从根本上杜绝幻影键（命令行亦可显式 `flows/extract/structure/script/extract_items 1 20 82 _extract --ordinal 2`）。
 - `../../../../verify/script/verify_chapter.py` 的 `keys_in_md` 同样支持两级：解析 `**定义1.1**：` 等 bold 键；
   编号模式由 `<book>/_extract/verify_config.json` 的 `ordinal` 决定，`--all` 时自动启用。
 - **例的完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），
-  交给专门的 `flows/extract/script/extract/scan_items` 做独立连续性核验。
+  现由 `verify` 消费 `structure.json` 时统一做连续性核验。
 
 ### 命令
 ```bash
 # 提取（两级；ordinal 也可在 verify_config.json 里设，无需命令行）
-python flows/extract/script/extract/extract_items 1 20 82 _extract --ordinal 2
-# 校验（两级，全书；ordinal 来自 verify_config.json）
+python flows/extract/structure/script/extract_items 1 20 82 _extract --ordinal 2
+# 校验 + 连续性核验（权威；消费 structure.json 的 A/B/D 层）
 python verify/script/verify_chapter.py --all _extract <book_dir>
-# 独立连续性核验（权威）
-python flows/extract/script/extract/scan_items 1 20 82 _extract
 ```
 
 ---
@@ -49,18 +49,18 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 | 真值 | OCR 误读 | 出现位置 | 处理 |
 |---|---|---|---|
-| §1.6 | `81.6` | Ch1 尾部 | D 层 `D_SEC_HEAD_A` 已容忍 `8` 前缀；scan_items 的 sec_re 容忍 `(?:§\|8)?` |
-| §2.5 | `S2.5` | Ch2 | D 层 `D_SEC_HEAD_A` 容忍 `8`；scan_items 的 sec_re 容忍 `(?:§\|S)?` |
+| §1.6 | `81.6` | Ch1 尾部 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
+| §2.5 | `S2.5` | Ch2 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
 | 普通 § | `§ 6.6`（中间有空格）| 多章 | D 层 `D_SEC_HEAD_C` 处理短块 |
 
-> 注意：`flows/extract/script/extract/scan_items` 的 `sec_re` 只容错 `§/S/8` 三种开头；若某节在扫描输出中
+> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在 `structure.json` 扫描结果中
 > 缺失，先用 `--verbose` 看原始文本，再人工确认是否又是一种新的 OCR 变形。
 
 ---
 
 ## 3. 三级编号（默认，大多数书）
 
-`章.节-号`（N.S-N），例如 `1.1-2`、`3.2-7`。这是 `flows/extract/script/extract/extract_items` 的默认
+`章.节-号`（N.S-N），例如 `1.1-2`、`3.2-7`。这是 `flows/extract/structure/script/extract_items` 的默认
 编号模式（`ordinal` 数组首元素 `type=3`，三级），`../../../../verify/script/verify_chapter.py` 也默认三级。绝大多数教材（含英文书）
 属此类，无需任何额外配置。v2 下对应 `verify_config.json`：`{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":3}],"strict":true}`（`scope:3` = 节内重置；CN 三级书通常设 `scope:3`，**不要用 make_config 默认的 `scope:2`**）。
 
@@ -68,7 +68,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 ## 4. 判定树：遇到新书先看编号
 
-> 🔴 **`verify_config.json` 是校验的硬性前置，但生成时机在「extract 出口后」**：先完成 **文本提取**（所有页面提取 100% 且每页过 MM Repair），再依据**源 `page_*.json`** 生成 `<book>/_extract/verify_config.json`（至少含数组形式 `ordinal`，见 §6），然后才批量校验。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal`（或 `ordinal` 非合法分组数组）会令 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写源阶段可继续，存量书兼容）。可用 `python config/verify_config/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在 extract 完成后批量进行。
+> 🔴 **`verify_config.json` 是校验的硬性前置，但生成时机在「extract 出口后」**：先完成 **文本提取**（所有页面提取 100% 且每页过 MM Repair），再依据**源 `page_*.json`** 生成 `<book>/_extract/verify_config.json`（至少含数组形式 `ordinal`，见 §6），然后才批量校验。**翻译派生版不参与配置生成。** 文件存在但缺 `ordinal`（或 `ordinal` 非合法分组数组）会令 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 直接报错（exit 2）；文件缺失仅警告并沿用默认 ordinal=3（写源阶段可继续，存量书兼容）。可用 `python config/verify_config/make_config.py <extract_dir>` 半自动探测 + 人工核对生成起始配置。**🚫 禁止「写完一章就校验一章」**——配置与校验统一在 extract 完成后批量进行。
 
 ```
 读 TOC / 抽一页原文，看编号长什么样？（判定树只用于确定 `ordinal` 数组的首元素 `type`，配置在源语言初稿全部完成后统一生成）
@@ -76,7 +76,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 ├─ 编号形如  定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）
 │     → 两级 + 双计数器（周民强型）
 │     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]
-│     → 批量校验后用 flows/extract/script/extract/scan_items 做连续性核验
+│     → 批量校验（verify 消费 structure.json，A/B/D 层覆盖连续性核验）
 │
 ├─ 编号形如  1.1-2 / 3.2-7（三级 章.节-号）
 │     → 默认 three-level
@@ -96,7 +96,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 │
 └─ 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）
       → 几乎肯定是三级正则误吃公式/枚举
-      → 先用 flows/extract/script/extract/scan_items 或人工核对确认真实条目齐全
+      → 先用 verify_chapter.py（消费 structure.json）或人工核对确认真实条目齐全
       → 若确为两级书：设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]（两级）
       → 若确为三级书但有几个真·OCR 噪点：用 --ignore 登记
         （写入 _extract/ignore_ch{N}.json，附 ignore_ch{N}.md 举证）
@@ -123,7 +123,7 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 
 ### 6.1 `ordinal` —— 必填（分组对象数组 `List[GroupConfig]`）
 
-`ordinal` 是**分组对象数组**，每个元素 `{type, name, depth, scope}`（见 `../../../../config/verify_config/verify_config.py` 的 `GroupConfig`）。它是**必填**字段；文件存在但缺 `ordinal` / `ordinal` 不是合法数组会令 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 直接报 `[CONFIG]` 错误并 exit 2。数组首元素的 `type` 即 `primary_type`（编号风格码 1–7，判定树 §4 每个分支对应一个 `type` 值）。
+`ordinal` 是**分组对象数组**，每个元素 `{type, name, depth, scope}`（见 `../../../../config/verify_config/verify_config.py` 的 `GroupConfig`）。它是**必填**字段；文件存在但缺 `ordinal` / `ordinal` 不是合法数组会令 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 直接报 `[CONFIG]` 错误并 exit 2。数组首元素的 `type` 即 `primary_type`（编号风格码 1–7，判定树 §4 每个分支对应一个 `type` 值）。
 > ⚠️ **旧版整型 `ordinal`（如 `3`）或 `separate_types` 字段已被 `from_dict` 拒绝**，并报 `make_config --force` 迁移提示。分组（per-type / combined）现由多个具名 group（per-type）或单个 uncat group（combined）表达。
 
 | 编号形态 | `type` (ordinal[0].type) | 说明 | 最简 `verify_config.json`（单组） |
@@ -168,4 +168,4 @@ python flows/extract/script/extract/scan_items 1 20 82 _extract
 ### 6.3 生成 / 校验工具
 
 - `python config/verify_config/make_config.py <extract_dir>` —— best-effort 生成起始配置（判定不清时仍以本判定树为准，人工核对）。
-- `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 入口均经 `ConfigLoader.require_complete()` 校验完整性（配置完整性主防线在**工作流规则**，不在单脚本行为上）。
+- `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 入口均经 `ConfigLoader.require_complete()` 校验完整性（配置完整性主防线在**工作流规则**，不在单脚本行为上）。

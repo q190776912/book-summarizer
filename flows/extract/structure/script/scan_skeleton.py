@@ -1,8 +1,11 @@
-"""scan_skeleton.py — 扫描原书某章的【真实结构骨架】，产出写作契约 ch{N}_skeleton.txt
+"""scan_skeleton.py — 扫描原书某章的【真实结构骨架】（SEC/EXER 行）。
+
+现主要作为 `build_structure.py` 的内部依赖（被 `import` 调用 `scan()` / `_mode_for_ordinal()`
+生成 `ch<N>_structure.json`）；其 standalone CLI 仍会写出 `ch{N}_skeleton.txt`，仅用于旧书兼容测试。
 
 为什么需要它
 ------------
-`ch{N}_items.txt`（extract_items*.py 的产物）只包含 **verifier 的必备条目键**，
+抽取器产出的**裸条目键**只包含 verifier 的必备条目键，
 它不含节标题、不含练习、不含条目的印刷标题。写章总结的 agent 若只拿到 items.txt，
 手上就没有「这一章到底有哪几节、每节有哪些条目和练习、按什么顺序排、每条印刷标题
 叫什么」的权威清单 —— 于是必然出现：漏节、节序颠倒、条目丢标题、练习被随手归拢。
@@ -12,12 +15,12 @@
 
 用法
 ----
-    python extract/scan_skeleton.py <extract_dir> [ch ...]
+    python scan_skeleton.py <extract_dir> [ch ...]
 
     # 全书
-    python extract/scan_skeleton.py D:/study/book/<书名>/_extract
+    python scan_skeleton.py D:/study/book/<书名>/_extract
     # 指定章
-    python extract/scan_skeleton.py D:/study/book/<书名>/_extract 1 2 3
+    python scan_skeleton.py D:/study/book/<书名>/_extract 1 2 3
 
     # 编号模式（three-level / two-level / cn）由 <extract_dir>/verify_config.json
     # 的 `ordinal` 字段自动判定，无需任何 --scheme 之类的命令行 override。

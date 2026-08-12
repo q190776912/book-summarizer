@@ -136,7 +136,7 @@ PROSE_RE_ROMAN = re.compile(
 # still accepted for backward compatibility.  Full "Proposition I.2.11" labels
 # appear only in prose cross-references.  Machine keys stay `标签I.S-N`
 # (labelled) / `I.S-N` (heading with no label word — mirror of the PDF-side
-# rule in extract/extract_items_gm.py).
+# rule in extract_items_gm.py).
 GM_SEC_RE = re.compile(r'^##\s*[§$]?\s*(\d{1,2})(?:' + GM_SEP + r')?\s+\S')
 GM_ENTRY_RE = re.compile(
     r'^\s*(?:>\s*)?(?:###\s+|\*\*)(\d{1,3})(?:' + GM_SEP + r')\s*([^*\n]{0,80})')

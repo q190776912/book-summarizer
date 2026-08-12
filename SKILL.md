@@ -34,7 +34,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 | Stage | 流程 | 一句话 | 关键约束 |
 |-------|------|--------|---------|
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
-| 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair；文本出口后跑 **config 子流程**（生成 `verify_config.json`）→ **figure_detection 子流程**（图检测+分配）→ **skeleton 子流程**（结构骨架契约）+ **items 子流程**（编号项清单，均全书批量生成） | 防停滞（extract 规则1）；chapter_map 早建只一次（extract/chapter_map 规则1）；公式调参；**MM Repair 门（extract/mm_repair 流程 规则1）**；🔴 **图检测前必须 config 先行**（extract 内部顺序）；🔴 skeleton/items 为 extract 末尾 Step 5/6（结构骨架契约与编号项清单在写源前就绪） |
+| 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair；文本出口后跑 **config 子流程**（生成 `verify_config.json`）→ **figure_detection 子流程**（图检测+分配）→ **structure 子流程**（合并产出 `ch<N>_structure.json` 结构契约，全书批量生成） | 防停滞（extract 规则1）；chapter_map 早建只一次（extract/chapter_map 规则1）；公式调参；**MM Repair 门（extract/mm_repair 流程 规则1）**；🔴 **图检测前必须 config 先行**（extract 内部顺序）；🔴 structure 为 extract 末尾 Step 5（结构契约在写源前就绪）；写源前可跑校验层 `verify/script/check_structure_completeness.py` 做源侧查漏 + 混合回填 |
 | 2 | [`write-source`](flows/write-source/write-source.md) | 按骨架契约写源语言初稿 + 格式后处理 + 嵌图 | 源语言优先（write-source 规则1）；拆章（write-source 规则3）；写源期间**禁 verify（write-source 规则2）** |
 | 3 | [`verify-source`](flows/verify-source/verify-source.md) | 调用通用 `verify` 流程批量校验**源语言**至 PASS（薄壳，引擎在 `verify`） | **批量纪律（verify 规则1）**；Q 层 formula 前置 |
 | 4 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS | 单向修复（derive-translate 规则1）；中英 1:1 同构 |
@@ -47,11 +47,11 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 | 阶段 | 脚本 |
 |------|------|
-| 提取（文本） | `flows/extract/pipeline/script/pipeline/extract_pipeline` · `launch_pipeline.sh` |
+| 提取（文本） | `flows/extract/pipeline/script/extract_pipeline` · `launch_pipeline.sh` |
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/figure/extract_figures` · `…/assign_figures.py` |
-| MM Repair | `flows/extract/mm_repair/script/mm_repair/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | `flows/extract/script/extract/scan_skeleton` · `…/extract_items.py`（均 extract Step 5/6 已批量生成契约，此处消费）· `flows/write-source/format/script/format/wrap_examples_bq` · `…/fmt_proofs.py` · `…/fix_katex.py` · `…/check_katex.py` · `verify/script/audit_counts.py` · `…/format/split_chapters.py` |
+| MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
+| 写作 | `flows/extract/structure/script/scan_skeleton` · `…/extract_items.py`（均 extract structure 子流程已批量生成 `ch<N>_structure.json` 契约，此处消费）· `flows/write-source/format/script/format/wrap_examples_bq` · `…/fmt_proofs.py` · `…/fix_katex.py` · `…/check_katex.py` · `verify/script/audit_counts.py` · `…/format/split_chapters.py` |
 | 嵌图 | `flows/script/figure/embed_figures` |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | 构造器 `data/formula_manifest/formula_manifest.py` · 流程 `verify/formula-manifest/script/backfill_all.py` · `…/diff_formula_manifest.py` |
@@ -62,8 +62,8 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 代码已按流程**物理搬迁**到对应 `flows/<stage>/script/<pkg>/` 目录（不再散在技能根）；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`），注册表与总编排见 `verify/verify.md` 与 `verify/layers`：
 
-- `flows/extract/pipeline/script/pipeline` · `flows/extract/script/extract`（编号项抽取 + 结构骨架 + scan_items，extract 末尾 Step 5/6 调用）
-- `flows/extract/mm_repair/script/mm_repair`
+- `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `structure.json`；源侧查漏 + 混合回填职责已迁校验层 `verify/script/check_structure_completeness.py`）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`；`b_layer` 已迁 `_legacy_`，缺口恢复逻辑移交校验层）
+- `flows/extract/mm_repair/script`
 - `flows/script/figure`
 - `flows/write-source/format/script/format`（含 `katex_validate.js` + `node_modules`）
 - `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；`layers/` 下每个校验层一个 `<语义名>/` 子包，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
@@ -75,7 +75,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
   - `figure_io.py`：`load_figure_index()`——`figure_index.json` 的统一读取（原 figure 包返回 `[]`、verify 包返回 `None`，已统一为 `[]`；verify 侧调用方仅做真值/迭代判断，行为一致）。
   - `normalize_math.py`：公式定界符修复库（`normalize()` / `fix_backticks()` / `stats()`）——纯函数、无第三方依赖，被格式 / 校验流水线按需 `from lib.normalize_math import ...` 调用。对应的命令行入口在 `tools/normalize_math_cli.py`（直接 `python tools/normalize_math_cli.py <files>` 改写文件，会写 `.bak_mathfix` 备份）。
 
-各包仍用包名互相 `import`（如 `verify/layers/section_continuity/script/section_continuity.py` → `from extract.extract_items_gm import ...`）。为保证搬进嵌套目录后 import 不断，新增 **`lib/boot.py`**：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 所有 `flows/*/script` 与 `verify/**/script` 注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
+各包仍用包名互相 `import`（如 `verify/layers/section_continuity/script/section_continuity.py` → `from extract_items_gm import ...`）。为保证搬进嵌套目录后 import 不断，新增 **`lib/boot.py`**：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 所有 `flows/*/script` 与 `verify/**/script` 注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
 
 约定：
 - `flows/<stage>/script/README.md`：本流程脚本索引（真实代码已在该目录内）。

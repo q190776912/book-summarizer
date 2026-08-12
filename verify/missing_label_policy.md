@@ -16,7 +16,7 @@
 
 ### Step 1 — 先尝试让 OCR 识别出来（优先）
 
-1. **调 OCR 参数**（`flows/extract/script/extract/extract_items` 或抽取脚本）：
+1. **调 OCR 参数**（`flows/extract/structure/script/extract_items` 或抽取脚本）：
    - `--dpi`：`200` / `300` / `400`（清晰度）。
    - `det_db_unclip_ratio`：`1.6` / `1.2` / `1.0`（检测框膨胀度）。
    - `det_db_box_thresh`：`0.3` / `0.5`（检测灵敏度）。
@@ -32,7 +32,7 @@
 2. **标注来源**：在该条目标签上追加 `（OCR无法识别）`，例如：
    - `**4.9-4 定义（泛函序列的强收敛与弱星收敛）**：…（OCR无法识别）`
    - 英文书同源版同理：`**Definition 4.9.4 …（OCR 无法识别）**`。
-3. **登记抽取覆盖**：在本章 `_extract/manual_overrides_ch{N}.json` 中追加该键（字段 `key` / `page` / `label` / `text`、JSON 结构与登记要点见公用配置文档 [`../config/manual_overrides_chN/manual_overrides_chN.md`](../config/manual_overrides_chN/manual_overrides_chN.md)），使抽取器承认其存在、解除 B 层序列缺口 BLOCKING。这是 skill 既定的"agent 恢复的 OCR 条目"机制（`flows/extract/script/extract/extract_items` 第 350 行注释；覆盖项会被打 `agent_recovered` 标记）。
+3. **登记抽取覆盖**：在本章 `_extract/manual_overrides_ch{N}.json` 中追加该键（字段 `key` / `page` / `label` / `text`、JSON 结构与登记要点见公用配置文档 [`../config/manual_overrides_chN/manual_overrides_chN.md`](../config/manual_overrides_chN/manual_overrides_chN.md)），使抽取器承认其存在、解除 B 层序列缺口 BLOCKING。这是 skill 既定的"agent 恢复的 OCR 条目"机制（`flows/extract/structure/script/extract_items` 第 350 行注释；覆盖项会被打 `agent_recovered` 标记）。
 
 > ✅ Step 2 三项缺一不可：`manual_overrides` 只解 B 层 BLOCKING；`(OCR无法识别)` 标记向读者声明内容非 OCR 逐字核验、属 agent 推断；两者互补。
 
@@ -56,7 +56,7 @@ B 层本就是"查漏"层。下列两项原拟作独立 Q / R 层，经用户 20
 
 ## 4. 序列缺口兜底（已在 B 层 `recover_missing_items`）
 
-- `flows/extract/script/extract/b_layer` 的序列连续性检查：某节抽取到 `…-1,2,3,5,6,7` 而缺 `-4` 时，先重扫页面；重扫无果 → 仍判 `blocking`（"still missing after auto-recovery"）。
+- `flows/extract/script/b_layer` 的序列连续性检查：某节抽取到 `…-1,2,3,5,6,7` 而缺 `-4` 时，先重扫页面；重扫无果 → 仍判 `blocking`（"still missing after auto-recovery"）。
 - 这正是 4.9-4 被吞时的实际触发点；用 §2 Step 2 的 `manual_overrides` 登记后即解除。
 - **（与 B 层 MD 侧检测的关系）** 提取侧的此 `blocking` 属辅助检测，最终受 B 层 `numbering_gap.py` 的「MD 存在性过滤」约束：若被报缺的编号实际已正确写在 `.md` 中（OCR 漏检、agent 已写出），该 `blocking` 会被抑制、不阻断——故「OCR 漏检但 .md 已写对」不会误报。权威的缺号判定见 [`layers/numbering_gap/numbering_gap.md`](layers/numbering_gap/numbering_gap.md)（MD 侧首项检验 + 连续性）。
 - 整类首项缺失（§3.1）与序列缺口（本节）是**互补**双保险：前者抓"整类首条连序列都不存在"的情形，后者抓"序列中间断号"。
@@ -70,5 +70,5 @@ B 层本就是"查漏"层。下列两项原拟作独立 Q / R 层，经用户 20
 ## 6. 相关文件
 
 - 代码：`layers/data_provider/script/data_provider.py`（`_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`）。
-- 抽取覆盖：`flows/extract/script/extract/extract_items`（`manual_overrides` 合并 + `agent_recovered` 标记）、各书 `_extract/manual_overrides_ch{N}.json`。
+- 抽取覆盖：`flows/extract/structure/script/extract_items`（`manual_overrides` 合并 + `agent_recovered` 标记）、各书 `_extract/manual_overrides_ch{N}.json`。
 - 注册表：[`verify.md`](verify.md) 第 1 节（B 层）、第 3 节同步清单（本策略无新契约键，仅复用 `blocking`/`warnings`）。

@@ -14,7 +14,7 @@
   ch{N}_skeleton.txt : 写作契约（SEC / STMT 行，按页码顺序）
 
 用法:
-  python extract/extract_items_kt.py <extract_dir> <ch> <start> <end>
+  python extract_items_kt.py <extract_dir> <ch> <start> <end>
 """
 import os
 import sys

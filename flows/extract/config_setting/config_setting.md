@@ -3,7 +3,7 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在 extract 的**文本提取 + MM Repair 全部完成**后（`_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性生成 `<book>/_extract/verify_config.json`——它是 `verify_chapter.py` / `flows/extract/script/extract/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。图检测子流程依赖本书的 `figure.labels`（未配置会退化默认前缀、自定义前缀书漏识 caption），故 `figure` 块必须显式出现。
+在 extract 的**文本提取 + MM Repair 全部完成**后（`_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性生成 `<book>/_extract/verify_config.json`——它是 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。图检测子流程依赖本书的 `figure.labels`（未配置会退化默认前缀、自定义前缀书漏识 caption），故 `figure` 块必须显式出现。
 ## 前置
 - **整书文本提取完成**（`_extraction_done.json` 存在，所有 `page_*.json` 已落盘并经 MM Repair）。
 - 🔴 **翻译派生版不参与配置生成**。

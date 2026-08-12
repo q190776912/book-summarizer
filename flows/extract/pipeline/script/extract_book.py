@@ -83,7 +83,7 @@ import paddle
 from PIL import Image
 import pdf_extract_kit.tasks  # registers all tasks (incl. OCR)
 from pdf_extract_kit.utils.config_loader import initialize_tasks_and_models
-from pipeline.deskew import (
+from deskew import (
     render_page as deskew_render_page,
     DEFAULT_MAX_ANGLE as DESKEW_MAX_ANGLE,
     DEFAULT_THRESHOLD as DESKEW_THRESHOLD,

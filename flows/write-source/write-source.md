@@ -9,7 +9,7 @@
 - 已知该书的源语言（英文书源语言为英文版，中文书源语言为中文版）。
 
 ## 步骤（有序）
-1. **消费 extract 末尾已生成的契约**：`ch<N>_skeleton.txt`（结构骨架契约）与 `ch<N>_items.txt` / 扫描报告（编号项清单）直接读取——骨架有几个 `SEC` 就写几个 `## §N.M`，顺序照抄；每个 `ITEM` 必须落地；编号项清单与骨架交叉核对，确保无遗漏。
+1. **消费 extract 末尾已生成的契约**：直接读取 `ch<N>_structure.json`（合并结构契约，取代原 `ch<N>_skeleton.txt` + `ch<N>_items.txt` 两份单产物，SSOT 见 `flows/extract/structure/structure.md`）——顶层数组按章顺序：每个 `type:"section"` 节点对应一个 `## §N.M` 标题（`name` 即带序标的纯标题，顺序照抄）；每个 `type` 为定义/定理/引理/推论/命题/例/评注/uncat 的编号项节点（即 `type∉{section,exercise,chapter}`）必须落地；`type:"exercise"` 节点为练习（照下方「习题收录规则」决定省略或保留）。逐节点交叉核对，确保无遗漏。
 2. 按 `format/ref/formatting.md` 全部格式规则写**源语言**文件：标题体系（`# 第N章` / `## §N.M` / `### §N.M.K`）、粗体条目标签（`**Definition 1.1**` 禁 `###`）、块引用、分隔线、`$$` 公式、图片嵌入（见子流程 figures）、练习收录。
 3. 写完后跑**格式后处理**（顺序固定）：
    ```powershell
@@ -32,8 +32,9 @@
 - 出口：源语言全部章节初稿写完、已嵌图、格式后处理跑过（此时仍未校验）。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/extract/script/extract/scan_skeleton`：结构骨架契约（产出 `ch<N>_skeleton.txt`）。
-- `flows/extract/script/extract/extract_items` + `scan_items.py`：编号项清单（英文书 `--lang en`）。
+- `flows/extract/structure/script/build_structure`：统一结构契约生成器（产出 `ch<N>_structure.json`，内部调用 `scan_skeleton` / `extract_items` 系列，命令见 `flows/extract/extract.md`）。
+- `flows/extract/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
+- `flows/extract/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `flows/write-source/format/script/format/wrap_examples_bq` / `flows/write-source/format/script/format/fmt_proofs` / `flows/write-source/format/script/format/fix_katex` / `flows/write-source/format/script/format/check_katex`：格式后处理。
 - `../../verify/script/audit_counts.py`：逐节条数核对（强制收尾）。
 - `flows/write-source/format/script/format/split_chapters`：规则3 拆章。

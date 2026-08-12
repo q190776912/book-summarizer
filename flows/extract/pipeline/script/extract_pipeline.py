@@ -44,7 +44,7 @@ import torch
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from pipeline.extract_book import init_models, process_batch
+from extract_book import init_models, process_batch
 
 SKILL_DIR = Path(__file__).parent.absolute()
 BATCH_SIZE = 50

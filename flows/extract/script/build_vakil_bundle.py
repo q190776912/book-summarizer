@@ -7,7 +7,7 @@ For each chapter, emit `<extract_dir>/chN_bundle.txt` containing:
   # RAW TEXT   (cleaned OCR text of the chapter pages, page-header noise stripped)
 
 Subagents consume the bundle + the gold Chapter 1 template to produce a
-faithful EN draft. Run:  python extract/build_vakil_bundle.py <extract_dir> [ch ...]
+faithful EN draft. Run:  python build_vakil_bundle.py <extract_dir> [ch ...]
 """
 import os
 import sys
@@ -30,7 +30,7 @@ import chapter_map
 
 import os, sys, re, json
 
-from extract.scan_skeleton import scan
+from scan_skeleton import scan
 
 # Known page-header / footer noise in the Vakil draft PDF.
 NOISE_EXACT = {

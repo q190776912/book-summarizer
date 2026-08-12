@@ -22,16 +22,10 @@ import os, sys
 
 import json, re, os, sys
 
-from extract.b_layer import recover_missing_items
-from extract.extract_items_en import extract_items_en
+from extract_items_en import extract_items_en
 from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
 from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH, ORDINAL_THREE_LEVEL,
                         ORDINAL_DEPTH, BookConfig, GroupConfig)
-
-# Tail gap (pages after a section's last detected item, up to the next section
-# or chapter end) considered "suspicious" rather than silently "resolved" once
-# it exceeds this many pages. Mirrors D-layer's SUSPECT>5 threshold.
-TAIL_GAP_THRESHOLD = 5
 
 def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chapter, label_re, cite_re, num_re):
     """Helper: process a regex match and append to raw_matches if valid."""
@@ -140,8 +134,8 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
 # TWO-LEVEL numbering scheme (e.g. 周民强《实变函数论》）
 #   · 定义 has its OWN per-chapter counter (定义1.1, 定义1.2, ...)
 #   · 定理/引理/推论/命题 SHARE one continuous counter (1.1, 1.2, ...)
-#   · 例 are renumbered PER SECTION (例1, 例2 ...) — not emitted here; use
-#     scan_items.py for example completeness.
+#   · 例 are renumbered PER SECTION (例1, 例2 ...) — not emitted here; example
+#     completeness is handled by build_structure (structure.json).
 # Produces keys like '定义1.1' / '定理1.1' that match the .md bold entries
 # (**定义1.1**：, **定理1.1**：). The three-level N.S-N regex is deliberately
 # NOT used here (it manufactures false-positive phantom keys for this scheme).
@@ -179,7 +173,7 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
         if it['key'] not in seen:
             seen[it['key']] = it
     items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
-    # Continuity is independently verified by scan_items.py; no B-layer gap
+    # Continuity is verified by build_structure (structure.json); no B-layer gap
     # re-scan here (the three-level re-scan logic is N.S-N specific).
     return items, [], []
 
@@ -420,11 +414,12 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
                               'agent_recovered': True})
         items.sort(key=lambda x: (x['page'], x['key']))
 
-    # ---- Step 5-6: boundary & density checks with auto-recovery (B-layer) ----
-    items, warnings, blocking = recover_missing_items(
-        extract_dir, chapter, start_page, end_page, items, label_re, TAIL_GAP_THRESHOLD, cfg
-    )
-    return items, warnings, blocking
+    # 源侧缺口恢复（原 B-layer recover_missing_items）已迁至校验层：
+    # 写书前的「源侧完整性校验 + 混合回填」由 verify/script/check_structure_completeness.py
+    # 承担（复用 section_continuity 公共子流程 + 独立标题锚定扫描）。抽取器只负责
+    # 把 raw 条目抓出来，不再内嵌校验逻辑。
+    # 返回 (items, [], [])：warnings/blocking 不再由抽取器产生（校验层职责）。
+    return items, [], []
 
 
 if __name__ == '__main__':

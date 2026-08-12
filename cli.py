@@ -21,9 +21,8 @@ SKILL_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # subcommand name -> script path relative to SKILL_ROOT
 DISPATCH = {
-    "extract-items": "flows/extract/script/extract/extract_items.py",
-    "extract-items-hom": "flows/extract/script/extract/extract_items_hom.py",
-    "scan-items": "flows/extract/script/extract/scan_items.py",
+    "extract-items": "flows/extract/structure/script/extract_items.py",
+    "extract-items-hom": "flows/extract/structure/script/extract_items_hom.py",
     "write-chapter-map": "data/chapter_map/chapter_map.py",
     "check-katex": "flows/write-source/format/script/format/check_katex.py",
     "fmt-proofs": "flows/write-source/format/script/format/fmt_proofs.py",
@@ -41,9 +40,9 @@ DISPATCH = {
     "manage-ignore": "config/ignore_chN/manage_ignore.py",
     "review": "verify/script/review_tool.py",
     "mathfix": "tools/normalize_math_cli.py",
-    "extract-book": "flows/extract/pipeline/script/pipeline/extract_book.py",
-    "extract-pipeline": "flows/extract/pipeline/script/pipeline/extract_pipeline.py",
-    "make-summary": "flows/extract/pipeline/script/pipeline/make_summary.py",
+    "extract-book": "flows/extract/pipeline/script/extract_book.py",
+    "extract-pipeline": "flows/extract/pipeline/script/extract_pipeline.py",
+    "make-summary": "flows/extract/pipeline/script/make_summary.py",
 }
 
 

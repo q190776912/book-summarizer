@@ -21,7 +21,7 @@ NV="$ENV/lib/site-packages/nvidia"
 export PATH="$ENV/lib/site-packages/torch/lib;$NV/cublas/bin;$NV/cuda_runtime/bin;$NV/cufft/bin;$NV/curand/bin;$NV/cusolver/bin;$NV/cusparse/bin;$NV/nvjitlink/bin;$ENV/Library/bin;$ENV/Scripts;$ENV;$PATH"
 
 PY="$ENV/python.exe"
-SCRIPT="C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/extract/pipeline/script/pipeline/extract_pipeline.py"
+SCRIPT="C:/Users/ye190/.workbuddy/skills/book-summarizer/flows/extract/pipeline/script/extract_pipeline.py"
 
 PDF="$1"
 EXTRA=()

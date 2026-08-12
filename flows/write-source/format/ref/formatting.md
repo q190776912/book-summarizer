@@ -365,7 +365,7 @@ Common patterns (after correction):
 - **带有专门习题小标题的集中习题块**（如 `### 练习`、`## §1.11 习题`、`**习题**`、`Exercises`、`Problems` 等标题下罗列的编号习题）→ **一律省略，不写入总结**，直接跳过，不写任何注记。整节都是习题的节（如 `## §1.11 练习`、`## §3.9 习题`）同理省略。
 - **没有专门习题标题、以穿插形式出现的习题**（习题散落在定义/定理/例等正文条目之间，或虽出现在节末但没有用「练习/习题」之类标题归拢）→ **保留**（可以是一道或多道），在原位写出题目（OCR 噪声必须重写正确 LaTeX），可附一句提示或思路。
 
-简言之：**有标题归拢即省，无标题穿插即留**。练习不计入 verifier 必备条目（ch*_items.txt 不含练习）。
+简言之：**有标题归拢即省，无标题穿插即留**。练习不计入 verifier 必备条目（`ch*_structure.json` 中虽含全量 `type:"exercise"` 节点，但 verify 仅核对 `type` 为定义/定理等编号项的节点，不核对练习）。
 
 ---
 
@@ -756,7 +756,7 @@ Q 层（`verify/layers/formula_tag/script/formula_tag.py`，`verify_config.json`
 
 6. **检查内部密集性**：对每节编号进行跨度分析，空缺编号回 JSON 对应页确认是否存在。
 
-7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`（字段结构与示例见 [`config/manual_overrides_chN/manual_overrides_chN.md`](config/manual_overrides_chN/manual_overrides_chN.md)），运行 `flows/extract/script/extract/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
+7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`（字段结构与示例见 [`config/manual_overrides_chN/manual_overrides_chN.md`](config/manual_overrides_chN/manual_overrides_chN.md)），运行 `flows/extract/structure/script/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
 
    此外脚本内置了**两级回退匹配**辅助还原：
    - **一级（3-group `num_re`）**：`N.S-N` 完整模式

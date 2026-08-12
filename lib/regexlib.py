@@ -36,7 +36,7 @@ SEP_WIDE = r'[\s._\-–·/：:／~～_＋+，,;；、．－〜]+'
 SEP_SPLIT_RE = re.compile(SEP_WIDE)
 
 # Numeric separator: used by the *number matchers* in the extractors
-# (num_re / lab_re / fr_re / EN_LAB_RE / fallback_re / scan_items).  Like
+# (num_re / lab_re / fr_re / EN_LAB_RE / fallback_re).  Like
 # SEP_WIDE it tolerates whitespace + fullwidth comma, but deliberately EXCLUDES
 # the more dangerous colon / plus / semicolon / ideographic-comma / slash so a
 # decimal "3.14", a formula "a:b" or a date "4/7/2001" is never misread as a

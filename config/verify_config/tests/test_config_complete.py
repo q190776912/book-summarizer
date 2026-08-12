@@ -9,7 +9,7 @@ Covers the new mandatory book-config gate:
     invoked inside `_make_loader()` (STRICT gate: a missing config file ->
     exit 2, per config_setting 流程 规则1 "文件缺失必须重新配置"); `main()`
     catches `ConfigError` -> print + exit 2.
-  * `extract/scan_skeleton.py` entry — constructs `ConfigLoader`, calls
+  * `scan_skeleton.py` entry — constructs `ConfigLoader`, calls
     `require_complete()`, reads `loader.book.primary_type` (int).
   * `config/verify_config/make_config.py` — best-effort starter-config generator (now emits
     the v2 array form).
@@ -71,7 +71,7 @@ from verify_config import (ConfigLoader, ConfigError, BookConfig, GroupConfig)  
 
 PY = sys.executable
 VERIFY_CLI = os.path.join(_ROOT, "verify/script/verify_chapter.py")
-SCAN_CLI = os.path.join(_ROOT, "flows/extract/script/extract/scan_skeleton.py")
+SCAN_CLI = os.path.join(_ROOT, "flows/extract/structure/script/scan_skeleton.py")
 MAKE_CLI = os.path.join(_ROOT, "config/verify_config/make_config.py")
 
 # Real corpus book (read-only use; generated files cleaned up afterwards).

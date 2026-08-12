@@ -29,7 +29,7 @@ _boot.setup()
   - 必须逐条读懂重写，剔除页眉/页脚/版权行，不得照抄 OCR 文本流。
   - number-first 体例（编号在前、标题在后）：条目标签必须是
     `**N.M.K（标题）：**` 或 `**定义 N.M.K**：`，禁止裸 `**N.M.K**` 把标题甩到正文。
-  - 结构骨架 `ch<N>_skeleton.txt` 是写作契约：几节写几节、顺序照抄、条目不增不减。
+  - 结构契约 `ch<N>_structure.json`（取代原 `ch<N>_skeleton.txt`，SSOT 见 `flows/extract/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON，不再读 skeleton.txt。
 
 检测七类缺陷（全部 BLOCKING，不可 --fix，需重写）：
   p_exer_block  — 练习归拢块：独立的 `### 练习`/`### 习题`/`### Exercises` 标题，
@@ -60,6 +60,7 @@ _boot.setup()
 """
 import os
 import re
+import json
 
 from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
 
@@ -149,24 +150,47 @@ def check_bare_items(lines, ordinal):
 EXER_SEC_TITLE_RE = re.compile(r'(练习|习题|[Ee]xercises?|[Pp]roblems?)\b')
 
 
-def check_missing_sections(md_lines, ext_dir, ch):
-    out = []
-    skel = os.path.join(ext_dir, 'ch%d_skeleton.txt' % ch)
-    if not os.path.exists(skel):
-        return out
-    secs = []
+def _iter_nodes(node):
+    """展平结构树（不含 chapter 自身），供契约加载使用。"""
+    for k in node.get("sub_sec", []):
+        yield k
+        yield from _iter_nodes(k)
+
+
+def _load_contract(ext_dir, ch):
+    """返回 (sections, item_keys)。
+
+    sections : list[(num, title)]，title 含印刷标题（用于习题节判定）。
+    item_keys: set[str]，允许出现的编号项编号集合（仅 three-level 点分格式，
+               与 md 侧 ITEM_LABEL_RE 对齐）。
+
+    读取合并契约 `ch{N}_structure.json`（结构树，取代 skeleton.txt）；
+    旧书须先重跑 build_structure 生成 JSON，不再读 skeleton.txt。
+    """
+    sections, item_keys = [], set()
+    jp = os.path.join(ext_dir, 'ch%d_structure.json' % ch)
+    if not os.path.exists(jp):
+        return sections, item_keys
     try:
-        with open(skel, encoding='utf-8') as f:
-            for ln in f:
-                if ln.startswith('SEC'):
-                    parts = ln.split()
-                    if len(parts) >= 2:
-                        # (num, printed-title)；title 含页码前缀，仅用于习题节判定
-                        secs.append((parts[1].strip(), ' '.join(parts[2:])))
+        with open(jp, encoding='utf-8') as f:
+            root = json.load(f)
     except Exception:
-        return out
-    if not secs:
-        return out
+        return sections, item_keys
+    for n in _iter_nodes(root):
+        t = n.get("type")
+        if t == "section":
+            sections.append((str(n.get("key", "")), str(n.get("name", ""))))
+        elif t not in ("section", "chapter", "exercise"):
+            k = str(n.get("key", ""))
+            if re.match(r"^\d+\.\d+\.\d+$", k):
+                item_keys.add(k)
+    return sections, item_keys
+
+
+def check_missing_sections(md_lines, ext_dir, ch):
+    sections, _ = _load_contract(ext_dir, ch)
+    if not sections:
+        return []
     present = set()
     present_first = set()
     for ln in md_lines:
@@ -175,17 +199,17 @@ def check_missing_sections(md_lines, ext_dir, ch):
             num = m.group(1)
             present.add(num)
             # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
-            # （Fraleigh 等：骨架存 "6.26"，md 用 `## §26.1` —— 全局节号 26
-            # 是 md 的首级分量、也是骨架的末级分量）。该匹配为「附加」，
-            # 不破坏标准书（md 用 `## §A.B` 时仍靠精确匹配 s in present），
-            # 仅对全局编号书放行 skeleton-last in present_first。
+            # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
+            # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
+            # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
             present_first.add(num.split('.')[0])
-    for s, title in secs:
+    out = []
+    for s, title in sections:
         if EXER_SEC_TITLE_RE.search(title):
             continue  # 习题专属节按规则可省略，不强制要求落地
         ok = (s in present) or (s.split('.')[-1] in present_first)
         if not ok:
-            out.append(f"  x Ch{ch} §{s}: 骨架契约要求此节，但 md 无对应 `## §{s}` 标题")
+            out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
     return out
 
 
@@ -330,28 +354,16 @@ def check_verbose_proofs(lines):
 
 
 def check_extra_items(md_lines, ext_dir, ch):
-    """编造条目：md 出现、但骨架 ITEM 清单中没有的编号条目（无中生有结构）。"""
+    """编造条目：md 出现、但结构契约编号项清单中没有的编号条目（无中生有结构）。"""
+    _, item_keys = _load_contract(ext_dir, ch)
+    if not item_keys:
+        return []
     out = []
-    skel = os.path.join(ext_dir, 'ch%d_skeleton.txt' % ch)
-    if not os.path.exists(skel):
-        return out
-    skel_items = set()
-    try:
-        with open(skel, encoding='utf-8') as f:
-            for ln in f:
-                if ln.startswith('ITEM'):
-                    parts = ln.split()
-                    if len(parts) >= 2 and re.match(r'^\d+\.\d+\.\d+$', parts[1]):
-                        skel_items.add(parts[1])
-    except Exception:
-        return out
-    if not skel_items:
-        return out
     for i, ln in enumerate(md_lines):
         m = ITEM_LABEL_RE.match(ln)
-        if m and m.group(1) not in skel_items:
+        if m and m.group(1) not in item_keys:
             # 排除练习标签（以 Exercise 开头不在此正则范围，这里仅数字条目）
-            out.append(f"  x L{i+1}: 编造条目（骨架无此编号，属无中生有结构，须删除或改为散文/备注）— {ln.strip()[:78]}")
+            out.append(f"  x L{i+1}: 编造条目（契约无此编号，属无中生有结构，须删除或改为散文/备注）— {ln.strip()[:78]}")
     return out
 
 

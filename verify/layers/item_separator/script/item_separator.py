@@ -19,11 +19,11 @@ _boot.setup()
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
-from verify.layers.script._struct_labels import (
+from verify.common.struct_labels import (
     I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
 )
 
@@ -71,50 +71,6 @@ def check_i_separators(md_file):
             out.append(f"  x L{i+1}→L{j+1}: missing `---` between items: [{si}]...[{sj}]")
     return out
 
-def fix_i_separators(md_file):
-    """I-LAYER auto-fix: insert `---` between consecutive items without separator.
-    Returns number of separators inserted."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    changes = 0
-
-    item_lines = []
-    for i, ln in enumerate(lines):
-        if (I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)
-                or I_ITEM_NUMFIRST_RE.match(ln)):
-            item_lines.append(i)
-    item_lines = sorted(set(item_lines))
-
-    insertions = []
-    for idx in range(len(item_lines) - 1):
-        i = item_lines[idx]
-        j = item_lines[idx + 1]
-        if j - i > 100:
-            continue
-        has_sep = False
-        section_between = False
-        for k in range(i + 1, j):
-            t = lines[k].strip()
-            if t == '---':
-                has_sep = True
-                break
-            if re.match(r'^#{1,6}\s', lines[k]):
-                section_between = True
-                break
-        if not has_sep and not section_between:
-            insertions.append(j)
-
-    for pos in sorted(set(insertions), reverse=True):
-        lines.insert(pos, '---')
-        changes += 1
-
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
 
 class ILayer(VerifyLayer):
     code = 'I'
@@ -127,6 +83,3 @@ class ILayer(VerifyLayer):
         return LayerResult(code=self.code, metadata={
             'i_sep_gaps': check_i_separators(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        return LayerFixResult(fix_dict={'i': fix_i_separators(ctx.md_file)})

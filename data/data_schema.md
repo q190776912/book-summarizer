@@ -18,6 +18,7 @@
 | `book_chN_formulas.json` | [build_book_manifest/](build_book_manifest) | `BookFormulaIndex` | 构造器 |
 | `*_filled.json` | [fill_book_labels/](fill_book_labels) | `FormulaFill` | 构造器 |
 | `repairs.json` | [repairs/](repairs) | `Repairs` | 构造器 |
+| `book_structure.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/extract/structure/script/build_structure.py` 调用；书对象，不再按章拆分） |
 
 ## 外部 / 流程产物（无 in-skill 构造器）
 

@@ -23,7 +23,7 @@ written .md. Consumes ctx.extracted / ctx.all_keys / ctx.entry_keys populated by
 the EXTRACT provider. Self-contained implementation (bodies relocated from verify_chapter.py during the per-layer split).
 """
 from verify.layers.script.base import VerifyLayer, LayerResult
-from verify.script.key_parse import sortkey
+from verify.common.key_parse import sortkey
 
 
 class ALayer(VerifyLayer):

@@ -33,11 +33,11 @@ Self-contained implementation (bodies relocated from the deleted structure_layer
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split).
 """
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
-from verify.layers.script._struct_labels import (
+from verify.common.struct_labels import (
     H_STRUCT_BQ_RE,
     H_STRUCT_BQ_FIX_RE,
     TOP_LEVEL_HEADER_RE,
@@ -193,59 +193,6 @@ def check_h_statement_in_blockquote(md_file):
                            f"(unexpected blockquote): {lines[k].strip()[:70]}")
     return out
 
-def fix_h_statement_in_blockquote(md_file):
-    """H-LAYER ext auto-fix: unwrap wrapped-statement `>` lines to top-level.
-    Mirrors the ch3 repair — structural `>` (>（N）/ >**(N)** / >$$ / >-(a)) in an
-    item's statement region are unwrapped; legit proof/example/note `>` kept.
-    Returns number of lines changed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    n = len(lines)
-    heads = [i for i in range(n) if TOP_LEVEL_HEADER_RE.match(lines[i])] + [n]
-    out, ptr, changes = [], 0, 0
-    def _unwrap(t):
-        if t == '':
-            return ''
-        m = re.match(r'^（([0-9a-zA-Z]+)）', t)
-        if m:
-            return '**(' + m.group(1) + ')**' + t[m.end():]
-        m = re.match(r'^\*\*\(([0-9a-zA-Z]+)\)\*\*', t)
-        if m:
-            return '**(' + m.group(1) + ')**' + t[m.end():]
-        m = re.match(r'^- （([0-9a-zA-Z]+)）', t)
-        if m:
-            return '- (' + m.group(1) + ')' + t[m.end():]
-        return t
-    for idx in range(len(heads) - 1):
-        h, nxt = heads[idx], heads[idx + 1]
-        out.extend(lines[ptr:h]); out.append(lines[h])
-        pen_idx = nxt
-        for k in range(h + 1, nxt):
-            if _h_ext_is_legit_bq(lines[k]):
-                pen_idx = k; break
-        bq = [k for k in range(h + 1, pen_idx) if lines[k].lstrip().startswith('>')]
-        wrapped = any(_h_ext_is_structural_bq(lines[k]) for k in bq)
-        if wrapped:
-            for k in range(h + 1, pen_idx):
-                s = lines[k]
-                if s.lstrip().startswith('>'):
-                    new = _unwrap(s.lstrip()[1:].lstrip())
-                    if new != s:
-                        changes += 1
-                    out.append(new)
-                else:
-                    out.append(s)
-        else:
-            out.extend(lines[h + 1:pen_idx])
-        out.extend(lines[pen_idx:nxt])
-        ptr = nxt
-    if changes:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(out))
-    return changes
 
 def check_unlabeled_blockquotes(md_file):
     """H-LAYER ext (unlabeled BQ): flag free-standing `>` blocks without a
@@ -308,57 +255,6 @@ def check_unlabeled_blockquotes(md_file):
                                f"allowed in `>`): {lines[k].strip()[:70]}")
     return out
 
-def fix_unlabeled_blockquotes(md_file):
-    """H-LAYER ext auto-fix: strip `>` prefix from unlabeled blockquote lines.
-    Uses the same block-splitting logic as check_unlabeled_blockquotes.
-    Returns number of lines changed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    n = len(lines)
-    changes = 0
-    ranges = []
-    i = 0
-    while i < n:
-        if not lines[i].lstrip().startswith('>'):
-            i += 1
-            continue
-        start = i
-        i += 1
-        while i < n and lines[i].lstrip().startswith('>'):
-            if _H_UL_OPENERS.match(lines[i]) or _H_UL_FOOTNOTE.match(lines[i]):
-                break
-            i += 1
-        end = i
-        first = None
-        for k in range(start, end):
-            inner = lines[k].lstrip()
-            if inner == '>' or inner == '':
-                continue
-            first = k
-            break
-        if first is None:
-            continue
-        ln = lines[first]
-        if _H_UL_OPENERS.match(ln) or _H_UL_FOOTNOTE.match(ln):
-            continue
-        if H_INLINE_STRUCT_BQ_RE.match(ln):
-            continue
-        ranges.append((start, end))
-    for start, end in ranges:
-        for k in range(start, end):
-            ln = lines[k]
-            if ln.lstrip().startswith('>') and ln.lstrip() not in ('>', '> '):
-                new = re.sub(r'^>\s?', '', ln, count=1)
-                if new != ln:
-                    lines[k] = new
-                    changes += 1
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
 
 def check_labels_missing_blockquote(md_file):
     """H-LAYER ext (missing BQ): flag labels (证明/证/例/注/说明/注记/脚注)
@@ -396,85 +292,6 @@ def check_labels_missing_blockquote(md_file):
                        f"(add `> ` prefix)")
     return out
 
-def fix_labels_missing_blockquote(md_file):
-    """H-LAYER ext auto-fix: wrap top-level 证明/证/例/注/说明/注记/脚注
-    labels with `> `. Returns number of lines changed.
-
-    Display math ($$...$$ fences) is skipped so legitimate CD-diagram rows
-    starting with `{` are never wrapped — see check_labels_missing_blockquote."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    changes = 0
-    in_math = False
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        if s == '$$':
-            in_math = not in_math
-            continue
-        if s.startswith('$$') and s.endswith('$$'):
-            continue
-        if in_math:
-            continue
-        st = ln.strip()
-        if st.startswith('>'):
-            continue
-        if re.match(r'^#{1,6}\s', ln):
-            continue
-        if _H_MISSING_BQ.match(st) or _H_MISSING_BQ_FOOTNOTE.match(st):
-            lines[i] = '> ' + ln
-            changes += 1
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
-
-def fix_h_structural_blockquote(md_file):
-    """H-LAYER auto-fix: remove `> ` prefix from structural labels inside blockquotes.
-    Also removes orphan bare `>` lines. Returns number of lines changed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    changes = 0
-
-    # Fix structural labels inside blockquotes: un-indent them
-    for i in range(len(lines)):
-        ln = lines[i]
-        if H_STRUCT_BQ_FIX_RE.match(ln):
-            new_ln = re.sub(r'^\s*>\s+', '', ln)
-            if new_ln != ln:
-                lines[i] = new_ln
-                changes += 1
-
-    # Also remove orphan bare `>` lines (H-layer sub-check).
-    # Remove both `>` (no space) and `> ` (with space) when not between real
-    # blockquote content.  We DELETE the line entirely (rather than blanking it
-    # to '') so the surrounding lines stay adjacent — blanking left a stray empty
-    # line that tripped the G-layer quote-gap check (e.g. an orphan `>` sitting
-    # between a top-level header and the next header).  Backward iteration makes
-    # `del` safe.
-    orphan_changes = 0
-    for i in range(len(lines) - 1, -1, -1):
-        ln = lines[i]
-        is_bare = ln.strip() == '>' or ln.strip() == ''
-        if not (ln.startswith('>') and is_bare):
-            continue  # not a bare > line
-        prev_has = i > 0 and lines[i-1].startswith('>') and lines[i-1].strip() not in ('', '>')
-        next_has = i < len(lines)-1 and lines[i+1].startswith('>') and lines[i+1].strip() not in ('', '>')
-        if not (prev_has and next_has):
-            del lines[i]
-            orphan_changes += 1
-    changes += orphan_changes
-
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
-
 
 class HLayer(VerifyLayer):
     code = 'H'
@@ -490,11 +307,3 @@ class HLayer(VerifyLayer):
             'h_ul_bq': check_unlabeled_blockquotes(ctx.md_file),
             'h_mbq': check_labels_missing_blockquote(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        fix_dict = {}
-        fix_dict['h'] = fix_h_structural_blockquote(ctx.md_file)
-        fix_dict['h_stmt'] = fix_h_statement_in_blockquote(ctx.md_file)
-        fix_dict['h_ul'] = fix_unlabeled_blockquotes(ctx.md_file)
-        fix_dict['h_mbq'] = fix_labels_missing_blockquote(ctx.md_file)
-        return LayerFixResult(fix_dict=fix_dict)

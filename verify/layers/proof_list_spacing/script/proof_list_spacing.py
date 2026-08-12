@@ -19,7 +19,7 @@ _boot.setup()
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
@@ -48,32 +48,6 @@ def check_proof_after_list(md_file):
                            f"L{i+1} without blank line — add blank line between")
     return out
 
-def fix_proof_after_list(md_file):
-    """K-LAYER auto-fix: insert a blank line between a numbered list and a
-    `> **证明` blockquote. Returns number of lines changed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    changes = 0
-    n = len(lines)
-    i = 0
-    while i < n - 1:
-        if re.match(r'^    \d+\.\s', lines[i]) or re.match(r'^    \(\d+\)\s', lines[i]):
-            nx = lines[i + 1].strip()
-            if (nx.startswith('> **证明') or nx.startswith('> **证明思路**')
-                    or re.search(r'\*\*(?:Proof|Proof sketch|Proof outline|Example|Note|Remark)\b', nx)):
-                # Insert blank line after the list item
-                lines.insert(i + 1, '')
-                changes += 1
-                n += 1
-                i += 1  # skip the newly inserted blank line
-        i += 1
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
 
 class KLayer(VerifyLayer):
     code = 'K'
@@ -86,6 +60,3 @@ class KLayer(VerifyLayer):
         return LayerResult(code=self.code, metadata={
             'k_proof_list': check_proof_after_list(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        return LayerFixResult(fix_dict={'k': fix_proof_after_list(ctx.md_file)})

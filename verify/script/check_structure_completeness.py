@@ -2,10 +2,10 @@
 
 目的
 ----
-`build_structure` 产出 `ch<N>_structure.json`（契约，SSOT）。但抽取器（`extract_items` 等）
+`build_structure` 产出 `book_structure.json`（书对象契约，SSOT）。但抽取器（`extract_items` 等）
 的源侧捡漏只覆盖三级书且诊断被丢弃（见 `flows/extract/structure/script/build_structure.py`
 对 `recover_missing_items` 返回的 `warnings/blocking` 的静默丢弃），非三级书在 structure 阶段
-**没有任何源侧查漏**，structure.json 会安静地缺章节/缺定义定理例。
+**没有任何源侧查漏**，book_structure.json 会安静地缺章节/缺定义定理例。
 
 本脚本在「写书之前」把**公共校验子流程的源侧能力**接到 structure 步骤：
   * 章节完整性 -> 复用公共子流程 `verify/layers/section_continuity`（语义名 section-continuity，
@@ -13,19 +13,19 @@
   * 条目完整性 -> 本脚本的「标题锚定」源侧扫描（覆盖全方案 three_level/two_level/en/fraleigh
     /gm/roman、全类型 定义/定理/引理/推论/命题/例/练习），作为对抽取器的**独立交叉校验**
     （抽取器是行内扫描，本扫描是块首锚定，二者互补，抓出被漏检的标题行条目）。
-  * 比对书中真值集 vs `structure.json` 契约 -> 得到「遗漏章节 / 遗漏定义定理例」清单。
+  * 比对书中真值集 vs `book_structure.json` 契约 -> 得到「遗漏章节 / 遗漏定义定理例」清单。
   * 混合回填（用户 2026-08-12 选定）：
-      - 可读遗漏项（编号/标签/页码/标题均能从 OCR 干净取出）-> 脚本直接插回 structure.json；
+      - 可读遗漏项（编号/标签/页码/标题均能从 OCR 干净取出）-> 脚本直接插回 book_structure.json；
       - 乱码 / 标题被吞等无法干净还原的项 -> 写入 `needs_agent` 报告，交 agent 凭知识/读图回填
         （沿用 `config/manual_overrides_chN` + `（OCR无法识别）` 既定机制，见 verify/missing_label_policy.md）。
 
 用法
 ----
     python check_structure_completeness.py <extract_dir> [ch ...] [--backfill] [--report-dir DIR]
-    # 不传 <ch> 即扫全部章；--backfill 才写回 structure.json，否则只产出报告（dry-run）。
+    # 不传 <ch> 即扫全部章；--backfill 才写回 book_structure.json，否则只产出报告（dry-run）。
     # 默认报告写到 <extract_dir>/completeness_reports/。
 
-注意：本脚本只消费 raw `page_*.json` + `structure.json` + 配置，**不依赖已写的 .md**，
+注意：本脚本只消费 raw `page_*.json` + `book_structure.json` + 配置，**不依赖已写的 .md**，
 因此可在写书前独立运行，把查漏从「写完 MD 才发现」提前到「抽完即查、源侧兜底」。
 """
 import os
@@ -47,6 +47,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+
+from data.book_structure.book_structure import BookStructure, StructureNode
 
 import page_json
 from section_continuity import check_d_layer  # 公共子流程：section-continuity（D 层）源侧重扫
@@ -160,7 +162,7 @@ def _is_three(scheme):
 def scan_raw_items(ext, ch, start, end):
     """标题锚定源侧扫描：返回书中真值条目候选列表。
     每项: {key, label, page, snippet, scheme, canon, has_label}
-    key 与 build_structure 产出的 structure.json 契约格式一致
+    key 与 build_structure 产出的 book_structure.json 契约格式一致
     （三级 = "C.S-N"；两级中文 = "标签C.S"；两级英文 = "标签 C.S"），
     以便回填后能被 write-source / verify 原样消费。
     """
@@ -236,7 +238,7 @@ def _find_section_page(ext, ch, sec_tuple):
     return None
 
 
-# === 契约（structure.json）读取 =============================================
+# === 契约（book_structure.json）读取 =============================================
 _LABEL_RE = re.compile(r'^(定义|定理|引理|推论|命题|例|练习|习题|评注|注'
                        r'|Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|Remark|Axiom)')
 
@@ -255,61 +257,62 @@ def _canon_key(primary_type, key):
     return tuple(int(x) for x in nums) if nums else None
 
 
-def load_contract(path):
-    """读 structure.json，返回 (tree, items: {canon: node}, sections: set(str 'C.S'))。"""
-    tree = json.load(open(path, encoding="utf-8"))
+def load_contract(tree):
+    """从结构树（StructureNode）提取 (tree, items: {canon: node}, sections: set(str 'C.S'))。
+
+    tree 为某章节点（StructureNode）；调用方通过 BookStructure.load 读取单文件并
+    用 ``bs.find_chapter(ch)`` 取得。
+    """
     items = {}
     sections = set()
 
     def walk(n):
-        t = n.get("type")
+        t = n.type
         if t == "section":
-            sections.add(n.get("key"))
+            sections.add(n.key)
         if t in ("chapter", "section"):
-            for k in n.get("sub_sec", []):
+            for k in n.sub_sec:
                 walk(k)
             return
         if t == "exercise":
             return
-        canon = _canon_key(_PRIMARY, n.get("key", ""))
+        canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
         if canon is not None:
             items[canon] = n
     walk(tree)
     return tree, items, sections
 
 
-# === 树操作（回填） =========================================================
+# === 树操作（回填，操作 StructureNode 模型，不再裸操作 dict）================
 def _fix_pages(node):
-    kids = node.get("sub_sec")
+    kids = node.sub_sec
     if not kids:
-        return node["page_end"]
-    cs = [k["page_start"] for k in kids]
+        return node.page_end
+    cs = [k.page_start for k in kids]
     ce = [_fix_pages(k) for k in kids]
-    node["page_start"] = min(cs)
-    node["page_end"] = max(ce)
-    return node["page_end"]
+    node.page_start = min(cs)
+    node.page_end = max(ce)
+    return node.page_end
 
 
 def _section_node(tree, sec_key):
     def walk(n):
-        if isinstance(n, dict):
-            if n.get("type") == "section" and n.get("key") == sec_key:
-                return n
-            for k in n.get("sub_sec", []):
-                r = walk(k)
-                if r:
-                    return r
+        if n.type == "section" and str(n.key) == str(sec_key):
+            return n
+        for k in n.sub_sec:
+            r = walk(k)
+            if r is not None:
+                return r
         return None
     return walk(tree)
 
 
 def _iter_sections(tree):
     def walk(n):
-        if isinstance(n, dict):
-            if n.get("type") == "section":
-                yield n
-            for k in n.get("sub_sec", []):
-                yield from walk(k)
+        if n.type == "section":
+            yield n
+        for k in n.sub_sec:
+            yield from walk(k)
     yield from walk(tree)
 
 
@@ -345,12 +348,12 @@ def _clean_title(text, key):
 
 
 def _node(key, ntype, name, page):
-    return {"key": key, "type": ntype, "name": name,
-            "page_start": page, "page_end": page}
+    return StructureNode(key=key, type=ntype, name=name,
+                         page_start=page, page_end=page, sub_sec=[])
 
 
 def insert_item(tree, key, label, page, canon, snippet=""):
-    """把遗漏条目插回 structure.json 树。three_level 优先归到 C.S 节；否则按页码归最近节。
+    """把遗漏条目插回结构树（StructureNode）。three_level 优先归到 C.S 节；否则按页码归最近节。
     节点字段（key/type/name/page）与 build_structure 完全一致，回填后 write-source / verify 可直接消费。
     """
     itype = _type_of(label)
@@ -365,15 +368,15 @@ def insert_item(tree, key, label, page, canon, snippet=""):
         secs = list(_iter_sections(tree))
         cand = None
         for s in secs:
-            if s["page_start"] <= page:
+            if s.page_start <= page:
                 cand = s
         if cand is not None:
             sn = cand
     if sn is not None:
-        sn.setdefault("sub_sec", []).append(node)
+        sn.sub_sec.append(node)
         _fix_pages(tree)
         return True, sec_key or "(page-proximity)"
-    tree.setdefault("sub_sec", []).append(node)
+    tree.sub_sec.append(node)
     _fix_pages(tree)
     return True, "(chapter-bucket)"
 
@@ -381,18 +384,17 @@ def insert_item(tree, key, label, page, canon, snippet=""):
 def insert_section(tree, sec_key, page):
     if _section_node(tree, sec_key) is not None:
         return False
-    node = {"key": sec_key, "type": "section", "name": sec_key,
-            "page_start": page or 0, "page_end": page or 0, "sub_sec": []}
+    node = _node(sec_key, "section", sec_key, page or 0)
     secs = list(_iter_sections(tree))
     inserted = False
     for s in secs:
-        if (page or 0) < s["page_start"]:
-            idx = tree["sub_sec"].index(s) if s in tree["sub_sec"] else len(tree["sub_sec"])
-            tree["sub_sec"].insert(idx, node)
+        if (page or 0) < s.page_start:
+            idx = tree.sub_sec.index(s) if s in tree.sub_sec else len(tree.sub_sec)
+            tree.sub_sec.insert(idx, node)
             inserted = True
             break
     if not inserted:
-        tree.setdefault("sub_sec", []).append(node)
+        tree.sub_sec.append(node)
     _fix_pages(tree)
     return True
 
@@ -426,10 +428,14 @@ def raw_present_sections(ch, start, end, ext, cfg):
 def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
-    sp = os.path.join(ext, f"ch{ch}_structure.json")
-    if not os.path.exists(sp):
+    # 单文件书对象：经 BookStructure 读取，定位指定章节点。
+    bs = BookStructure.load(ext)
+    if bs is None:
         return None
-    tree, contract_items, contract_sections = load_contract(sp)
+    ch_node = bs.find_chapter(ch)
+    if ch_node is None:
+        return None
+    tree, contract_items, contract_sections = load_contract(ch_node)
 
     raw_secs = raw_present_sections(ch, start, end, ext, cfg)
     missing_sections = sorted(s for s in raw_secs
@@ -477,8 +483,9 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             if ok:
                 backfilled_items.append({"key": mi["key"], "where": where, "page": mi["page"]})
         if backfilled_items or backfilled_sections:
-            with open(sp, "w", encoding="utf-8") as f:
-                json.dump(tree, f, ensure_ascii=False, indent=2)
+            # 回填后整体写回单文件书对象：用 ch_node 替换本书根下同 key 章节，再 save。
+            bs.root.replace_chapter(tree)
+            bs.save(ext)
 
     report = {
         "chapter": ch,

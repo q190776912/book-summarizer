@@ -24,8 +24,8 @@ _boot.setup()
 import json
 import os
 
-from verify.script.key_parse import normkey
-from verify.layers.script._fig_common import normfig
+from verify.common.key_parse import normkey
+from verify.common.fig_common import normfig
 
 
 def load_ignore(ignore_path):

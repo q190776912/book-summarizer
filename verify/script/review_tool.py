@@ -122,7 +122,7 @@ def main():
     # Paths (skill-internal scripts only; book data is resolved from argv).
     # _ROOT is the skill root computed at module load. Restructuring moved these
     # scripts, so reference their current locations under flows/ and verify/.
-    extract_items = os.path.join(_ROOT, "flows", "extract", "script", "extract", "extract_items.py")
+    extract_items = os.path.join(_ROOT, "flows", "extract", "structure", "script", "extract_items.py")
     verify_chapter = os.path.join(_ROOT, "verify", "script", "verify_chapter.py")
 
     # Book directory: REQUIRED as argv[1] — this tool is book-agnostic.

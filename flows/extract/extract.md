@@ -3,7 +3,7 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair；文本提取全部完成后，依次跑 **config 子流程**（生成 `verify_config.json`）、**figure_detection 子流程**（图检测 + 分配），最后跑 **structure 子流程**（生成全书每章 `ch<N>_structure.json`）。本阶段最终产出修复后的 `page_*.json` + `figure_index.json` + 全书每章 `ch<N>_structure.json`（写作契约 + verify 基准合一），**不做任何校验**。
+把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair；文本提取全部完成后，依次跑 **config 子流程**（生成 `verify_config.json`）、**figure_detection 子流程**（图检测 + 分配），最后跑 **structure 子流程**（生成全书单一的 `book_structure.json` 书对象）。本阶段最终产出修复后的 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一），**不做任何校验**。
 ## 前置
 - `prep` 完成，环境 OK。
 - 已知待提取 PDF 的路径 `P`（工作目录由 Step 1 的「目录决策」按分支 A–D 自动确定，必要时归一目录；不要求 PDF 预先就位于 `D:\study\book\<书名>\`）。
@@ -49,12 +49,12 @@
    - 运行 **figure_detection 子流程** [`extract/figure_detection`](figure_detection/figure_detection.md)：全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配，产出 `figure_detect.json` + `figure_index.json` + `figure/` 裁剪图。书若无图可跳过本步。
 
 6. **figure_detection 完成后 → 跑 structure 子流程（统一结构骨架，全书批量）**
-   - 运行 **structure 子流程** [`extract/structure`](structure/structure.md)：生成单一 `ch<N>_structure.json` 树（章节 → 条目/练习递归，含 `key`/`type`/`name`/页码），作为 write-source 的写作契约与 verify 的编号项基准（合一）。文本提取 100% 且 config 已出 `verify_config.json` 后批量跑：
+   - 运行 **structure 子流程** [`extract/structure`](structure/structure.md)：生成单一 `book_structure.json` 书对象（章节 → 条目/练习递归，`sub_sec` 内按章顺序嵌套，含 `key`/`type`/`name`/页码），作为 write-source 的写作契约与 verify 的编号项基准（合一）。文本提取 100% 且 config 已出 `verify_config.json` 后批量跑：
    ```powershell
    python flows/extract/structure/script/build_structure <extract_dir>
    # 不传 <ch> 即全书；也可指定章：build_structure.py <extract_dir> 1 2 3
    ```
-   - 至此 extract 阶段完成：`page_*.json` + `figure_index.json` + 全书每章 `ch<N>_structure.json` 均已就绪，供 write-source 消费、verify 读取。
+   - 至此 extract 阶段完成：`page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json` 均已就绪，供 write-source 消费、verify 读取。
 
 ## 启动方式（后台提取启动逻辑，含启动脚本）
 
@@ -115,13 +115,13 @@ $proc = Start-Process -WindowStyle Hidden -PassThru `
 - **规则2 — 多册文档：强制逐册串行提取**（显存安全），前一册 `PIPELINE OK` + 显存回落后才启动下一册。
 
 ## 出口条件
-- 出口：全书页面提取 100% 且每页过 MM Repair，config + figure_detection + structure 子流程均已跑完，产出 `page_*.json` + `figure_index.json` + 全书每章 `ch<N>_structure.json`（写作契约 + verify 基准合一）。
+- 出口：全书页面提取 100% 且每页过 MM Repair，config + figure_detection + structure 子流程均已跑完，产出 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/extract/pipeline/script/extract_pipeline`：后台**文本**流水线驱动（自动断点续跑，纯文本提取）。参数：`<pdf> [--start N] [--end N] [--force] [--deskew …]`；`--end` 省略时取 PDF 自动识别总页（全本），`--start` 默认 1；每批 50 页；自动续跑；一批失败即停。图检测不在本脚本内。
 - `launch_pipeline.sh`：bash 启动器（空格路径安全）。
 - `../../data/chapter_map/chapter_map.py`（数据结构见 [data/chapter_map/chapter_map.md](../../data/chapter_map/chapter_map.md)）：chapter_map 模板工具。
-- `flows/extract/structure/script/build_structure`：统一结构骨架生成（structure 子流程，Step 6），生成全书每章 `ch<N>_structure.json`。
+- `flows/extract/structure/script/build_structure`：统一结构骨架生成（structure 子流程，Step 6），生成全书单一的 `book_structure.json` 书对象。
 - `flows/extract/structure/script/scan_skeleton`：章节/练习（`SEC`/`EXER`）扫描，build_structure 的内部依赖（不再作为独立子流程暴露）。
 - `flows/extract/structure/script/extract_items` + 变体（`extract_items_en` / `_gm` / `_hom` / `_kt` / `_vakil`）：编号项抽取，按 `ordinal` 被 build_structure 调用（内部依赖）。
 
@@ -131,4 +131,4 @@ $proc = Start-Process -WindowStyle Hidden -PassThru `
 - [`extract/mm_repair`](mm_repair/mm_repair.md) — MM Repair 链路（Step 2 轮询）
 - [`extract/config_setting`](config_setting/config_setting.md) — 书级配置生成（Step 3，图检测之前）
 - [`extract/figure_detection`](figure_detection/figure_detection.md) — 图检测 + 分配（Step 4，config 之后）
-- [`extract/structure`](structure/structure.md) — 统一结构骨架（Step 6，生成 `ch<N>_structure.json`；写作契约 + verify 基准合一）
+- [`extract/structure`](structure/structure.md) — 统一结构骨架（Step 6，生成 `book_structure.json` 书对象；写作契约 + verify 基准合一）

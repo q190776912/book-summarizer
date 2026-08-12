@@ -341,7 +341,7 @@ def print_result(r):
 
     # P-LAYER: anti-regression gate (content/structure defects, blocking, never auto-fix).
     # Catches the Vakil incident class: exercise-consolidation blocks, OCR/header
-    # noise, bare item numbers (missing title), and missing sections vs skeleton.
+    # noise, bare item numbers (missing title), and missing sections vs structure contract.
     p_exer = r.get('p_exer_block', [])
     p_noise = r.get('p_noise', [])
     p_bare = r.get('p_bare_item', [])
@@ -373,14 +373,14 @@ def print_result(r):
     if p_miss:
         problems += 1
         print(f"\nP-LAYER MISSING SECTION vs CONTRACT ({len(p_miss)}): structure contract "
-              f"(ch{ch}_structure.json) is the writing contract — "
+              f"(book_structure.json) is the writing contract — "
               f"every section must be emitted in order; add the missing `## §`:")
         for g in p_miss:
             print(g)
     if p_extra:
         problems += 1
         print(f"\nP-LAYER FABRICATED ITEM vs CONTRACT ({len(p_extra)}): structure contract "
-              f"(ch{ch}_structure.json) is the writing contract — "
+              f"(book_structure.json) is the writing contract — "
               f"do NOT invent numbered items the source lacks "
               f"(e.g. a `**X.1.1（Implicit）：**` where §X.1 is prose); delete or demote to prose/remark:")
         for g in p_extra:

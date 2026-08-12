@@ -135,7 +135,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
 #   · 定义 has its OWN per-chapter counter (定义1.1, 定义1.2, ...)
 #   · 定理/引理/推论/命题 SHARE one continuous counter (1.1, 1.2, ...)
 #   · 例 are renumbered PER SECTION (例1, 例2 ...) — not emitted here; example
-#     completeness is handled by build_structure (structure.json).
+#     completeness is handled by build_structure (book_structure.json).
 # Produces keys like '定义1.1' / '定理1.1' that match the .md bold entries
 # (**定义1.1**：, **定理1.1**：). The three-level N.S-N regex is deliberately
 # NOT used here (it manufactures false-positive phantom keys for this scheme).
@@ -173,7 +173,7 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
         if it['key'] not in seen:
             seen[it['key']] = it
     items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
-    # Continuity is verified by build_structure (structure.json); no B-layer gap
+    # Continuity is verified by build_structure (book_structure.json); no B-layer gap
     # re-scan here (the three-level re-scan logic is N.S-N specific).
     return items, [], []
 

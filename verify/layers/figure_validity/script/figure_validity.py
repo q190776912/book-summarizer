@@ -28,7 +28,7 @@ from verify.layers.script.base import VerifyLayer, LayerResult
 
 import os
 
-from verify.layers.script._fig_common import load_figure_index, cv2
+from verify.common.fig_common import load_figure_index, cv2
 
 def check_f_figure_validity(ch, ext):
     """F-LAYER: figure validity (analog of C-layer).

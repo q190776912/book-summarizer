@@ -6,7 +6,7 @@
 >
 > **本文件同时是「更大的公用子流程」**：它编排 `verify/layers/<snake>/script/` 下的全部 18 个校验层模块，
 > 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/verify-source`、`../flows/derive-translate`
-> 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/layers/<snake>.md` 的 SSOT。
+> 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/layers/<snake>/<snake>.md` 的 SSOT。
 
 ## 目的
 某语言全部初稿写完后，**一次性批量校验该语言全部章节**，未过则用 `--fix` 自动修复后重验，直至 `verify PASS + KaTeX OK`。
@@ -16,8 +16,8 @@
 - `ctx.language` 由 config 决定（`en` / `cn`），`verify_chapter.py` 据此切换标签类映射，无需为不同语言写两套逻辑。
 
 ## 校验层注册表（SSOT）
-所有校验层脚本在 `verify/layers/<snake>/script/<snake>.py`，子流程文档 `<snake>.md` 在 `layers` 级，
-由 `script/register_all.py` 遍历 `verify/layers/*/script/` 自动发现并注册。`code` 为稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；
+所有校验层脚本在 `verify/layers/<snake>/script/<snake>.py`，子流程文档 `<snake>.md` 在 `verify/layers/<snake>/` 目录内（与 `script/` 并列），
+由 `script/register_all.py` 遍历 `verify/layers/*/script/` 用 `importlib` 按裸名 `import` 自动发现并注册（无 `__init__.py`，下划线前缀模块跳过）。`code` 为稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；
 `name` 为语义名。`order` 决定运行顺序，`auto_fixable` / `fix_order` 决定 `--fix` 修复顺序。
 
 | code | 语义名 | 模块（snake） | order | auto_fixable | fix_order | 子流程文档 |
@@ -25,7 +25,7 @@
 | EXTRACT | data-provider | data_provider | 0 | 否 | — | [data_provider](layers/data_provider/data_provider.md) |
 | D | section-continuity | section_continuity | 1 | 否 | — | [section_continuity](layers/section_continuity/section_continuity.md) |
 | A | missing-items | missing_items | 2 | 否 | — | [missing_items](layers/missing_items/missing_items.md) |
-| B | numbering-gap | numbering_gap | 3 | 否 | — | [numbering_gap](layers/numbering_gap/numbering_gap.md) |
+| B | item-numbering-integrity | item_numbering_integrity | 3 | 否 | — | [item_numbering_integrity](layers/item_numbering_integrity/item_numbering_integrity.md) |
 | C | katex-validation | katex_validation | 4 | 否 | — | [katex_validation](layers/katex_validation/katex_validation.md) |
 | E | figure-completeness | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
 | F | figure-validity | figure_validity | 6 | 否 | — | [figure_validity](layers/figure_validity/figure_validity.md) |
@@ -48,7 +48,7 @@
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
    ```
 3. 未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。
-4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/layers/<snake>/script/<snake>.py`，文档 `verify/layers/<snake>.md`，各自 SSOT）。
+4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/layers/<snake>/script/<snake>.py`，文档 `verify/layers/<snake>/<snake>.md`，各自 SSOT）。
 5. （可选，位置+内容保真）跑公式 manifest 对账（见子流程 `formula-manifest`）。
 
 ## 本阶段规则（🔴 内联）
@@ -69,7 +69,7 @@
 - `../config/ignore_chN/manage_ignore.py`：维护忽略清单（ignore keys / figures）。
 
 ## 子流程
-- **各校验层**：`verify/layers/<snake>.md`（脚本在 `verify/layers/<snake>/script/<snake>.py`，见上方注册表表格链接）——每层一个可独立引用的公用子流程。
+- **各校验层**：`verify/layers/<snake>/<snake>.md`（脚本在 `verify/layers/<snake>/script/<snake>.py`，见上方注册表表格链接）——每层一个可独立引用的公用子流程。
 - [`formula-manifest`](formula-manifest/formula-manifest.md) — 公式 manifest 保真对账（Step 3.6）。
 
 ## 新增一个校验层（模块约定）
@@ -77,5 +77,5 @@
 2. 在 `<snake>.py` 中定义 `VerifyLayer` 子类，设 `code='<唯一大写字母或 EXTRACT>'`、`name='<语义名>'`、`order=<整数>`、`auto_fixable=<bool>`（可修复再设 `fix_order`）；无需 `__init__.py`，`register_all` 遍历 `verify/layers/<snake>/script/` 发现该模块。
    共用 helper 放 `layers/script/_fig_common.py` / `_struct_labels.py`（下划线前缀，自动跳过注册）。
 3. 写入 `<snake>.md`：按统一模板（目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）写本层 SSOT；若声明字节契约键，用 ```` ```contract-keys ```` 块。
-4. `script/register_all.py` 经 `pkgutil` 扫描自动发现，**无需手动登记**；将本层加入上方注册表表格。
+4. `script/register_all.py` 经 `importlib` 扫描 `verify/layers/*/script/` 自动发现（按裸名 `import`；无 `__init__.py`，下划线前缀模块跳过），**无需手动登记**；将本层加入上方注册表表格。
 5. 如需被其他消费者单独引用，在入口脚本跑过 `lib.boot.setup()` 后直接 `from <snake> import <Class>` 即可（裸名 import，boot 已将 `**/script` 注入 sys.path）。

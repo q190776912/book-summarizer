@@ -34,7 +34,7 @@ from verify.layers.script.base import VerifyLayer, LayerResult
 
 import os, json
 
-from verify.layers.script._fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
+from verify.common.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
 
 def check_e_figure_completeness(ch, start, end, ext, ignore_fig=None):
     """E-LAYER: figure completeness (analog of B-layer).

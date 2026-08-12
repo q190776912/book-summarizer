@@ -26,4 +26,4 @@
 
 ## 历史参考
 
-- `ref/_archived_verify_config_schema.md`：早期 schema 设计分解（已归档，仅供回溯）。
+- 早期 `verify_config` schema 设计分解已归档，仅供回溯（现以 `verify_config.md` / `verify_config.py` 为准）。

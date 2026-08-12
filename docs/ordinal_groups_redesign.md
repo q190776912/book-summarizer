@@ -40,7 +40,7 @@
 
 | 文件 | 改动性质 | 关键改动 |
 |---|---|---|
-| `../config/verify_config/verify_config.py` | **核心重构** | 新增 `GroupConfig`；`BookConfig.ordinal: List[GroupConfig]`；`from_dict` 解析数组 + 拒旧格式；`require_complete` 逐组校验；新增 `primary_type()` / `extractor_family()` / `match_group()` / `uncat_group()`；删除 `separate_types` 字段、`SEP_COMBINED/SEP_PER_TYPE` 常量、`BookConfig.depth`、`group_prefix_len()`；`book_config_has_ordinal` 改「非空数组」检测 |
+| `../config/verify_config/verify_config.py` | **核心重构** | 新增 `GroupConfig`；`BookConfig.ordinal: List[GroupConfig]`；`from_dict` 解析数组 + 拒旧格式；`require_complete` 逐组校验；新增 `primary_type()` / `extractor_family()` / `match_group()` / `uncat_group()`；删除 `separate_types` 字段、`SEP_COMBINED/SEP_PER_TYPE` 常量、`BookConfig.depth`、`group_prefix_len()`；`verify_config_has_ordinal` 改「非空数组」检测 |
 | `../config/verify_config/make_config.py` | **输出格式** | 输出数组形式（单默认组 `{type, name:["uncat"], depth, scope:2}`）；打印迁移提示 |
 | `../flows/extract/structure/script/extract_items.py` | **签名/分组** | `extract_items(..., groups=...)` 替换 `ordinal=, separate_types=`；传入 `recover_missing_items(groups=...)` |
 | `../flows/extract/script/b_layer.py` | **分组逻辑** | `_group_key(it, separate_types)` → `_group_key(it, groups)`（name→group 匹配）；删除 `from verify.layers.script.b_layer import SEP_*`；`recover_missing_items(groups=...)` |
@@ -54,7 +54,7 @@
 | `verify/verify_chapter.py` | **帮助文本** | 仅更新 usage/help 文本中关于 `ordinal`/`separate_types` 的描述（代码逻辑经 `require_complete` 已覆盖，无需改校验逻辑） |
 | `verify/report.py` | **无改动** | 仅消费 `verify_one` 结果 dict，不触碰 `ordinal`，无需改 |
 | `../config/verify_config/tests/test_config_complete.py` | **测试** | 更新/新增：旧 `{"ordinal": int}` 抛 `ConfigError`；`require_complete` 逐组校验用例；`from_dict` 单组默认；make_config 新数组输出 |
-| `../verify/layers/numbering_gap/numbering_gap.md`、`../verify/verify.md`、`references/layers/extract.md` | **文档同步（建议，P2）** | 同步分组模型说明（非阻塞，可后置） |
+| `../verify/layers/item_numbering_integrity/item_numbering_integrity.md`、`../verify/verify.md`、`references/layers/extract.md` | **文档同步（建议，P2）** | 同步分组模型说明（非阻塞，可后置） |
 
 ---
 
@@ -169,7 +169,7 @@ sequenceDiagram
     participant LD as ConfigLoader
     participant EX as ExtractLayer
     participant EI as extract_items
-    participant BL as BLayer(_md_gap_blocking)
+    participant BL as ItemNumberingIntegrityLayer(_md_gap_blocking)
     participant RP as report
     VC->>LD: ConfigLoader(ext,book); require_complete()
     LD->>LD: from_dict(data) -> BookConfig(ordinal:List[GroupConfig])
@@ -214,7 +214,7 @@ def from_dict(cls, data):
         raise ConfigError("[CONFIG] 旧版 'levels' 字段已废弃，请重跑 make_config.py。")
     else:
         # 缺失 ordinal：产出默认单组（供「文件缺失→warn+默认」路径；
-        # 若文件存在则 require_complete 会据 book_config_has_ordinal 抛错）
+        # 若文件存在则 require_complete 会据 verify_config_has_ordinal 抛错）
         groups = [_default_single_group()]
     # --- section_types/section_depths：原逻辑保留（正交）---
     ...
@@ -231,7 +231,7 @@ def _parse_group(g):
     return GroupConfig(type=t, name=names, depth=depth, scope=scope)
 ```
 
-> `book_config_has_ordinal` 改为：`isinstance(data.get('ordinal'), list) and len(data['ordinal']) > 0`。
+> `verify_config_has_ordinal` 改为：`isinstance(data.get('ordinal'), list) and len(data['ordinal']) > 0`。
 
 ### 5.2 `require_complete` 逐组校验（config/verify_config/verify_config.py）
 
@@ -240,7 +240,7 @@ def _parse_group(g):
 ```
 - 文件缺失 + allow_absent=True  -> WARN + 默认单组（保持向后兼容）
 - 文件缺失 + allow_absent=False -> raise ConfigError
-- 文件存在但 book_config_has_ordinal==False -> raise ConfigError("未声明 ordinal 数组")
+- 文件存在但 verify_config_has_ordinal==False -> raise ConfigError("未声明 ordinal 数组")
 - 逐组校验（每组 type∈ORDINAL_CODES、depth>=1、scope∈{1,2,3}、name 为 str 列表、
   至少一组、恰一个 uncat 组或有 uncat 兜底）-> 任一不合法 raise ConfigError
 - section_types/section_depths 检查：原逻辑保留（仅当显式给出时）
@@ -345,7 +345,7 @@ def _parse_group(g):
 - 删除 `SEP_COMBINED` / `SEP_PER_TYPE` 常量。
 - `from_dict`：解析数组 + 逐组校验；旧 `int`/`levels` 抛 `ConfigError`（迁移提示）；缺失→默认单组。
 - 新增 `primary_type()` / `extractor_family()` / `match_group()` / `uncat_group()` / `has_cn_three_level()` / `_default_single_group()`。
-- `book_config_has_ordinal` 改为「非空 list」检测。
+- `verify_config_has_ordinal` 改为「非空 list」检测。
 - `require_complete`：逐组校验（type∈CODES、depth≥1、scope∈{1,2,3}、name 为 str 列表、至少一组、恰一个 uncat 组）；section 检查保留。
 - 子步骤：①GroupConfig ②BookConfig 字段/删除 ③from_dict ④require_complete ⑤helpers ⑥常量清理。
 
@@ -387,7 +387,7 @@ def _parse_group(g):
 |---|---|---|
 | 文件缺失 + allow_absent=True | 无文件 | warn + 默认单组，不抛 |
 | 文件缺失 + allow_absent=False | 无文件 | `ConfigError` |
-| 文件存在无 ordinal | `{"disable":[]}` | `ConfigError`（book_config_has_ordinal=False）|
+| 文件存在无 ordinal | `{"disable":[]}` | `ConfigError`（verify_config_has_ordinal=False）|
 | 旧 int 格式 | `{"ordinal": 3}` | `ConfigError`（from_dict 直接抛，迁移提示）|
 | 旧 levels | `{"levels": 3}` | `ConfigError` |
 | 合法单组 | `{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":2}]}` | 不抛 |

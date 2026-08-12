@@ -1,7 +1,7 @@
 """config/verify_config/verify_config.py — single source of truth for ALL per-book verify configuration.
 
 This module replaces the old `ManagerConfig` (verify/registry.py) +
-`BNumberingConfig` (verify/layers/numbering_gap/script/numbering_gap.py) and the scattered inline reads of
+`BNumberingConfig` (verify/layers/item_numbering_integrity/script/item_numbering_integrity.py) and the scattered inline reads of
 `chapter_map.json` / `figure_index.json`.  Every layer reads its configuration
 through a `ConfigLoader` instance (constructed ONCE per run), never by
 re-reading files or by receiving config field-by-field through a context object.
@@ -488,9 +488,9 @@ class ConfigLoader:
                  extra_ignore: Optional[List[str]] = None):
         self.extract_dir = extract_dir
         self.book_dir = book_dir
-        self.book_config_path: Optional[str] = None
-        self.book_config_has_ordinal: bool = False
-        self.book = self._load_book_config()
+        self.verify_config_path: Optional[str] = None
+        self.verify_config_has_ordinal: bool = False
+        self.book = self._load_verify_config()
         self.chapters = self._load_chapter_map()
         self.figure_index = self._load_figure_index()
         # Optional extra ignore entries supplied via CLI (--ignore / --ignore-figure);
@@ -498,7 +498,7 @@ class ConfigLoader:
         self.extra_ignore: Set[str] = set(extra_ignore or [])
 
     # ---- verify_config.json ----
-    def _load_book_config(self) -> BookConfig:
+    def _load_verify_config(self) -> BookConfig:
         candidates = [
             os.path.join(self.extract_dir, 'verify_config.json'),
             os.path.join(self.book_dir, 'verify_config.json'),
@@ -520,8 +520,8 @@ class ConfigLoader:
         # (hard error) from "file absent" (warning + default) — `BookConfig.from_dict`
         # silently defaults ordinal to a single uncat group, so we cannot infer
         # absence from the resolved value alone.
-        self.book_config_path = hit_path
-        self.book_config_has_ordinal = (
+        self.verify_config_path = hit_path
+        self.verify_config_has_ordinal = (
             isinstance(data.get('ordinal'), list) and len(data.get('ordinal')) > 0
         )
         return BookConfig.from_dict(data)
@@ -546,7 +546,7 @@ class ConfigLoader:
         cfg = self.book
 
         # --- file presence ---
-        if self.book_config_path is None:
+        if self.verify_config_path is None:
             if allow_absent:
                 warnings.warn(
                     "[CONFIG] 未找到 verify_config.json，沿用默认 ordinal=3（向后兼容）。"
@@ -562,11 +562,11 @@ class ConfigLoader:
 
         # --- ordinal array present & every group legal (1..7) ---
         # `from_dict` already rejects the old int/str/levels formats and appends a
-        # default uncat group, so `book_config_has_ordinal` (== "ordinal is a
+        # default uncat group, so `verify_config_has_ordinal` (== "ordinal is a
         # non-empty list") is the reliable "was it declared" signal.
-        if not self.book_config_has_ordinal:
+        if not self.verify_config_has_ordinal:
             raise ConfigError(
-                f"[CONFIG] {self.book_config_path} 未声明 ordinal 数组"
+                f"[CONFIG] {self.verify_config_path} 未声明 ordinal 数组"
                 f"（应为 GroupConfig 数组，例如 "
                 f'[{{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}}]）。'
                 f" 旧版整型 ordinal 已废弃，请运行 "
@@ -575,36 +575,36 @@ class ConfigLoader:
         for gi, g in enumerate(cfg.ordinal):
             if g.type not in ORDINAL_CODES:
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].type={g.type}"
+                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].type={g.type}"
                     f" 非法（应 1..7）。")
             if g.depth < 1:
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].depth={g.depth}"
+                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].depth={g.depth}"
                     f" 必须 >=1。")
             if g.scope not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} ordinal[{gi}].scope={g.scope}"
+                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].scope={g.scope}"
                     f" 非法（应 1/2/3）。")
         # --- section_types / section_depths (only when explicitly given) ---
         if cfg.section_types or cfg.section_depths:
             if len(cfg.section_types) != len(cfg.section_depths):
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} section_types 与 section_depths "
+                    f"[CONFIG] {self.verify_config_path} section_types 与 section_depths "
                     f"长度不等（{len(cfg.section_types)} vs {len(cfg.section_depths)}）。"
                 )
             if any(d < 1 for d in cfg.section_depths):
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} section_depths 含非法分量（<1）。"
+                    f"[CONFIG] {self.verify_config_path} section_depths 含非法分量（<1）。"
                 )
             for code in cfg.section_types:
                 if code not in SECTION_ROLE_CODES:
                     raise ConfigError(
-                        f"[CONFIG] {self.book_config_path} section_types 含非法角色码 "
+                        f"[CONFIG] {self.verify_config_path} section_types 含非法角色码 "
                         f"{code}（应在 {SECTION_ROLE_CODES}）。"
                     )
             if cfg.section_depths[0] != 1:
                 raise ConfigError(
-                    f"[CONFIG] {self.book_config_path} section_depths[0] 必须为 1"
+                    f"[CONFIG] {self.verify_config_path} section_depths[0] 必须为 1"
                     f"（章首分量）。"
                 )
 

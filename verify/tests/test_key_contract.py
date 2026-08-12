@@ -27,7 +27,7 @@ REPORT = os.path.join(_ROOT, "verify/script/report.py")
 # 管理器注入、不归属任何层的键（稳定基础设施，加层不受影响）。
 # 各层自己的键声明在 verify/layers/<snake>/<snake>.md 的 ```contract-keys 块中
 # （层文档 verify/layers/<snake>/<snake>.md 位于 <snake>/ 目录内；脚本 verify/layers/<snake>/script/<snake>.py）。
-MANAGER_INJECTED = {"ch", "md", "status", "extract_dir"}
+MANAGER_INJECTED = {"ch", "md", "status", "extract_dir", "levels"}
 
 
 def load_doc_keys():

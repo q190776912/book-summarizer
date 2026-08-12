@@ -11,7 +11,6 @@
 
 输出（写入 <extract_dir>）：
   ch{N}_extract.json : {"sections":[(num,title,page)], "statements":[(label,num,page,text)]}
-  ch{N}_skeleton.txt : 写作契约（SEC / STMT 行，按页码顺序）
 
 用法:
   python extract_items_kt.py <extract_dir> <ch> <start> <end>
@@ -214,19 +213,7 @@ def write_outputs(extract_dir, ch, data):
     out_json = os.path.join(extract_dir, 'ch%s_extract.json' % suffix)
     ch_extract.ChExtract(data=data).dump(out_json)
 
-    sk = os.path.join(extract_dir, 'ch%s_skeleton.txt' % suffix)
-    with open(sk, 'w', encoding='utf-8') as f:
-        f.write('# Chapter %s skeleton (K&T scheme)\n' % ch)
-        f.write('# Contract: emit every SEC in order; cover every STMT.\n')
-        f.write('# SUB = lettered subsection (write as ### §N.X); not enforced by P gate.\n')
-        f.write('# Problems/Notes/References blocks OMITTED.\n')
-        f.write('# kind  number        page  title/first-line\n')
-        for num, title, p, kind in data['sections']:
-            f.write('%-5s %-13s p%-4d %s\n' % (kind, num, p, title))
-        for label, num, p, text in data['statements']:
-            f.write('%-5s %-13s p%-4d %s %s\n'
-                    % ('STMT', '%s %s' % (label, num), p, label, text))
-    return out_json, sk
+    return out_json
 
 
 def main():
@@ -235,10 +222,10 @@ def main():
     start = int(sys.argv[3])
     end = int(sys.argv[4])
     data = extract(extract_dir, ch, start, end)
-    oj, sk = write_outputs(extract_dir, int(ch) if ch.isdigit() else ch, data)
+    oj = write_outputs(extract_dir, int(ch) if ch.isdigit() else ch, data)
     print('ch%s -> sections=%d statements=%d'
           % (ch, len(data['sections']), len(data['statements'])))
-    print('  wrote', os.path.basename(oj), os.path.basename(sk))
+    print('  wrote', os.path.basename(oj))
 
 
 if __name__ == '__main__':

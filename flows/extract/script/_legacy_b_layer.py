@@ -191,7 +191,7 @@ def recover_missing_items(extract_dir, chapter, start_page, end_page, items, lab
         # gaps the strict OCR pass dropped; it must NOT hard-block on its own
         # because OCR phantom matches (a stray "8.6-15" citation) inflate
         # last_num and fabricate gaps. The authoritative missing-number
-        # detection runs on the written .md in verify/layers/numbering_gap/script/numbering_gap.py.
+        # detection runs on the written .md in verify/layers/item_numbering_integrity/script/item_numbering_integrity.py.
         if first_num > 1:
             recovered = _scan_and_recover(start_page, first_page - 1, sec_num, section_label, extract_dir, chapter, existing_keys, label_re)
             auto_recovered.extend(recovered)

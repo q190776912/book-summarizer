@@ -14,6 +14,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
+from data.book_structure.book_structure import BookStructure
+
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/layers/verbose_gates/verbose_gates.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """verbose_gates.py — P-LAYER (order 16): anti-regression gate for content/structure defects.
 
@@ -29,7 +31,7 @@ _boot.setup()
   - 必须逐条读懂重写，剔除页眉/页脚/版权行，不得照抄 OCR 文本流。
   - number-first 体例（编号在前、标题在后）：条目标签必须是
     `**N.M.K（标题）：**` 或 `**定义 N.M.K**：`，禁止裸 `**N.M.K**` 把标题甩到正文。
-  - 结构契约 `ch<N>_structure.json`（取代原 `ch<N>_skeleton.txt`，SSOT 见 `flows/extract/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON，不再读 skeleton.txt。
+  - 结构契约 `book_structure.json`（SSOT 见 `flows/extract/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON。
 
 检测七类缺陷（全部 BLOCKING，不可 --fix，需重写）：
   p_exer_block  — 练习归拢块：独立的 `### 练习`/`### 习题`/`### Exercises` 标题，
@@ -164,19 +166,17 @@ def _load_contract(ext_dir, ch):
     item_keys: set[str]，允许出现的编号项编号集合（仅 three-level 点分格式，
                与 md 侧 ITEM_LABEL_RE 对齐）。
 
-    读取合并契约 `ch{N}_structure.json`（结构树，取代 skeleton.txt）；
-    旧书须先重跑 build_structure 生成 JSON，不再读 skeleton.txt。
+    读取单文件书对象 book_structure.json（结构树）；
+    旧书须先重跑 build_structure 生成该单文件。
     """
     sections, item_keys = [], set()
-    jp = os.path.join(ext_dir, 'ch%d_structure.json' % ch)
-    if not os.path.exists(jp):
+    bs = BookStructure.load(ext_dir)
+    if bs is None:
         return sections, item_keys
-    try:
-        with open(jp, encoding='utf-8') as f:
-            root = json.load(f)
-    except Exception:
+    ch_node = bs.find_chapter(ch)
+    if ch_node is None:
         return sections, item_keys
-    for n in _iter_nodes(root):
+    for n in _iter_nodes(ch_node.to_dict()):
         t = n.get("type")
         if t == "section":
             sections.append((str(n.get("key", "")), str(n.get("name", ""))))

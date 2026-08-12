@@ -30,8 +30,8 @@ import os
 import json
 
 from verify.layers.script.base import VerifyLayer, LayerResult
-from verify.script.key_parse import GM_SEC_RE, GM_ENTRY_RE
-from extract_items_gm import scan_gm_blocks, _load_sections
+from verify.common.key_parse import GM_SEC_RE, GM_ENTRY_RE
+from verify.common.gm_scan import scan_gm_blocks, _load_sections
 from lib.regexlib import SEP_TIGHT
 from verify_config import (
     ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,

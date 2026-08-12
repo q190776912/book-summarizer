@@ -19,11 +19,11 @@ _boot.setup()
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
-from verify.layers.script._struct_labels import N_ITEM_RE
+from verify.common.struct_labels import N_ITEM_RE
 
 def check_excessive_bq_empty_lines(md_file):
     """N-LAYER: detect excessive consecutive empty `>` lines inside blockquotes.
@@ -69,55 +69,6 @@ def check_excessive_bq_empty_lines(md_file):
         i += 1
     return out
 
-def fix_excessive_bq_empty_lines(md_file):
-    """N-LAYER auto-fix: collapse excessive consecutive empty `>` lines in
-    blockquotes to max 1. Returns number of lines removed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    n = len(lines)
-    changes = 0
-    in_bq = False
-    i = 0
-    while i < n:
-        s = lines[i].strip()
-        if s.startswith('> **') and ('证明' in s or '例' in s or '注' in s
-                or re.search(r'\*\*(?:Proof|Example|Note|Remark)\b', s)):
-            in_bq = True
-            i += 1
-            continue
-        if in_bq:
-            if (re.match(r'^---\s*$', s) or re.match(r'^#{1,6}\s', s) or
-                N_ITEM_RE.match(s)):
-                in_bq = False
-                i += 1
-                continue
-            if s in ('>', '> '):
-                j = i
-                while j < n and lines[j].strip() in ('>', '> '):
-                    j += 1
-                count = j - i
-                if count > 1:
-                    # Keep the first `> ` line, DELETE the rest so we never
-                    # create bare blank lines that the G-layer would flag.
-                    for idx in range(j - 1, i, -1):
-                        del lines[idx]
-                    changes += count - 1
-                    n = len(lines)
-                    # Do NOT advance i — the next line to check is still at i
-                    continue
-                i = j
-                continue
-            if s == '':
-                i += 1
-                continue
-        i += 1
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
 
 class NLayer(VerifyLayer):
     code = 'N'
@@ -130,6 +81,3 @@ class NLayer(VerifyLayer):
         return LayerResult(code=self.code, metadata={
             'n_bq_empty': check_excessive_bq_empty_lines(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        return LayerFixResult(fix_dict={'n': fix_excessive_bq_empty_lines(ctx.md_file)})

@@ -27,10 +27,10 @@ classDiagram
     }
 
     class ConfigLoader {
-        +book_config_path
-        +bool book_config_has_ordinal
+        +verify_config_path
+        +bool verify_config_has_ordinal
         +BookConfig book
-        +_load_book_config() BookConfig
+        +_load_verify_config() BookConfig
         +require_complete(allow_absent) void
     }
 
@@ -40,7 +40,7 @@ classDiagram
     class ExtractLayer {
         +run(ctx)
     }
-    class BLayer {
+    class ItemNumberingIntegrityLayer {
         +_md_gap_blocking(ctx)
     }
     class ExtractItems {
@@ -68,8 +68,8 @@ classDiagram
     ExtractLayer ..> ExtractItems : groups=cfg.ordinal
     ExtractLayer ..> KeyParse : keys_in_md(groups)
 
-    BLayer ..> BookConfig : ctx.config
-    BLayer ..> GroupConfig : match_group(label)
+    ItemNumberingIntegrityLayer ..> BookConfig : ctx.config
+    ItemNumberingIntegrityLayer ..> GroupConfig : match_group(label)
 
     ExtractItems ..> ExtractBLayer : recover_missing_items(groups)
     ExtractBLayer ..> GroupConfig : match_group(label)

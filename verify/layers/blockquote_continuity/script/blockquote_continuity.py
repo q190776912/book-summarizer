@@ -22,11 +22,11 @@ Self-contained implementation of the three G-checks (bodies relocated from the d
 blank lines inside blockquotes to `> ` and removes orphan bare `>` lines.
 """
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
-from verify.layers.script._struct_labels import G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE
+from verify.common.struct_labels import G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE
 
 from lib.regexlib import G_HEAD
 
@@ -155,60 +155,6 @@ def check_example_proof_gap(md_file):
             break
     return errors, warns
 
-def fix_g_quote_continuity(md_file):
-    """G-LAYER auto-fix: convert bare blank lines inside blockquotes to `> `.
-    Returns number of lines changed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    n = len(lines)
-    changes = 0
-
-    # PASS 1: convert blank lines inside blockquotes to `> `
-    in_block = False
-    for i in range(n):
-        ln = lines[i]
-        if G_HEAD.match(ln):
-            in_block = True
-            continue
-        elif G_TERM.match(ln) and not ln.lstrip().startswith('>'):
-            in_block = False
-            continue
-        if in_block and ln.strip() == '' and not ln.startswith('>'):
-            # Mirror check_g_quote_continuity: a bare blank is a LEGITIMATE
-            # inter-block separator when its next non-blank line is a new
-            # block head (`> **证明/例`) or a terminator (`---` / `## ` /
-            # top-level `**label**`) — leave it as-is, do NOT convert to `> `.
-            j = i + 1
-            while j < n and lines[j].strip() == '':
-                j += 1
-            if j < n:
-                nx = lines[j]
-                is_newblock = bool(G_HEAD.match(nx))
-                is_term = bool(G_TERM.match(nx) and not nx.lstrip().startswith('>'))
-                if is_newblock or is_term:
-                    continue
-            lines[i] = '> '
-            changes += 1
-        # A top-level (non->) non-blank line closes the blockquote
-        if in_block and ln.strip() and not ln.startswith('>'):
-            in_block = False
-
-    # PASS 2: remove orphan bare `>` lines (exactly `>`, not `> ` with space)
-    for i in range(n - 1, -1, -1):
-        if lines[i].rstrip() == '>' and lines[i] != '> ':
-            prev_has = i > 0 and lines[i-1].startswith('>') and lines[i-1].rstrip() != '>'
-            next_has = i < n-1 and lines[i+1].startswith('>') and lines[i+1].rstrip() != '>'
-            if not (prev_has and next_has):
-                lines[i] = ''
-                changes += 1
-
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-    return changes
 
 class GLayer(VerifyLayer):
     code = 'G'
@@ -223,6 +169,3 @@ class GLayer(VerifyLayer):
             'nested_bq': check_nested_blockquotes(ctx.md_file),
             'ex_proof_gaps': check_example_proof_gap(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        return LayerFixResult(fix_dict={'g': fix_g_quote_continuity(ctx.md_file)})

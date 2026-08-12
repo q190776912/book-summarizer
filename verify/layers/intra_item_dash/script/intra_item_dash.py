@@ -19,11 +19,11 @@ _boot.setup()
 
 Self-contained implementation (bodies relocated from the deleted structure_layers.py during the per-layer split)."""
 
-from verify.layers.script.base import VerifyLayer, LayerResult, LayerFixResult
+from verify.layers.script.base import VerifyLayer, LayerResult
 
 import re
 
-from verify.layers.script._struct_labels import TOP_LEVEL_HEADER_RE
+from verify.common.struct_labels import TOP_LEVEL_HEADER_RE
 
 _J_SUBPOINT_RE = re.compile(r'^\*\*\(\d+\)\*\*')
 
@@ -87,55 +87,6 @@ def check_item_header_dash(md_file):
             continue
     return out
 
-def fix_item_header_dash(md_file):
-    """J-LAYER auto-fix: remove every `---` that sits INSIDE an item block.
-
-    Uses the same `in_item` span-tracker as check_item_header_dash, so it
-    catches a `---` between a header and its first `**(N)**` sub-point AND a
-    `---` between two `**(i)**`/`**(i+1)**` sub-points, even when a sub-point
-    spans multiple lines (continuation text / `$$` formula directly above the
-    `---`). Also collapses the single blank immediately after the `---` so the
-    parts stay tight (matching the no-`---` style of `**引理3.3**`).
-    Returns number of lines removed."""
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
-    n = len(lines)
-    remove = set()
-    in_item = False
-    for i in range(n):
-        s = lines[i]
-        st = s.strip()
-        if st == '':
-            continue
-        if st.startswith('>'):
-            in_item = False
-            continue
-        if re.match(r'^#{1,6}\s', s):
-            in_item = False
-            continue
-        if TOP_LEVEL_HEADER_RE.match(s) or _J_SUBPOINT_RE.match(s):
-            in_item = True
-            continue
-        if _J_DASH_RE.match(s):
-            ni = i + 1
-            while ni < n and lines[ni].strip() == '':
-                ni += 1
-            if ni < n and not lines[ni].lstrip().startswith('>'):
-                nxt = lines[ni]
-                if in_item and _J_SUBPOINT_RE.match(nxt):
-                    remove.add(i)  # the `---`
-                    if i + 1 < n and lines[i + 1].strip() == '':
-                        remove.add(i + 1)  # the blank line right after the `---`
-            continue
-    if remove:
-        new = [ln for idx, ln in enumerate(lines) if idx not in remove]
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(new))
-        return len(remove)
-    return 0
 
 class JLayer(VerifyLayer):
     code = 'J'
@@ -148,6 +99,3 @@ class JLayer(VerifyLayer):
         return LayerResult(code=self.code, metadata={
             'j_header_dash': check_item_header_dash(ctx.md_file),
         })
-
-    def fix(self, ctx):
-        return LayerFixResult(fix_dict={'j': fix_item_header_dash(ctx.md_file)})

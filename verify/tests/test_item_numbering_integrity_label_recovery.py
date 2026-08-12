@@ -1,5 +1,5 @@
 """
-test_b_layer_label_recovery.py
+test_item_numbering_integrity_label_recovery.py
 
 Regression test for the v2 B-layer label-recovery fix.
 
@@ -24,7 +24,7 @@ Theorem 12.7 (not in ignore) IS still flagged.  Without the fix the test fails
 because 12.3 / 12.4 would be falsely BLOCKed.
 
 Run (stdlib unittest, no pytest dependency):
-    python verify/tests/test_b_layer_label_recovery.py
+    python verify/tests/test_item_numbering_integrity_label_recovery.py
 """
 import os
 import sys
@@ -49,7 +49,7 @@ import unittest
 
 
 from verify_config import BookConfig, GroupConfig
-from numbering_gap import _md_gap_blocking
+from item_numbering_integrity import _md_gap_blocking
 from verify.layers.script.base import VerifyContext
 
 
@@ -67,7 +67,7 @@ def _ctx_with_md(md_text, config):
     )
 
 
-class BLayerLabelRecoveryTest(unittest.TestCase):
+class ItemNumberingIntegrityLabelRecoveryTest(unittest.TestCase):
     # Chapter 12: Theorem 12.2, 12.5, 12.6, 12.8 present; 12.3/12.4 missing
     # (confirmed sparse) and 12.7 missing (real gap).  Definitions 12.1-12.4
     # present and complete (fill the merged counter so only Theorem gaps show).

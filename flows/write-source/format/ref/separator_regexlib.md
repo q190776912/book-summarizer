@@ -1,9 +1,9 @@
 # 分隔符通配 + 正则去重 重构设计方案
 
 > 作者：Bob（架构师） · 类型：**重构（refactor）**，非新功能
-> 范围：`../../../../verify/script/key_parse.py`、`../../../../verify/layers/numbering_gap/script/numbering_gap.py`、`../../../../verify/layers/data_provider/script/data_provider.py`、`flows/extract/structure/script/extract_items*.py`
+> 范围：`../../../../verify/script/key_parse.py`、`../../../../verify/layers/item_numbering_integrity/script/item_numbering_integrity.py`、`../../../../verify/layers/data_provider/script/data_provider.py`、`flows/extract/structure/script/extract_items*.py`
 > 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `scope`(现为 per-group `GroupConfig.scope`)/分组逻辑（现为 `ordinal` 数组的具名 group vs uncat group）；保留 label-first / number-first 识别逻辑。
-> ⚠️ **v2 重构更新**：本约束中「保留 `separate_types`(`SEP_COMBINED`/`SEP_PER_TYPE`)」已不适用——`separate_types` 与 `SEP_*` 常量已在 `ordinal` 数组化重构中移除，分组现由 `ordinal` 数组表达（见 L124 注记与 `../../../../verify/verify.md` §4.3、`../../../../verify/layers/numbering_gap/numbering_gap.md`）。
+> ⚠️ **v2 重构更新**：本约束中「保留 `separate_types`(`SEP_COMBINED`/`SEP_PER_TYPE`)」已不适用——`separate_types` 与 `SEP_*` 常量已在 `ordinal` 数组化重构中移除，分组现由 `ordinal` 数组表达（见 L124 注记与 `../../../../verify/verify.md` §4.3、`../../../../verify/layers/item_numbering_integrity/item_numbering_integrity.md`）。
 > 注（最终落地与该约束的偏差）：本重构后期把 `levels` 吸收为 `ordinal` 整数编码（见 `../../../../config/verify_config/verify_config.py` 的 `ORDINAL_*`），`known_gaps` 并入统一的 `ignore` 集合——二者均不再作为独立配置字段存在；`disable` 也已移除（层不再被跳过，噪声走 `ignore` 抑制）。
 
 ---
@@ -17,7 +17,7 @@
 | 复用 `key_parse.py` 作为唯一归宿 | ❌ 不单独成立 | `key_parse.py` 还承载 label canon map、各 scheme 正则、业务语义，塞入"分隔符原语"会让它更臃肿，且本次只动"分隔符" |
 | **新建 `verify/regexlib.py` + `key_parse.py` 重新导出** | ✅ **采用** | ① 单一真理源，满足"公用正则抽 lib"；② `regexlib` 仅依赖 `re`（无 cv2/torch），可独立 import，契合 `key_parse` 既有的"standalone"契约；③ `key_parse` 重新导出全部既有公共名 → 所有现调用方**零改动**（见下方调用方清单），回归风险最低 |
 
-**调用方零改动清单**（grep 确认）：`../../../../verify/layers/numbering_gap/script/numbering_gap.py`、`../../../../verify/layers/data_provider/script/data_provider.py`、`../../../../verify/layers/section_continuity/script/section_continuity.py`(用 `GM_SEC_RE/GM_ENTRY_RE`)、`../../../../verify/layers/missing_items/script/missing_items.py`(用 `sortkey`)、`../../../../config/ignore_chN/manage_ignore.py`、`../../../../verify/script/ignore_files.py`(用 `normkey`)、`flows/extract/structure/script/extract_items_gm`(用 `GM_*_RE/gm_head_label/_canon_label`)。全部仍 `from verify.script.key_parse import ...`，名字不变。
+**调用方零改动清单**（grep 确认）：`../../../../verify/layers/item_numbering_integrity/script/item_numbering_integrity.py`、`../../../../verify/layers/data_provider/script/data_provider.py`、`../../../../verify/layers/section_continuity/script/section_continuity.py`(用 `GM_SEC_RE/GM_ENTRY_RE`)、`../../../../verify/layers/missing_items/script/missing_items.py`(用 `sortkey`)、`../../../../config/ignore_chN/manage_ignore.py`、`../../../../verify/script/ignore_files.py`(用 `normkey`)、`flows/extract/structure/script/extract_items_gm`(用 `GM_*_RE/gm_head_label/_canon_label`)。全部仍 `from verify.script.key_parse import ...`，名字不变。
 
 **依赖方向（避免循环）**：`regexlib`（最底层，纯分隔符原语，**不含 label 知识**）← `key_parse`（高层，label 集合 + scheme 正则 + `canon_token`/`normkey`，从 regexlib 引入 SEP 并重新导出）← 各 layer / extractor。
 
@@ -84,7 +84,7 @@ def normkey(s: str) -> str:
 ### 1.3 关键设计决策
 
 1. **双分隔符集**：匹配型正则（`KEY_RE`/`ENTRY_RE`/`PROSE_*`/`_numpath_regexes`/`_BOOK_LABEL_RES`）统一用 `SEP_TIGHT`（= 现 b_layer 的 `[.\-–·/．－〜]`，**不含** 空格/逗号/冒号）；`SEP_WIDE` + `SEP_SPLIT_RE` 只用于 `re.split` 与 `canon_sep`/`canon_token_numeric`（这些场景输入已被边界/anchor 限定）。→ 既满足团队"通配覆盖全集"的诉求，又规避 unanchored `finditer` 吞掉 `"1, 2, 3"`/`"Eq. 2.3"` 等散文数字（**over-match 对策**，见 §3）。
-2. **`present_md` 末级保持 dash（`C.S-N`）**：不改动其分隔符形态，因此既有 `present_md` ↔ `BLayer.run` 的 `bkeys`（`f"{sec}-{n}"`）dash 比对耦合**天然保持有效**，无需两端各做归一（约束 #4）。
+2. **`present_md` 末级保持 dash（`C.S-N`）**：不改动其分隔符形态，因此既有 `present_md` ↔ `ItemNumberingIntegrityLayer.run` 的 `bkeys`（`f"{sec}-{n}"`）dash 比对耦合**天然保持有效**，无需两端各做归一（约束 #4）。
 3. **`known_gaps` 通配**：`b_layer` 的 `_norm_sep`/`_SEP_BETWEEN_DIGITS` 整体由 `canon_token_numeric` 替代；用户写 `"Theorem 12.3"` 或 `"Theorem 12-3"`、emit 出 dash 形态，三者经同一 `canon_token_numeric` 归一后一致比对（约束 #5）。
 4. **`split` 健壮性**：5 处 `re.split(_SEP, s)` 改为 `re.split(SEP_SPLIT_RE, s)` 并过滤空串 → 消除连续分隔符（`4..11--5`）产生 `''` 导致 `int()` 崩溃的隐患（b_layer L108/191/204/209/235）。
 
@@ -113,7 +113,7 @@ def normkey(s: str) -> str:
 - 新增 `canon_token`（全 label 归一版，供未来/可选使用）。
 - 验证：本文件 import 自检 + `python -c "from verify.script.key_parse import KEY_RE, normkey, GM_LABELED_RE"` 通过。
 
-### T03 — `../../../../verify/layers/numbering_gap/script/numbering_gap.py` 改造：去重 + 健壮性（不改分级/分组/label-first）  【P0，依赖 T01】
+### T03 — `../../../../verify/layers/item_numbering_integrity/script/item_numbering_integrity.py` 改造：去重 + 健壮性（不改分级/分组/label-first）  【P0，依赖 T01】
 - L42 `_SEP = r'[.\-–·/．－〜]'` → 删除，改 `from verify.regexlib import SEP, SEP_SPLIT_RE, canon_token_numeric, split_numpath, build_numpath_regexes`（与现字符集一致 → 匹配行为不变）。
 - L51-63 `_numpath_regexes`：逻辑原样迁入 `regexlib.build_numpath_regexes`；本文件改为调用（L58 `numpath` 用 `SEP` 已由 regexlib 提供）。
 - L92-94 `_SEP_BETWEEN_DIGITS`/`_norm_sep` → 删除，改用 `regexlib.canon_token_numeric`。
@@ -122,7 +122,7 @@ def normkey(s: str) -> str:
 - L485 `present_md` key、L526 `emit` 的 `full`、L306 尾部 `full`：**保持 `C.S-N` dash 形态不变**（耦合安全，见 §1.3.2）。可选：抽出 `md_item_key(prefix_str, item_num)` 助手统一三处构造，防未来漂移。
 - L501/529-530 `known = {_norm_sep(x)...}` / `_norm_sep(token)...` → 全部替换为 `canon_token_numeric(...)`（raw 与 canon-label 两种形态分别归一后比对，逻辑同现）。
 - L575/L595 `bkeys` 构造（`f"{sec}-{n}"` / `f"{sec}{n.strip()}"`）保持 dash 形式不变。
-- **v2 重构更新**：`SEP_COMBINED`/`SEP_PER_TYPE` 常量已在 `ordinal` 数组化重构中**移除**，分组现由 `ordinal` 数组的多个具名 group（per-type）或单个 uncat group（combined）表达；本「严禁改动 SEP 常量」约束对旧常量已不再适用（见 `../../../../config/verify_config/verify_config.py` 的 `GroupConfig` / `BookConfig.group_for_label` 与 `../../../../verify/layers/numbering_gap/numbering_gap.md`）。其余仍应保留：`group_prefix_len`（现为 `GroupConfig.group_prefix_len`，per-group 计算）、label-first/number-first 分支、`_is_header_boundary`/`_after_label_boundary`（本轮不动，见 §4）。
+- **v2 重构更新**：`SEP_COMBINED`/`SEP_PER_TYPE` 常量已在 `ordinal` 数组化重构中**移除**，分组现由 `ordinal` 数组的多个具名 group（per-type）或单个 uncat group（combined）表达；本「严禁改动 SEP 常量」约束对旧常量已不再适用（见 `../../../../config/verify_config/verify_config.py` 的 `GroupConfig` / `BookConfig.group_for_label` 与 `../../../../verify/layers/item_numbering_integrity/item_numbering_integrity.md`）。其余仍应保留：`group_prefix_len`（现为 `GroupConfig.group_prefix_len`，per-group 计算）、label-first/number-first 分支、`_is_header_boundary`/`_after_label_boundary`（本轮不动，见 §4）。
 
 ### T04 — `../../../../verify/layers/data_provider/script/data_provider.py` 改造：通配匹配型正则  【P0，依赖 T01】
 - 顶部新增 `from verify.regexlib import SEP`（或 `SEP_TIGHT`）。
@@ -139,7 +139,7 @@ def normkey(s: str) -> str:
   - L13-16 `EN_LAB_RE`：`(\d+)\s*\.\s*(\d+)` → `(\d+)' + SEP + r'(\d+)`（en 书用点号仍匹配，通配其他分隔符）。
 - `flows/extract/structure/script/extract_items_gm`：
   - `GM_OCR_ITEM_RE`(L93) `^(\d{1,3})\.\s*`、`GM_OCR_SEC_RE`(L85) `^...(\d{1,2})\.\s+`：结构性标题固定用点，可保留 `\.`；其共享 `GM_LABELED_RE`/`GM_HEAD_LABEL_RE` 已在 T02 经 regexlib 通配。**本轮建议保留 `.`，仅记录。**
-- **额外汇总（建议本轮一并或作为 follow-up，P2）**：`flows/extract/script/b_layer`(L26 `num_re` 的 `[\.\-\·\，\s]`) 仍写死分隔符，属"校验相关正则重复定义"，应改引用 `regexlib.SEP`/`SEP_WIDE` 以彻底完成"抽 lib"。**不阻塞三书回归，但建议纳入同 PR 以免遗漏。**（注：`scan_items` 已于 structure 流程合并时删除，其 `lab_re`/`sec_re`/`ex_re` 不再存在。）
+- **额外汇总（建议本轮一并或作为 follow-up，P2）**：`flows/extract/script/b_layer`(L26 `num_re` 的 `[\.\-\·\，\s]`) 仍写死分隔符，属"校验相关正则重复定义"，应改引用 `regexlib.SEP`/`SEP_WIDE` 以彻底完成"抽 lib"。**不阻塞三书回归，但建议纳入同 PR 以免遗漏。**
 
 ---
 
@@ -163,7 +163,7 @@ D:/anaconda3/envs/pdfextract/python.exe -m verify.script.verify_chapter --all <b
 - **验证**：回归后对比改动前后 `all_keys` 集合差异应为空（或仅多捕获原先因 `·`/空格漏匹配的正确键——属正向修复）。
 
 ### 3.3 `present_md` ↔ `bkeys` 比对耦合（约束 #4）
-- 决策：**保持两端 dash 形态不变**。理由：`present_md` 键由解析出的 `comps` 经 `C.S-N` 构造（与 .md 原书写法无关，恒为 dash）；`BLayer.run` 的 `bkeys` 亦为 dash（`f"{sec}-{n}"`）。故 `<=` 抑制比对逻辑无需改动即有效。
+- 决策：**保持两端 dash 形态不变**。理由：`present_md` 键由解析出的 `comps` 经 `C.S-N` 构造（与 .md 原书写法无关，恒为 dash）；`ItemNumberingIntegrityLayer.run` 的 `bkeys` 亦为 dash（`f"{sec}-{n}"`）。故 `<=` 抑制比对逻辑无需改动即有效。
 - 加固：T03 可选抽出 `md_item_key()` 助手统一 L485/L526/L306 三处构造，防止未来某处改分隔符导致耦合失效。
 
 ### 3.4 `normkey` 改造对 A 层比对的影响（约束：指出是否影响）
@@ -179,7 +179,7 @@ D:/anaconda3/envs/pdfextract/python.exe -m verify.script.verify_chapter --all <b
 
 1. **是否把 `key_parse.py` 重命名为更贴切的名字**（如 `keyparse.py` / 保留）？本次设计**不重命名**（避免牵连所有 import 与文档引用），但如想顺手规范化可一并做——需同步改 7 处 import 与 `../../../../verify/verify.md` 等文档。
 2. **`_is_header_boundary` / `_after_label_boundary` 的终止符集合**（b_layer L121/L139）是否也通配？当前用写死集合，未知标点已默认归为边界（优先级低）。本轮**建议不动**（属"条目 vs 引用"判定，非"分隔符匹配"，且改动有引入误报风险）。若要做，应单独评估。
-3. **`flows/extract/script/b_layer`**（T05 额外汇总）是否纳入本轮 PR，还是留作 follow-up？它是抽取侧缺号恢复，含写死分隔符，彻底"抽 lib"应覆盖；但未在三书核心回归路径上，可独立验证。（注：`scan_items` 已于 structure 流程合并时删除，相关正则已随流程移除，不再纳入。）
+3. **`flows/extract/script/b_layer`**（T05 额外汇总）是否纳入本轮 PR，还是留作 follow-up？它是抽取侧缺号恢复，含写死分隔符，彻底"抽 lib"应覆盖；但未在三书核心回归路径上，可独立验证。
 4. **`SEP_WIDE` 是否要含全角逗号 `，`**：当前列了 `,`(半角) 与 `、`(顿号)，未列全角逗号 `，`。建议补 `，`（中文散文常见），但需确认不会与 `SEP_TIGHT` 外的匹配型正则误用——重申：匹配型只用 `SEP_TIGHT`，`SEP_WIDE` 仅 split/canon，故加 `，` 安全。请确认。
 
 ---
@@ -197,7 +197,7 @@ D:/anaconda3/envs/pdfextract/python.exe -m verify.script.verify_chapter --all <b
 - `../../../../verify/script/key_parse.py`：`GM_SEP` 改写为派生式。
 
 ### 5.3 「非 bug」澄清（避免误改）
-下游 `../../../../verify/layers/numbering_gap/script/numbering_gap.py`、`flows/extract/structure/script/extract_items*.py`、`flows/extract/script/_legacy_b_layer.py`、`flows/extract/structure/script/_legacy_gen_contract.py` 等大量 `key.split('.')` / `split('-')` / `split(':')` 是解析**已归一化的 canonical `C.S-N` key**（提取器匹配时用通配抓数字组分、存 key 时归一成字面 `.`/`-`），不是写死标点匹配 —— 通配只在匹配阶段发生。这些 split **不应**改为通配，否则会破坏 canonical key 契约。
+下游 `../../../../verify/layers/item_numbering_integrity/script/item_numbering_integrity.py`、`flows/extract/structure/script/extract_items*.py`、`flows/extract/script/_legacy_b_layer.py`、`flows/extract/structure/script/_legacy_gen_contract.py` 等大量 `key.split('.')` / `split('-')` / `split(':')` 是解析**已归一化的 canonical `C.S-N` key**（提取器匹配时用通配抓数字组分、存 key 时归一成字面 `.`/`-`），不是写死标点匹配 —— 通配只在匹配阶段发生。这些 split **不应**改为通配，否则会破坏 canonical key 契约。
 
 ### 5.4 验证
 import smoke test（含 d_layer）→ `IMPORTS OK`；3 书本轮回归预期与改动前一致。

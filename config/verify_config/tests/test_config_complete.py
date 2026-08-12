@@ -313,17 +313,12 @@ class TestScanSkeletonEntry(unittest.TestCase):
     def test_scan_real_book_with_config_exit_0(self):
         # Real book with a v2 array ordinal config: scan must read
         # primary_type and exit 0.
-        # (side effect: creates ch1_skeleton.txt in the real _extract — removed
-        # afterwards so the corpus is left untouched)
-        skel = os.path.join(REAL_HAS_CFG, "ch1_skeleton.txt")
-        try:
-            _best_effort_remove(skel)
-            rc, out, err = _run([SCAN_CLI, REAL_HAS_CFG, "1"])
-            self.assertEqual(rc, 0,
-                             "scan_skeleton on configured real book must exit 0. "
-                             "out=%s err=%s" % (out[-500:], err[-500:]))
-        finally:
-            _best_effort_remove(skel)
+        # scan_skeleton no longer writes any file, so this only verifies the
+        # config gate exit code and leaves the corpus untouched.
+        rc, out, err = _run([SCAN_CLI, REAL_HAS_CFG, "1"])
+        self.assertEqual(rc, 0,
+                         "scan_skeleton on configured real book must exit 0. "
+                         "out=%s err=%s" % (out[-500:], err[-500:]))
 
     def test_scan_missing_config_warns_no_hard_fail(self):
         # No config -> WARNING + default ordinal=3, scan still completes (rc 0).

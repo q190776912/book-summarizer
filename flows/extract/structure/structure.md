@@ -3,7 +3,7 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-把原先两份独立产物——`ch<N>_skeleton.txt`（结构骨架契约）与 `ch<N>_items.txt`（编号项清单）——**合并为单一 JSON 树** `ch<N>_structure.json`，一次产出同时满足两类需求：
+**统一结构骨架 / 写作契约 + verify 编号项基准**：structure 子流程产出全书单一 `book_structure.json`（书对象，不再按章拆分、不再用数组包裹），一次产出同时满足两类需求：
 
 - **write-source 写作契约**：全书按章顺序的章节树，几节写几节、顺序照抄、每个编号项（定义/定理/例/…）必须落地、印刷标题进 `name`、练习全量纳入 `type:"exercise"`。
 - **verify 编号项基准**：展平树、过滤 `type!="exercise"` 即得本书编号项 `key` 集合（data_provider 改为读此 JSON，不再重跑抽取器，见 `verify/layers/data_provider`）。
@@ -26,7 +26,7 @@ python flows/extract/structure/script/build_structure <extract_dir>
 # 编号模式（三级/两级/en/vakil/gm/roman/fraleigh）由 <extract_dir>/verify_config.json
 # 的 ordinal 自动判定，无需 --scheme
 ```
-产出全书 `ch<N>_structure.json`（每章一个），这是后续查漏对比的**基线契约**，也是 write-source 的写作契约 + verify 的编号项基准。
+产出全书单一的 `book_structure.json`（书对象，`sub_sec` 内按章顺序嵌套全部章节），这是后续查漏对比的**基线契约**，也是 write-source 的写作契约 + verify 的编号项基准。
 
 **第 2 步 · 源侧查漏（dry-run，只出报告、不写回，先 review）**
 ```powershell
@@ -48,7 +48,7 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...]
 确认 `readable` 项无误后，**先备份再写回**：
 ```powershell
 # 写回前建议备份（防止误填可秒回退）：
-#   cp ch<N>_structure.json <备份目录>/
+#   cp book_structure.json <备份目录>/
 python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --backfill
 ```
 回填节点与第 1 步**逐字段一致**（`key` 三级=`C.S-N`、两级中文=`标签C.S`、两级英文=`标签 C.S`；
@@ -74,8 +74,8 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
   （抽取器行内扫描、本扫描块首锚定，二者互补，抓出被漏检的标题行条目）。
 
 ### 比对与混合回填（用户 2026-08-12 选定「混合」）
-比对「书中真值集」vs `structure.json` 契约，得到遗漏章节 / 遗漏定义定理例清单，按状态分流：
-- **readable（可读遗漏项）**：编号 / 标签 / 页码 / 标题均能从 OCR 干净取出 → 脚本直接插回 `structure.json`。
+比对「书中真值集」vs `book_structure.json` 契约，得到遗漏章节 / 遗漏定义定理例清单，按状态分流：
+- **readable（可读遗漏项）**：编号 / 标签 / 页码 / 标题均能从 OCR 干净取出 → 脚本直接插回 `book_structure.json`。
   回填节点与 `build_structure` **逐字段一致**（`key` 三级=`C.S-N`、两级中文=`标签C.S`、两级英文=`标签 C.S`；
   `type` 由 label 经同一张 `_LABEL_TO_TYPE` 映射；`name = "key 印刷标题"`；`page_start/page_end = 页码`），
   故 write-source / verify 可原样消费。
@@ -108,7 +108,7 @@ missing_items[{key,label,page,snippet,canon,has_label,status}] / backfilled_item
   "sub_sec": [ /* 仅 chapter / section 含此键，递归同结构 */ ]
 }
 ```
-- **顶层**为数组，按章顺序；每章一个 `type:"chapter"` 节点。
+- **顶层**为书对象（`key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>），`sub_sec` 内按章顺序嵌套 `type:"chapter"` 节点；章/`section` 递归继续挂 `sub_sec`。全文件只有一个 JSON 对象，不再按章拆分、不用数组直接包裹章节。
 - **`name` 带序标**：序标位置随书（前/后皆可），与原文一致；只含标题不含正文内容。
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：叶子 `== page_start`；容器（chapter/section）取**末代子孙页**。
@@ -130,7 +130,7 @@ missing_items[{key,label,page,snippet,canon,has_label,status}] / backfilled_item
 - **写完后自查**：`section` 数应等于总结 `## §` 数；非 exercise 节点 `key` 集合应与总结编号一致。
 
 ## 出口条件
-- 出口：全书每章 `ch<N>_structure.json` 已生成，作为 write-source 的写作契约与 verify 的编号项基准采用。
+- 出口：全书单一的 `book_structure.json` 已生成（书对象，`sub_sec` 内按章顺序嵌套全部章节），作为 write-source 的写作契约与 verify 的编号项基准采用。
 
 ## 已知局限（实现层，非契约缺陷）
 - **en 两级（ordinal=4）章节检测为近似**：skeleton 的 `SEC` 行对部分 en 书乱匹配，章节号由条目键派生，可能多出空章节（条目仍正确捕获、按序归位）。写章时以「派生章节 + 源书实际节标题」为准。

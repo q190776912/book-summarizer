@@ -1,11 +1,22 @@
-"""build_structure.py — 统一结构骨架生成器：产出全书每章 ch{N}_structure.json
+"""build_structure.py — 统一结构骨架生成器：产出全书单个 book_structure.json（书对象）
+
+设计（2026-08-12 用户最终确认）
+------------------------------
+全书只产出一个 ``<extract_dir>/book_structure.json``，顶层是一个「书」对象（**不是数组**）：
+    {"key": -1, "type": -1, "name": "<书名>", "page_start": <书起始页>,
+     "page_end": <书终止页>, "sub_sec": [ <章节对象...> ]}
+章节 / 条目节点递归嵌套，schema 见 ``flows/extract/structure/structure.md``
+（key / type / name / page_start / page_end / sub_sec）。
+
+增量合并：已存在 book_structure.json 时，替换/追加指定章（``build_structure <ext> [ch ...]``），
+随后按章号稳定排序并整体写回；不传 <ch> 即全量重建全书。模型类见
+``data/book_structure/book_structure.py``（BookStructure / StructureNode）。
+
 
 为什么需要它
 ------------
-旧流程曾分两条：`scan_skeleton.py` 扫 `ch{N}_skeleton.txt`（章节/条目/练习顺序契约）、
-`extract_items*.py` 抽 `ch{N}_items.txt`（编号项基准）。两者维护两份易漂移，故已废弃为
-独立子流程——其底层逻辑（`scan_skeleton` 的 `SEC`/`EXER` 扫描、`extract_items*` 的编号
-项抽取）现在由本脚本**内部调用**，统一合成为**单一 JSON 树**，一次产出同时满足两类需求：
+本脚本把 `scan_skeleton` 的 `SEC`/`EXER` 扫描 与 `extract_items*` 的编号项抽取**内部调用**，
+统一合成为**单一 `book_structure.json` 书对象**，一次产出同时满足两类需求：
   · write-source 写作契约：章节顺序、条目/练习齐全、印刷标题（name 带序标）。
   · verify 编号项基准：展平树、filter type!="exercise" 即得本书编号项集合
     （data_provider 改为读此 JSON，不再重跑抽取器）。
@@ -74,6 +85,7 @@ from verify_config import (ORDINAL_EN, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from verify.script.key_parse import _canon_label
+from data.book_structure.book_structure import BookStructure, StructureNode
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +231,7 @@ def _chapter_title(cm, ch):
 
 # ---------------------------------------------------------------------------
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
-# 生成 structure.json 后，verify 与 write-source 均消费该 JSON，不再重跑抽取器。
+# 生成 book_structure.json 后，verify 与 write-source 均消费该 JSON，不再重跑抽取器。
 # ---------------------------------------------------------------------------
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
@@ -401,22 +413,46 @@ def main():
     cm = chapter_map.load_chapter_map_raw(os.path.join(ext, "chapter_map.json"))
     rng = _build_rng(cm)
 
+    # 书名：取 book_dir 的目录名（ConfigLoader 已持有 book_dir = <book>）。
+    book_dir = os.path.dirname(ext.rstrip("/")) or ext
+    book_name = os.path.basename(book_dir) if book_dir else ""
+
+    # 增量合并：若已存在 book_structure.json，则在其上替换/追加指定章；否则新建空书。
+    bs = BookStructure.load(ext, book_dir) or BookStructure.new_book(book_name, book_dir)
+    if not bs.root.name and book_name:
+        bs.root.name = book_name
+
     for ch in (want or sorted(rng)):
         if ch not in rng:
             print("ch%-3d SKIP (not in chapter_map)" % ch)
             continue
         start, end = rng[ch]
         chapter = build_chapter(ext, ch, start, end, book, cm)
-        out = os.path.join(ext, "ch%d_structure.json" % ch)
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(chapter, f, ensure_ascii=False, indent=2)
+        node = StructureNode.from_dict(chapter)
+        replaced = bs.root.replace_chapter(node)
         n_item = sum(1 for _ in _iter_items(chapter)
                      if _["type"] not in ("exercise", "section", "chapter"))
         n_ex = sum(1 for _ in _iter_items(chapter) if _["type"] == "exercise")
         n_sec = sum(1 for _ in _iter_items(chapter) if _["type"] == "section")
-        print("ch%-3d -> %s | sections=%d items=%d exercises=%d"
-              % (ch, os.path.basename(out), n_sec, n_item, n_ex))
+        verb = "UPDATE" if replaced else "ADD"
+        print("ch%-3d %s | sections=%d items=%d exercises=%d"
+              % (ch, verb, n_sec, n_item, n_ex))
+
+    # 按章顺序稳定排序（chapter_map 顺序），避免增量写入导致乱序；再写回单个
+    # book_structure.json（save 内部重算书根页码）。
+    bs.root.sub_sec.sort(key=lambda n: _chapter_sort_key(n.key))
+    out = bs.save(ext)
+    print("BOOK -> %s | chapters=%d"
+          % (os.path.basename(out), len(bs.root.sub_sec)))
     return 0
+
+
+def _chapter_sort_key(key):
+    """章号排序键：数字章号按数值，字母/其它章号（附录 A/B…）排末尾。"""
+    try:
+        return (0, int(str(key)))
+    except (TypeError, ValueError):
+        return (1, str(key))
 
 
 def _iter_items(node):

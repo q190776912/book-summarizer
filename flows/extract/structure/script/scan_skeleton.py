@@ -1,12 +1,12 @@
 """scan_skeleton.py — 扫描原书某章的【真实结构骨架】（SEC/EXER 行）。
 
 现主要作为 `build_structure.py` 的内部依赖（被 `import` 调用 `scan()` / `_mode_for_ordinal()`
-生成 `ch<N>_structure.json`）；其 standalone CLI 仍会写出 `ch{N}_skeleton.txt`，仅用于旧书兼容测试。
+供其拼装 `book_structure.json` 书对象）；其 standalone CLI 仅向 stdout 打印扫描结果（诊断用），不写任何文件。
 
 为什么需要它
 ------------
 抽取器产出的**裸条目键**只包含 verifier 的必备条目键，
-它不含节标题、不含练习、不含条目的印刷标题。写章总结的 agent 若只拿到 items.txt，
+它不含节标题、不含练习、不含条目的印刷标题。写章总结的 agent 若只拿到抽取器的裸条目键，
 手上就没有「这一章到底有哪几节、每节有哪些条目和练习、按什么顺序排、每条印刷标题
 叫什么」的权威清单 —— 于是必然出现：漏节、节序颠倒、条目丢标题、练习被随手归拢。
 
@@ -27,7 +27,7 @@
 
 输出
 ----
-`<extract_dir>/ch{N}_skeleton.txt`，每行一条，形如：
+每行一条，形如（打印到 stdout，不落盘）：
 
     SEC   1.2         p25   Categories and functors
     ITEM  1.2.1       p25   Categories.
@@ -260,24 +260,15 @@ def main():
             else:
                 deduped.append(row)
         rows = deduped
-        out = os.path.join(extract_dir, 'ch%d_skeleton.txt' % ch)
         secs = []
-        with open(out, 'w', encoding='utf-8') as f:
-            f.write('# Chapter %d skeleton (pages %d-%d, ordinal=%s)\n' % (ch, start, end, ordinal))
-            f.write('# THIS FILE IS A WRITING CONTRACT: emit every SEC in this order,\n')
-            f.write('# cover every ITEM in this order, keep every printed title.\n')
-            f.write('# EXER (exercises): follow flows/write-source/format/ref/formatting.md 习题收录规则\n')
-            f.write('#   (interleaved exercises kept in place; chapter-end blocks omitted).\n')
-            f.write('# kind  number      page  printed-title\n')
-            for p, kind, num, title in rows:
-                if kind == 'SEC':
-                    secs.append(num)
-                    f.write('\n')
-                f.write('%-5s %-11s p%-4d %s\n' % (kind, num, p, title))
+        for p, kind, num, title in rows:
+            if kind == 'SEC':
+                secs.append(num)
+            print('%-5s %-11s p%-4d %s' % (kind, num, p, title))
         n_item = sum(1 for r in rows if r[1] == 'ITEM')
         n_ex = sum(1 for r in rows if r[1] == 'EXER')
-        print('ch%-3d -> %s | secs=%s items=%d exercises=%d'
-              % (ch, os.path.basename(out), secs, n_item, n_ex))
+        print('ch%-3d | secs=%s items=%d exercises=%d'
+              % (ch, secs, n_item, n_ex))
     return 0
 
 

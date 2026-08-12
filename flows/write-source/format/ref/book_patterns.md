@@ -6,7 +6,7 @@
 以及对应的处理决策。遇到新的书时先对照「判定树」，确定编号模式（ordinal），
 可避免大量假阳性（phantom key）误报。
 
-> 🔴 **合并结构契约**：上述各编号体系的「骨架扫描（`scan_skeleton`）」与「编号项提取（`extract_items`）」现已统一由 `flows/extract/structure/script/build_structure` 合并为单产物 `ch<N>_structure.json`（SSOT 见 `flows/extract/structure/structure.md`）。write-source 与 verify（`data_provider`）均直接消费该 JSON；编号项的**连续性核验**现移交 `verify`（消费 `structure.json` 的 A/B/D 层），不再有独立的 `scan_items` 扫描脚本。本文件对各编号体系的抽取器路由说明仍然有效，只是调用入口改为 `build_structure`，不再直接消费两份单产物。
+> 🔴 **合并结构契约**：上述各编号体系的「骨架扫描（`scan_skeleton`）」与「编号项提取（`extract_items`）」现已统一由 `flows/extract/structure/script/build_structure` 合并为单产物 `book_structure.json` 书对象（SSOT 见 `flows/extract/structure/structure.md`）。write-source 与 verify（`data_provider`）均直接消费该 JSON；编号项的**连续性核验**现移交 `verify`（消费 `book_structure.json` 的 A/B/D 层），不再有独立的 `scan_items` 扫描脚本。本文件对各编号体系的抽取器路由说明仍然有效，只是调用入口改为 `build_structure`。
 
 ---
 
@@ -31,13 +31,13 @@
 - `../../../../verify/script/verify_chapter.py` 的 `keys_in_md` 同样支持两级：解析 `**定义1.1**：` 等 bold 键；
   编号模式由 `<book>/_extract/verify_config.json` 的 `ordinal` 决定，`--all` 时自动启用。
 - **例的完整性**不进 `extract_items`/`verify` 的 A/B 层（例按节重编、跨节重复），
-  现由 `verify` 消费 `structure.json` 时统一做连续性核验。
+  现由 `verify` 消费 `book_structure.json` 时统一做连续性核验。
 
 ### 命令
 ```bash
 # 提取（两级；ordinal 也可在 verify_config.json 里设，无需命令行）
 python flows/extract/structure/script/extract_items 1 20 82 _extract --ordinal 2
-# 校验 + 连续性核验（权威；消费 structure.json 的 A/B/D 层）
+# 校验 + 连续性核验（权威；消费 book_structure.json 的 A/B/D 层）
 python verify/script/verify_chapter.py --all _extract <book_dir>
 ```
 
@@ -53,7 +53,7 @@ python verify/script/verify_chapter.py --all _extract <book_dir>
 | §2.5 | `S2.5` | Ch2 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
 | 普通 § | `§ 6.6`（中间有空格）| 多章 | D 层 `D_SEC_HEAD_C` 处理短块 |
 
-> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在 `structure.json` 扫描结果中
+> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在 `book_structure.json` 扫描结果中
 > 缺失，先用 `--verbose` 看原始文本，再人工确认是否又是一种新的 OCR 变形。
 
 ---
@@ -76,7 +76,7 @@ python verify/script/verify_chapter.py --all _extract <book_dir>
 ├─ 编号形如  定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）
 │     → 两级 + 双计数器（周民强型）
 │     → 源语言初稿全部完成后，在 verify_config.json 设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]
-│     → 批量校验（verify 消费 structure.json，A/B/D 层覆盖连续性核验）
+│     → 批量校验（verify 消费 book_structure.json，A/B/D 层覆盖连续性核验）
 │
 ├─ 编号形如  1.1-2 / 3.2-7（三级 章.节-号）
 │     → 默认 three-level
@@ -96,12 +96,12 @@ python verify/script/verify_chapter.py --all _extract <book_dir>
 │
 └─ 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）
       → 几乎肯定是三级正则误吃公式/枚举
-      → 先用 verify_chapter.py（消费 structure.json）或人工核对确认真实条目齐全
+      → 先用 verify_chapter.py（消费 book_structure.json）或人工核对确认真实条目齐全
       → 若确为两级书：设 "ordinal": [{"type":2,"name":["uncat"],"depth":2,"scope":2}]（两级）
       → 若确为三级书但有几个真·OCR 噪点：用 --ignore 登记
         （写入 _extract/ignore_ch{N}.json，附 ignore_ch{N}.md 举证）
 
-> 💡 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 §6.1 与 `verify/layers/numbering_gap/numbering_gap.md`）。
+> 💡 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 §6.1 与 `verify/layers/item_numbering_integrity/item_numbering_integrity.md`）。
 ```
 
 ---

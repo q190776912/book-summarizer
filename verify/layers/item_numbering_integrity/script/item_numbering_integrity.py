@@ -14,9 +14,9 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
-# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/layers/numbering_gap/numbering_gap.md（SSOT）；本文件仅含实现，勿在此复述叙事。
+# 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/layers/item_numbering_integrity/item_numbering_integrity.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
-numbering_gap.py — B-LAYER (order 3): 缺号检测（忠于原文）。
+item_numbering_integrity.py — B-LAYER (order 3): 缺号检测（忠于原文）。
 
 权威检测落在 agent 写出的 .md 上，按 `ctx.config.ordinal` 决定的编号编排类型
 （由 ConfigLoader 从 verify_config.json 读入，挂在 ctx.config，不依赖任何编排层透传）正确分组后，
@@ -26,7 +26,7 @@ md 内部的缺号默认是「硬 BLOCKING」（严格模式，不允许遗漏�
 都会要求核对。很多书定理/引理类条目本就稀疏（如某章只有 `Lemma 2.5`），这些
 经核对确认是书本身编号、非遗漏的，应在配置文件 `ignore` 中登记，以免误报。
 配置 `strict: false` 才降级为非阻塞警示。硬阻塞也来自提取侧契约（若已接线）。
-语义 / 分组 / 契约键等详见 verify/layers/numbering_gap/numbering_gap.md（SSOT）。
+语义 / 分组 / 契约键等详见 verify/layers/item_numbering_integrity/item_numbering_integrity.md（SSOT）。
 """
 import json
 import os
@@ -36,7 +36,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from verify.layers.script.base import VerifyLayer, LayerResult
-from verify.script.key_parse import sortkey, _canon_label
+from verify.common.key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
 
 # Tail-check tolerance: source max minus md max beyond this is treated as a
@@ -534,9 +534,9 @@ def _md_gap_blocking(ctx):
     return blocking, warnings, present_md, tail_warnings
 
 
-class BLayer(VerifyLayer):
+class ItemNumberingIntegrityLayer(VerifyLayer):
     code = 'B'
-    name = 'numbering-gap'
+    name = 'item-numbering-integrity'
     order = 3
     auto_fixable = False
 

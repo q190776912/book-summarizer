@@ -15,7 +15,7 @@ sequenceDiagram
     participant LD as ConfigLoader
     participant EX as ExtractLayer
     participant EI as extract_items
-    participant BL as BLayer(_md_gap_blocking)
+    participant BL as ItemNumberingIntegrityLayer(_md_gap_blocking)
     participant RP as report
 
     VC->>LD: ConfigLoader(ext,book); require_complete()

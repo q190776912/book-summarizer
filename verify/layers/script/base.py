@@ -144,6 +144,26 @@ class LayerRegistry:
         return dict(self._layers)
 
 
+# ---------------------------------------------------------------------------
+# Fixer registry — 把「自动修复实现」与 VerifyLayer（现仅含检测逻辑）彻底解耦。
+# 每个可自动修的层，其修复逻辑放在独立的 `fix_<snake>.py` 模块，暴露
+# `apply_fix(ctx) -> LayerFixResult`，并在模块顶层调用
+# `register_fixer(code, fix_order, apply_fix)` 完成注册。修复字典
+# {h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n} 字节兼容不变。
+# ---------------------------------------------------------------------------
+FIXERS: Dict[str, tuple] = {}  # code -> (fix_order, apply_fix_fn)
+
+
+def register_fixer(code: str, fix_order: int, fn) -> None:
+    """注册某层的自动修复实现（在 fix_<snake>.py 顶层调用）。"""
+    FIXERS[code] = (fix_order, fn)
+
+
+def fixable_ordered_fixers():
+    """按 fix_order 排序的 (code, (fix_order, fn)) 列表。"""
+    return sorted(FIXERS.items(), key=lambda kv: (kv[1][0], kv[0]))
+
+
 # Neutral defaults for every legacy result key. Seed for `verify_one` so that a
 # layer that does not emit a key still leaves it present with correct types.
 # Types MUST match each layer's normal emission:
@@ -292,14 +312,26 @@ class VerifyManager:
 
     # ------------------------------------------------------------------ fix
     def fix(self, md_file) -> Dict[str, int]:
-        """Run every auto-fixable layer in `fix_order`, returning the
-        byte-compatible change dict {h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n}."""
+        """Run every auto-fix in `fix_order`, returning the byte-compatible
+        change dict {h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n}.
+
+        修复实现位于独立的 `fix_<snake>.py` 模块（经 FIXERS 注册）。当 FIXERS 为空
+        （过渡期 / 尚未迁移修复器）时，回退到各层的 `layer.fix`（旧路径），保证 --fix 不回归。
+        """
         cfg = self.loader.book
         ctx = VerifyContext(
             ch=None, start=None, end=None, md_file=md_file, ext_dir=None,
             config=cfg, figure_index=self.loader.figure_index,
         )
         result: Dict[str, int] = {}
+        if FIXERS:
+            for code, (fix_order, fn) in fixable_ordered_fixers():
+                fr = fn(ctx)
+                if fr is None:
+                    continue
+                result.update(fr.fix_dict)
+            return result
+        # 过渡回退：FIXERS 未注册任何修复器时，使用各层自身 fix()。
         for layer in self.registry.fixable_ordered():
             fr = layer.fix(ctx)
             if fr is None:

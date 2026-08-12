@@ -3,21 +3,24 @@
 目的
 ----
 `build_structure` 产出 `book_structure.json`（书对象契约，SSOT）。但抽取器（`extract_items` 等）
-的源侧捡漏只覆盖三级书且诊断被丢弃（见 `flows/extract/structure/script/build_structure.py`
-对 `recover_missing_items` 返回的 `warnings/blocking` 的静默丢弃），非三级书在 structure 阶段
-**没有任何源侧查漏**，book_structure.json 会安静地缺章节/缺定义定理例。
+的源侧捡漏只覆盖三级书且诊断被丢弃，非三级书在 structure 阶段**没有任何源侧查漏**，
+book_structure.json 会安静地缺章节 / 缺定义定理例。
 
-本脚本在「写书之前」把**公共校验子流程的源侧能力**接到 structure 步骤：
-  * 章节完整性 -> 复用公共子流程 `verify/layers/section_continuity`（语义名 section-continuity，
-    `check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 extract_items）。
-  * 条目完整性 -> 本脚本的「标题锚定」源侧扫描（覆盖全方案 three_level/two_level/en/fraleigh
-    /gm/roman、全类型 定义/定理/引理/推论/命题/例/练习），作为对抽取器的**独立交叉校验**
-    （抽取器是行内扫描，本扫描是块首锚定，二者互补，抓出被漏检的标题行条目）。
-  * 比对书中真值集 vs `book_structure.json` 契约 -> 得到「遗漏章节 / 遗漏定义定理例」清单。
-  * 混合回填（用户 2026-08-12 选定）：
-      - 可读遗漏项（编号/标签/页码/标题均能从 OCR 干净取出）-> 脚本直接插回 book_structure.json；
-      - 乱码 / 标题被吞等无法干净还原的项 -> 写入 `needs_agent` 报告，交 agent 凭知识/读图回填
-        （沿用 `config/manual_overrides_chN` + `（OCR无法识别）` 既定机制，见 verify/missing_label_policy.md）。
+本脚本在「写书之前」把**两个公共校验层**接到 structure 步骤，分四步兜底：
+
+  * 第 2 步（章节）→ 复用公共子流程 `verify/layers/section_continuity`（语义名
+    section-continuity，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，
+    独立于 extract_items），比对「书中真值章节集」vs `book_structure.json` 契约，
+    检出遗漏章节（内部洞 `continuity_sections` + 尾部缺节 `missing_sections`）并回填。
+  * 第 3 步（条目）→ 复用公共子流程 `verify/layers/item_numbering_integrity`
+    （语义名 item-numbering-integrity，B 层）的编号完整性逻辑。为避免与 verify 端
+    冲突（verify 端 B 层读「已写好的 .md」），structure 阶段把 `book_structure.json`
+    派生出一份「合成 md」喂给 B 层、并把源条目集作为 `ctx.items` 喂给它，让 B 层的
+    分组 / 编号 / ignore 逻辑校验 book_structure 的条目完整性；具体回填由
+    「源条目集（scan_raw_items 跨校验）− 契约」的结构化差集驱动（保留原
+    scan_raw_items 作为稳健的源侧交叉校验，专门抓抽取器漏检）。
+  * 第 4 步（完整性与连续性闸门）→ 回填后重跑第 2 / 第 3 步，断言遗漏章节 / 可读遗漏项
+    / B 层 blocking 全部归零，保证 book_structure 既完整又连续。
 
 用法
 ----
@@ -51,13 +54,18 @@ _boot.setup()
 from data.book_structure.book_structure import BookStructure, StructureNode
 
 import page_json
-from section_continuity import check_d_layer  # 公共子流程：section-continuity（D 层）源侧重扫
+# 公共校验层（verify/layers/*/script 由 boot 注入 sys.path，可直接裸 import）：
+from section_continuity import check_d_layer          # D 层：section-continuity（章节连续性）
+from item_numbering_integrity import ItemNumberingIntegrityLayer  # B 层：item-numbering-integrity（条目编号完整性）
+from verify.layers.script.base import VerifyContext   # B 层 run() 所需的精简运行时载体
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,
 )
 
 # === 源侧条目扫描：标题锚定，覆盖全方案 / 全类型 ============================
+# 作为「源条目集」喂给 B 层（ctx.items）并做 set-difference 差集回填；它是独立于
+# 抽取器的稳健交叉校验，专门抓抽取器漏检的标题行条目。
 OCR_DIGIT = {'O': 0, 'o': 0, 'Q': 0, 'D': 0, '0': 0,
              'I': 1, 'l': 1, 'i': 1, '1': 1,
              'Z': 2, 'z': 2, '2': 2,
@@ -67,6 +75,9 @@ OCR_DIGIT = {'O': 0, 'o': 0, 'Q': 0, 'D': 0, '0': 0,
              'T': 7, 't': 7, '7': 7,
              'B': 8, 'b': 8, '8': 8,
              'g': 9, '9': 9}
+
+# 第 3 步只关心「定义 / 定理 / 引理 / 推论 / 命题 / 例」等重要概念；练习由 EXER 单独处理。
+_EXER_LABELS_RAW = {'练习', '习题', 'Exercise'}
 
 CN_LABELS = ['定义', '定理', '引理', '推论', '命题', '例', '练习', '习题', '评注', '注', '公理', '准则']
 EN_LABELS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
@@ -160,7 +171,7 @@ def _is_three(scheme):
 
 
 def scan_raw_items(ext, ch, start, end):
-    """标题锚定源侧扫描：返回书中真值条目候选列表。
+    """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的 book_structure.json 契约格式一致
     （三级 = "C.S-N"；两级中文 = "标签C.S"；两级英文 = "标签 C.S"），
@@ -399,14 +410,77 @@ def insert_section(tree, sec_key, page):
     return True
 
 
-# === 主流程 ================================================================
-_PRIMARY = ORDINAL_THREE_LEVEL
+# === 合成 md（book_structure → .md，喂给 verify 层）=========================
+def synthetic_section_md(tree):
+    """把 book_structure 的 section 节点写成 ``## §C.S`` 标题，供 D 层
+    （section_continuity）解析比对（D 层读 md 的 § 标题行，独立于 page_*.json）。"""
+    lines = []
+
+    def walk(n):
+        if n.type == "section":
+            lines.append("## §%s" % n.key)
+        if n.type in ("chapter", "section"):
+            for k in n.sub_sec:
+                walk(k)
+    walk(tree)
+    return "\n".join(lines) + "\n"
 
 
-def raw_present_sections(ch, start, end, ext, cfg):
-    """复用公共子流程 section-continuity 的源侧重扫：喂空 md -> 返回书中真值章节集。"""
+# 类型 -> 规范标签（反向映射 LABEL_TO_TYPE），供合成 md 重建可被 B 层解析的条目头。
+_TYPE_TO_LABEL = {
+    "definition": "Definition", "theorem": "Theorem", "lemma": "Lemma",
+    "corollary": "Corollary", "proposition": "Proposition", "example": "Example",
+    "remark": "Remark", "exercise": "Exercise", "uncat": "uncat",
+}
+# 三级裸键（"C.S-K" / "C.S.K"，无内置标签）——这类键需补一个类型标签，B 层
+# num-first 解析才认得出是真实条目（否则尾串无标签 -> 被当 reference 丢弃）。
+_BARE_THREE = re.compile(r'^\d+[.\-·，．]\d+[.\-·，．]\d+$')
+
+
+def synthetic_item_md(tree):
+    """把 book_structure 的非练习条目节点写成 ``**...**`` 粗体头，供 B 层
+    （item_numbering_integrity）解析其编号分组 / 连续性（B 层读 md 粗体条目头）。
+
+    **关键**：``build_structure`` 产出的 name 经 ``_clean_title`` 已**剥掉类型词**
+    （如 ``"1.1-1 Metric space."``，标签留在 ``type`` 字段而非 name）。若直接把 name
+    喂给 B 层，B 层 ``_parse_entry`` 对「数字前置 + 无尾标签/描述性尾串」会判定为
+    reference 而**丢弃**，导致 B 层对三级书的 book_structure 永远查不出缺号（假绿）。
+    故此处按 ``type`` 反推标签，为裸三级键重建 ``**key Label**`` 形式（两级书的 key
+    已自带标签，如 ``"Definition 1.1"``，无需补；uncat 裸键 B 层自然丢弃，由
+    set-difference 兜底，不影响连续性闸门）。"""
+    lines = []
+
+    def walk(n):
+        if n.type in ("chapter", "section"):
+            for k in n.sub_sec:
+                walk(k)
+            return
+        if n.type == "exercise":
+            return
+        key = str(n.key)
+        label = _TYPE_TO_LABEL.get(n.type, "uncat")
+        if _BARE_THREE.match(key) and label != "uncat":
+            entry = "%s %s" % (key, label)
+        else:
+            entry = key        # 两级键自带标签；uncat 裸键 -> B 层丢弃（可接受）
+        lines.append("**%s**" % entry)
+    walk(tree)
+    return "\n".join(lines) + "\n"
+
+
+# === 第 2 步：section_continuity 校验遗漏章节 ===============================
+def step2_sections(ch, start, end, ext, cfg, tree):
+    """第 2 步：用 section_continuity（D 层）校验遗漏章节并回填 book_structure。
+
+    喂 book_structure 派生的合成 md → D 层比对「源真值章节集」（直接重扫
+    page_*.json，独立于抽取器）与 book_structure 契约，返回遗漏章节：
+      * continuity_sections：书内章节序列的内部洞（节序断裂）；
+      * missing_sections：落在 book_structure 最后一个已写节之后的整节缺失。
+    二者合并即「源有而 book_structure 无」的遗漏章节集合。
+    """
+    md = synthetic_section_md(tree)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
-        f.write("")
+        f.write(md)
         md_path = f.name
     try:
         d = check_d_layer(ch, start, end, md_path, ext, cfg=cfg)
@@ -415,33 +489,42 @@ def raw_present_sections(ch, start, end, ext, cfg):
             os.unlink(md_path)
         except OSError:
             pass
-    rel = d.get("missing_sections", []) + d.get("continuity_sections", [])
-    full = set()
-    for r in rel:
+    # book_structure.json 只建模 chapter → section → 条目（**没有 subsection 容器
+    # 节点**），所以 D 层只需比对「章节级（level 2 = C.S）」；level 3（subsection）
+    # 在契约里无对应节点，若纳入会把每个 C.S-K 条目误报成「缺失 subsection」。
+    # 故只取 levels[2] 的 continuity / missing（level 1 = 章前缀，level 2 = 节）。
+    levels = d.get("levels", {}) or {}
+    sec = levels.get(2, {}) or {}
+    continuity = list(sec.get("continuity", []))
+    tail = list(sec.get("missing", []))
+    missing = []
+    for r in continuity + tail:
         if not r:
             continue
         parts = r.split(".")
-        full.add(".".join([str(ch)] + parts))
-    return full
+        missing.append(".".join([str(ch)] + parts))
+    return sorted(set(missing)), {"continuity": continuity, "tail": tail}
 
 
-def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
+# === 第 3 步：item_numbering_integrity 校验遗漏重要概念 ======================
+def step3_items(ch, start, end, ext, cfg, tree, contract_items):
+    """第 3 步：用 item_numbering_integrity（B 层）校验遗漏定义/定理/例等重要概念并回填。
+
+    做法（避免在写书前依赖「已写 .md」，与 verify 端 B 层解耦）：
+      1) 用 scan_raw_items 得到源侧条目集（稳健跨校验，抓抽取器漏检）；
+         仅保留「重要概念」（排除练习类），与契约对比做 set-difference → 结构化缺失（驱动回填）。
+      2) 把 book_structure 派生出「合成 md」（非练习条目 → ``**key name**`` 粗体头），
+         并把源条目集作为 ``ctx.items`` 喂给 B 层，让其分组 / 编号 / ignore 逻辑校验
+         book_structure 的条目完整性；B 层输出（blocking / b_gap_warnings /
+         b_tail_warnings）作为「编号连续性」诊断一并上报。
+    """
     global _PRIMARY
     _PRIMARY = cfg.primary_type
-    # 单文件书对象：经 BookStructure 读取，定位指定章节点。
-    bs = BookStructure.load(ext)
-    if bs is None:
-        return None
-    ch_node = bs.find_chapter(ch)
-    if ch_node is None:
-        return None
-    tree, contract_items, contract_sections = load_contract(ch_node)
-
-    raw_secs = raw_present_sections(ch, start, end, ext, cfg)
-    missing_sections = sorted(s for s in raw_secs
-                              if s not in contract_sections and len(s.split(".")) == 2)
 
     raw_items = scan_raw_items(ext, ch, start, end)
+    raw_items = [it for it in raw_items if it["label"] not in _EXER_LABELS_RAW]
+
+    # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）
     missing_items = []
     seen_canon = set(contract_items.keys())
     for it in raw_items:
@@ -467,6 +550,76 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             "has_label": it.get("has_label", False), "status": status,
         })
 
+    # 2) item_numbering_integrity（B 层）：喂合成 md + ctx.items=源条目集
+    bmeta = _run_b_layer(ch, start, end, ext, cfg, tree, raw_items)
+
+    return missing_items, bmeta
+
+
+def _run_b_layer(ch, start, end, ext, cfg, tree, source_items):
+    """把 book_structure 派生 md + 源条目集喂给 item_numbering_integrity（B 层），
+    返回其 metadata：{blocking, b_gap_warnings, b_tail_warnings, ignored_hit}。"""
+    md = synthetic_item_md(tree)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write(md)
+        md_path = f.name
+    try:
+        ctx = VerifyContext(ch=ch, start=start, end=end, md_file=md_path,
+                            ext_dir=ext, config=cfg)
+        ctx.items = source_items            # 源条目集（供尾部校验：源 max vs md max）
+        ctx.extraction_blocking = []        # structure 阶段无 EXTRACT 层；源侧缺失由 set-difference 直接算
+        ctx.ignored_hit = []
+        res = ItemNumberingIntegrityLayer().run(ctx)
+    finally:
+        try:
+            os.unlink(md_path)
+        except OSError:
+            pass
+    return res.metadata
+
+
+# === 第 4 步：完整性与连续性闸门 =============================================
+def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
+    """第 4 步：回填后重跑第 2 / 第 3 步，断言遗漏章节 / 可读遗漏项 / B 层 blocking 全部归零，
+    保证 book_structure 既完整（无遗漏）又连续（章节序列 / 条目编号无洞）。"""
+    tree2, items2, _secs2 = load_contract(ch_node_after)
+    miss_sec2, _ = step2_sections(ch, start, end, ext, cfg, tree2)
+    miss_it2, bmeta2 = step3_items(ch, start, end, ext, cfg, tree2, items2)
+
+    readable_left = [m for m in miss_it2 if m["status"] == "readable"]
+    b_blocking = bmeta2.get("blocking", [])
+    sec_left = list(miss_sec2)
+    passed = (not sec_left) and (not readable_left) and (not b_blocking)
+    return {
+        "passed": passed,
+        "residual_sections": sec_left,
+        "residual_readable_items": [m["key"] for m in readable_left],
+        "residual_b_blocking": b_blocking,
+    }
+
+
+# === 主流程 ================================================================
+_PRIMARY = ORDINAL_THREE_LEVEL
+
+
+def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
+    global _PRIMARY
+    _PRIMARY = cfg.primary_type
+    # 单文件书对象：经 BookStructure 读取，定位指定章节点。
+    bs = BookStructure.load(ext)
+    if bs is None:
+        return None
+    ch_node = bs.find_chapter(ch)
+    if ch_node is None:
+        return None
+    tree, contract_items, contract_sections = load_contract(ch_node)
+
+    # ---- 第 2 步：section_continuity 校验遗漏章节 ----
+    missing_sections, sec_detail = step2_sections(ch, start, end, ext, cfg, tree)
+
+    # ---- 第 3 步：item_numbering_integrity 校验遗漏重要概念 ----
+    missing_items, bmeta = step3_items(ch, start, end, ext, cfg, tree, contract_items)
+
     backfilled_items = []
     backfilled_sections = []
     if backfill:
@@ -487,17 +640,30 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             bs.root.replace_chapter(tree)
             bs.save(ext)
 
+    # ---- 第 4 步：完整性与连续性闸门（回填后重跑断言）----
+    # 回填已写入 bs（内存同对象），用最新章节点重算契约再校验。
+    ch_node_after = bs.find_chapter(ch)
+    gate = step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta)
+
     report = {
         "chapter": ch,
         "contract_items": len(contract_items),
         "contract_sections": sorted(contract_sections),
-        "raw_items_scanned": len(raw_items),
-        "raw_sections_present": sorted(raw_secs),
+        "raw_items_scanned": _count_raw_items(ext, ch, start, end),
+        "raw_sections_present": sorted(set(sec_detail.get("continuity", []) + sec_detail.get("tail", []))),
         "missing_sections": missing_sections,
         "missing_items": missing_items,
         "backfilled_items": backfilled_items,
         "backfilled_sections": backfilled_sections,
+        "section_detail": sec_detail,
+        "b_layer": {
+            "blocking": bmeta.get("blocking", []),
+            "b_gap_warnings": bmeta.get("b_gap_warnings", []),
+            "b_tail_warnings": bmeta.get("b_tail_warnings", []),
+        },
+        "gate": gate,
     }
+
     os.makedirs(report_dir, exist_ok=True)
     with open(os.path.join(report_dir, f"ch{ch}_completeness_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
@@ -506,10 +672,16 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     n_agent = sum(1 for m in missing_items if m["status"] == "needs_agent")
     n_ref = sum(1 for m in missing_items if m["status"] == "reference")
     print(f"ch{ch}: contract(items={len(contract_items)}, sections={len(contract_sections)}) | "
-          f"raw(items={len(raw_items)}, sections={len(raw_secs)}) | "
-          f"missing(items={len(missing_items)}[{n_read}r/{n_ref}ref/{n_agent}a], sections={len(missing_sections)})"
-          + (f" | BACKFILLED(items={len(backfilled_items)}, sections={len(backfilled_sections)})" if backfill else ""))
+          f"missing(sections={len(missing_sections)}[{len(sec_detail.get('continuity', []))}cont/{len(sec_detail.get('tail', []))}tail], "
+          f"items={len(missing_items)}[{n_read}r/{n_ref}ref/{n_agent}a])"
+          + (f" | BACKFILLED(items={len(backfilled_items)}, sections={len(backfilled_sections)})" if backfill else "")
+          + f" | GATE={'PASS' if gate['passed'] else 'FAIL'}")
     return report
+
+
+def _count_raw_items(ext, ch, start, end):
+    """轻量统计源侧（含练习过滤前）扫描到的原始条目数，仅用于报告，不影响回填。"""
+    return len(scan_raw_items(ext, ch, start, end))
 
 
 def main():

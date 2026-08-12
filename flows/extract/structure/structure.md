@@ -16,8 +16,9 @@
 
 ## 步骤（有序）
 
-> 三步顺序：**第 1 步生成基线契约 → 第 2 步源侧查漏（dry-run，先 review）→ 第 3 步分流 + 回填**。
-> 三步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
+> 四步顺序：**第 1 步生成基线契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核**。
+> 四步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
+> 第 2 / 3 步都建议先 `--backfill` 之前的 dry-run 报告 review，确认 `readable` 项无误后再写回。
 
 **第 1 步 · 生成结构契约（必做，先跑，作为查漏基线）**
 ```powershell
@@ -28,22 +29,21 @@ python flows/extract/structure/script/build_structure <extract_dir>
 ```
 产出全书单一的 `book_structure.json`（书对象，`sub_sec` 内按章顺序嵌套全部章节），这是后续查漏对比的**基线契约**，也是 write-source 的写作契约 + verify 的编号项基准。
 
-**第 2 步 · 源侧查漏（dry-run，只出报告、不写回，先 review）**
+**第 2 步 · 章节查漏 + 回填（复用 `section_continuity` / D 层）**
 ```powershell
-python verify/script/check_structure_completeness.py <extract_dir> [ch ...]
-# 不传 <ch> 即扫全部章；报告写到 <extract_dir>/completeness_reports/ch<N>_completeness_report.json
+python verify/script/check_structure_completeness.py <extract_dir> [ch ...]            # dry-run：只出报告
+python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --backfill  # 写回 book_structure.json
 ```
-复用两个**公共校验能力**（不另造判定逻辑）：
-- 章节完整性 → 复用公共子流程 `verify/layers/section_continuity`（`check_d_layer`）直接重扫 `page_*.json`；
-- 条目完整性 → 本脚本「标题锚定」独立扫描（全方案 / 全类型，作为抽取器的交叉校验）。
-比对「书中真值集」vs 第 1 步契约，产出 `missing_sections` 与 `missing_items[{key,label,page,snippet,canon,has_label,status}]`。
-**这一步只生成报告，不动 JSON**，你先 review 报告里的遗漏项。
+- 章节完整性 → 复用公共子流程 `verify/layers/section_continuity`（语义名 **section-continuity**，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。
+- 把 `book_structure.json` 派生出「合成 md」（`## §C.S` 标题）喂给 D 层，D 层比对「书中真值章节集」vs 契约，检出**遗漏章节**：内部洞（`continuity_sections`）+ 尾部缺节（`missing_sections`），回填 `book_structure.json` 的 `section` 节点。
+- 🔴 **只校验章节级（level 2 = C.S）**：`book_structure` 只建模 `chapter → section → 条目`，**无 subsection 容器节点**，故 D 层只取 `levels[2]`（level 1 = 章前缀、level 2 = 节），不查 subsection（否则会把每个 C.S-K 条目误报成「缺失 subsection」）。
 
-**第 3 步 · 分流 + 回填（写书前兜底）**
-按第 2 步报告里每个 `missing_items` 的 `status` 分流：
-- `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本可**自动回填**；
-- `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
-- `needs_agent`（OCR 字母↔数字无法干净还原）→ 交 agent 凭读图 / 知识回填（沿用 `config/manual_overrides_chN` + `（OCR无法识别）`，见 `verify/missing_label_policy.md`）。
+**第 3 步 · 重要概念查漏 + 回填（复用 `item_numbering_integrity` / B 层）**
+- 条目完整性 → 复用公共子流程 `verify/layers/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把 `book_structure` 派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
+- 具体**回填**由「源条目集（`scan_raw_items` 跨校验：标题锚定、全方案 / 全类型，抓抽取器漏检）− 契约」的结构化差集驱动（保留 `scan_raw_items` 作为稳健源侧交叉校验），只回填**重要概念**（排除练习类）：
+  - `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本**自动回填**；
+  - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
+  - `needs_agent`（OCR 字母↔数字无法干净还原）→ 交 agent 凭读图 / 知识回填（沿用 `config/manual_overrides_chN` + `（OCR无法识别）`，见 `verify/missing_label_policy.md`）。
 
 确认 `readable` 项无误后，**先备份再写回**：
 ```powershell
@@ -54,9 +54,11 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 回填节点与第 1 步**逐字段一致**（`key` 三级=`C.S-N`、两级中文=`标签C.S`、两级英文=`标签 C.S`；
 `type` 共用同一张 `_LABEL_TO_TYPE` 映射；`name = "key 印刷标题"`；`page_start/page_end = 页码`），
 故 write-source / verify 可原样消费。
-回填后**再跑一次第 2 步 dry-run 复核**：`readable` 项应归零，剩余仅 `reference` / `needs_agent`。
 
-> 🔴 **顺序铁律**：第 1 → 2 → 3 步必须在 **write-source 之前**完成。回填后的编号项才会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。
+**第 4 步 · 完整 + 连续 闸门（收尾保证）**
+回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source。
+
+> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步必须在 **write-source 之前**完成。回填后的编号项才会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。
 
 ## 源侧完整性校验与回填（写书前兜底）
 
@@ -68,10 +70,14 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 
 ### 复用的公共校验能力
 - **章节完整性** → 复用公共子流程 `verify/layers/section_continuity`（语义名 **section-continuity**，
-  `check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`，喂空 md 即得书中真值章节集）。
-- **条目完整性** → 本脚本的「标题锚定」源侧扫描（覆盖全方案 three_level / two_level / en / fraleigh / gm / roman、
-  全类型 定义/定理/引理/推论/命题/例/练习），作为抽取器的**独立交叉校验**
-  （抽取器行内扫描、本扫描块首锚定，二者互补，抓出被漏检的标题行条目）。
+  `check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。把 `book_structure`
+  派生「合成 md」（`## §C.S`）喂给 D 层，比对「书中真值章节集」vs 契约，只取 `levels[2]`（章节级）的
+  内部洞 / 尾部缺节作为遗漏章节。与 verify 端同源，不产生第二套判定逻辑。
+- **条目完整性** → 复用公共子流程 `verify/layers/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）
+  的编号完整性逻辑。把 `book_structure` 派生「合成 md」（`**key Label**` 粗体头，按 `type` 反推标签以匹配 B 层解析，
+  因 `build_structure` 产出的 `name` 已剥掉类型词）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
+  实际**回填**由「源侧标题锚定扫描 `scan_raw_items`（覆盖全方案 three_level / two_level / en / fraleigh / gm / roman、
+  全类型 定义/定理/引理/推论/命题/例/练习，作为抽取器的独立交叉校验）− 契约」的结构化差集驱动。
 
 ### 比对与混合回填（用户 2026-08-12 选定「混合」）
 比对「书中真值集」vs `book_structure.json` 契约，得到遗漏章节 / 遗漏定义定理例清单，按状态分流：
@@ -92,8 +98,11 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 ### 产物
 `<extract_dir>/completeness_reports/ch<N>_completeness_report.json`，含：
 `contract_items / raw_items_scanned / raw_sections_present / missing_sections /
-missing_items[{key,label,page,snippet,canon,has_label,status}] / backfilled_items / backfilled_sections`。
-先 review 报告（dry-run），确认 `readable` 项无误后再 `--backfill` 写回。
+missing_items[{key,label,page,snippet,canon,has_label,status}] / backfilled_items / backfilled_sections /
+section_detail{continuity,tail} / b_layer{blocking,b_gap_warnings,b_tail_warnings} /
+gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
+先 review 报告（dry-run），确认 `readable` 项无误后再 `--backfill` 写回；写回后**第 4 步闸门**
+（`gate.passed == true`）才允许进入 write-source。
 
 ## 节点 Schema
 ```jsonc

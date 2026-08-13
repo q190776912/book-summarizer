@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""fmt_extras.py — consolidated display-math / blockquote post-processing helpers.
+"""fmt_extras.py — display-math post-processing helpers (production stage).
 
-Merged from the previously-standalone scripts:
-  dedent_display_math.py, normalize_display_math.py,
-  split_displaymath.py, fix_quote_gaps.py
-
-All subcommands are idempotent unless noted.
+Subcommands (idempotent unless noted):
 
   dedent    <file.md> [--fix] | --dir <dir> [--fix]
             Strip list-indentation from non-blockquote `$$` blocks so they
@@ -15,12 +11,11 @@ All subcommands are idempotent unless noted.
             Rebuild every `$$ ... $$` block cleanly (plain or blockquote):
             dedent + blank lines + restore `>` on blockquote closers.
 
-  split     <file.md> [<file.md> ...]
-            Split single-line `$$ ... $$` into multi-line `$$` blocks (in place).
-
-  fixgap    <file.md> [<file.md> ...]
-            G-layer fixes (in place): quote-gap -> `> ` empty line, flatten
-            nested blockquotes, prefix intra-block bare `$$` with `> `.
+Blockquote continuity / nested-blockquote flattening / intra-block bare `$$`
+prefixing are handled by verify (fixers G / M via `verify --fix`), not here.
+Single-line `$$ ... $$` splitting is also handled by `verify --fix` (fixer C,
+verify/format_verify/script/fix_katex.py).  This tool therefore only does
+display-math *shape* post-processing that verify does not auto-fix.
 """
 import os
 import sys
@@ -39,9 +34,7 @@ import lib.boot as _boot
 _boot.setup()
 
 
-import os, sys
-
-import sys, os, re, glob, argparse
+import sys, os, glob, argparse
 
 
 # --------------------------------------------------------------------------
@@ -141,75 +134,6 @@ def normalize(lines):
 
 
 # --------------------------------------------------------------------------
-# split_displaymath
-# --------------------------------------------------------------------------
-def split_math(text):
-    out = []
-    for line in text.split('\n'):
-        # blockquote single-line display math:  > $$ ... $$
-        m = re.match(r'^>\s*\$\$(.+)\$\$$', line)
-        if m:
-            out.append('> $$')
-            out.append('> ' + m.group(1))
-            out.append('> $$')
-            continue
-        # non-blockquote single-line display math:  $$ ... $$
-        m = re.match(r'^\$\$(.+)\$\$$', line)
-        if m:
-            out.append('$$')
-            out.append(m.group(1))
-            out.append('$$')
-            continue
-        out.append(line)
-    return '\n'.join(out)
-
-
-# --------------------------------------------------------------------------
-# fix_quote_gaps  (G-layer: mirrors verify_chapter.check_g_quote_continuity)
-# --------------------------------------------------------------------------
-from lib.regexlib import G_HEAD
-G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*)')
-
-
-def fix_text(text):
-    lines = text.split('\n')
-    n = len(lines)
-    out = list(lines)
-    in_block = False
-    changed = 0
-    for i in range(n):
-        ln = lines[i]
-        if G_HEAD.match(ln):
-            in_block = True
-            continue
-        if G_TERM.match(ln) and not ln.lstrip().startswith('>'):
-            in_block = False
-            continue
-        if in_block and ln.strip() == '':
-            j = i + 1
-            while j < n and lines[j].strip() == '':
-                j += 1
-            if j >= n:
-                continue
-            nx = lines[j]
-            if G_HEAD.match(nx):
-                continue
-            if G_TERM.match(nx) and not nx.lstrip().startswith('>'):
-                continue
-            out[i] = '> '
-            changed += 1
-        elif in_block and ln.strip().startswith('$$') and not ln.lstrip().startswith('>'):
-            out[i] = '> ' + ln.strip()
-            changed += 1
-    # flatten nested blockquotes to single level
-    for i in range(n):
-        if re.match(r'^\s*>\s+>', out[i]):
-            out[i] = re.sub(r'^(?:\s*>\s*)+', '> ', out[i])
-            changed += 1
-    return '\n'.join(out), changed
-
-
-# --------------------------------------------------------------------------
 # file drivers + CLI
 # --------------------------------------------------------------------------
 def _process_file_dedent(path, fix):
@@ -241,32 +165,9 @@ def _process_file_normalize(path, fix):
     return changed
 
 
-def _split_file(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        text = f.read()
-    new = split_math(text)
-    if new != text:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(new)
-        print(f"[SPLIT] rewrote {os.path.basename(path)}")
-    else:
-        print(f"[SPLIT] {os.path.basename(path)}: nothing to split")
-
-
-def _fix_file(path):
-    with open(path, encoding='utf-8') as f:
-        text = f.read()
-    new, changed = fix_text(text)
-    if changed:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(new)
-        print(f"  fixed {changed} line(s) in {os.path.basename(path)}")
-    return changed
-
-
 def main():
     ap = argparse.ArgumentParser(
-        description="Display-math / blockquote post-processing helpers.")
+        description="Display-math post-processing helpers.")
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     p_d = sub.add_parser('dedent', help='dedent non-blockquote $$ blocks')
@@ -278,12 +179,6 @@ def main():
     p_n.add_argument('path', nargs='?')
     p_n.add_argument('--dir', help='process all *.md in this dir')
     p_n.add_argument('--fix', action='store_true')
-
-    p_s = sub.add_parser('split', help='split single-line $$ blocks')
-    p_s.add_argument('paths', nargs='+')
-
-    p_g = sub.add_parser('fixgap', help='G-layer quote-gap / nested flatten fixes')
-    p_g.add_argument('paths', nargs='+')
 
     args = ap.parse_args()
 
@@ -303,16 +198,6 @@ def main():
             _process_file_normalize(args.path, args.fix)
         else:
             ap.error('normalize needs <path> or --dir')
-    elif args.cmd == 'split':
-        for p in args.paths:
-            if os.path.isfile(p) and p.endswith('.md'):
-                _split_file(p)
-    elif args.cmd == 'fixgap':
-        total = 0
-        for p in args.paths:
-            if os.path.isfile(p) and p.endswith('.md'):
-                total += _fix_file(p)
-        print(f"TOTAL changed lines: {total}")
 
 
 if __name__ == '__main__':

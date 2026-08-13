@@ -35,7 +35,7 @@ _FENCE_MATH_TOKENS = ('\\begin', '@>', '@V', '@|', '@AAA', '@<<', '@=',
 
 
 # Pass 1c: raw Unicode math arrows / relation glyphs are FORBIDDEN outside
-# math mode (formatting.md rule #8). They must be written as KaTeX commands:
+# math mode (writing-rules.md rule #8). They must be written as KaTeX commands:
 #   ↪ \hookrightarrow   ↠ \twoheadrightarrow   ↦/↣ \mapsto   → \to
 #   ⇒ \implies / \Rightarrow   ⇔ \iff   ≅ \cong
 RAW_MATH_ARROWS = ('↪', '↠', '↦', '↣', '→', '⇒', '⇔', '⇐', '⇎', '⇏',
@@ -116,7 +116,7 @@ def find_raw_arrow_errors(lines):
             errs.append(
                 f'line {i}: raw Unicode math arrow(s) {"".join(bad)} outside '
                 f'math mode — use KaTeX ($\\hookrightarrow$, $\\to$, '
-                f'$\\cong$, ...) per formatting.md rule #8')
+                f'$\\cong$, ...) per writing-rules.md rule #8')
     return errs
 
 
@@ -154,7 +154,7 @@ _SWALLOWED_PREFIX_RE = re.compile(
 
 # ============================================================================
 # Pass 1f (NEW, 2026-08-04): "character-type" formulas outside math mode
-#   (formatting.md rule #17). ALL mathematical content MUST be rendered via
+#   (writing-rules.md rule #17). ALL mathematical content MUST be rendered via
 #   KaTeX ($...$ / $$...$$); it must NEVER appear as bare characters in the
 #   running text. Two sub-cases:
 #     (A) Raw Unicode math glyphs (Greek letters, operators, relations, sets,
@@ -233,7 +233,7 @@ def find_bare_math_errors(lines):
             errs.append(
                 f'line {i}: character-type formula — raw Unicode math glyph(s) '
                 f'{"".join(bad)} outside math mode — wrap in $...$ / rewrite as '
-                f'KaTeX (formatting.md rule #17)')
+                f'KaTeX (writing-rules.md rule #17)')
         # (B) probability / expectation / variance operators
         for m in _PROB_OP_RE.finditer(text):
             errs.append(

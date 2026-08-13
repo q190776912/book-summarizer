@@ -1,8 +1,8 @@
 > 🔴 **本文件是该领域规则的唯一权威详细说明（SSOT）**。`SKILL.md` 与代码注释只引用此处、不重复描述；新增/修改该领域规则只改本文件。
 
-# 格式与内容规则（Formatting & Content Rules）
+# 写作规则（Formatting & Content Rules）
 
-> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片流水线见 `../../figures/ref/figure_pipeline.md`，校验关卡见 `../../../../verify/verify.md`。
+> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片流水线见 `../flows/write-source/figures/ref/figure_pipeline.md`，校验关卡见 `../verify/verify.md`。
 
 ---
 
@@ -256,7 +256,7 @@ Do NOT trim or selectively keep examples. Every `例` / `Example` from the book 
 - Do NOT create duplicate labels for the same number.
 - If the book introduces a concept without a formal numbered label, write it as **narrative text** using bold for the term name (e.g. `**换位子 (Commutator)**：…`), NOT as a fabricated labeled item.
 
-**Verification**: `../../../../verify/script/verify_chapter.py` checks that every extracted item key appears in the `.md`. Keys that appear in the `.md` but are not in the extraction are reported as **EXTRA** — review every EXTRA key.
+**Verification**: `../verify/script/verify_chapter.py` checks that every extracted item key appears in the `.md`. Keys that appear in the `.md` but are not in the extraction are reported as **EXTRA** — review every EXTRA key.
 
 ### 6. Formula Content Must Be Faithful to the Original (No Semantic Substitution)
 
@@ -756,7 +756,7 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
 
 6. **检查内部密集性**：对每节编号进行跨度分析，空缺编号回 JSON 对应页确认是否存在。
 
-7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`（字段结构与示例见 [`config/manual_overrides_chN/manual_overrides_chN.md`](config/manual_overrides_chN/manual_overrides_chN.md)），运行 `flows/extract/structure/script/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
+7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`（字段结构与示例见 [`../config/manual_overrides_chN/manual_overrides_chN.md`](../config/manual_overrides_chN/manual_overrides_chN.md)），运行 `flows/extract/structure/script/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
 
    此外脚本内置了**两级回退匹配**辅助还原：
    - **一级（3-group `num_re`）**：`N.S-N` 完整模式

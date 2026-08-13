@@ -38,8 +38,8 @@ def _find_node():
 def _find_node_modules():
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [
-        # skill-local node_modules travels with format/ (moved under
-        # flows/write-source/format/script/node_modules)
+        # skill-local node_modules lives with the katex tooling under
+        # verify/format_verify/script/node_modules
         os.path.normpath(os.path.join(here, 'node_modules')),
         r'C:\Users\ye190\.workbuddy\binaries\node\workspace\node_modules',
         os.path.normpath(os.path.join(here, '..', '..', '..', 'binaries', 'node',

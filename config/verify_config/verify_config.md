@@ -28,6 +28,22 @@
 - `depth`：编号阿拉伯数字段数（≥1）。
 - `scope`：计数重置边界（1=book / 2=chapter / 3=section）。
 
+## 如何选定 `ordinal` 首元素 `type`（判定树）
+
+> 判定树**只用于确定 `ordinal` 数组的首元素 `type`**（即 `primary_type`）；配置在源语言初稿全部完成后统一生成（`make_config.py` 可半自动探测，但判定不清时以此树为准、人工核对）。翻译派生版不参与配置生成。
+
+读 TOC / 抽一页原文，看编号长什么样？
+
+- 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（周民强型）→ `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`
+- 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":3}]}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
+- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"ordinal":[{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`
+- 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"ordinal":[{"type":5,"name":["uncat"],"depth":3,"scope":3}]}`
+- Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"ordinal":[{"type":6,"name":["uncat"],"depth":2,"scope":2}]}`
+- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"ordinal":[{"type":7,"name":["uncat"],"depth":2,"scope":2}]}`
+- 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费 `book_structure.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
+
+> 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
+
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
@@ -88,3 +104,15 @@ EN 两级：
 ```
 
 > 空数组 `[]` 是"本书确实没有任何图号前缀"的**标记号**：下游（`extract_figures` / `assign_figures` / E 层 `fig_cap_re`）据此返回真正的零匹配，而**不会**回落到默认 `["图","Figure","Fig"]` 去误匹配正文里碰巧出现的 `Figure`/`图` 等词。与"`figure` 字段缺失→回落默认"语义严格区分。
+
+## 附录：小节标题 `§` 的 OCR 漏识诊断（D 层）
+
+本项目实测到的现象（D 层 `section_continuity` 统一容忍，机制见 `verify/section_continuity/section_continuity.md`）：
+
+| 真值 | OCR 误读 | 出现位置 | 处理 |
+|---|---|---|---|
+| §1.6 | `81.6` | Ch1 尾部 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
+| §2.5 | `S2.5` | Ch2 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
+| 普通 § | `§ 6.6`（中间有空格） | 多章 | D 层 `D_SEC_HEAD_C` 处理短块 |
+
+> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在 `book_structure.json` 扫描结果中缺失，先用 `--verbose` 看原始文本，再人工确认是否又是一种新的 OCR 变形。

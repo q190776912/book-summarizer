@@ -2,7 +2,7 @@
 
 # 图片流水线（Figure Pipeline）
 
-> 本文档是 `book-summarizer` skill 的图片提取参考。工作流步骤见 `SKILL.md`，格式规则见 `../../format/ref/formatting.md`，校验关卡见 `../../../../verify/verify.md`。
+> 本文档是 `book-summarizer` skill 的图片提取参考。工作流步骤见 `SKILL.md`，格式规则见 `../../../../docs/writing-rules.md`，校验关卡见 `../../../../verify/verify.md`。
 
 ---
 
@@ -160,7 +160,7 @@
 
 ### 嵌入后 C 层 "missing blank line after `</div>`"
 
-顶层（非块引用内）图片的 `</div>` 后缺空行会导致 Markdown 解析器吞内容，C 层报错。详见 `flows/write-source/format/ref/formatting.md#已知遗留问题顶层-div-后缺空行`。
+顶层（非块引用内）图片的 `</div>` 后缺空行会导致 Markdown 解析器吞内容，C 层报错。详见 `../../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行`。
 
 ---
 

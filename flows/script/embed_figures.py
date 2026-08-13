@@ -162,7 +162,7 @@ def parse_ref(cap):
         num = re.sub(r"\s+", "", m.group(1))
         return (kind, num, "证明" in cap)
     # Exercise (practice-problem) reference. When an exercise entry is kept in the
-    # summary (interleaved exercises per flows/write-source/format/ref/formatting.md 习题收录规则), a
+    # summary (interleaved exercises per docs/writing-rules.md 习题收录规则), a
     # figure captioned with that exercise (e.g. "Exercise 11.4.A" / "习题 1.2.A")
     # anchors to the exercise entry (`**11.4.A（练习 (Exercise)）：…`) instead of
     # being skipped. (Chapter-end exercise blocks are omitted, so their figures

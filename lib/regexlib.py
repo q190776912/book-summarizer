@@ -19,6 +19,15 @@ and contains NO label knowledge — label-embedded regexes stay in
 ``verify/script/key_parse.py``.
 
 Imported as ``from lib.regexlib import ...`` (the skill root is on sys.path).
+
+.. warning::
+   WILDCARDING happens ONLY at the *matching* stage: extractors building a key,
+   and verify layers detecting one.  Once a key is canonicalized it is stored as
+   a literal ``C.S-N`` string and consumed by ``key.split('.')`` / ``split('-')``
+   / ``split(':')`` in many downstream modules (item_numbering_integrity,
+   data_provider, extract_items*, b_layer, gen_contract, …).  Those splits MUST
+   NOT be widened to the SEP sets — doing so would break the canonical-key
+   contract.  Keep literal ``'.'`` / ``'-'`` splits on already-normalized keys.
 """
 
 import re
@@ -91,9 +100,9 @@ ROMAN_KEY_RE = re.compile(r'([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r
 
 # --- shared label-bearing / domain regexes (centralised 2026-08-09) --------
 # Only BYTE-IDENTICAL, same-semantics duplicates across packages are merged
-# here.  Semantically divergent duplicates (e.g. g_layer.G_TERM vs
-# fmt_extras.G_TERM, or the #{1,6} vs #{2,6} SEC_RE in wrap_examples_bq) are
-# intentionally left local — blind merging would change behaviour.
+# here.  Semantically divergent duplicates (e.g. the #{1,6} vs #{2,6} SEC_RE
+# in wrap_examples_bq) are intentionally left local — blind merging would
+# change behaviour.
 # Consumers import with `as` aliases to keep local call-sites untouched.
 
 # Chinese-scheme section-heading detectors (extract.scan_skeleton +
@@ -107,7 +116,7 @@ SECGLUE_CN = re.compile(
     r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
     r'[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 
-# Blockquote head line (verify.g_layer + format.fmt_extras).
+# Blockquote head line (verify.g_layer / format_verify).
 G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
 
 # Figure OCR markers (figure.build_figure_index + figure.build_precise_anchors).

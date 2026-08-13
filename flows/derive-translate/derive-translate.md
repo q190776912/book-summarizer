@@ -29,7 +29,7 @@
 
 ## 相关代码（路径相对 skill 根目录）
 - `../../verify/script/verify_chapter.py`：`--all` 校验翻译版。
-- `flows/write-source/format/script/*` + `flows/script/embed_figures`：翻译版格式后处理与嵌图（同 `write-source`）。
+- `flows/write-source/script/*` + `flows/script/embed_figures`：翻译版格式后处理与嵌图（同 `write-source`）。
 
 ## 子流程
 - 写作 / 格式 / 嵌图规则见 [`write-source`](../write-source/write-source.md) 及其子流程。

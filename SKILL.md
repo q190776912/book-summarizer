@@ -1,6 +1,6 @@
 ---
 name: book-summarizer
-description: Summarizes a textbook (from local PDF or the agent's knowledge base) into chapter-by-chapter markdown files. Output language follows the textbook's language: Chinese text→CN only; English text→CN+EN; other languages→original+CN+EN. Each chapter gets numbered definitions/theorems/examples, proof sketches, and KaTeX. HARD REQUIREMENTS: (0) Never copy OCR formulas directly — correct+rewrite; (1) NO mojibake; (2) ALL labeled/bare-numbered items AND all examples must be included; (3) bold inline labels NOT ### headings (gm-体例书例外：条目标题按原书排印用 `###`，见 write-source/format). CN version annotates key terms with (English) from the source text when available, else translated.
+description: Summarizes a textbook (from local PDF or the agent's knowledge base) into chapter-by-chapter markdown files. Output language follows the textbook's language: Chinese text→CN only; English text→CN+EN; other languages→original+CN+EN. Each chapter gets numbered definitions/theorems/examples, proof sketches, and KaTeX. HARD REQUIREMENTS: (0) Never copy OCR formulas directly — correct+rewrite; (1) NO mojibake; (2) ALL labeled/bare-numbered items AND all examples must be included; (3) bold inline labels NOT ### headings (gm-体例书例外：条目标题按原书排印用 `###`，见 docs/writing-rules.md §2「NO Item-Headings」下的 gm 体例书例外条款). CN version annotates key terms with (English) from the source text when available, else translated.
 ---
 
 # Book Summarizer
@@ -51,7 +51,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/extract_figures` · `…/assign_figures.py` |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化工具 `flows/write-source/format/script/wrap_examples_bq` · `…/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，已并入 verify）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，已并入 verify，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `…/format/split_chapters.py` |
+| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化工具 `flows/write-source/script/wrap_examples_bq` · `flows/write-source/script/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，已并入 verify）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，已并入 verify，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `flows/write-source/script/split_chapters.py` |
 | 嵌图 | `flows/script/embed_figures` |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | 构造器 `data/formula_manifest/formula_manifest.py` · 流程 `verify/formula-manifest/script/backfill_all.py` · `…/diff_formula_manifest.py` |
@@ -65,7 +65,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
 - `flows/extract/mm_repair/script`
 - `flows/script`
-- `flows/write-source/format/script/format`（含 `katex_validate.js` + `node_modules`）
+- `flows/write-source/script`（生产期格式化工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` 等）
 - `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；每个校验层一个 `<语义名>/` 子包，位于 `verify/<语义名>/`，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
 - `data/<json_name>/`：每个中间产物 JSON **独占一个目录**（如 `data/chapter_map`、`data/figure_index`、`data/formula_manifest`），内含 `<json_name>.md`（数据结构说明）+ `<json_name>.py`（模型类，继承 `data/lib/json_data.py` 基类）；JSON 数据结构索引见 `data/data_schema.md`。各 JSON 的校验/编排/书专用脚本在 `verify/formula-manifest/script`，不在 `data`。
 - `lib`：**公用方法与变量锚点**，保留在技能根目录，被所有包 import。当前含：

@@ -9,7 +9,7 @@
 
 ## 步骤（语义与检查内容）
 - **七道闸门**：
-  1. `p_exer_block`：独立 `### 练习/习题/Exercises` 归拢块——专拦「无中生有新建归拢块」的违规（见 SKILL.md 🔴 规则与 [`../../flows/write-source/format/ref/formatting.md`](../../flows/write-source/format/ref/formatting.md) 习题规则）。策略为：**穿插在小节中的习题原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`），**章末整块习题省略不写**；无论哪种，都禁止把原书穿插内容抽出来归拢成块。
+  1. `p_exer_block`：独立 `### 练习/习题/Exercises` 归拢块——专拦「无中生有新建归拢块」的违规（见 SKILL.md 🔴 规则与 [`../../docs/writing-rules.md`](../../docs/writing-rules.md) 习题规则）。策略为：**穿插在小节中的习题原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`），**章末整块习题省略不写**；无论哪种，都禁止把原书穿插内容抽出来归拢成块。
   2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见 `book_structure.json` 书对象，由 `build_structure` 生成，SSOT 见 `flows/extract/structure/structure.md`）。

@@ -20,7 +20,7 @@
 8. 检查数学块引用泄漏——`$$...$$` 内有 `>` 行（原 M 层）。
 9. 检查引用块空行过多——`>` 块内连续空 `>` 行超过 1（原 N 层）。
 
-> 上述所有阈值/形态与原有各格式校验完全一致；`flows/write-source/format/format.md`（SSOT）定义的格式规则本来即由这些校验 + katex 子进程 + 格式管线脚本共同强制，本层**不新增任何检查**，仅把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）。
+> 上述所有阈值/形态与原有各格式校验完全一致；[`docs/writing-rules.md`](../../docs/writing-rules.md)（SSOT）定义的格式规则本来即由这些校验 + katex 子进程 + 格式管线脚本共同强制，本层**不新增任何检查**，仅把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）。
 
 ## 规则（检测规则定义）
 
@@ -44,6 +44,40 @@ $x \in \mathbb{R}$
 $$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$
 $$x = y$$
 ```
+
+#### 根因总览（实测 8 类模式）
+| # | 问题模式 | 根因 |
+|---|---------|------|
+| 1 | `$formula，` 未闭合 `$` | 中文逗号/句号放在 `$` 内未补 `$`；缺闭合 `$` 会吞噬紧随的 `$$` |
+| 2 | `$$` 包裹非数学内容 | 自动脚本在含中文 / `$...$` 的行外加 `$$...$$` |
+| 3 | 断裂的命令（`\int` → `\in t`） | 修复脚本替换时破坏命令间距 |
+| 4 | `$$` 包裹 `## §` 节标题 | 自动脚本误把标题行包进 `$$` |
+| 5 | CD 交换图语法错误 | `@A\int A` 在 KaTeX CD 中无法解析；`@VV\text{RN} A` 尾字符应为 `V` |
+| 6 | 集合符号 `{x` 花括号未转义 | `$A_n={x$` → 缺 `\{` / `\}` |
+| 7 | `$$\text{N}pt\]` 对齐参数 | `\\[\text{N}pt]` 被改写为 `$$\text{N}pt]` |
+| 8 | `$$` 块内空行 | 空白行插入 `$$` 内部，部分渲染器中断显示块 |
+
+> 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–10（含单行 `$$…$$` 显示数学拆分）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览），复验 `python verify/format_verify/script/check_katex.py <file>`。
+
+#### 手动修复要点
+- **模式 1（缺闭合 `$`）**：搜"奇数个 `$` 的行"，查是否以 `$formula，` / `$formula.` 结尾且之后有 `$$`；在末尾标点前补 `$`（如 `记 $\langle h,\mu\rangle=\int_X h(x)\,\mu(dx).`）。
+- **模式 2（`$$` 包非数学）**：把 `$$ 中文/含 $...$ 文本 $$` 还原为裸文本（或仅保留内部 `$...$`），如 `$$ 上箭头表示积分算子, 下箭头表示 Radon–Nikodym 导数. $$` → 裸文本。
+- **模式 5（CD 交换图）**：
+  ```text
+  \begin{CD}
+  \mathcal M_a @>P>> \mathcal M_a\\
+  @V\int VV @VV\text{RN}V\\   ← 下箭头 + 积分标签
+  L^1_+ @>P>> L^1_+
+  \end{CD}
+  ```
+  KaTeX CD 箭头：`@>>>` 右 / `@<<<` 左 / `@VVV` 下 / `@AAA` 上；带标签 `@>label>>` / `@VlabelV` / `@AlabelA`；方向标记字符（V/A/\>/<）须首尾匹配；`\int` 作上箭头标签会失败，改用 `@V\int VV`。
+
+#### 验证后的残余警告（非失败）
+`check_katex` 报告的 "naked LaTeX command" / "raw Unicode math arrow" 是**外观警告**，不影响渲染（中文正文引用数学符号时不需全程数学模式）。需消除可给单符号加 `$` 包裹，非强制。
+
+#### 修复纪律（禁止）
+- 勿串联多层 fix 脚本（各自只修自己模式而未知模式被前一个破坏）→ 统一用 `fix_katex.py` 一站式修复。
+- 勿在替换中破坏命令间距（`\int` → `\in t`、`\infty` → `\in fty` 类）。
 
 ### 检测规则2 · quote_gaps（原 G 层，可 `--fix`）
 一个 `> **证明/例**` 块处于「激活态」时，若遇**裸空行**（空行且其后首个非空行仍是块内容），判定连续性被切断；应将该空行改为 `> `（空引用行）以维持块连续。允许作为「块间分隔」的裸空行：其后为 `> **证明/例**` / `---` / `## ` / 顶层 `**标签**`。契约键 `quote_gaps`。
@@ -315,7 +349,7 @@ $$
 | fixer 代号 | 修复模块 | fix_order | fix_dict 键 | 修复对象 |
 |-----------|----------|-----------|-------------|----------|
 | H | fix_structural_label_guard.py | 1 | `h`, `h_stmt`, `h_ul`, `h_mbq`（硬约束顺序） | h_structural_bq / h_stmt_bq / h_ul_bq / h_mbq |
-| C | fix_katex.py | 2 | `c` | katex 模式综合修复（模式 1–9，纯字符串变换） |
+| C | fix_katex.py | 2 | `c` | katex 模式综合修复（模式 1–10，纯字符串变换；含单行 `$$…$$` 拆分） |
 | G | fix_blockquote_continuity.py | 5 | `g` | quote_gaps / nested_bq（展平） / ex_proof_gaps（合并例证空隙 + 拆分同行例+证明） |
 | I | fix_item_separator.py | 6 | `i` | i_sep_gaps |
 | J | fix_intra_item_dash.py | 7 | `j` | j_header_dash |

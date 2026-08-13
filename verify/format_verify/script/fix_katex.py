@@ -65,7 +65,16 @@ Pattern 9 — Fix brace escaping in math mode (3 sub-cases)
   (a) Group delimiters: _\{FP\} -> _{FP}, \frac\{1\}\{n\} -> \frac{1}{n}
   (b) Set notation: \{P^n f} -> \{P^n f\} (missing closing \)
   (c) Literal braces: \sqrt{1-x\}} kept as-is (NOT unescaped to }})
+Pattern 10 — Split single-line `$$ ... $$` display math onto separate lines
+  Before:  $$ formula $$
+  After:   $$
+           formula
+           $$
+  Applies to both plain and blockquote (`> $$ formula $$`) single-line
+  blocks.  Resolves check_katex Pass 1 detection so `verify --fix` is
+  end-to-end for display-math line shape.
 """
+
 import os, re, sys, glob
 
 
@@ -396,12 +405,51 @@ def fix_align_param(content: str) -> tuple:
     return content != original, content
 
 
+def fix_single_line_display_math(lines: list) -> bool:
+    """Pattern 10: split single-line `$$ ... $$` (plain or blockquote).
+
+    Lines like `$$ formula $$` or `> $$ formula $$` are not valid
+    multi-line display math and fail check_katex Pass 1.  Split them onto
+    separate lines.  Idempotent: already-split blocks are untouched.
+    """
+    changed = False
+    new_lines = []
+    for line in lines:
+        raw = line.rstrip('\n\r')
+        # blockquote single-line:  > $$ ... $$
+        m = re.match(r'^>\s*\$\$(.+?)\$\$$', raw)
+        if m:
+            new_lines.append('> $$\n')
+            new_lines.append('> ' + m.group(1) + '\n')
+            new_lines.append('> $$\n')
+            changed = True
+            continue
+        # non-blockquote single-line:  $$ ... $$
+        m = re.match(r'^\$\$(.+?)\$\$$', raw)
+        if m:
+            new_lines.append('$$\n')
+            new_lines.append(m.group(1) + '\n')
+            new_lines.append('$$\n')
+            changed = True
+            continue
+        new_lines.append(line)
+    if changed:
+        lines[:] = new_lines
+    return changed
+
+
 def fix_file(fp: str, dry_run: bool = False) -> int:
     """Apply all fixes to a single file. Returns count of changes made."""
     with open(fp, 'r', encoding='utf-8') as f:
         content = f.read()
     lines = content.splitlines(keepends=True)
     changes = 0
+
+    # Pattern 10 — split single-line display math (run first so downstream
+    # $$ -based patterns see properly-formed multi-line blocks)
+    if fix_single_line_display_math(lines):
+        changes += 1
+        content = ''.join(lines)
 
     # Pattern 1 — lines-based
     if fix_unclosed_dollars(lines):

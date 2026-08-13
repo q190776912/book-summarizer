@@ -10,7 +10,7 @@
 
 ## 步骤（有序）
 1. 以已校验源语言版为唯一蓝本，**逐条翻译**出翻译版：条目 / 编号 / 公式 / 图片位置必须 1:1 对应，不得增删或自行发挥；中文版首现术语照旧标 `(English)`。
-2. 对翻译版跑格式后处理（`wrap_examples_bq` / `fmt_proofs` / `fix_katex` / `check_katex`）与嵌图（Step 3.5）。
+2. 对翻译版跑格式后处理（`wrap_examples_bq` / `fmt_proofs`；KaTeX 检测/修复 `verify/format_verify/script/check_katex.py` 与 `fix_katex.py` 由 `verify --fix` 自动调用）与嵌图（Step 3.5）。
 3. 批量校验翻译版：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # 针对翻译版

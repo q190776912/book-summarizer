@@ -24,7 +24,7 @@ Result-dict contract (must stay identical to the old `verify_one` return):
     extract_dir, items
 
 Fix-dict contract (must stay identical to the old `fix_all_layers` return order):
-    h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
+    h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n
 """
 import os
 import sys
@@ -185,6 +185,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'ex_proof_gaps': ([], []),
     'h_structural_bq': [], 'h_stmt_bq': [], 'h_ul_bq': [], 'h_mbq': [],
     'i_sep_gaps': [], 'j_header_dash': [], 'k_proof_list': [], 'l_sep_blanks': [], 'm_dm_gt': [], 'n_bq_empty': [],
+    'heading_sep': [],
     'o_subitem_gaps': [],
     'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [], 'p_extra_item': [],
     'p_verbose': [], 'p_proof_verbose': [],

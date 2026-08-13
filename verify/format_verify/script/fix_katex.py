@@ -18,8 +18,9 @@ r"""Comprehensive KaTeX fix script — handles all known patterns from the
 Chaos-Fractals-Noise book project.
 
 Usage:
-    python format/fix_katex.py <book_dir>               # fix all .md files
-    python format/fix_katex.py <book_dir> --dry-run      # preview only
+    python verify/format_verify/script/fix_katex.py <book_dir>               # fix all .md files
+    python verify/format_verify/script/fix_katex.py <book_dir> --dry-run      # preview only
+    # 亦可由 `verify --fix` 自动调用（经 register_fixer('C', 2, apply_fix) 注册）
 
 This script fixes the following patterns. (check_katex --fix is NOT used;
 the cascade bug that motivated this script was actually in
@@ -481,3 +482,28 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ----------------------------------------------------------------------------
+# verify FIXERS 注册（option A）：使 `verify --fix` 能自动修复 KaTeX 模式。
+# 检测仍由 format_verify.py 经 check_katex.py 子进程完成；此处只负责修复。
+# ----------------------------------------------------------------------------
+from verify.script.base import LayerFixResult, register_fixer
+
+
+def apply_fix(ctx) -> LayerFixResult:
+    """C-LAYER (code 'C', fix_order 2) auto-fix for KaTeX patterns.
+
+    Runs the pattern-based comprehensive fix on the chapter markdown and
+    returns the byte-compatible fix dict {c: n_changes}.  Requires no node
+    runtime (pure regex/string transforms on known broken patterns).
+
+    NOTE: `verify --fix` rewrites the file in place.  Because this fixer
+    edits mathematical *content* (not just whitespace), it is intentionally
+    ordered early (2) so downstream format fixers see a stable math layer.
+    """
+    n = fix_file(ctx.md_file, dry_run=False)
+    return LayerFixResult(fix_dict={'c': n})
+
+
+register_fixer('C', 2, apply_fix)

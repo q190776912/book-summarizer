@@ -28,7 +28,7 @@ WARNING on --fix with Chinese-language files:
       - It may insert $ inside $$...$$ display math blocks
       - This produces "Can't use function '$' in math mode" errors
       - Each re-run of --fix adds MORE damage (observed: 1 -> 27 errors)
-    Use format/fix_katex.py instead for Chinese files — it handles all
+    Use verify/format_verify/script/fix_katex.py instead for Chinese files — it handles all
     known patterns without the cascading risk.
 
 

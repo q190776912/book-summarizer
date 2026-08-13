@@ -64,7 +64,7 @@ The Chinese text MUST be valid, readable UTF-8. Historically files were written 
 
 - **Write the file as UTF-8** and verify it opens as readable Chinese. Never write through a toolchain that re-encodes (e.g. passing Chinese filenames through `cmd /c` or a non-UTF-8 shell mangles them).
 - **After writing each file, spot-read the first few lines** (with the `read` tool) to confirm the Chinese is legible.
-- When running `../script/check_katex.py` on Chinese-path files, pass the paths **directly** to the `pdfextract` Python executable, NOT through `cmd /c`.
+- When running `verify/format_verify/script/check_katex.py` on Chinese-path files, pass the paths **directly** to the `pdfextract` Python executable, NOT through `cmd /c`.
 
 ### 2. Format — Bold Inline Labels for Items, Blockquote for Examples, NO Item-Headings
 
@@ -100,7 +100,7 @@ Definitions, theorems, propositions, corollaries, lemmas, axioms, and remarks MU
   > **证明（定理 续）**：由引理 33.5 … 证毕。
   ```
 
-> 此类「标签被吞进块引用」的缺陷，旧版 `../script/fmt_proofs.py` 的 `repair_leaked_bq` 也会自动制造（它曾把一书的 48 章中 34 处独立 `**定理**` 误包进前一个证明）。**当前版 `../script/fmt_proofs.py` 已修复**：默认只跑 stage1（补 `---`、把独立证明包进引用），不再运行会吞并标签的 repair 步骤，且把独立成行的结构性标签识别为硬边界，绝不吞并。写作时仍须主动遵守本规则，不要依赖后处理兜底。
+> 此类「标签被吞进块引用」的缺陷必须主动避免：写作时把独立成行的结构性标签（`**定理**`/`**定义**`…）视为硬边界，不要依赖后处理兜底。`../script/fmt_proofs.py` 的生产期变换（stage1）只补 `---`、把独立证明包进引用，并把独立成行的结构性标签识别为硬边界，绝不吞并；遗漏的引用连续性、例-证空隙等问题由 verify 的 G fixer（`verify/format_verify/script/fix_blockquote_continuity.py`，`verify --fix`）负责修复。
 
 ### 2a. Theorems/Propositions and Their Proofs — No Separator Between
 
@@ -344,7 +344,7 @@ Common patterns (after correction):
 > **证明思路**：1. 第一步。 2. 第二步。 … N. 最后步骤。
 ```
 
-> **例块连续性规则**：例的陈述与它的证明必须在同一连续 blockquote 中，禁止出现裸空行（零内容且无 `>` 前缀的空行）或裸 `$$`（无 `>` 前缀的展示公式）。裸空行会打断 blockquote，使例子和证明被渲染为两个独立框。如需留白，用 `>`（空引用行）；如需 `$$` 公式，用 `> $$`。`format/fmt_proofs.py` 的 `merge_example_block()` 可自动合并遗漏的例-证明块。
+> **例块连续性规则**：例的陈述与它的证明必须在同一连续 blockquote 中，禁止出现裸空行（零内容且无 `>` 前缀的空行）或裸 `$$`（无 `>` 前缀的展示公式）。裸空行会打断 blockquote，使例子和证明被渲染为两个独立框。如需留白，用 `>`（空引用行）；如需 `$$` 公式，用 `> $$`。写作期遗漏的例-证明空隙（裸空行/裸 `$$`/同行拼接）由 verify 的 G fixer（`verify/format_verify/script/fix_blockquote_continuity.py`，code `G`）在 `verify --fix` 时自动合并/拆分。
 
 英文版对应（**纯英文，绝不含中文、绝不用全角中文标点**）：
 ```
@@ -547,7 +547,7 @@ Common patterns (after correction):
    >
    > 后续文字
    ```
-   `format/check_katex.py --fix` 可自动修复此问题。
+   `verify/format_verify/script/check_katex.py --fix` 可自动修复此问题。
 
 4. **Avoid `\bigl(\sup\{` / `\bigl(\inf\{`**: `\bigl(\sup\{...\}\bigr)` breaks KaTeX. Use `\sup\{...\}` or `\bigl(\sup_{...}` without the outer `\bigl(`...`\bigr)`.
 
@@ -576,7 +576,7 @@ Common patterns (after correction):
          \end{CD}
          $$
 
-   AMScd 速查：`@>>>` 右箭头、`@<<<` 左箭头、`@VVV` 下箭头、`@AAA` 上箭头；右箭头上方标签 `@>f>>`、下箭头左侧标签 `@VfVV`；`@|` 竖直恒等、`@=` 水平恒等、`@.` 空格子。开头 `$$` 前仍须有空行（规则 #1）。本规则已由 `format/check_katex.py` 的 Pass 1b 强制校验：凡 ` ``` ` 围栏内的内容像公式/图表（含 `→↓←↑`、`─│╲` 等制表符或 `@>@V@|` 等 AMScd 记号），一律判 KaTeX 错误并阻断 `verify/script/verify_chapter.py` 的 C 层。
+   AMScd 速查：`@>>>` 右箭头、`@<<<` 左箭头、`@VVV` 下箭头、`@AAA` 上箭头；右箭头上方标签 `@>f>>`、下箭头左侧标签 `@VfVV`；`@|` 竖直恒等、`@=` 水平恒等、`@.` 空格子。开头 `$$` 前仍须有空行（规则 #1）。本规则已由 `verify/format_verify/script/check_katex.py` 的 Pass 1b 强制校验：凡 ` ``` ` 围栏内的内容像公式/图表（含 `→↓←↑`、`─│╲` 等制表符或 `@>@V@|` 等 AMScd 记号），一律判 KaTeX 错误并阻断 `verify/script/verify_chapter.py` 的 C 层。
 
 8. **禁止用原始 Unicode 数学箭头 / 关系符（如 `↪ ↠ ↦ → ⇒ ⇔ ≅`）**：这些是 OCR / 手敲留下的"回退字形"，必须与公式字体保持一致地改写成真正的 KaTeX。这是上一轮用户明确指出的问题（如 `Φ:A↪B` 应写作 `$\Phi:A\hookrightarrow B$`）。
    - 映射表（写在 `$...$` 内）：
@@ -592,15 +592,15 @@ Common patterns (after correction):
    - ❌ 错误（原始 Unicode，渲染成回退字形、与公式字体不一致）：`若 Φ:A↪B 为单射，记 Φ:A↠B 为满射，Φ:A≅B 为同构`
    - ✅ 正确（KaTeX）：`若 $\Phi:A\hookrightarrow B$ 为单射，记 $\Phi:A\twoheadrightarrow B$ 为满射，$\Phi:A\cong B$ 为同构`
    - 同理，原始 Unicode 数学运算符（`⊕` 直和、`Π` 积、`∈` 属于、`⊆` 包含等）也**建议**改为 KaTeX（`\oplus` / `\prod` / `\in` / `\subseteq`）；但为避免误伤，本规则**只强制拦截箭头 / 关系字形**（见上表），运算符暂仅作文档要求、不强制拦截。判断口诀：正文里只要出现 `↪↠↦→⇒⇔≅` 这类字形且不在 `$...$` / `$$...$$` 数学模式内，一律视为错误。
-   - 本规则已由 `format/check_katex.py` 的 **Pass 1c** 强制校验：凡在「非数学模式」下出现上述箭头 / 关系字形，一律判 KaTeX 错误并阻断 `verify/script/verify_chapter.py` 的 C 层（与 Pass 1b 同级）。
+   - 本规则已由 `verify/format_verify/script/check_katex.py` 的 **Pass 1c** 强制校验：凡在「非数学模式」下出现上述箭头 / 关系字形，一律判 KaTeX 错误并阻断 `verify/script/verify_chapter.py` 的 C 层（与 Pass 1b 同级）。
 
 9. **禁止「裸 LaTeX 命令」出现在数学模式之外**：`\mathrm{op}`、`\operatorname{Hom}`、`\mathbb Z`、`\varphi:A\to B` 这类写法如果**没有包在 `$...$` 或 `$$...$$` 里**，Markdown 会把它们当普通文本原样显示（读者看到的是代码而不是公式）。这是 2026-07 第 1 章中文版实际发生过的事故（82 行裸公式）。
    - ❌ 错误：`右 Λ-模是左 Λ^{\mathrm{op}}-模`（`\mathrm` 裸露，直接显示为代码）
    - ✅ 正确：`右 Λ-模是左 $\Lambda^{\mathrm{op}}$-模`
    - 判断口诀：**只要一行里出现反斜杠命令 `\xxx`，它就必须处于 `$...$` / `$$...$$` / 代码围栏之一的内部**。
-   - 本规则已由 `format/check_katex.py` 的 **Pass 1d** 强制校验：数学模式外出现 `\命令` 一律判 KaTeX 错误（代码围栏内豁免）。
-   - 高发场景提醒：写中文总结时，从 `$$` 块里"顺手"复制片段到正文叙述、或在定义句里内联小公式时，最容易忘掉 `$` 包裹——写完后务必跑一遍 `format/check_katex.py`。
-   - **修复裸公式时的次生事故（Pass 1e 强制校验）**：给裸公式补 `$` 时，**绝不能把行首的结构前缀（块引用 `>`、列表符 `-`、编号 `(a)`/`1.`）一起包进公式**。如 `> - \mu_* 单` 修成 `$> - \mu_*$ 单` 就是错的——`>` 变成公式内可见字符、列表符和编号全部丢失；正确写法是 `> - $\mu_*$ 单`（前缀留在 `$` 外）。`format/check_katex.py` Pass 1e 会将行首 `$` 内含 `>`/`-`/`(a)`/`1.` 前缀的行判为 KaTeX 错误。
+   - 本规则已由 `verify/format_verify/script/check_katex.py` 的 **Pass 1d** 强制校验：数学模式外出现 `\命令` 一律判 KaTeX 错误（代码围栏内豁免）。
+   - 高发场景提醒：写中文总结时，从 `$$` 块里"顺手"复制片段到正文叙述、或在定义句里内联小公式时，最容易忘掉 `$` 包裹——写完后务必跑一遍 `verify/format_verify/script/check_katex.py`。
+   - **修复裸公式时的次生事故（Pass 1e 强制校验）**：给裸公式补 `$` 时，**绝不能把行首的结构前缀（块引用 `>`、列表符 `-`、编号 `(a)`/`1.`）一起包进公式**。如 `> - \mu_* 单` 修成 `$> - \mu_*$ 单` 就是错的——`>` 变成公式内可见字符、列表符和编号全部丢失；正确写法是 `> - $\mu_*$ 单`（前缀留在 `$` 外）。`verify/format_verify/script/check_katex.py` Pass 1e 会将行首 `$` 内含 `>`/`-`/`(a)`/`1.` 前缀的行判为 KaTeX 错误。
 
 10. **公式编号必须用 `\tag{N.M}` 写在 `$$` 块内部**：当原书公式带有编号（如 (1.17)、(8.3) 等），总结中必须将编号以 `\tag{N.M}` 的形式附加在公式行末尾（闭合 `$$` 之前），使渲染后编号显示在公式右侧同一行。**禁止**将编号写成公式块外部的独立文字行（如 `（式 (1.17)）`）。
     - ✅ 正确：
@@ -617,7 +617,7 @@ Common patterns (after correction):
       （式 (1.17)）
       ```
     - 若原书编号后紧跟解释性文字（如"（式 (1.17)）。连续时间情形类似…"），将编号移入 `\tag{}`，解释文字作为公式块后的正常段落保留。
-    - 本规则由 `format/check_katex.py` 的 **Pass 1i** 校验：检测 `$$` 闭合行之后紧跟的以 `（式 (` 开头的独立行，判为格式错误。
+    - 本规则由 `verify/format_verify/script/check_katex.py` 的 **Pass 1i** 校验：检测 `$$` 闭合行之后紧跟的以 `（式 (` 开头的独立行，判为格式错误。
 
 ### 公式序标（编号 1:1 真实性与 Q 层校验）
 
@@ -641,12 +641,12 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
     - ❌ 错误：`对 $t>0,[空行]$$...$$`（`$t>0,` 没有闭合 → `$` 吞掉 `$$` 的首 `$`）
     - ✅ 正确：`对 $t>0$，[空行]$$...$$`
     - **诊断**：搜索「奇数个 `$` 的行且其后紧跟 `$$`」。
-    - `format/fix_katex.py` 自动修复此模式。
+    - `verify/format_verify/script/fix_katex.py` 自动修复此模式。
 
 12. **`$$` 不得包裹非数学内容**：`$$` 内的内容须为纯数学 LaTeX，不能包含中文文本、`##` 标题或 `$...$` 内联数学。
     - ❌ 错误：`$$ ## §N.S 标题 $$`、`$$ text $formula$ more text $$`
     - ✅ 正确：去掉 `$$` 包裹，保留内容作为普通段落
-    - `format/fix_katex.py` 自动修复此模式。
+    - `verify/format_verify/script/fix_katex.py` 自动修复此模式。
 
 13. **断裂命令修复**：自动修复脚本有时会破坏命令间距，产生不可识别的控制序列：
     | 断裂写法 | 正确写法 |
@@ -658,7 +658,7 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
     | `\quadc` | `\quad c` |
     | `\widetildeP` | `\widetilde P` |
     | `\fracx3` | `\frac{x}{3}` |
-    - `format/fix_katex.py` 自动修复此模式。
+    - `verify/format_verify/script/fix_katex.py` 自动修复此模式。
 
 14. **交换图（CD）语法要点**：
     - 箭头方向标记字符必须**首尾匹配**：`@VlabelV`（首 V 尾 V）、`@AlabelA`（首 A 尾 A）
@@ -666,19 +666,19 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
     - ✅ 正确：`@VV\text{RN}V`
     - `@A\int A`（以 `\int` 作为上箭头标签）在 KaTeX 中解析失败，改用 `@V\int VV`（下箭头+积分标签）
     - `\begin{CD}` 和 `\end{CD}` 必须被 `$$` 包裹
-    - `format/fix_katex.py` 自动修复此模式。
+    - `verify/format_verify/script/fix_katex.py` 自动修复此模式。
 
 15. **集合符号花括号必须转义**：在 `$...$` 内使用集合 `{x : ...}` 时必须用 `\{` 和 `\}`。
     - ❌ 错误：`$A_n={x$ : 1 $\le x \le c}$`（花括号未被 LaTeX 识别为集合定界符）
     - ✅ 正确：`$A_n=\{x : 1 \le x \le c\}$`
-    - `format/fix_katex.py` 自动修复此模式。
+    - `verify/format_verify/script/fix_katex.py` 自动修复此模式。
 
 16. **`$$` 块内禁止空行**：`$$...$$` 内的空行可能被部分渲染器视为显示块中断。
-    - `format/fix_katex.py` 自动移除。
+    - `verify/format_verify/script/fix_katex.py` 自动移除。
 
 17. **🔴 禁止「字符型公式」——所有数学必须走 KaTeX，不得写成字符（2026-08-04 立，C 层强制）**
     > 任何数学内容都**必须**用 KaTeX 渲染（`$...$` 行内 / `$$...$$` 显示），**绝不允许**以裸字符形式留在正文叙述里。这是 2026-08-04 第 7 章反复踩坑的根因：subagent 把行内数学写成 Unicode 数学字符或 ASCII 函数表达式、却没包 `$...$`，结果只是普通文本、不渲染。
-    - **(A) 裸 Unicode 数学字形**（强制，由 `check_katex.py` 的 **Pass 1f** 拦截）：σ √ ∑ ∞ ≤ ≥ ≠ ≈ ≡ × ÷ ± ∓ ∂ ∇ ∏ ∪ ∩ ∈ ∉ ⊂ ⊆ ∀ ∃ ∅ ℝ ℕ ℤ ℂ，以及希腊字母 α β γ δ ε ζ η θ κ λ μ ν ξ π ρ σ τ φ χ ψ ω / Γ Δ Θ Λ Ξ Σ Φ Ψ Ω。这些在总结里几乎从不作为散文出现，一律视为错误：
+    - **(A) 裸 Unicode 数学字形**（强制，由 `verify/format_verify/script/check_katex.py` 的 **Pass 1f** 拦截）：σ √ ∑ ∞ ≤ ≥ ≠ ≈ ≡ × ÷ ± ∓ ∂ ∇ ∏ ∪ ∩ ∈ ∉ ⊂ ⊆ ∀ ∃ ∅ ℝ ℕ ℤ ℂ，以及希腊字母 α β γ δ ε ζ η θ κ λ μ ν ξ π ρ σ τ φ χ ψ ω / Γ Δ Θ Λ Ξ Σ Φ Ψ Ω。这些在总结里几乎从不作为散文出现，一律视为错误：
         - ❌ 错误：`σ²t`、`√(2π t³)`、`∑_{n} B_n<∞`、`μ≠0`、`x∈ℝ`、`π 约等于 3.14`
         - ✅ 正确：`$\sigma^{2}t$`、`$\sqrt{2\pi t^{3}}$`、`$\sum_{n} B_n<\infty$`、`$\mu\neq 0$`、`$x\in\mathbb{R}$`、`$\pi$ 约等于 3.14`
         - 注：上标数字 ² ³ **暂不强制**（物理单位 km² 会误报），但数学里的 `n²` 仍应写作 `$n^{2}$`（仅作文档要求）。
@@ -686,8 +686,8 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
         - ❌ 错误：`设 p_k(n)=Pr{粒子在 n 步后位于右侧第 k 步}`、`X(t) is continuous`、`初始位置 x0`、`E[X]`
         - ✅ 正确：`设 $p_{k}(n)=\Pr\{\text{粒子…第 }k\text{ 步}\}$`、`$X(t)$ is continuous`、`初始位置 $x_{0}$`、`$\mathbb{E}[X]$`
     - **(C) 与既有规则的关系**：本规则与 rule #8（Unicode 箭头/关系字形）、rule #9（裸 LaTeX 命令）共同构成「数学必须渲染」三道防线；rule #8 只强制箭头/关系字形，本规则（#17）把**其余所有数学字形 + ASCII 数学表达式**一并强制，彻底堵死「字符型公式」。
-    - **强制闸口**：`verify_chapter.py` 的 **C 层**会子进程调用 `check_katex.py`；Pass 1f 报出的「character-type formula」即计入 `katex_lines`，导致该章 `verify` 不通过。换言之，今后任何章节只要正文里残留字符型公式，就不会过校验——必须在 authoring 阶段就把所有数学包进 `$...$`/`$$...$$`。
-    - **authoring 护栏**：写总结时，凡出现变量、函数、概率、集合、希腊字母、上下标，一律顺手加 `$`；写完后务必跑 `format/check_katex.py <file>`（或 `verify --all`），Pass 1f 会一次性把漏包的数学揪出来。
+    - **强制闸口**：`verify_chapter.py` 的 **C 层**会子进程调用 `verify/format_verify/script/check_katex.py`；Pass 1f 报出的「character-type formula」即计入 `katex_lines`，导致该章 `verify` 不通过。换言之，今后任何章节只要正文里残留字符型公式，就不会过校验——必须在 authoring 阶段就把所有数学包进 `$...$`/`$$...$$`。
+    - **authoring 护栏**：写总结时，凡出现变量、函数、概率、集合、希腊字母、上下标，一律顺手加 `$`；写完后务必跑 `verify/format_verify/script/check_katex.py <file>`（或 `verify --all`），Pass 1f 会一次性把漏包的数学揪出来。
 
 ### 块引用与分隔线规则
 

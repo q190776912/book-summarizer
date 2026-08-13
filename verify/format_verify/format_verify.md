@@ -10,7 +10,7 @@
 ## 步骤（实际校验流程）
 全部检测函数为内联实现（与原九个格式校验逐字一致），`run()` 一次性返回下方 15 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
 
-1. 加载章节 markdown，并调用 `flows/write-source/format/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
+1. 加载章节 markdown，并调用 `verify/format_verify/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
 2. 扫描 `>` 引用块，检查连续性 / 嵌套 / 例证空隙（原 G 层）。
 3. 扫描结构标签守卫——结构标签在引用块内 / 陈述内容误包 / 无标签引用块 / 须进引用块的标签在顶层（原 H 层，4 子项）。
 4. 检查条目间分隔符完整性——连续 item 间缺 `---`（原 I 层）。
@@ -26,8 +26,8 @@
 
 > 每条规则给出：**语义** + **错误格式**（被判定为非法的写法）+ **正确格式**（应当写成的写法）+ 契约键 / 阻断性 / `--fix` / 原层代号。约定：结构标签（`**定义 N.N**`、`**定理 N.N**`、`**引理**`、`**推论**` 等）与陈述内容位于顶层；证明、例、注、说明等附属块一律用 `>` 块引用包裹（`> **证明**`、`> **例 N**`、`> **注**` …）。
 
-### 检测规则1 · KaTeX 渲染校验（原 C 层，只读、阻断 FAIL）
-调用 `flows/write-source/format/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。契约键 `katex_errors`(bool) / `katex_lines`(list)。**只读**：本层只检测，公式本身需人工或 `check_katex.py --fix` 修正。
+### 检测规则1 · KaTeX 渲染校验（原 C 层，检测 + `--fix` 自动修复、阻断 FAIL）
+调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，`verify --fix` 自动调用；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`。
 
 **错误格式（KaTeX 渲染失败，阻断 FAIL）：**
 ```text
@@ -65,8 +65,8 @@ $$x = y$$
 > 第二步。
 ```
 
-### 检测规则3 · nested_bq（原 G 层，只读）
-`> > **证明/例**` 二级嵌套块引用必须展平为单层 `>`。契约键 `nested_bq`。
+### 检测规则3 · nested_bq（原 G 层，可 `--fix`）
+`> > **证明/例**` 二级嵌套块引用必须展平为单层 `>`。契约键 `nested_bq`。**可自动修复**：`verify/format_verify/script/fix_blockquote_continuity.py`（code `G`）经 `register_fixer` 注册，`verify --fix` 自动把 `> > **` 展平为 `> **`。
 
 **错误格式（嵌套块引用）：**
 ```text
@@ -80,8 +80,8 @@ $$x = y$$
 > 内容。
 ```
 
-### 检测规则4 · ex_proof_gaps（原 G 层，只读）
-`> **例**` 陈述与其后的 `> **证明**` 之间，不得出现**裸空行**或**裸 `$$`** 把二者割裂；同一引用行也不得把「例」与「证明」**拼在一起**。应拆成连续独立的 `>` 块（例块结束 → 正常空行 → `> **证明**` 块）。契约键 `ex_proof_gaps` 为二元组 `([阻断], [警告])`，只读、不自动修复。
+### 检测规则4 · ex_proof_gaps（原 G 层，可 `--fix`）
+`> **例**` 陈述与其后的 `> **证明**` 之间，不得出现**裸空行**或**裸 `$$`** 把二者割裂；同一引用行也不得把「例」与「证明」**拼在一起**。二者必须处于**同一连续 `>` 块**内（例头 → 内容 → `> **证明**`，中间无切断）。契约键 `ex_proof_gaps` 为二元组 `([阻断], [警告])`，**可自动修复**：`fix_blockquote_continuity.py`（code `G`）合并例证空隙（删去二者之间的裸空行/顶层内容并重新包进同一 `>` 块），并拆分同行例+证明（`> **例…**…**证明…**` → 两行独立 `>`）。
 
 **错误格式（例与证明被裸空行割裂 / 同行拼接）：**
 ```text
@@ -92,14 +92,12 @@ $$x = y$$
 > **例 1.4** 内容。**证明** 证明。   ← 例与证明拼在同一引用行
 ```
 
-**正确格式（例、证明为相邻独立 `>` 块，中间仅一个正常空行）：**
+**正确格式（例、证明处同一连续 `>` 块，中间无切断）：**
 ```text
 > **例 1.3** 这是例的内容。
-
 > **证明** 这是证明。
 
 > **例 1.4** 内容。
-
 > **证明** 证明。
 ```
 
@@ -283,8 +281,25 @@ $$
 > 内容。
 ```
 
+### 检测规则15 · heading_sep（原 L 层扩展，可 `--fix`）
+紧邻**任意层级节标题**（`## ` / `### ` / …，正则 `^#{2,6}\s`）之下的 `---` 永不合法——合法分隔线只活在「引子段落下方」或「相邻 item 之间」。契约键 `heading_sep`。**可自动修复**：`verify/format_verify/script/fix_separator_spacing.py`（code `L`）在修复 `l_sep_blanks` 之前先删除这种「标题 → `---`」分隔线。
+
+**错误格式（`---` 直接坐在标题下）：**
+```text
+## 2.1 节标题
+---
+> **例 2.1-1** ...
+```
+
+**正确格式（标题与首块之间无 `---`）：**
+```text
+## 2.1 节标题
+
+> **例 2.1-1** ...
+```
+
 ## 阻断性与可修复（出口判定）
-- 15 个键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
+- 16 个键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
 - 本检测层 `auto_fixable = False`：**自动修复不由本层完成**，改由下方 FIXERS 注册表（按原 fixer 代号）执行，字节兼容不变。
 
 ## 出口条件
@@ -292,7 +307,7 @@ $$
 
 ## 相关代码（`verify/format_verify/script/format_verify.py`）
 - `code = 'F'`，`order = 6`，`auto_fixable = False`。
-- `run()` 返回元数据含 15 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），其余为 list。
+- `run()` 返回元数据含 16 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），其余为 list。
 
 ## 子流程（自动修复）
 自动修复逻辑位于 `verify/format_verify/script/fix_*.py`，各自在模块顶层调用 `register_fixer(code, fix_order, apply_fix)` 注册，**fixer 代号沿用原层字母**，fix-dict 键顺序字节兼容不变：
@@ -300,15 +315,16 @@ $$
 | fixer 代号 | 修复模块 | fix_order | fix_dict 键 | 修复对象 |
 |-----------|----------|-----------|-------------|----------|
 | H | fix_structural_label_guard.py | 1 | `h`, `h_stmt`, `h_ul`, `h_mbq`（硬约束顺序） | h_structural_bq / h_stmt_bq / h_ul_bq / h_mbq |
-| G | fix_blockquote_continuity.py | 5 | `g` | quote_gaps |
+| C | fix_katex.py | 2 | `c` | katex 模式综合修复（模式 1–9，纯字符串变换） |
+| G | fix_blockquote_continuity.py | 5 | `g` | quote_gaps / nested_bq（展平） / ex_proof_gaps（合并例证空隙 + 拆分同行例+证明） |
 | I | fix_item_separator.py | 6 | `i` | i_sep_gaps |
 | J | fix_intra_item_dash.py | 7 | `j` | j_header_dash |
 | K | fix_proof_list_spacing.py | 8 | `k` | k_proof_list |
-| L | fix_separator_spacing.py | 9 | `l` | l_sep_blanks |
+| L | fix_separator_spacing.py | 9 | `l` | l_sep_blanks / heading_sep（删除标题下的 `---`） |
 | M | fix_math_blockquote_leak.py | 10 | `m` | m_dm_gt |
 | N | fix_blockquote_spacing.py | 11 | `n` | n_bq_empty |
 
-> `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n}`（与旧 `fix_all_layers` 完全一致）。KaTeX（原 C）不自动修复。
+> `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n}`（与旧 `fix_all_layers` 一致，新增 `c` 为 KaTeX 自动修复）。
 
 ## 字节契约键
 ```contract-keys
@@ -325,6 +341,7 @@ i_sep_gaps
 j_header_dash
 k_proof_list
 l_sep_blanks
+heading_sep
 m_dm_gt
 n_bq_empty
 ```

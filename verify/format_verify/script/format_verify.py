@@ -31,10 +31,10 @@ Unifies the nine legacy format layers that were consolidated on 2026-08-13:
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
 All detection bodies are inlined here (relocated verbatim from the former nine
-format layers).  The layer returns the SAME 15 byte-contract keys those layers
-used to emit — no new keys, no removed keys — so `report.py`,
-`verify_chapter.py`, and the contract tests stay green without modification of
-the result-dict shape.
+format layers).  The layer returns the 16 byte-contract keys those layers
+used to emit, plus the `heading_sep` detection key added 2026-08-13 (covered by
+`DEFAULT_RESULT` and the contract test's dynamic `ALLOWED` set) — so `report.py`,
+`verify_chapter.py`, and the contract tests stay green.
 
 Auto-fix is NOT performed by this layer: it is implemented by the eight
 `fix_*.py` modules in this same `script/` directory, which self-register via
@@ -52,7 +52,7 @@ from verify.script.struct_labels import (
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
     I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
 )
-from lib.regexlib import G_HEAD
+from lib.regexlib import G_HEAD, FMT_HR_RE, FMT_SEC_RE
 
 
 # ===========================================================================
@@ -61,16 +61,15 @@ from lib.regexlib import G_HEAD
 def check_katex(md_file):
     """Run check_katex.py on the markdown file, return (has_errors, error_lines).
 
-    NOTE: the legacy katex_validation layer resolved the script to a
-    non-existent `verify/format/check_katex.py` (latent bug — katex
-    validation in verify was effectively dead / would raise FileNotFoundError).
-    The real checker lives at
-    `flows/write-source/format/script/check_katex.py`; resolve it from the
-    skill root (`_ROOT`) so it always points at the live file.  The subprocess
-    is guarded: any failure to launch (missing node / katex JS runtime) or a
-    non-zero exit degrades to "(False, [])" — never crashes `verify_one`."""
+    The checker lives at `verify/format_verify/script/check_katex.py` (the
+    whole katex detection subsystem — check_katex + katex_heuristics +
+    katex_render + katex_validate.js — was consolidated into verify on
+    2026-08-13). Resolve it from the skill root (`_ROOT`) so it always points
+    at the live file.  The subprocess is guarded: any failure to launch
+    (missing node / katex JS runtime) or a non-zero exit degrades to
+    "(False, [])" — never crashes `verify_one`."""
     check_path = os.path.join(
-        _ROOT, 'flows', 'write-source', 'format', 'script', 'check_katex.py')
+        _ROOT, 'verify', 'format_verify', 'script', 'check_katex.py')
     try:
         r = subprocess.run([
             sys.executable, '-X', 'utf8', check_path, md_file
@@ -634,6 +633,32 @@ def check_separator_blank_lines(md_file):
 
 
 # ===========================================================================
+# L-EXT: `---` directly under a section heading
+# ===========================================================================
+def check_heading_separators(md_file):
+    """Detect a `---` whose nearest preceding non-blank line is a section
+    heading (## / ### / …).  Such a separator is NEVER legitimate per the
+    format convention (legitimate separators live only below a lead-in
+    paragraph or between adjacent items).  Returns a list of violation
+    strings.  Empty = pass."""
+    try:
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except Exception:
+        return []
+    out = []
+    for i, ln in enumerate(lines):
+        if FMT_HR_RE.match(ln):
+            j = i - 1
+            while j >= 0 and lines[j].strip() == '':
+                j -= 1
+            if j >= 0 and FMT_SEC_RE.match(lines[j]):
+                out.append(f"  x L{i+1}: `---` directly under a heading "
+                           f"(remove it): {ln.strip()[:40]}")
+    return out
+
+
+# ===========================================================================
 # M-LAYER: `>` lines inside display math blocks
 # ===========================================================================
 def check_displaymath_gt(md_file):
@@ -737,6 +762,7 @@ class FLayer(VerifyLayer):
             'j_header_dash': check_item_header_dash(ctx.md_file),
             'k_proof_list': check_proof_after_list(ctx.md_file),
             'l_sep_blanks': check_separator_blank_lines(ctx.md_file),
+            'heading_sep': check_heading_separators(ctx.md_file),
             'm_dm_gt': check_displaymath_gt(ctx.md_file),
             'n_bq_empty': check_excessive_bq_empty_lines(ctx.md_file),
         })

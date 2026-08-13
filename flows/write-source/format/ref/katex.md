@@ -4,9 +4,9 @@
 
 ## 一站式修复（推荐）
 ```powershell
-python format/fix_katex.py <book_dir>            # 处理模式 1–8
-python format/fix_katex.py <book_dir> --dry-run  # 预览
-python format/check_katex.py <file>              # 复验（不加 --fix）
+python verify/format_verify/script/fix_katex.py <book_dir>            # 处理模式 1–8
+python verify/format_verify/script/fix_katex.py <book_dir> --dry-run  # 预览
+python verify/format_verify/script/check_katex.py <file>              # 复验（不加 --fix）
 ```
 > 该脚本处理模式 1–8，**不含** `check_katex --fix` 的级联破坏风险（`--fix` 只修格式，不插入 `$`）。
 
@@ -24,7 +24,7 @@ python format/check_katex.py <file>              # 复验（不加 --fix）
 
 ## 已知危险操作（❌ 禁止）
 1. **`_extract/fix_cn_files.py` 的 `fix_dollar_count`**（已修复）：原把 `$formula$.` 误改为 `$formula.`，制造未闭合 `$` → 吞噬 `$$`。已修正为"插入 `$` 而非删除"。
-2. **`mathify_plaintext.py`**：已暂停使用。会把已有 `\(...\)` 误当普通字符产生 `$\\(...$` 坏模式。已被 `fix_katex.py` 取代。
+2. **`mathify_plaintext.py`**（已删除）：会把已有 `\(...\)` 误当普通字符产生 `$\\(...$` 坏模式。功能已由 `verify/format_verify/script/fix_katex.py`（code `C`，`verify --fix` 调用）完整取代。
 3. **多层 fix 脚本串联**：A→B→C 各自只修自己模式而未知模式被前一个破坏。→ 用 `fix_katex.py` 一站式修复。
 
 ## 手动修复模式

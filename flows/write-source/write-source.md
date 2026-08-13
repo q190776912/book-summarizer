@@ -19,8 +19,8 @@
    ```powershell
    python flows/write-source/format/script/wrap_examples_bq <book_dir>   # 顶层例包进 > 块引用（须先跑）
    python flows/write-source/format/script/fmt_proofs <book_dir> --number # 块引用/分隔线/证明格式修复
-   python flows/write-source/format/script/fix_katex <book_dir>           # 综合修复已知 KaTeX 模式
-   python flows/write-source/format/script/check_katex <file>             # 逐文件复验（不加 --fix）
+   python verify/format_verify/script/fix_katex <book_dir>           # 综合修复已知 KaTeX 模式（亦由 verify --fix 自动调用）
+   python verify/format_verify/script/check_katex <file>             # 逐文件复验（不加 --fix）
    python verify/script/audit_counts.py <ch> <start> <end> <md_file> <extract_dir>  # 逐节核对条数（强制）
    ```
 4. 跑 `flows/script/embed_figures <book_dir>` 嵌入本章图片（见子流程 figures，Step 3.5，强制）。
@@ -41,7 +41,7 @@
 - `flows/extract/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/extract/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 写源时按节点 `page_start..page_end` 取 OCR 原文（双源 (b) 内容来源）。
-- `flows/write-source/format/script/wrap_examples_bq` / `flows/write-source/format/script/fmt_proofs` / `flows/write-source/format/script/fix_katex` / `flows/write-source/format/script/check_katex`：格式后处理。
+- `flows/write-source/format/script/wrap_examples_bq` / `flows/write-source/format/script/fmt_proofs`：格式后处理（KaTeX 检测/修复已并入 verify，见 `verify/format_verify/script/check_katex.py` 与 `fix_katex.py`，由 `verify --fix` 自动修复）。
 - `../../verify/script/audit_counts.py`：逐节条数核对（强制收尾）。
 - `flows/write-source/format/script/split_chapters`：规则3 拆章。
 - `flows/script/embed_figures`：嵌图（Step 3.5）。

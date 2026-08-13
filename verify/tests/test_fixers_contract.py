@@ -19,10 +19,10 @@ from verify.script.base import FIXERS, fixable_ordered_fixers
 
 
 def test_fixers_registered_and_ordered():
-    expected = {"H", "G", "I", "J", "K", "L", "M", "N"}
+    expected = {"H", "G", "I", "J", "K", "L", "M", "N", "C"}
     assert set(FIXERS) == expected, ("FIXERS codes", set(FIXERS))
     ordered = [c for c, _ in fixable_ordered_fixers()]
-    assert ordered == ["H", "G", "I", "J", "K", "L", "M", "N"], ordered
+    assert ordered == ["H", "C", "G", "I", "J", "K", "L", "M", "N"], ordered
 
 
 def test_fix_dict_key_order_byte_compatible():
@@ -39,7 +39,7 @@ def test_fix_dict_key_order_byte_compatible():
             if fr is None:
                 continue
             result.update(fr.fix_dict)
-        legacy = ["h", "h_stmt", "h_ul", "h_mbq", "g", "i", "j", "k", "l", "m", "n"]
+        legacy = ["h", "h_stmt", "h_ul", "h_mbq", "c", "g", "i", "j", "k", "l", "m", "n"]
         assert list(result.keys()) == legacy, ("order", list(result.keys()))
     finally:
         os.unlink(tf.name)

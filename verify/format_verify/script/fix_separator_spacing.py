@@ -1,14 +1,21 @@
 """fix_separator_spacing.py — L-LAYER (code 'L', fix_order 9) auto-fix.
 
-Separation of concerns: DETECTION logic (check_separator_blank_lines) lives in
-separator_spacing.py; this module holds ONLY the auto-fix logic
-(fix_separator_blank_lines).  The fix uses only inline `---` matching (no
-shared constants).  Self-registers via register_fixer('L', 9, apply_fix).
+Owns separator hygiene:
+  * insert blank lines around every `---` missing them  (legacy l_sep_blanks)
+  * remove a `---` that sits directly under a section heading (`## `/`###` …),
+    which is never a legitimate separator per the format convention
+    (legitimate separators are only: below a lead-in paragraph, or between
+    adjacent items).  -> heading_sep
 
+The under-heading `---` is removed FIRST, then blank-line spacing is applied
+to the remaining separators, so a stray separator under a heading is taken
+out rather than merely padded.  Both operations are idempotent.
+Self-registers via register_fixer('L', 9, apply_fix).
 Fix-dict key: {l}.
 """
 import os
 import sys
+import re
 from pathlib import Path
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
@@ -24,21 +31,34 @@ import lib.boot as _boot
 _boot.setup()
 
 from verify.script.base import LayerFixResult, register_fixer
+from lib.regexlib import FMT_HR_RE as HR_RE, FMT_SEC_RE as SEC_RE
 
 
-def fix_separator_blank_lines(md_file):
-    """L-LAYER auto-fix: insert blank lines above/below every `---` that is
-    missing them. Returns number of separators changed.
+def _remove_heading_seps(lines):
+    """Remove `---` whose nearest preceding non-blank line is a section
+    heading (## / ### / …).  Returns (lines, n_removed).  Idempotent."""
+    out = []
+    removed = 0
+    for line in lines:
+        if HR_RE.match(line):
+            j = len(out) - 1
+            while j >= 0 and out[j].strip() == '':
+                j -= 1
+            if j >= 0 and SEC_RE.match(out[j]):
+                removed += 1
+                continue  # drop this stray separator
+        out.append(line)
+    if removed:
+        # collapse the double blanks left directly under the heading
+        text = '\n'.join(out)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.split('\n'), removed
+    return lines, 0
 
-    Required format: ``正文\\n\\n---\\n\\n正文`` — a blank line immediately
-    before AND after each `---`. Builds a fresh line list (instead of fragile
-    in-place inserts) so both sides are handled in a single pass.
-    """
-    try:
-        with open(md_file, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except Exception:
-        return 0
+
+def _fix_separator_blank_lines(lines):
+    """Insert blank lines above/below every `---` missing them.
+    Returns (lines, n_changed)."""
     out = []
     n = len(lines)
     changes = 0
@@ -49,22 +69,34 @@ def fix_separator_blank_lines(md_file):
                 out.append('')
                 changes += 1
             out.append(line)
-            # Ensure a blank line BELOW the separator (skip if it is the last line).
+            # Ensure a blank line BELOW the separator (skip if last line).
             nxt = lines[i + 1] if i + 1 < n else ''
             if nxt.strip() != '':
                 out.append('')
                 changes += 1
         else:
             out.append(line)
-    if changes > 0:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(out))
-    return changes
+    return out, changes
 
 
 def apply_fix(ctx) -> LayerFixResult:
-    """Run the L auto-fix and return the byte-compatible fix dict {l}."""
-    return LayerFixResult(fix_dict={'l': fix_separator_blank_lines(ctx.md_file)})
+    """Run L auto-fix (remove under-heading `---` first, then blank-line
+    spacing on the remaining separators) and return the byte-compatible
+    fix dict {l}."""
+    md = ctx.md_file
+    try:
+        with open(md, encoding='utf-8') as f:
+            text = f.read()
+    except Exception:
+        return LayerFixResult(fix_dict={'l': 0})
+    lines = text.split('\n')
+    lines, c1 = _remove_heading_seps(lines)
+    lines, c2 = _fix_separator_blank_lines(lines)
+    total = c1 + c2
+    if total > 0:
+        with open(md, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+    return LayerFixResult(fix_dict={'l': total})
 
 
 register_fixer('L', 9, apply_fix)

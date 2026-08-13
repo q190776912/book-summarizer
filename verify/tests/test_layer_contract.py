@@ -37,8 +37,8 @@ from verify.script.base import DEFAULT_RESULT
 from verify.script.base import VerifyContext
 from verify_config import BookConfig, GroupConfig
 
-# Fix-dict contract keys (verify/script/base.py): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
-FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
+# Fix-dict contract keys (verify/script/base.py): h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n
+FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'c', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
 
 # Allowed result-dict keys = the exact legacy contract mirrored by DEFAULT_RESULT.
 ALLOWED = set(DEFAULT_RESULT.keys())

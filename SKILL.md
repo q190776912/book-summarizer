@@ -51,7 +51,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/extract_figures` · `…/assign_figures.py` |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化工具 `flows/write-source/format/script/wrap_examples_bq` · `…/fmt_proofs.py` · `…/fix_katex.py` · `…/check_katex.py` · `verify/script/audit_counts.py` · `…/format/split_chapters.py` |
+| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化工具 `flows/write-source/format/script/wrap_examples_bq` · `…/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，已并入 verify）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，已并入 verify，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `…/format/split_chapters.py` |
 | 嵌图 | `flows/script/embed_figures` |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | 构造器 `data/formula_manifest/formula_manifest.py` · 流程 `verify/formula-manifest/script/backfill_all.py` · `…/diff_formula_manifest.py` |

@@ -50,6 +50,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 import figure_index
+import figure_detect
 import chapter_map
 
 import os
@@ -65,15 +66,25 @@ import numpy as np
 # reuse detection helpers (kept in extract_figures.py)
 # ----------------------------------------------------------------------------
 from extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
-from lib.figure_io import load_fig_labels, build_fig_label_re  # noqa: E402
+from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re  # noqa: E402
 
 
 def load_figure_detect(out_dir):
+    """Load the RAW detection store (figure_detect.json) — a list of detection
+    entries produced by extract_figures.py, each carrying ``cap_text`` (the
+    caption OCR) and ``bbox`` used by assign_chapter's labeling.
+
+    NOTE: this is the *detection* store, NOT figure_index.json. Loading it via
+    figure_index.FigureIndex would filter entries to Figure fields and DROP
+    ``cap_text`` (Figure has ``caption``, not ``cap_text``), which would break
+    the caption-based labeling path and force the weaker proximity fallback.
+    Use the FigureDetect adapter (the store's real model) to preserve all keys.
+    """
     p = os.path.join(out_dir, "figure_detect.json")
     if not os.path.exists(p):
         return None
     try:
-        return figure_index.FigureIndex.load(p).to_dict()
+        return list(figure_detect.FigureDetect.load(p).data)
     except Exception:
         return None
 
@@ -93,10 +104,10 @@ def gather_refs(out_dir, start, end):
 
     OCR often splits a caption like "图 6.1.1" across several text items, so we
     reconstruct each page's text in reading order (sorted by y) and regex-find
-    the figure label on the joined string — this yields the full 3-level label
-    instead of a partial "6.1" fragment, and we map the match back to its line's y."""
-    labels = load_fig_labels(out_dir)
-    pat = build_fig_label_re(labels)
+    the figure label on the joined string — this yields the full label
+    (1/2/3 component per ``figure.components``) instead of a partial fragment,
+    and we map the match back to its line's y."""
+    pat = load_fig_label_re(out_dir)
     refs = []
     for pno in range(start, end + 1):
         ocr = load_ocr_text(os.path.join(out_dir, f"page_{pno:03d}.json"))
@@ -138,6 +149,7 @@ def assign_chapter(det_all, ch, start, end, out_dir):
     fig_dir = os.path.join(out_dir, "figure")
     os.makedirs(fig_dir, exist_ok=True)
     labels = load_fig_labels(out_dir)
+    fig_components = load_fig_components(out_dir)
 
     ch_dets = [e for e in det_all if e.get("chapter") == ch]
     ch_dets.sort(key=lambda e: (e["page"], e.get("fig_idx", 0)))
@@ -159,7 +171,7 @@ def assign_chapter(det_all, ch, start, end, out_dir):
 
     assigned, unnamed_k = [], 0
     for det in ch_dets:
-        label = parse_fig_label(det.get("cap_text"), labels) if det.get("cap_text") else None
+        label = parse_fig_label(det.get("cap_text"), labels, fig_components) if det.get("cap_text") else None
 
         if not label:
             # proximity fallback: same page, nearest unused 图X.X.X by vertical gap
@@ -212,6 +224,42 @@ def assign_chapter(det_all, ch, start, end, out_dir):
             "caption": det.get("cap_text"),
             "source": "detect",
         })
+
+    # ---- dedupe by (chapter, label) ----
+    # The layout detector frequently emits 2-3 overlapping "figure" boxes for a
+    # single actual figure (figure + a nearby formula/diagram box, or a figure
+    # split into sub-boxes). All of them pair with the SAME caption "Fig. 22",
+    # so without dedupe we would emit phantom entries chNN_fig22.png /
+    # chNN_fig22_2.png that the figure (E) layer counts as multiple figures and
+    # marks as missing/extra. Keep the LARGEST-area detection (the complete
+    # figure) and remove the spurious crops. A real book never has two distinct
+    # figures sharing one number, so a label collision within a chapter is
+    # always a duplicate detection, never two genuine figures.
+    best = {}
+    to_drop = []
+    for e in assigned:
+        lab = e.get("label")
+        if not lab:
+            continue
+        b = e.get("bbox") or [0, 0, 0, 0]
+        area = max(0, (b[2] - b[0]) * (b[3] - b[1]))
+        if lab in best:
+            prev_e, prev_area = best[lab]
+            if area > prev_area:
+                to_drop.append(prev_e)
+                best[lab] = (e, area)
+            else:
+                to_drop.append(e)
+        else:
+            best[lab] = (e, area)
+    for e in to_drop:
+        _fp = os.path.join(fig_dir, os.path.basename(e["file"]))
+        if os.path.exists(_fp):
+            try:
+                os.remove(_fp)
+            except OSError:
+                pass
+    assigned = [e for e in assigned if e not in to_drop]
     return assigned
 
 

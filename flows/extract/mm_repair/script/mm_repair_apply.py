@@ -147,10 +147,10 @@ def apply(extract_dir, dry=False, repairs_path=None):
         return 1
 
     manifest = mm_repair_manifest.MmRepairManifest.load(manifest_path).data
-    repairs = repairs.Repairs.load(repairs_path).to_dict()
-    corrections = repairs.get("corrections", {})
-    ok = repairs.get("ok", {})
-    to_structured = repairs.get("to_structured", {})
+    rep = repairs.Repairs.load(repairs_path).to_dict()
+    corrections = rep.get("corrections", {})
+    ok = rep.get("ok", {})
+    to_structured = rep.get("to_structured", {})
 
     applied = 0
     reviewed = 0

@@ -57,7 +57,7 @@ _boot.setup()
 import figure_detect
 from figure_detect import FigureDetect
 from page_json import PageJson
-from lib.figure_io import load_fig_labels, build_fig_label_re, FIGURE_LABELS_DEFAULT
+from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT
 
 
 import os, sys
@@ -133,11 +133,16 @@ def render_page(doc, pno, dpi, deskew_mode="auto",
 
 
 def load_ocr_text(json_path):
-    """Load page_NNN.json text items (each has 'poly' + 'text'). Return list."""
+    """Load page_NNN.json text items (each has 'poly' + 'text'). Return list.
+
+    page_NNN.json is a PageJson (OCR engine output, a dict with a "text"
+    key) — NOT a FigureDetect list. Use the PageJson adapter, not
+    FigureDetect, otherwise .load() of a dict returns [] and .get() fails.
+    """
     if not json_path or not os.path.exists(json_path):
         return []
     try:
-        data = figure_detect.FigureDetect.load(json_path).data
+        data = PageJson.load(json_path).data
     except Exception:
         return []
     return data.get("text", []) or []
@@ -174,22 +179,27 @@ def caption_text_for_bbox(ocr_items, bbox):
 # so it honors the book's actual Figure / 图 / Fig. numbering, NOT a hardcoded list.
 
 
-def parse_fig_label(text, labels=None):
+def parse_fig_label(text, labels=None, components=2):
     """Extract the sequential number after a figure-label prefix in `text`.
 
     The prefix list is BOOK-SPECIFIC (verify_config.json `figure.labels`); when
-    `labels` is None the default prefix set is used. Returns the number string
+    `labels` is None the default prefix set is used. `components` (1–3) controls
+    how many number segments a label may have — see lib.figure_io.build_fig_label_re
+    and ``figure.components`` in verify_config.json. Returns the number string
     (e.g. "5.1") or None.
 
-    A label is recognized only when it precedes a *sequential* number of 2–3
-    components (e.g. "5.1" or "5.1.2"); a bare "3" is NOT a figure label, which
-    keeps body text like "equation 3" from being mistaken for a caption.
+    A label is recognized only when it precedes a *sequential* number of the
+    configured segment count; with components=2 a bare "3" is NOT a figure label,
+    which keeps body text like "equation 3" from being mistaken for a caption.
+    Books with a global-integer figure sequence (Kreyszig, components=1) DO accept
+    a bare integer ("Fig. 23" -> "23") because the required "Fig." prefix already
+    disambiguates it from "equation 3".
     """
     if not text:
         return None
     if labels is None:
         labels = FIGURE_LABELS_DEFAULT
-    m = build_fig_label_re(labels).search(text)
+    m = build_fig_label_re(labels, components).search(text)
     return m.group(1) if m else None
 
 
@@ -265,7 +275,7 @@ def detect_on_page(model, arr, W, H, conf, imgsz, device, fig_id, cap_id):
 
 
 def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
-                 fig_dir, conf, imgsz, device, fig_labels=None):
+                 fig_dir, conf, imgsz, device, fig_labels=None, fig_components=2):
     """Detect + crop figures on one page (DETECTION ONLY: positional names, no
     semantic label yet). Returns (entries, md_lines).
 
@@ -298,7 +308,7 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
         # If yes, crop the figure + its caption (label + description) as ONE
         # image; otherwise crop the figure alone. This is the required
         # "include caption iff it has a label" logic.
-        has_label = bool(cap_txt) and parse_fig_label(cap_txt, fig_labels) is not None
+        has_label = bool(cap_txt) and parse_fig_label(cap_txt, fig_labels, fig_components) is not None
 
         # Crop region: figure box by default; extend to include the caption
         # (union of figure + caption boxes) only when a labeled caption exists.
@@ -312,14 +322,33 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
             continue
         # positional / random name — NO 图X.X.X yet (assignment phase does that)
         fname = f"det_p{pno:03d}_{fi:02d}.png"
-        # NOTE: cv2.imwrite fails SILENTLY on Windows paths that contain
-        # non-ASCII (e.g. Chinese) characters, which silently breaks this
-        # pipeline for non-English book folders. Save via PIL instead.
+        fpath = os.path.join(fig_dir, fname)
+        # NOTE: cv2.imwrite fails SILENTLY (returns False, no exception) on
+        # Windows paths with non-ASCII chars and on some array layouts, which
+        # would leave a dangling detection entry with no crop file. Prefer PIL
+        # (BGR->RGB via contiguous copy), verify the file was actually written,
+        # and only then append the entry. If BOTH writers fail, skip the entry
+        # so figure_index never references a non-existent crop.
+        import numpy as _np
+        _written = False
         try:
             from PIL import Image as _PILImage
-            _PILImage.fromarray(crop[:, :, ::-1]).save(os.path.join(fig_dir, fname))
+            _PILImage.fromarray(_np.ascontiguousarray(crop[:, :, ::-1])).save(fpath)
+            _written = os.path.exists(fpath)
         except Exception:
-            cv2.imwrite(os.path.join(fig_dir, fname), crop)
+            _written = False
+        if not _written:
+            try:
+                import cv2 as _cv2
+                if _cv2.imwrite(fpath, _np.ascontiguousarray(crop)):
+                    _written = os.path.exists(fpath)
+            except Exception:
+                _written = False
+        if not _written:
+            # crop could not be persisted — drop the entry rather than leave a
+            # phantom detection (the figure can be re-detected on a re-run).
+            md_lines.append(f"- 图(检测跳过, p{pno}, 裁图写入失败)")
+            continue
         entries.append({
             "chapter": ch,
             "page": pno,
@@ -382,6 +411,7 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
     if chap_map is None:
         chap_map = load_chapter_map(out_dir)
     fig_labels = load_fig_labels(out_dir)
+    fig_components = load_fig_components(out_dir)
 
     doc = fitz.open(pdf_path)
     new_entries = []
@@ -391,7 +421,8 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
         ocr_items = load_ocr_text(json_path)
         ch = chapter_for_page(pno, chap_map)
         e, _ = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
-                            ch, pno, fig_dir, conf, imgsz, device, fig_labels)
+                            ch, pno, fig_dir, conf, imgsz, device, fig_labels,
+                            fig_components)
         new_entries += e
     doc.close()
 
@@ -438,6 +469,7 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
 
     chap_map = load_chapter_map(out_dir)
     fig_labels = load_fig_labels(out_dir)
+    fig_components = load_fig_components(out_dir)
     doc = fitz.open(pdf_path)
     total = doc.page_count
     all_entries, all_md = [], []
@@ -447,7 +479,8 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
         ocr_items = load_ocr_text(json_path)
         ch = chapter_for_page(pno, chap_map)
         e, md = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
-                             ch, pno, fig_dir, conf, imgsz, device, fig_labels)
+                             ch, pno, fig_dir, conf, imgsz, device, fig_labels,
+                             fig_components)
         all_entries += e
         all_md += md
         if pno % 20 == 0 or pno == total:
@@ -484,6 +517,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
     cap_id = next((k for k, v in names.items() if str(v).lower() == "figure_caption"), 4)
     print(f"[info] loader={loader}; chapter={ch} pages {start}..{end}")
     fig_labels = load_fig_labels(out_dir)
+    fig_components = load_fig_components(out_dir)
 
     doc = fitz.open(pdf_path)
     entries, md = [], []
@@ -492,7 +526,8 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
         json_path = os.path.join(out_dir, f"page_{pno:03d}.json")
         ocr_items = load_ocr_text(json_path)
         e, m = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
-                            ch, pno, fig_dir, conf, imgsz, device, fig_labels)
+                            ch, pno, fig_dir, conf, imgsz, device, fig_labels,
+                            fig_components)
         entries += e
         md += m
     doc.close()

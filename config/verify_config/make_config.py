@@ -27,9 +27,11 @@
      小节书（1.1.1.1）需手动补 section_types/section_depths；ordinal/formula 检测
      不准请修正后再跑 verify。
 
-⚠️ 相位护栏：ordinal/formula 探测均要求整书提取已完成（存在 _extraction_done.json），
-   否则跳过探测、打印提示并返回默认值——**禁止**在提取未完成时对前若干页抽样降级。
-   判定不清时以 `verify/verify.md` 与各层 `ref/*.md` 的语义为准，人工核对后再跑校验。
+⚠️ 相位护栏：ordinal/formula 探测均要求 MM Repair 已完成（完成标记 _extraction_done.json
+   存在；该标记仅在 MM Repair 模式 A+B 全部 apply 回 page_*.json 后由主 Agent 写出，不等同
+   后台文本流水线"文本 100%"中间信号），否则跳过探测、打印提示并返回默认值——**禁止**在
+   MM Repair 未完成（尤其模式 A 视觉审读未做）时对前若干页抽样降级。判定不清时以
+   `verify/verify.md` 与各层 `ref/*.md` 的语义为准，人工核对后再跑校验。
 
 ⚠️ 本脚本只生成「起始」配置，不覆盖任何已有文件（除非 --force），也不声称正确。
 """
@@ -88,13 +90,14 @@ def detect_formula(extract_dir):
     Returns a ``{"type", "depth", "scope", "ignore"}`` dict, or ``None`` when
     neither shape is detected (caller then simply omits the ``formula`` key).
 
-    Phase guard: requires the whole-book extraction to be finished
-    (``_extraction_done.json``); otherwise returns None rather than guessing
-    from a partial extraction.
+    Phase guard: requires MM Repair to be finished (``_extraction_done.json``
+    present — written only after mode A+B are applied back to ``page_*.json``,
+    NOT merely when background text extraction reaches 100%); otherwise returns
+    None rather than guessing from a partial / un-repaired extraction.
     """
     if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
-        print('[make_config] 整书提取未完成（缺 _extraction_done.json），'
-              '跳过 formula 探测；请跑完全书提取后再生成配置。')
+        print('[make_config] MM Repair 未完成（缺 _extraction_done.json），'
+              '跳过 formula 探测；请完成 MM Repair（模式 A+B 写回 page_*.json）后再生成配置。')
         return None
 
     pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
@@ -183,14 +186,15 @@ def _detect_ordinal_from_pages(extract_dir):
     two-level regex, so raw counts would bias toward two-level): CN three >
     EN two > CN two; no hits -> default 3.
 
-    Phase guard: only runs AFTER the whole-book extraction is finished
-    (`_extraction_done.json` present).  If extraction is incomplete we MUST NOT
-    sample the first N pages and downgrade — we skip and return the safe
-    default instead.
+    Phase guard: only runs AFTER MM Repair is finished (`_extraction_done.json`
+    present — written only after mode A+B applied back to ``page_*.json``, NOT
+    merely when background text extraction reaches 100%).  If MM Repair is
+    incomplete we MUST NOT sample the first N pages and downgrade — we skip and
+    return the safe default instead.
     """
     if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
-        print('[make_config] 整书提取未完成（缺 _extraction_done.json），'
-              '跳过探测；请跑完全书提取后再生成配置。')
+        print('[make_config] MM Repair 未完成（缺 _extraction_done.json），'
+              '跳过探测；请完成 MM Repair（模式 A+B 写回 page_*.json）后再生成配置。')
         return 3  # default three_level (不降级抽样)
     pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
     counts = {'cn_three': 0, 'en': 0, 'cn_two': 0}

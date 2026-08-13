@@ -23,6 +23,7 @@
 - **规则3 — 带序标才合并 caption**：仅当配对 caption 含序标（`parse_fig_label` 命中 `figure.labels`）才把图 + caption 裁成一张；否则只裁图。若配置为显式空数组 `[]`（本书无图序标），`parse_fig_label` 恒返回 `None`，所有图都只裁图本身，不会误把正文里的 `Figure`/`图` 当图号合并。
 - **规则4 — 检测/分配异常不阻断**：任一脚本抛异常仅记日志，不影响已落盘产物；未命名图（`label==null`）仍由写章阶段以"图(未标号)"嵌入，不视为 FAIL。
 - **跳过图检测**：若本书确实无图，直接跳过本子流程即可，`figure_index.json` 保持缺失/空，写章阶段按无图处理（无需开关）。
+- **🔴 检测→分配只能顺序跑一次（det_ 裁图被消耗）**：步骤1 检测把裁图写成 `figure/det_pNNN_KK.png`，步骤2 分配会把这些 `det_*` 裁图**重命名**为 `figure/chNN_figX.X.X.png`。因此 `assign_figures.py` 每跑一次就消耗掉一批 `det_*` 源裁图；若想**重跑分配**（例如改了 `figure.labels`/`components` 后重新命名），**必须先重跑检测**（重新生成 `det_*` 与 `figure_detect.json`）再分配一次，否则分配会因找不到 `det_*` 源文件而落空、产生"条目存在但裁图缺失"的不一致状态。调试时反复跑分配而不重检测，正是这种不一致的根源。
 
 ## 出口条件
 - 出口：`figure_detect.json` 与 `figure_index.json` 均存在，且 `figure_index.json` 涵盖全部已建章节（或本书无图而跳过）。

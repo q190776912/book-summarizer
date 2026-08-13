@@ -20,7 +20,7 @@ try:
 except Exception:
     cv2 = None
 from verify.common.key_parse import sortkey
-from lib.figure_io import load_figure_index, load_fig_labels, build_fig_label_re, FIGURE_LABELS_DEFAULT
+from lib.figure_io import load_figure_index, load_fig_labels, load_fig_label_re, FIGURE_LABELS_DEFAULT
 
 
 def fig_cap_re(out_dir=None):
@@ -28,7 +28,12 @@ def fig_cap_re(out_dir=None):
     in OCR text. The prefix list is BOOK-SPECIFIC (verify_config.json
     `figure.labels`); `out_dir=None` uses the default prefix set. This makes the
     E-layer honor each book's OWN figure numbering instead of a hardcoded 图."""
-    labels = load_fig_labels(out_dir) if out_dir else list(FIGURE_LABELS_DEFAULT)
+    # Honor BOTH the book's figure.labels AND figure.components (1=global int,
+    # 2=chapter.figure, 3=chapter.section.figure). out_dir=None -> default prefixes
+    # with the historical 2-component default.
+    if out_dir:
+        return load_fig_label_re(out_dir)
+    labels = list(FIGURE_LABELS_DEFAULT)
     return build_fig_label_re(labels)
 
 

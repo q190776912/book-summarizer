@@ -46,7 +46,7 @@ from verify.script.base import VerifyLayer, LayerResult
 import re
 import subprocess
 
-from verify.common.struct_labels import (
+from verify.script.struct_labels import (
     G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE,
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,

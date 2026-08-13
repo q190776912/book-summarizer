@@ -10,7 +10,7 @@
   定理 / 定义 / 例等叶节点 ``sub_sec=[]``。``sub_sec`` 顺序即书中实际顺序。
 
 本模块是结构 JSON 的**唯一权威模型**：所有读写 / 遍历 / 回填都经本类，
-脚本不再裸操作 json 字典（见 ``verify/common/structure_io.py``、
+脚本不再裸操作 json 字典（见 ``verify/script/structure_io.py``、
 ``verify/verbose_gates``、``verify/script/check_structure_completeness.py``）。
 
 序列化契约（对齐 data/data_schema.md 描述的 JsonData 基类）：

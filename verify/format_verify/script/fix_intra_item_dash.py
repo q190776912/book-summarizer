@@ -3,7 +3,7 @@
 Separation of concerns: DETECTION logic (check_item_header_dash) lives in
 intra_item_dash.py; this module holds ONLY the auto-fix logic
 (fix_item_header_dash).  Shared regexes are imported from the detection
-module (_J_SUBPOINT_RE, _J_DASH_RE) and from verify.common.struct_labels
+module (_J_SUBPOINT_RE, _J_DASH_RE) and from verify.script.struct_labels
 (TOP_LEVEL_HEADER_RE).  Self-registers via register_fixer('J', 7, apply_fix).
 
 Fix-dict key: {j}.
@@ -27,7 +27,7 @@ _boot.setup()
 import re
 
 from verify.script.base import LayerFixResult, register_fixer
-from verify.common.struct_labels import TOP_LEVEL_HEADER_RE
+from verify.script.struct_labels import TOP_LEVEL_HEADER_RE
 from format_verify import _J_SUBPOINT_RE, _J_DASH_RE
 
 

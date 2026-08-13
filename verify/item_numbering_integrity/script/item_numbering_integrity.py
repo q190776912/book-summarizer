@@ -37,7 +37,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from verify.script.base import VerifyLayer, LayerResult
-from verify.common.key_parse import sortkey, _canon_label
+from verify.script.key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
 from verify_config import ORDINAL_THREE_LEVEL
 

@@ -17,10 +17,10 @@ import lib.boot as _boot
 _boot.setup()
 
 from verify.script.base import VerifyLayer, LayerResult
-from verify.common.key_parse import keys_in_md, _first_num, sortkey
+from verify.script.key_parse import keys_in_md, _first_num, sortkey
 from verify_config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN
-from verify.common.ordinal import int_to_roman
-from verify.common.structure_io import read_structure_items
+from verify.script.ordinal import int_to_roman
+from verify.script.structure_io import read_structure_items
 
 # ---------------------------------------------------------------------------
 # data_provider.py — EXTRACT provider (order 0).

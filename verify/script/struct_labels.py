@@ -1,7 +1,7 @@
-"""_struct_labels.py — 共享「结构标签」正则常量（Phase-1 verbatim 抽取）。
+"""struct_labels.py — 共享「结构标签」正则常量（Phase-1 verbatim 抽取）。
 
-下划线前缀：被 register_all.py 的 pkgutil 自动发现跳过（if _name.startswith('_')），
-因此本模块不会被当作 verify layer 注册，可安全地被各 layer 显式 import 复用。
+本模块位于 verify/script/，是共享 helper，非校验层（register_all 仅扫描
+verify/<snake>/script/<snake>.py 形式的层包，故不会被当作层注册），可安全地被各 layer 显式 import 复用。
 
 本模块只搬位置、不改字符：所有 re.compile(...) 的文本与原始文件逐字符一致，
 包括 H_STRUCT_BQ_RE 的注释。Phase-2（归一化、补「式」、合并发散正则）不在本次范围。

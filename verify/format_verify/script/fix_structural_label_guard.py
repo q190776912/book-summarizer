@@ -29,7 +29,7 @@ _boot.setup()
 import re
 
 from verify.script.base import LayerFixResult, register_fixer
-from verify.common.struct_labels import (
+from verify.script.struct_labels import (
     H_STRUCT_BQ_FIX_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
 )
 

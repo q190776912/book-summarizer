@@ -3,7 +3,7 @@
 Separation of concerns: DETECTION logic (check_excessive_bq_empty_lines) lives in
 blockquote_spacing.py; this module holds ONLY the auto-fix logic
 (fix_excessive_bq_empty_lines).  Shared regex N_ITEM_RE is imported from
-verify.common.struct_labels.  Self-registers via register_fixer('N', 11, apply_fix).
+verify.script.struct_labels.  Self-registers via register_fixer('N', 11, apply_fix).
 
 Fix-dict key: {n}.
 """
@@ -26,7 +26,7 @@ _boot.setup()
 import re
 
 from verify.script.base import LayerFixResult, register_fixer
-from verify.common.struct_labels import N_ITEM_RE
+from verify.script.struct_labels import N_ITEM_RE
 
 
 def fix_excessive_bq_empty_lines(md_file):

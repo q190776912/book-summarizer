@@ -1,4 +1,4 @@
-"""verify/common/gm_scan.py — Gelfand–Manin / Roman 体例的 OCR 标题扫描（从 flows/extract/structure/script/extract_items_gm.py 解耦复制）。
+"""verify/script/gm_scan.py — Gelfand–Manin / Roman 体例的 OCR 标题扫描（从 flows/extract/structure/script/extract_items_gm.py 解耦复制）。
 
 D 层（section_continuity）对 GM / ROMAN 书做章节连续性校验时，需复用抽取器的标题扫描
 `scan_gm_blocks` / `_load_sections`。原实现位于 flows 抽取管线，违反「校验脚本不得依赖 flows」
@@ -25,8 +25,8 @@ import lib.boot as _boot
 _boot.setup()
 
 import page_json
-from verify.common.ordinal import int_to_roman
-from verify.common.key_parse import EN_LABEL_KINDS, gm_head_label, GM_LABELED_RE
+from verify.script.ordinal import int_to_roman
+from verify.script.key_parse import EN_LABEL_KINDS, gm_head_label, GM_LABELED_RE
 
 
 _ROMAN_VALUES = {'i': 1, 'v': 5, 'x': 10, 'l': 50, 'c': 100, 'd': 500, 'm': 1000}

@@ -2,7 +2,7 @@
 
 Covers the typed model (data.book_structure.book_structure: BookStructure /
 StructureNode) and its three structural consumers:
-  - verify.common.structure_io.read_structure_items   (data_provider source)
+  - verify.script.structure_io.read_structure_items   (data_provider source)
   - verify.verbose_gates._load_contract         (P-LAYER contract)
   - verify.script.check_structure_completeness backfill path (save round-trip)
 
@@ -28,7 +28,7 @@ import lib.boot as _boot
 _boot.setup()
 
 from data.book_structure.book_structure import BookStructure, StructureNode, ROOT_KEY, ROOT_TYPE
-from verify.common.structure_io import read_structure_items
+from verify.script.structure_io import read_structure_items
 from verify.verbose_gates.script.verbose_gates import _load_contract
 
 

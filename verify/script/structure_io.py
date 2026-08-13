@@ -1,4 +1,4 @@
-"""verify/common/structure_io.py — 统一消费 extract/structure 产物 book_structure.json（SSOT）。
+"""verify/script/structure_io.py — 统一消费 extract/structure 产物 book_structure.json（SSOT）。
 
 从 verify/data_provider/script/data_provider.py 抽出的纯数据读取逻辑；
 不再依赖抽取管线代码，仅读取其产物 JSON 文件（单文件书对象，由

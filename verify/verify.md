@@ -65,7 +65,7 @@
 ## 新增一个校验层（模块约定）
 1. 在 `verify/<snake>/script/` 下新建 `<snake>.py` 模块（`<snake>` 为小写蛇形语义名）。
 2. 在 `<snake>.py` 中定义 `VerifyLayer` 子类，设 `code='<唯一大写字母或 EXTRACT>'`、`name='<语义名>'`、`order=<整数>`、`auto_fixable=<bool>`（可修复再设 `fix_order`）；无需 `__init__.py`，`register_all` 遍历 `verify/<snake>/script/` 发现该模块。
-   共用 helper 放 `script/_fig_common.py` / `_struct_labels.py`（下划线前缀，自动跳过注册）。
+   共用 helper 放 `verify/script/`（如 `base.py`、`fig_common.py`、`struct_labels.py`）；`register_all` 仅扫描 `verify/<snake>/script/` 形式的层包，故 `script/` 下的模块不会被当作层注册。
 3. 写入 `<snake>.md`：按统一模板（目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）写本层 SSOT；若声明字节契约键，用 ```` ```contract-keys ```` 块。
 4. `script/register_all.py` 经 `importlib` 扫描 `verify/*/script/` 自动发现（按裸名 `import`；无 `__init__.py`，下划线前缀模块跳过），**无需手动登记**；将本层加入上方注册表表格。
 5. 如需被其他消费者单独引用，在入口脚本跑过 `lib.boot.setup()` 后直接 `from <snake> import <Class>` 即可（裸名 import，boot 已将 `**/script` 注入 sys.path）。

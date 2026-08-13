@@ -1,4 +1,4 @@
-"""verify/common/ordinal.py — 整数转罗马数字（从 flows/extract/structure/script/extract_items_gm.py 解耦复制）。
+"""verify/script/ordinal.py — 整数转罗马数字（从 flows/extract/structure/script/extract_items_gm.py 解耦复制）。
 
 原本 data_provider 直接 `from extract_items_gm import int_to_roman`，而 extract_items_gm 位于
 flows/ 抽取管线，违反「校验脚本不得依赖 flows」的约束。此处仅抽取该纯函数，使校验子流程

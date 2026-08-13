@@ -44,7 +44,7 @@ from verify.script.base import VerifyLayer, LayerResult
 import os, json
 
 from page_json import PageJson
-from verify.common.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
+from verify.script.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
 
 
 def _chapter_entries(idx, ch):

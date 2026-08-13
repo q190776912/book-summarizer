@@ -4,8 +4,8 @@ register_all.py - 通过 AUTO-DISCOVERY 构建全局 LayerRegistry。
 机制：扫描 verify/ 下每个 <snake>/script/<snake>.py（每个校验层目录的 script/
 子目录），按裸名 import（boot.setup() 已将 **/script 注入 sys.path），收集其中定义的
 VerifyLayer 子类并注册。层文档 <snake>.md 位于 verify/<snake>/ 目录内（与 script/ 并列）。
-共享 helper（base.py、_fig_common.py、_struct_labels.py、_template_layer.py、
-_reconcile_book_formulas.py）留在 verify/script/，不会被当作层。运行顺序完全由各层
+共享 helper（base.py、fig_common.py、struct_labels.py、_template_layer.py、
+_reconcile_book_formulas.py）放在 verify/script/，不会被当作层。运行顺序完全由各层
 的 order / fix_order 属性决定，与发现顺序无关。
 """
 import os

@@ -3,7 +3,7 @@
 Separation of concerns: DETECTION logic (check_i_separators) lives in
 item_separator.py; this module holds ONLY the auto-fix logic
 (fix_i_separators).  Shared item-label regexes are imported from
-verify.common.struct_labels.  Self-registers via register_fixer('I', 6, apply_fix).
+verify.script.struct_labels.  Self-registers via register_fixer('I', 6, apply_fix).
 
 Fix-dict key: {i}.
 """
@@ -26,7 +26,7 @@ _boot.setup()
 import re
 
 from verify.script.base import LayerFixResult, register_fixer
-from verify.common.struct_labels import (
+from verify.script.struct_labels import (
     I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
 )
 

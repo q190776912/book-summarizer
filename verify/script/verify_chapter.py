@@ -314,12 +314,16 @@ def verify_all(ext, book_dir, extra_ignore=None):
         lsp = len(r.get('l_sep_blanks', []))
         mdm = len(r.get('m_dm_gt', []))
         nbq = len(r.get('n_bq_empty', []))
+        # F-LAYER FORMAT 聚合（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）：
+        # 所有格式子项 finding 数求和，单一 F 计数呈现。
+        f_n = (ke + ggaps + epg + hbq + hstmt + hul + hmbq
+               + isp + jsp + ksp + lsp + mdm + nbq)
         osub = len([g for g in r.get('o_subitem_gaps', []) if g.strip().startswith('x')])
         qf = len(r.get('q_fabricated', []) or [])
         qi = len(r.get('q_inconsistent', []) or [])
         qm = len(r.get('q_missing', []) or [])
-        print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} K:{ke} Dc:{dcont} Dmiss:{dmiss} "
-              f"FgMiss:{fgmiss} FgInv:{fginv} G:{ggaps} EG:{epg} H:{hbq} Hstmt:{hstmt} Hul:{hul} Hmbq:{hmbq} I:{isp} J:{jsp} K:{ksp} L:{lsp} Mdm:{mdm} Nbq:{nbq} Osub:{osub} "
+        print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
+              f"FgMiss:{fgmiss} FgInv:{fginv} F:{f_n} Osub:{osub} "
               f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
 
     pass_count = sum(1 for r in results if r['status'] == 'PASS')
@@ -381,7 +385,7 @@ def _main_impl():
     ignore_fig_global = load_ignore_fig(_flag_value('--ignore-figure'))
     extra_ignore = list(ignore_keys) + list(ignore_fig_global)
 
-    # Apply --fix flag (auto-correct G/H/I layers) before verification
+    # Apply --fix flag (auto-correct format-layer fixers: H/G/I/J/K/L/M/N, etc.) before verification
     if '--fix' in sys.argv:
         if '--all' not in sys.argv:
             args_fix = _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure', '--fix'))
@@ -450,7 +454,7 @@ def _main_impl():
         print("  --manual: path to manual_overrides_ch{N}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
-        print("  --fix: auto-correct G/H/I/J layer issues before verification")
+        print("  --fix: auto-correct format-layer fixer issues (H/G/I/J/K/L/M/N) before verification")
         print("  ordinal(数组) / language / strict / ignore / manual are")
         print("  configured in <book>/_extract/verify_config.json (see verify/verify.md).")
         print("  ordinal / section_types / section_depths 必须在 <book>/_extract/verify_config.json")

@@ -20,7 +20,7 @@ try:
 except Exception:
     cv2 = None
 from verify.common.key_parse import sortkey
-from lib.figure_io import load_figure_index, load_fig_labels, load_fig_label_re, FIGURE_LABELS_DEFAULT
+from lib.figure_io import load_figure_index, load_fig_labels, load_fig_label_re, build_fig_label_re, FIGURE_LABELS_DEFAULT
 
 
 def fig_cap_re(out_dir=None):

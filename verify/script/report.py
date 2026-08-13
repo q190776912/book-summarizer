@@ -136,15 +136,6 @@ def print_result(r):
         print("\nB-LAYER NUMBERING GAP CHECK (non-blocking, verify against source):")
         for w in r['b_gap_warnings']:
             print(f"  ~ {w.strip()}")
-    if r['katex_errors']:
-        problems += 1
-        print(f"\nC-LAYER KATEX ERRORS ({len(r['katex_lines'])}):")
-        for l in r['katex_lines']:
-            try:
-                print(f"  x {l}")
-            except UnicodeEncodeError:
-                print(f"  x {l.encode('ascii', errors='replace').decode('ascii')}")
-
     # E-LAYER: figure completeness (analog of B-layer) — only if figure extraction ran.
     if r.get('fig_skipped'):
         print("\nE-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
@@ -177,143 +168,130 @@ def print_result(r):
             for l in r['fig_invalid_warn']:
                 print(l)
 
-    # G-LAYER: quote-block continuity (structural, always runs).
-    # A bare blank line inside a `> **证明/例` block splits it into
-    # separate boxes — the "图跟例子断开了" symptom. Blocking like C-layer.
+    # ===========================================================================
+    # F-LAYER FORMAT: 合并格式校验总结（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）。
+    # 所有格式相关 finding 在单一 F-LAYER FORMAT 段内呈现；任一子项非空即阻断 FAIL。
+    # ---- KaTeX（原 C 层）----
+    if r['katex_errors']:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · KaTeX ({len(r['katex_lines'])}):")
+        for l in r['katex_lines']:
+            try:
+                print(f"  x {l}")
+            except UnicodeEncodeError:
+                print(f"  x {l.encode('ascii', errors='replace').decode('ascii')}")
+    # ---- 引用块连续性（原 G 层）----
     if r.get('quote_gaps'):
         problems += 1
-        print(f"\nG-LAYER QUOTE CONTINUITY ({len(r['quote_gaps'])}): a bare blank line "
+        print(f"\nF-LAYER FORMAT · Quote continuity ({len(r['quote_gaps'])}): a bare blank line "
               f"inside a `> **证明/例` block breaks it into separate boxes — "
               f"convert the blank to `> ` (empty-quote line) so the block stays contiguous:")
         for g in r['quote_gaps']:
             print(g)
-
     if r.get('nested_bq'):
         problems += 1
-        print(f"\nG-LAYER NESTED BLOCKQUOTE ({len(r['nested_bq'])}): `> > **证明/例` nested "
+        print(f"\nF-LAYER FORMAT · Nested blockquote ({len(r['nested_bq'])}): `> > **证明/例` nested "
               f"blockquotes detected — use single `>` level (proof inside example must "
               f"use `> **证明**`, not `> > **证明**`):")
         for g in r['nested_bq']:
             print(g)
-
     ex_gaps, ex_warns = r.get('ex_proof_gaps', ([], []))
     if ex_gaps:
         problems += 1
-        print(f"\nG-LAYER EXAMPLE-PROOF GAP ({len(ex_gaps)}): example and its proof are NOT "
+        print(f"\nF-LAYER FORMAT · Example-proof gap ({len(ex_gaps)}): example and its proof are NOT "
               f"in the same contiguous blockquote — remove empty lines between them so "
               f"the entire example+proof uses the same `>` level:")
         for g in ex_gaps:
             print(g)
     if ex_warns:
-        print(f"\nG-LAYER EXAMPLE-PROOF WARN ({len(ex_warns)}): blank `>` line between "
+        print(f"\nF-LAYER FORMAT · Example-proof warn ({len(ex_warns)}): blank `>` line between "
               f"example and proof (visual spacing OK, but can be removed):")
         for w in ex_warns:
             print(w)
-
-    # H-LAYER: structural label inside blockquote (blocking, always runs).
+    # ---- 结构标签守卫（原 H 层）----
     h_bq = r.get('h_structural_bq', [])
     if h_bq:
         problems += 1
-        print(f"\nH-LAYER STRUCTURAL BLOCKQUOTE ({len(h_bq)}): labels like "
+        print(f"\nF-LAYER FORMAT · Structural-in-blockquote ({len(h_bq)}): labels like "
               f"定义/定理/引理/推论/命题/断言/公理/Theorem/Definition/Lemma/Corollary/Proposition/Axiom "
               f"must be TOP-LEVEL (no `>` wrapper) — remove the `> ` prefix:")
         for g in h_bq:
             print(g)
-
-    # H-LAYER ext (ISSUE1): a theorem/definition/lemma/...'s OWN statement content
-    # (enumerated clauses, display formulas, sub-point lists) must be TOP-LEVEL —
-    # only proof/example/note/footnote blocks belong in `>`. Blocking.
     h_stmt = r.get('h_stmt_bq', [])
     if h_stmt:
         problems += 1
-        print(f"\nH-LAYER STATEMENT-IN-BLOCKQUOTE ({len(h_stmt)}): a definition/theorem/lemma/"
+        print(f"\nF-LAYER FORMAT · Statement-in-blockquote ({len(h_stmt)}): a definition/theorem/lemma/"
               f"corollary/proposition's STATEMENT content (`（N）` / `**（N）**` / `$$` / `- （a）` "
               f"inside the item, before any `> **证明/例/注`) must be TOP-LEVEL — unwrap those "
               f"`>` lines. `>` is reserved for proof/example/note/footnote only:")
         for g in h_stmt:
             print(g)
-
-    # H-LAYER ext (unlabeled BQ): free-standing `>` blocks without a recognized
-    # label (证明/证/例/注/说明/脚注). Blocking.
     h_ul = r.get('h_ul_bq', [])
     if h_ul:
         problems += 1
-        print(f"\nH-LAYER UNLABELED BLOCKQUOTE ({len(h_ul)}): a `>` blockquote must start "
+        print(f"\nF-LAYER FORMAT · Unlabeled blockquote ({len(h_ul)}): a `>` blockquote must start "
               f"with a recognized label (证明/证/例/注/说明/脚注). Found plain text in `>` "
               f"without any label — remove the `>` prefix or add a label:")
         for g in h_ul:
             print(g)
-
-    # H-LAYER ext (missing BQ): labels that MUST be inside `>` but are at top level.
     h_mbq = r.get('h_mbq', [])
     if h_mbq:
         problems += 1
-        print(f"\nH-LAYER MISSING BLOCKQUOTE ({len(h_mbq)}): labels like 证明/证/例/注/说明/注记 "
+        print(f"\nF-LAYER FORMAT · Missing blockquote ({len(h_mbq)}): labels like 证明/证/例/注/说明/注记 "
               f"must be wrapped in `>` — add `> ` prefix:")
         for g in h_mbq:
             print(g)
-
-    # I-LAYER: item separator completeness (blocking, always runs).
+    # ---- 条目分隔符完整性（原 I 层）----
     i_sep = r.get('i_sep_gaps', [])
     if i_sep:
         problems += 1
-        print(f"\nI-LAYER MISSING SEPARATOR ({len(i_sep)}): consecutive items without `---` "
+        print(f"\nF-LAYER FORMAT · Missing separator ({len(i_sep)}): consecutive items without `---` "
               f"between them — insert `---` (blank line + --- + blank line) between each pair:")
         for g in i_sep:
             print(g)
-
-    # J-LAYER: any `---` INSIDE an item block (header ↔ sub-points) is a defect
-    # (blocking, always runs). Covers BOTH a header split from its first `**(N)**`
-    # sub-point AND `**(i)**` split from `**(i+1)**` — even when a sub-point spans
-    # multiple lines (its continuation text / a `$$` formula sits directly above
-    # the `---`). The `---` belongs *between* two top-level items (I-LAYER), never
-    # inside one item's block — remove that `---`.
+    # ---- 条目内分隔符（原 J 层）----
     j_hd = r.get('j_header_dash', [])
     if j_hd:
         problems += 1
-        print(f"\nJ-LAYER HEADER-DASH ({len(j_hd)}): a `---` sits INSIDE an item block "
+        print(f"\nF-LAYER FORMAT · Header-dash ({len(j_hd)}): a `---` sits INSIDE an item block "
               f"(between the header and its first `**(N)**` sub-point, OR between two "
               f"`**(i)**`/`**(i+1)**` sub-points) — remove that `---` so the item's parts "
               f"stay directly connected (matching `**引理3.3**` … `(1)` … `(2)` style, "
               f"no `---` between them):")
         for g in j_hd:
             print(g)
-
-    # K-LAYER: blank line between numbered list and proof blockquote.
+    # ---- 证明-列表间距（原 K 层）----
     k_list = r.get('k_proof_list', [])
     if k_list:
         problems += 1
-        print(f"\nK-LAYER PROOF-AFTER-LIST ({len(k_list)}): a `> **证明**` blockquote "
+        print(f"\nF-LAYER FORMAT · Proof-after-list ({len(k_list)}): a `> **证明**` blockquote "
               f"directly follows a numbered list item without a blank line — add a "
               f"blank line so the proof aligns at the theorem's outer level:")
         for g in k_list:
             print(g)
-
-    # L-LAYER: blank lines around `---` separators (blocking, always runs).
+    # ---- 分隔符空行（原 L 层）----
     l_sep = r.get('l_sep_blanks', [])
     if l_sep:
         problems += 1
-        print(f"\nL-LAYER SEPARATOR BLANK-LINES ({len(l_sep)}): every `---` separator "
+        print(f"\nF-LAYER FORMAT · Separator blank-lines ({len(l_sep)}): every `---` separator "
               f"must have a blank line immediately before AND after it — "
               f"insert missing blank line(s):")
         for g in l_sep:
             print(g)
-
-    # M-LAYER: `>` lines inside display math blocks.
+    # ---- 数学块引用泄漏（原 M 层）----
     m_dm = r.get('m_dm_gt', [])
     if m_dm:
         problems += 1
-        print(f"\nM-LAYER DISPLAYMATH-GT ({len(m_dm)}): `>` lines found inside "
+        print(f"\nF-LAYER FORMAT · Displaymath-gt ({len(m_dm)}): `>` lines found inside "
               f"`$$...$$` display math blocks — strip the blockquote prefix from "
               f"these lines:")
         for g in m_dm:
             print(g)
-
-    # N-LAYER: excessive empty `>` lines inside blockquotes.
+    # ---- 引用块空行过多（原 N 层）----
     n_bq = r.get('n_bq_empty', [])
     if n_bq:
         problems += 1
-        print(f"\nN-LAYER BQ-EMPTY-LINES ({len(n_bq)}): excessive consecutive empty "
+        print(f"\nF-LAYER FORMAT · BQ-empty-lines ({len(n_bq)}): excessive consecutive empty "
               f"`>` lines inside blockquote (max 1 allowed between content) — "
               f"collapse extras to a single empty `>` line:")
         for g in n_bq:
@@ -444,17 +422,18 @@ def print_result(r):
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。
 
+    # F-LAYER FORMAT 聚合计数（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）：
+    # 任一格式子项非空即计入 F 总数；ex_warns 为非阻断 warn，不计入阻断计数。
+    f_n = (len(r.get('katex_lines', [])) + len(r.get('quote_gaps', [])) + len(r.get('nested_bq', []))
+           + len(ex_gaps) + len(h_bq) + len(h_stmt) + len(h_ul) + len(h_mbq)
+           + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(m_dm) + len(n_bq))
+
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "
-              f"/ {len(r['katex_lines'])} KaTeX / {len(d.get('continuity_sections', []))} D-layer section-gaps "
+              f"/ {len(d.get('continuity_sections', []))} D-layer section-gaps "
               f"/ {len(d.get('missing_sections', []))} D-layer missing tail sections "
               f"/ {len(r.get('fig_missing', []))} fig-missing / {len(r.get('fig_invalid', []))} fig-invalid "
-              f"/ {len(r.get('quote_gaps', []))} quote-gaps / {len(r.get('nested_bq', []))} nested-bq "
-              f"/ {len(ex_gaps)} ex-proof-gap / {len(h_bq)} h-layer-struct-bq "
-              f"/ {len(h_stmt)} h-layer-stmt-bq "
-              f"/ {len(i_sep)} i-layer-sep / {len(j_hd)} j-layer-header-dash "
-              f"/ {len(k_list)} k-layer-proof-list / {len(l_sep)} l-layer-sep-blanks "
-              f"/ {len(m_dm)} m-layer-dm-gt / {len(n_bq)} n-layer-bq-empty "
+              f"/ F:{f_n} F-layer-format "
               f"/ {len([g for g in o_gaps if g.strip().startswith('x')])} o-layer-subitem "
               f"/ {len(p_exer)} p-layer-exer-block / {len(p_noise)} p-layer-noise "
               f"/ {len(p_bare)} p-layer-bare-item / {len(p_miss)} p-layer-missing-sec "

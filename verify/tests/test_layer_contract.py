@@ -104,17 +104,24 @@ class LayerContractTest(unittest.TestCase):
                 f"layer {layer.code} contributes unknown result keys {unknown}")
 
     def test_fix_keys_subset(self):
-        """Every auto-fixable layer's fix() uses ONLY known fix-dict keys."""
-        self.assertGreater(len(LAYER_REGISTRY.fixable_ordered()), 0,
-                           "registry has no fixable layers")
-        for layer in LAYER_REGISTRY.fixable_ordered():
-            fr = layer.fix(self.ctx)
+        """Every registered fixer (FIXERS, the post-merge fix mechanism) emits
+        ONLY known fix-dict keys (FIX_KEYS).
+
+        Historically auto-correct logic lived on auto_fixable VerifyLayers; the
+        format-verify consolidation (2026-08-13) relocated all fixers into
+        standalone `fix_<snake>.py` modules registered via `register_fixer`
+        (codes H/G/I/J/K/L/M/N preserved). `VerifyManager.fix` consumes FIXERS
+        directly, so we validate FIXERS here instead of LAYER_REGISTRY."""
+        from verify.layers.script.base import FIXERS, fixable_ordered_fixers
+        self.assertGreater(len(FIXERS), 0, "FIXERS registry has no fixers")
+        for code, (fix_order, fn) in fixable_ordered_fixers():
+            fr = fn(self.ctx)
             if fr is None:
                 continue
             unknown = set(fr.fix_dict.keys()) - FIX_KEYS
             self.assertEqual(
                 unknown, set(),
-                f"layer {layer.code} fixes unknown keys {unknown}")
+                f"fixer {code} fixes unknown keys {unknown}")
 
 
 if __name__ == '__main__':

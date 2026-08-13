@@ -34,7 +34,7 @@ from verify.common.struct_labels import (
 )
 
 # Shared regex constants + helpers used by BOTH detection and fix (single source).
-from structural_label_guard import (
+from format_verify import (
     _H_UL_OPENERS, _H_UL_FOOTNOTE, _H_MISSING_BQ, _H_MISSING_BQ_FOOTNOTE,
     _h_ext_is_legit_bq, _h_ext_is_structural_bq, _h_ext_items,
 )

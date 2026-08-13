@@ -26,7 +26,7 @@ _boot.setup()
 
 from verify.layers.script.base import LayerFixResult, register_fixer
 from lib.regexlib import G_HEAD
-from blockquote_continuity import G_TERM
+from format_verify import G_TERM
 
 
 def fix_g_quote_continuity(md_file):

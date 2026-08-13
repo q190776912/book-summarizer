@@ -113,6 +113,5 @@ class ExtractLayer(VerifyLayer):
         return LayerResult(code=self.code, legacy=items, metadata={
             'items': items,
             'entry_keys': entry_keys,
-            'all_keys': all_keys,
             'label_warns': label_warns,
         })

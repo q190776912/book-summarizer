@@ -28,7 +28,7 @@ import re
 
 from verify.layers.script.base import LayerFixResult, register_fixer
 from verify.common.struct_labels import TOP_LEVEL_HEADER_RE
-from intra_item_dash import _J_SUBPOINT_RE, _J_DASH_RE
+from format_verify import _J_SUBPOINT_RE, _J_DASH_RE
 
 
 def fix_item_header_dash(md_file):

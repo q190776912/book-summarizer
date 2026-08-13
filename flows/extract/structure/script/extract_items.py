@@ -414,7 +414,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
                               'agent_recovered': True})
         items.sort(key=lambda x: (x['page'], x['key']))
 
-    # 源侧缺口恢复（原 B-layer recover_missing_items）已迁至校验层：
+    # 源侧缺口恢复逻辑现已剥离到校验层，抽取器只负责抓取 raw 条目：
     # 写书前的「源侧完整性校验 + 混合回填」由 verify/script/check_structure_completeness.py
     # 承担（复用 section_continuity 公共子流程 + 独立标题锚定扫描）。抽取器只负责
     # 把 raw 条目抓出来，不再内嵌校验逻辑。

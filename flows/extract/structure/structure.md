@@ -63,7 +63,7 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 ## 源侧完整性校验与回填（写书前兜底）
 
 ### 动机
-`build_structure` 本身只做「抽取 + 合并」，**不再内嵌源侧缺口恢复**（原 `recover_missing_items` 已迁 `_legacy_`；抽取器只负责把 raw 条目抓出来）。
+`build_structure` 本身只做「抽取 + 合并」，**不再内嵌源侧缺口恢复**（源侧缺口恢复由校验层负责；抽取器只负责把 raw 条目抓出来）。
 若只靠抽取器，漏抓的定义/定理/例会安静地缺进 JSON；且非三级书在 structure 阶段原本就无源侧查漏。
 本步骤在「写书之前」调用校验层的源侧重完整性工具（`verify/script/check_structure_completeness.py`，复用 `section_continuity` 公共子流程 + 独立标题锚定扫描），把查漏从
 「写完 MD 才发现」提前到「抽完即查、源侧兜底」。

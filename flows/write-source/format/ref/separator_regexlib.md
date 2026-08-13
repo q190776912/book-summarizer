@@ -1,10 +1,4 @@
-# 分隔符通配 + 正则去重 重构设计方案
-
-> 作者：Bob（架构师） · 类型：**重构（refactor）**，非新功能
-> 范围：`../../../../verify/script/key_parse.py`、`../../../../verify/layers/item_numbering_integrity/script/item_numbering_integrity.py`、`../../../../verify/layers/data_provider/script/data_provider.py`、`flows/extract/structure/script/extract_items*.py`
-> 硬约束（来自 team-lead）：不改坏三书回归（Kreyszig 11/11、Koopman 40/40、Apostol 28/28）；保留 `scope`(现为 per-group `GroupConfig.scope`)/分组逻辑（现为 `ordinal` 数组的具名 group vs uncat group）；保留 label-first / number-first 识别逻辑。
-> ⚠️ **v2 重构更新**：本约束中「保留 `separate_types`(`SEP_COMBINED`/`SEP_PER_TYPE`)」已不适用——`separate_types` 与 `SEP_*` 常量已在 `ordinal` 数组化重构中移除，分组现由 `ordinal` 数组表达（见 L124 注记与 `../../../../verify/verify.md` §4.3、`../../../../verify/layers/item_numbering_integrity/item_numbering_integrity.md`）。
-> 注（最终落地与该约束的偏差）：本重构后期把 `levels` 吸收为 `ordinal` 整数编码（见 `../../../../config/verify_config/verify_config.py` 的 `ORDINAL_*`），`known_gaps` 并入统一的 `ignore` 集合——二者均不再作为独立配置字段存在；`disable` 也已移除（层不再被跳过，噪声走 `ignore` 抑制）。
+# 分隔符通配 + 正则去重 设计方案
 
 ---
 

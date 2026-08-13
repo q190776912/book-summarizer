@@ -92,7 +92,7 @@ This is the single most important, non-obvious requirement. PDF-Extract-Kit load
 
 > **本环境改用 `launch_pipeline.sh`**（skill 自带的 bash 脚本）：`.bat` 启动器仅适用于能直接运行 `.bat` 的 Windows cmd 环境；本环境的安全策略会拦截 `Start-Process`/`.bat`，且空格路径静默失败。下面 `.bat` 仅作 PATH 设置逻辑的参考。
 
-Launch extraction scripts through a small `.bat` that sets PATH to `torch\lib` + the nvidia cu12 bins first, then calls the env's python. (历史上的 `run_extract.bat` 已退役至 `_retired/`；首选 skill 自带的 `launch_pipeline.sh`。) Example launcher placed next to the script:
+Launch extraction scripts through a small `.bat` that sets PATH to `torch\lib` + the nvidia cu12 bins first, then calls the env's python. (首选 skill 自带的 `launch_pipeline.sh`，本 `.bat` 仅作 PATH 设置逻辑参考。) Example launcher placed next to the script:
 
 ```bat
 @echo off

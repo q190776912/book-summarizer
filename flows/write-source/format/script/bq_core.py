@@ -17,7 +17,7 @@ _boot.setup()
 
 # -*- coding: utf-8 -*-
 """
-bq_core.py — 块引用引擎（从 fmt_proofs.py 迁移，逻辑不变）。
+bq_core.py — 块引用引擎。
 
 提供：emit_block / remove_heading_seps / repair_leaked_bq / merge_example_block /
 stage1，以及支撑这些函数的模块级正则与常量。

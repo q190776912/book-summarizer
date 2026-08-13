@@ -4,8 +4,6 @@
 > **新增 / 修改本层只改此文件 + 汇总表加一行 + 必要代码**，不要在其他文档重复描述。
 > **注册机制**：本层脚本位于 `verify/layers/item_numbering_integrity/script/item_numbering_integrity.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/layers/*/script/` 自动发现并注册。`code = 'B'` 是稳定字母代号（被 SKILL.md 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
 
-> **命名说明**：原目录名 `numbering_gap` 只描述了「编号跳空」这一现象，**没有体现出本层真正的语义——专门检测定义 / 定理 / 引理 / 推论 / 命题 / 例子等条目的编号遗漏**。已于 2026-08-12 更名为 `item_numbering_integrity`（更贴切）；注意 **`code = 'B'` 代号不变**，所有 SKILL.md / per-book 记忆引用的是字母代号，更名只影响目录与脚本文件名，不影响逻辑与引用。
-
 ## 目的
 检测 agent 写出的 `.md` 交付物里「条目编号缺号」，让 agent 来补；中段不存在合法跳号，漏了就是漏了。——本质是**忠于原文**地发现「定义/定理/引理/推论/命题/例子」等条目被整条漏写（首项缺失、序列断裂、或尾部比源少）。
 
@@ -17,7 +15,7 @@
 
 四类输出（见「字节契约键」）：
 - `blocking`：严格模式下 md 内部首项/连续性缺口 + 提取侧查漏（整类首项缺失、OCR over-mark 守卫），（硬 FAIL，`auto_fixable=False`）。
-- `truly_missing` / `mentioned_only` / `extra`：整章完整性（原 A 层，已并入 B）。`truly_missing`=书有而 md 全宇宙无 → 阻断；`mentioned_only`=仅正文/引用出现、非独立条目 → 仅复核；`extra`=md 有而提取未检出（多为合法交叉引用）→ 仅参考。
+- `truly_missing` / `mentioned_only` / `extra`：整章完整性（B 层职责）。`truly_missing`=书有而 md 全宇宙无 → 阻断；`mentioned_only`=仅正文/引用出现、非独立条目 → 仅复核；`extra`=md 有而提取未检出（多为合法交叉引用）→ 仅参考。
 - `warnings`：非阻断（含 over-mark 守卫的误标提示、OCR 漏检复核等）。
 - `b_gap_warnings`：非严格模式（`strict:false`）下 md 内部首项/连续性缺口，降级为非阻断警示。
 - `b_tail_warnings`：尾部校验，始终非阻断。
@@ -61,12 +59,12 @@
 - 编号配置由 `config/verify_config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层读 `ctx.config`，**不再各自读文件**（旧的 `load_for_md` 文件 IO 已删除）。分组由 `ordinal` 数组各 group 的 `type`/`depth`/`scope` 决定（见 `config/verify_config/verify_config.py` 的 `GroupConfig` / `ORDINAL_DEPTH`），JSON 里 `ordinal` 必填为数组。
 - `ItemNumberingIntegrityLayer.run`（自包含，不依赖任何其他层）：
   1. 整章完整性（原 A 层）：`truly_missing = sorted(extracted - all_keys)`、`mentioned_only = sorted((extracted & all_keys) - entry_keys)`、`extra = sorted(all_keys - extracted)`，其中 `extracted = {it['key'] for it in ctx.items} - ignore_keys`；并算 `ignored_hit` stage1（噪声键 `extracted_raw & ignore_keys`）。
-  2. 提取侧查漏（原 P2 / 并入 B 的 Q+over-mark）：`_merged_category_first_missing(ctx, all_keys, blocking)` + `_merged_ocr_overmark_guard(ctx, items, warnings)`（基于 raw `page_*.json` + `ctx.items` + md）。
+  2. 提取侧查漏（原 P2 的 Q+over-mark 逻辑）：`_merged_category_first_missing(ctx, all_keys, blocking)` + `_merged_ocr_overmark_guard(ctx, items, warnings)`（基于 raw `page_*.json` + `ctx.items` + md）。
   3. `ignored_hit` 第二段 suppression：遍历 `blocking`，若某条引用键全部 ∈ `ignore_keys`，把 `bkeys` 并入 `ctx.ignored_hit` 并从 `blocking` 剔除（最终 `ignored_hit` 完全由 B 计算，不再有 EXTRACT stage1 覆盖）。
   4. 算 MD 侧 `_md_gap_blocking` -> `(md_blocking, md_warnings, present_md, md_tail)`。
   5. 对提取侧 `blocking` 做「MD 存在性过滤」：被报缺的键 ∈ `present_md` 则抑制（消息号已带前导 `-`，拼接用 `sec + n`）。
   6. 合并 `blocking = filtered_extraction + md_blocking`；返回 `metadata={'blocking','warnings','b_gap_warnings','b_tail_warnings','ignored_hit','truly_missing','mentioned_only','extra'}`。
-- `b_tail_warnings` 由 `report.py` 在 `B-LAYER TAIL CHECK` 段非阻断打印；`b_gap_warnings` 在 `B-LAYER NUMBERING GAP CHECK` 段打印；`truly_missing`/`mentioned_only`/`extra` 在 `TRULY MISSING` / `MENTIONED-ONLY` / `EXTRA` 段打印（原 A 层打印段，现归属 B 产出）。
+- `b_tail_warnings` 由 `report.py` 在 `B-LAYER TAIL CHECK` 段非阻断打印；`b_gap_warnings` 在 `B-LAYER NUMBERING GAP CHECK` 段打印；`truly_missing`/`mentioned_only`/`extra` 在 `TRULY MISSING` / `MENTIONED-ONLY` / `EXTRA` 段打印（B 层打印段）。
 
 ## 子流程
 无独立子脚本；核心算法 `_md_gap_blocking` / `_source_item_comps_label` 在本层脚本内。

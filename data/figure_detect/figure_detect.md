@@ -7,8 +7,6 @@ PDF 抽取阶段 1 的**原始检测**记录，由图检测模型（MFD）逐页
   本 skill **仅消费**它 —— `build_figure_index.py` 读取它来合成 `figure_index.json`，并不写出它。
 - 落盘：`<book>/_extract/figure_detect.json`（外部工具写出，非本 skill 生成）。
 
-> 旧路径 `flows/write-source/figures/script/build_figure_index.py` 已迁移至此。
-
 ## 数据结构（每条约）
 ```json
 { "chapter": 1, "page": 5, "det_id": 0,

@@ -8,7 +8,7 @@
   （由 extract 父流程轮询调用，或人工从 OCR 目录页读章名 + 书页码填入模板）。
 - 类与构造函数：`ChapterMap`（+ `Chapter`）—— `from chapter_map import ChapterMap`；
   `ChapterMap.default()` / `ChapterMap.load(path)` / `ChapterMap(chapters=...).dump(path)`。
-- 原 `flows/extract/script/write_chapter_map.py`（写作/提取条目脚本之一），随写作脚本整体迁至 `../../flows/write-source/script`。
+- 章节映射脚本：`../../flows/write-source/script/chapter_map.py`。
 
 ## 落盘位置
 - `<book>/_extract/chapter_map.json`

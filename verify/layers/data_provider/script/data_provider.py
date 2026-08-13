@@ -35,8 +35,8 @@ from verify.common.structure_io import read_structure_items
 #     ctx.all_keys    md 中出现过的一切键（含正文/交叉引用里的 mention）
 #     ctx.label_warns 标签(定义/定理)与正文不符告警（report 打印，非阻断）
 #
-# 不参与：truly_missing / mentioned_only / extra（A 层原职责，已并入 B）、
-#         提取侧查漏(整类首项缺失 Q + over-mark 守卫)（原 P2，已并入 B）、
+# 不参与：truly_missing / mentioned_only / extra（现由 B 层负责）、
+#         提取侧查漏(整类首项缺失 + over-mark 守卫)（现由 B 层负责）、
 #         ignored_hit / extraction_blocking（B 自行计算并写 ctx，不再依赖本层 stage1）。
 #
 # 这是全管线唯一的数据入口（"no global mutable state，everything flows through ctx"）。

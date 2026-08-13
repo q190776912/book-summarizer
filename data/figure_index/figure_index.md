@@ -11,8 +11,6 @@ PDF 抽取阶段 2 的**命名索引**：把阶段 1 的检测框匹配到书源
   提供——**被 `flows/.../assign_figures.py` 委托**（裸 `json.dump` 已移出流程脚本，实例化归本目录）。
 - 落盘：`<book>/_extract/figure_index.json`
 
-> 旧路径 `flows/write-source/figures/script/build_figure_index.py` 已迁移至此。
-
 ## 数据结构（每条约）
 ```json
 { "chapter": 1, "page": 5, "fig_idx": 0, "label": "1.2",
@@ -26,7 +24,7 @@ PDF 抽取阶段 2 的**命名索引**：把阶段 1 的检测框匹配到书源
 - `caption`：图注文本。
 
 ## 消费方
-- `../../verify/script/verify_chapter.py` 的 **figure 层(E)：图片完整性 + 图片有效性（原 E/F 合并）**。
+- `../../verify/script/verify_chapter.py` 的 **figure 层(E)：图片完整性 + 图片有效性**。
 - 命名 / 嵌入：`assign_figures.py` / `embed_figures.py` / `../../config/figure_manual_chN/apply_manual_figures.py`。
 
 ## 关联

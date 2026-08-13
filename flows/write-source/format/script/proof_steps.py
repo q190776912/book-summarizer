@@ -17,7 +17,7 @@ _boot.setup()
 
 # -*- coding: utf-8 -*-
 """
-proof_steps.py — 证明步骤编号（从 fmt_proofs.py 迁移，逻辑不变）。
+proof_steps.py — 证明步骤编号。
 
 提供：number_proof / stage2（证明步骤编号渲染为块引用内有序列表）。
 """

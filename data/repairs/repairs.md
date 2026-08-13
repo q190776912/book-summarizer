@@ -4,7 +4,6 @@
 - `repairs.py`：合并多 agent 各自写出的 `repairs.json`。
 - 类与构造函数：`Repairs` —— `from repairs import Repairs`；`Repairs.merge(mm_dir)` 构造，`Repairs(...).dump(path)`；
   亦可用 `Repairs.from_sections(corrections, ok, to_structured, deferred)`。`mm_repair_text_compare.py` 经 `Repairs(**repairs).dump(path)` 委托写出（裸 `json.dump` 已移出流程脚本，实例化归本目录）。
-- 旧路径 `flows/extract/mm_repair/script/merge_repairs.py` 已迁移至此。
 - **消费者**（`mm_repair_audit.py` / `mm_repair_text_compare.py` / `mm_repair_apply.py` /
   `rereview_montage.py`）属 MM Repair 链路编排，**留 `../../flows`**。
 

@@ -115,7 +115,7 @@
 
 ### 与 figure 层(E) 校验的衔接
 
-`figure_index.json` 落地后 `../../../../verify/script/verify_chapter.py` 启用 **figure 层(E)：图片完整性 + 图片有效性（原 E/F 合并）**：
+`figure_index.json` 落地后 `../../../../verify/script/verify_chapter.py` 启用 **figure 层(E)：图片完整性 + 图片有效性**：
 
 - **E 层 MISSING（真漏检）**：章内 OCR 引用了"图 X.X.X"但 `figure_index.json` 无对应条目 → 该图**根本没被检测到** → 去对应页**重新识别**（降 `--conf` 重跑 `extract_figures.py --ch N` 或手动补图）
 - **未命名（已检测，无图号）**：`figure_index.json` 中有该图条目但 `label==null` → 它**被找到了**，只是 caption 没被识别成"图 X.X.X" → **不阻断**

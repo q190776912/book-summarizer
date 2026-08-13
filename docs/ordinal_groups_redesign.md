@@ -327,7 +327,7 @@ def _parse_group(g):
 1. **双语 / 异构 type 同书（高风险）**：用户示例混合 `type 3`（CN 三级，裸键 `C.S-N`）与 `type 4`（EN 二级，标签键 `Definition 1.1`）。MD 侧解析器对两类键形态不同，A 层 `keys_in_md` 用 union 覆盖尚可，但 B 层连续性「同组共享计数器」在混合族下语义复杂（EN 组与 CN 组的 key 形态不互通）。**建议**：`make_config` 只产单组；混合族书（罕见）由人工写多组并自测。已在设计里允许但**不保证**自动正确。
 2. **gm/roman 风格在数组下（中风险）**：`extract_items_gm` / roman 路径的机器键含罗马章号，`_md_gap_blocking` 的 numpath 解析需按 `group.structure` 选 roman/gm 解析器（复用 `key_parse` 的 `ENTRY_RE_ROMAN`/`GM_*`）。`keys_in_md` 同理需 `chapter_roman` 参数透传。**回归要求**：确认 Koopman(Kreyszig? 实为 GM) / 含 roman 书在重生配置下仍 PASS（见 QA）。
 3. **循环 import**：`config.py` 不能 import `key_parse`（后者 import `config`）。`match_group` 的 canonicalization 在 `config.py` 内用聚焦副本解决；`from_dict` 存 canonical `name`。需人工确保两份 canon map 同步。
-4. **`SEP_*` 删除的波及**：`SEP_COMBINED/SEP_PER_TYPE` 在 `config.py`、`verify/layers/b_layer.py`、`../flows/extract/script/b_layer.py` 三处定义/引用。删除时三处须同步，且 `flows/write-source/format/ref/separator_regexlib.md:124` 曾标注「严禁改动 SEP 常量」——本次变更需在该文档注明「本约束已被 2026-XX 分组重构取代」。
+4. **`SEP_*` 删除的波及**：`SEP_COMBINED/SEP_PER_TYPE` 在 `config.py`、`verify/layers/b_layer.py`、`../flows/extract/script/b_layer.py` 三处定义/引用。删除时三处须同步，且 `flows/write-source/format/ref/separator_regexlib.md:124` 曾标注「严禁改动 SEP 常量」。
 5. **`base.py` `ordinal` property 语义变更（int→list）**：所有 `ctx.config.ordinal` / `ctx.ordinal` 的 int 比较点（`extract_layer` 6 处、`p_layer`、`d_layer`）必须改为 `extractor_family()`/`primary_type()`，遗漏会导致 `int == tuple` 永远 False 或 AttributeError。已逐点列出。
 6. **`require_complete` 旧测试契约翻转**：`test_config_complete.py` 现假设「非法 ordinal 被静默 clamp、不抛错」（KNOWN GAP）。新设计对旧 `{"ordinal": int}` **主动抛 `ConfigError`**，与旧测试预期相反——必须同步更新测试（见任务 T04）。
 7. **`keys_in_md` 签名变更**：所有调用点（仅 `extract_layer.py`）需更新；若有其他脚本直接 import `keys_in_md`，一并改。
@@ -425,5 +425,5 @@ def _parse_group(g):
 
 - **混合结构族书的自动正确性**：用户示例含 `type 3 + type 4` 同书。设计允许但不保证自动正确（见风险 1）。假设：存量 50 书均为单结构族，make_config 只产单组；异构书由人工配置+自测。
 - **`make_config` 检测精度**：仍 best-effort（原逻辑不变），`depth` 直接取 `ORDINAL_DEPTH[detected]`，不尝试逐组细分；多组精细配置由人工编辑。
-- **`references/*.md` 文档同步**：列为 P2 建议，非阻塞；但 `refactor_separator_regexlib.md:124` 关于「严禁改动 SEP 常量」的约束须在该文档注明已被本次重构取代。
+- **`references/*.md` 文档同步**：列为 P2 建议，非阻塞。
 - **`ordinal_depth()` 旧函数**：grep 显示无外部调用，建议随 `BookConfig.depth` 删除一并移除（或保留为 `ordinal_depth(group)` 便捷函数）；本次默认移除。

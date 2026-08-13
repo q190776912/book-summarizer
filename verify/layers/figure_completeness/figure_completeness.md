@@ -1,12 +1,11 @@
-# E 层 — FIGURE（figure_completeness，原 E+F 合并）
+# E 层 — FIGURE（figure_completeness，图完整性 + 图有效性）
 
 > 本文件是 **E 层（统一 figure 层）** 的唯一权威详情（SSOT）。语义 / 阈值 / `--fix` 范围 / 实现均只在此描述；汇总索引与全局架构见 [`../verify.md`](../verify.md)。
 > **新增 / 修改本层只改此文件 + 汇总表加一行 + 必要代码**，不要在其他文档重复描述。
 > **注册机制**：本层脚本位于 `verify/layers/figure_completeness/script/figure_completeness.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/layers/*/script/` 自动发现并注册。`code = 'E'` 是稳定字母代号（被 SKILL.md 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
-> **合并说明（2026-08-13）**：原 F 层（figure-validity，图有效性 / cv2 解码校验）已并入本层。figure 校验现为代号 `E` 的单层；`code='F'` 与其 `figure_validity` 模块已退役（备份于 `verify/_retired_layers/figure_validity_2026-08-13/`）。
 
 ## 目的
-图完整性（覆盖度，**was E**）+ 图有效性（文件可解码性，**was F**）：OCR 引用了图注但裁剪图缺失 → 可能漏检；以及裁剪图文件缺失 / 损坏 / 过小 / 近空白 → 嵌入后无图或误检。
+图完整性（覆盖度）+ 图有效性（文件可解码性）：OCR 引用了图注但裁剪图缺失 → 可能漏检；以及裁剪图文件缺失 / 损坏 / 过小 / 近空白 → 嵌入后无图或误检。
 
 ## 步骤（语义与检查内容）
 - 仅当 `_extract/figure_index.json` 存在且含本章 `chapter` 条目时运行；否则 SKIP（绝不阻断）。
@@ -31,7 +30,7 @@
 - `code = 'E'`，`order = 5`，`auto_fixable = False`。
 - 底层返回 None 时必须 emit `fig_missing: []` / `fig_extra: []` / `fig_invalid: []` / `fig_invalid_warn: []`（双保险，防 `result['missing'] if result else []` 路径崩）。
 - `fig_skipped` 由 E 的 `metadata['skipped']` 携带，管理器据此注入（禁止窄化为 `ctx.figure_index is None`）。
-- 合并收益：原 E、F 各自 load 一次 index + 各过滤一遍章节，现统一为单次载入 + 单次过滤。
+- 本层单次载入 `figure_index.json` 并单次按章过滤（原 E、F 各自独立载入 / 过滤）。
 
 ## 子流程
 无独立子脚本；依赖图片抽取产出的 `_extract/figure_index.json`。
@@ -41,7 +40,7 @@
 
 - **触发门（report.py）**：
   - `E-LAYER FIGURE COMPLETENESS MISSING` → 整章 FAIL；`E-LAYER FIGURE EXTRA` → 仅 WARN（无 `figure_index.json` 的章节自动 SKIP，绝不阻断）。
-  - `E-LAYER FIGURE VALIDITY ERRORS` → 整章 FAIL；`E-LAYER FIGURE SUSPICIOUS` → 仅 WARN（门标签由原 `F-LAYER …` 统一改名，2026-08-13）。
+  - `E-LAYER FIGURE VALIDITY ERRORS` → 整章 FAIL；`E-LAYER FIGURE SUSPICIOUS` → 仅 WARN。
 - **修复步骤**：
   1. 看 `E-LAYER FIGURE COMPLETENESS MISSING` 列出的图号（如 `图3.2.1`）。
   2. 确认 `<book>/_extract/figure_index.json` 是否真缺；若属图片提取未跑/过期，重跑

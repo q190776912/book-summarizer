@@ -169,7 +169,7 @@ def print_result(r):
                 print(l)
 
     # ===========================================================================
-    # F-LAYER FORMAT: 合并格式校验总结（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）。
+    # F-LAYER FORMAT: 统一格式校验总结。
     # 所有格式相关 finding 在单一 F-LAYER FORMAT 段内呈现；任一子项非空即阻断 FAIL。
     # ---- KaTeX（原 C 层）----
     if r['katex_errors']:
@@ -418,11 +418,11 @@ def print_result(r):
     q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
               if q_checked else "")
 
-    # B-LAYER BLOCKING 已包含「重要概念首项缺失」(原 Q 层逻辑，2026-08-05 并入 B)：
+    # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。
 
-    # F-LAYER FORMAT 聚合计数（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）：
+    # F-LAYER FORMAT 聚合计数：
     # 任一格式子项非空即计入 F 总数；ex_warns 为非阻断 warn，不计入阻断计数。
     f_n = (len(r.get('katex_lines', [])) + len(r.get('quote_gaps', [])) + len(r.get('nested_bq', []))
            + len(ex_gaps) + len(h_bq) + len(h_stmt) + len(h_ul) + len(h_mbq)

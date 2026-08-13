@@ -60,9 +60,9 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 ## 代码位置（重要）
 
-代码已按流程**物理搬迁**到对应 `flows/<stage>/script/<pkg>/` 目录（不再散在技能根）；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`），注册表与总编排见 `verify/verify.md` 与 `verify/layers`：
+代码按流程组织在对应 `flows/<stage>/script/<pkg>/` 目录；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`），注册表与总编排见 `verify/verify.md` 与 `verify/layers`：
 
-- `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象；源侧查漏 + 混合回填职责已迁校验层 `verify/script/check_structure_completeness.py`）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`；`b_layer` 已迁 `_legacy_`，缺口恢复逻辑移交校验层）
+- `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
 - `flows/extract/mm_repair/script`
 - `flows/script`
 - `flows/write-source/format/script/format`（含 `katex_validate.js` + `node_modules`）

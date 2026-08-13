@@ -1,15 +1,14 @@
-# F 层 — FORMAT（format_verify，合并 C/G/H/I/J/K/L/M/N 九层格式校验）
+# F 层 — FORMAT（format_verify，统一格式校验）
 
 > 本文件是 **F 层（统一格式校验层）** 的唯一权威详情（SSOT）。语义 / 阈值 / `--fix` 范围 / 实现均只在此描述；汇总索引与全局架构见 [`../verify.md`](../verify.md)。
 > **新增 / 修改本层只改此文件 + 汇总表加一行 + 必要代码**，不要在其他文档重复描述。
 > **注册机制**：本层脚本位于 `verify/layers/format_verify/script/format_verify.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/layers/*/script/` 自动发现并注册。`code = 'F'` 是稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
-> **合并说明（2026-08-13）**：原 C（katex-validation）、G（blockquote-continuity）、H（structural-label-guard）、I（item-separator）、J（intra-item-dash）、K（proof-list-spacing）、L（separator-spacing）、M（math-blockquote-leak）、N（blockquote-spacing）九层已**统一并入本层（代号 F）**。九层的检测函数已内联进 `format_verify.py`，原九层目录退役备份于 `verify/_retired_layers/format_verify_legacy_2026-08-13/`。`code='F'` 此前在 E/F 合并中曾被 figure_validity 临时占用，现正式归属 format-verify（详见 `verify.md` 注册表备注）。
 
 ## 目的
 统一全部「格式」类校验：KaTeX 渲染校验 + 引用块连续性/嵌套/例证空隙 + 结构标签守卫（4 子项）+ 条目分隔符完整性/条目内分隔符 + 证明-列表间距 + 分隔符空行 + 数学块引用泄漏 + 引用块空行过多。任一子项非空即整章 FAIL（KaTeX 与结构类同阻断）。
 
 ## 步骤（实际校验流程）
-全部检测函数为内联实现（与退役九层逐字一致），`run()` 一次性返回下方 15 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
+全部检测函数为内联实现（与原九个格式校验逐字一致），`run()` 一次性返回下方 15 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
 
 1. 加载章节 markdown，并调用 `flows/write-source/format/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
 2. 扫描 `>` 引用块，检查连续性 / 嵌套 / 例证空隙（原 G 层）。
@@ -21,7 +20,7 @@
 8. 检查数学块引用泄漏——`$$...$$` 内有 `>` 行（原 M 层）。
 9. 检查引用块空行过多——`>` 块内连续空 `>` 行超过 1（原 N 层）。
 
-> 上述所有阈值/形态与退役九层完全一致；`flows/write-source/format/format.md`（SSOT）定义的格式规则本来即由这九层 + katex 子进程 + 格式管线脚本共同强制，本合并**不新增任何检查**，仅把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）。
+> 上述所有阈值/形态与原有各格式校验完全一致；`flows/write-source/format/format.md`（SSOT）定义的格式规则本来即由这些校验 + katex 子进程 + 格式管线脚本共同强制，本层**不新增任何检查**，仅把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）。
 
 ## 规则（检测规则定义）
 

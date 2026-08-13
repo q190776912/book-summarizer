@@ -16,8 +16,6 @@ _boot.setup()
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见
 # verify/layers/figure_completeness/figure_completeness.md（SSOT）；本文件仅含实现，勿在此复述叙事。
-# 合并说明：原 F 层（figure_validity，图有效性 / cv2 解码校验）已于 2026-08-13 并入本层，
-# figure 校验现统一为代号 'E' 的单层；report.py 的图相关门统一为 E-LAYER 前缀。
 
 """
 figure_completeness.py — E-LAYER (order 5): unified FIGURE layer.

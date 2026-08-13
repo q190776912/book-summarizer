@@ -25,13 +25,8 @@
 | EXTRACT | data-provider | data_provider | 0 | 否 | — | [data_provider](layers/data_provider/data_provider.md) |
 | D | section-continuity | section_continuity | 1 | 否 | — | [section_continuity](layers/section_continuity/section_continuity.md) |
 | B | item-numbering-integrity | item_numbering_integrity | 3 | 否 | — | [item_numbering_integrity](layers/item_numbering_integrity/item_numbering_integrity.md) |
-
-> **注（2026-08-13 重构）**：原 A 层（missing-items，整章完整性 `truly_missing`/`mentioned_only`/`extra`）与原独立 Q/R 的查漏逻辑（整类首项缺失 + over-mark 守卫，原 P2 收于 EXTRACT 层）已**统一并入 B 层**。B 现为「查漏」唯一权威：`truly_missing`（书有、md 全宇宙无 → 阻断）、`mentioned_only`（仅复核）、`extra`（仅参考）、以及提取侧查漏均由其产出。EXTRACT 层退化为纯数据供给（items / entry_keys / all_keys / label_warns），与 B 解耦。
-| E | figure（图完整性+图有效性，原 E/F 合并） | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
-| F | format-verify（合并格式校验，原 C/G/H/I/J/K/L/M/N 九层统一） | format_verify | 6 | 否 | — | [format_verify](layers/format_verify/format_verify.md) |
-
-> **注（2026-08-13 重构）**：原 F 层（figure-validity，图有效性 / cv2 解码校验：文件缺失·无法解码·单边<20px 阻断、近空白低方差仅警告）已**并入 E 层**。figure 校验现为代号 `E` 的单层：一次性载入 `figure_index.json` 并按章过滤，既做 caption↔index 对账（`fig_missing` 阻断 / `fig_extra` 警告），又做裁剪图解码校验（`fig_invalid` 阻断 / `fig_invalid_warn` 警告）。
-> 代号 `F` 本身已**复用**为 **format-verify** 合并格式校验层（见上表 F 行）：把原 `C`(katex) / `G`(blockquote-continuity) / `H`(structural-label-guard) / `I`(item-separator) / `J`(intra-item-dash) / `K`(proof-list-spacing) / `L`(separator-spacing) / `M`(math-blockquote-leak) / `N`(blockquote-spacing) 九个格式相关校验**合并为单一层**，统一输出为 `report.py` 的 `F-LAYER FORMAT` 段落。`format_verify` 层 `auto_fixable=False`，其可修复项由迁移至 `verify/layers/format_verify/script/fix_*.py` 的 8 个 fix 模块承担——它们仍以**原代号 H/G/I/J/K/L/M/N** 经 `register_fixer` 注册进 `FIXERS`（保留 `fix_order` 与 fix-dict 字节序），故 `--fix` 行为不变。九层旧目录备份于 `verify/_retired_layers/format_verify_legacy_2026-08-13/`，figure_validity 旧目录备份于 `verify/_retired_layers/figure_validity_2026-08-13/`。
+| E | figure（图完整性 + 图有效性） | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
+| F | format-verify（统一格式校验：KaTeX + 引用块 + 结构标签 + 条目分隔 + 证明间距 + 分隔空行 + 数学泄漏 + 引用块空行） | format_verify | 6 | 否 | — | [format_verify](layers/format_verify/format_verify.md) |
 | O | subitem-continuity | subitem_continuity | 15 | 否 | — | [subitem_continuity](layers/subitem_continuity/subitem_continuity.md) |
 | P | verbose-gates | verbose_gates | 16 | 否 | — | [verbose_gates](layers/verbose_gates/verbose_gates.md) |
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](layers/formula_tag/formula_tag.md) |

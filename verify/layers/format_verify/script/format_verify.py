@@ -30,12 +30,11 @@ Unifies the nine legacy format layers that were consolidated on 2026-08-13:
     M  math_blockquote_leak    -> `>` lines inside display math blocks
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
-All detection bodies are inlined here (relocated verbatim from the retired
-layer modules, now backed up under
-`verify/_retired_layers/format_verify_legacy_2026-08-13/`).  The layer returns
-the SAME 15 byte-contract keys the nine layers used to emit — no new keys, no
-removed keys — so `report.py`, `verify_chapter.py`, and the contract tests stay
-green without modification of the result-dict shape.
+All detection bodies are inlined here (relocated verbatim from the former nine
+format layers).  The layer returns the SAME 15 byte-contract keys those layers
+used to emit — no new keys, no removed keys — so `report.py`,
+`verify_chapter.py`, and the contract tests stay green without modification of
+the result-dict shape.
 
 Auto-fix is NOT performed by this layer: it is implemented by the eight
 `fix_*.py` modules in this same `script/` directory, which self-register via

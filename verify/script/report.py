@@ -84,7 +84,7 @@ def print_result(r):
 
     if r.get('ignored_hit'):
         print(f"\nIGNORED ({len(r['ignored_hit'])}): confirmed-noise keys suppressed via --ignore "
-              f"(excluded from A/B comparison; C/D unaffected):")
+              f"(excluded from B-layer completeness comparison; C/D unaffected):")
         for k in r['ignored_hit']:
             print(f"  · {k}")
 

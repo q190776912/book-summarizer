@@ -225,13 +225,13 @@ class VerifyContext:
         self.ignore_fig = ignore_fig or set()
 
         # --- derived (populated by EXTRACT provider + B layer) ---
+        # EXTRACT 供水：items / entry_keys / all_keys / label_warns
+        # B 层查漏：ignored_hit / extraction_blocking
         self.items = None
         self.entry_keys = None
         self.all_keys = None
-        self.extracted = None
         self.ignored_hit = None
         self.extraction_blocking = None
-        self.extraction_warnings = None
         self.label_warns = None
         self.provided = set()
         self.skipped = set()

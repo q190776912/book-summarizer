@@ -13,6 +13,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+import page_json
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/layers/item_numbering_integrity/item_numbering_integrity.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
@@ -38,6 +39,7 @@ from dataclasses import dataclass, field
 from verify.layers.script.base import VerifyLayer, LayerResult
 from verify.common.key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
+from verify_config import ORDINAL_THREE_LEVEL
 
 # Tail-check tolerance: source max minus md max beyond this is treated as a
 # likely OCR phantom / alien-numbering and collapses to ONE summary warning
@@ -401,11 +403,11 @@ def _md_gap_blocking(ctx):
     cfg = ctx.config
     known = ctx.ignore
     if not ctx.md_file:
-        return [], [], set()
+        return [], [], set(), []
     try:
         txt = open(ctx.md_file, encoding='utf-8').read()
     except Exception:
-        return [], [], set()
+        return [], [], set(), []
 
     # Grouping is now driven by the BookConfig.ordinal GroupConfig array.  For
     # each entry we parse its (comps, label) at the MOST SPECIFIC depth that
@@ -534,6 +536,139 @@ def _md_gap_blocking(ctx):
     return blocking, warnings, present_md, tail_warnings
 
 
+# ---------------------------------------------------------------------------
+# Merged P2 from EXTRACT provider (2026-08-13): 提取侧查漏 —— 整类首项缺失
+# (Q) + over-mark 守卫。EXTRACT 层现为纯数据供给（items/entry_keys/all_keys/
+# label_warns），查漏逻辑统一归 B，B 与 EXTRACT 解耦：EXTRACT 只供水、不做事。
+# 复用 B 现有 `blocking` / `warnings` 键，不加新契约键。
+# ---------------------------------------------------------------------------
+CAT_WORDS = ['定义', '定理', '引理', '推论', '命题']
+EN_TO_CN = {'Definition': '定义', 'Theorem': '定理', 'Lemma': '引理',
+            'Corollary': '推论', 'Proposition': '命题'}
+# OCR 字母↔数字容错（章号首位）：扫描 raw page JSON 时把 A→4, B→8, O→0 …
+OCR_DIGIT = {'O': 0, 'o': 0, 'Q': 0, 'D': 0, '0': 0,
+             'I': 1, 'l': 1, 'i': 1, '1': 1,
+             'Z': 2, 'z': 2, '2': 2,
+             'A': 4, 'a': 4, '4': 4,
+             'S': 5, 's': 5, '5': 5,
+             'G': 6, 'g': 6, '6': 6,
+             'T': 7, 't': 7, '7': 7,
+             'B': 8, 'b': 8, '8': 8,
+             'g': 9, '9': 9}
+
+
+def _norm_ch(s):
+    if s.isdigit():
+        return int(s)
+    return OCR_DIGIT.get(s)
+
+
+# raw-text OCR-tolerant heading patterns (block-anchored with ^):
+_CH = r'([0-9A-Za-z])'
+_BOOK_LABEL_RES = [
+    re.compile(r'^\s*(定义|定理|引理|推论|命题)\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\b'),          # 定义4.7-1
+    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)(?:' + SEP_TIGHT + r'(\d+))?\b', re.IGNORECASE),  # Definition 4.7[-N]
+    re.compile(r'^\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\s*(定义|定理|引理|推论|命题)'),            # 4.7-1 定义
+]
+
+
+def _scan_book_category_items(ch, start, end, ext_dir):
+    """Scan raw page JSON text blocks for category-heading items, OCR-tolerant on
+    the chapter's first char (A→4 etc). Returns {(sec, cat): sorted[num,]}.
+    Block-anchored (^) so cross-references like '由定义 4.7-1' are excluded."""
+    by = defaultdict(list)
+    for p in range(start, end + 1):
+        fp = os.path.join(ext_dir, f'page_{p:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = page_json.PageJson.load(fp).data
+        except Exception:
+            continue
+        for blk in d.get('text', []):
+            t = blk.get('text', '').strip()
+            if not t:
+                continue
+            for ri, rgx in enumerate(_BOOK_LABEL_RES):
+                m = rgx.match(t)
+                if not m:
+                    continue
+                if ri == 0:                      # 定义4.7-1
+                    cat = m.group(1); chc = m.group(2)
+                    sec = int(m.group(3)); num = int(m.group(4))
+                elif ri == 1:                    # Definition 4.7[-N]
+                    cat = EN_TO_CN.get(m.group(1).title(), '定义')
+                    chc = m.group(2); sec = int(m.group(3))
+                    num = int(m.group(4)) if m.group(4) is not None else 0
+                else:                            # 4.7-1 定义
+                    chc = m.group(1); sec = int(m.group(2)); num = int(m.group(3))
+                    tail = t[m.end():m.end() + 8]
+                    tm = re.search(r'(定义|定理|引理|推论|命题)', tail)
+                    if not tm:
+                        break
+                    cat = tm.group(1)
+                cc = _norm_ch(chc)
+                if cc is None or cc != ch:
+                    break
+                by[(sec, cat)].append(num)
+                break
+    return {k: sorted(set(v)) for k, v in by.items()}
+
+
+def _merged_category_first_missing(ctx, all_keys, blocking):
+    """Q 逻辑并入 B：整类首项缺失检测。仅 three_level 方案启用（ordinal=3）。"""
+    if ctx.config.primary_type != ORDINAL_THREE_LEVEL:
+        return
+    ch = ctx.ch
+    book_cat = _scan_book_category_items(ch, ctx.start, ctx.end, ctx.ext_dir)
+    if not book_cat:
+        return
+    # md 中各节已出现的编号（任何重要概念类别都算，避免同号异类误报）。
+    # 注意：three-level 方案的 .md 键是数字型（如 3.3-2），不含类别前缀，
+    # 故此处用数字型正则解析，不能套用带类别前缀的 _BOOK_LABEL_RES。
+    md_by_sec = defaultdict(set)
+    for k in all_keys:
+        m = re.match(r'^(\d+)\.(\d+)-(\d+)$', k)
+        if m and int(m.group(1)) == ch:
+            md_by_sec[int(m.group(2))].add(int(m.group(3)))
+    for (sec, cat), nums in book_cat.items():
+        bmin = nums[0]
+        if bmin in md_by_sec.get(sec, set()):
+            continue                        # 该编号在总结中已出现（任何类别）→ 非首项缺失
+        blocking.append(
+            f"  ! §{ch}.{sec} 书中含「{cat}」{len(nums)} 条（首项 {cat}{ch}.{sec}-{bmin}），"
+            f"但总结未含任何「{cat}」条目（编号 {bmin} 在总结中不存在）→ 疑似缺失首项 {cat}{ch}.{sec}-{bmin}")
+
+
+def _merged_ocr_overmark_guard(ctx, items, warnings):
+    """over-mark 守卫：.md 中带（OCR无法识别）的条目，若其编号已被 book 抽取识别
+    → 误标警告（书中其实有该条目，不应标 OCR无法识别）。"""
+    try:
+        mdtext = open(ctx.md_file, encoding='utf-8').read()
+    except Exception:
+        return
+    mark_re = re.compile(r'\*\*([^*]*?(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)[^*]*?)\*\*')
+    md_mark = set()
+    for m in mark_re.finditer(mdtext):
+        if 'OCR无法识别' in m.group(0) or 'OCR无法识别' in m.group(1):
+            md_mark.add(f"{int(m.group(2))}.{int(m.group(3))}-{int(m.group(4))}")
+    if not md_mark:
+        return
+    book_num = set()
+    for it in items:
+        # agent_recovered (manual override) entries are NOT genuinely OCR-recognized;
+        # an (OCR无法识别) marker on them is legitimate, so don't误-flag.
+        if it.get('agent_recovered'):
+            continue
+        mm = re.search(r'(\d+)\.(\d+)-(\d+)', it['key'])
+        if mm:
+            book_num.add(f"{mm.group(1)}.{mm.group(2)}-{mm.group(3)}")
+    for k in sorted(md_mark):
+        if k in book_num and k not in ctx.ignore:
+            warnings.append(
+                f"  ? {k} 标注（OCR无法识别）但书中 OCR 已识别该条目 → 可能误标，请复核")
+
+
 class ItemNumberingIntegrityLayer(VerifyLayer):
     code = 'B'
     name = 'item-numbering-integrity'
@@ -541,10 +676,28 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
     auto_fixable = False
 
     def run(self, ctx):
-        blocking = list(ctx.extraction_blocking or [])
-        ignored_hit = list(ctx.ignored_hit or [])
+        items = ctx.items or []
+        entry_keys = ctx.entry_keys or set()
+        all_keys = ctx.all_keys or set()
         ignore_keys = ctx.ignore
 
+        # --- A-LAYER 完整性（原独立 A 层，现并入 B）：truly_missing / mentioned_only / extra ---
+        # 数据来自 EXTRACT 供给的 ctx.items（书真相集）/ all_keys / entry_keys；
+        # B 是查漏的唯一权威，EXTRACT 只供水、不做事。
+        extracted_raw = {it['key'] for it in items}
+        ignored_hit = sorted(extracted_raw & ignore_keys, key=sortkey)   # stage1：噪声键
+        extracted = extracted_raw - ignore_keys                          # 剔噪书集
+        truly_missing = sorted(extracted - all_keys)
+        mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
+        extra = sorted(all_keys - extracted, key=sortkey)
+
+        # --- P2：提取侧查漏（原 EXTRACT 层 merged Q + over-mark 守卫，现并入 B）---
+        blocking = []
+        warnings = []
+        _merged_category_first_missing(ctx, all_keys, blocking)
+        _merged_ocr_overmark_guard(ctx, items, warnings)
+
+        # --- B 层原有逻辑：ignored_hit 第二段 suppression + md 侧查漏 + OCR 误报过滤 ---
         # Suppress extraction-side blocking entries whose referenced item keys
         # are ALL registered as confirmed noise; fold those keys into ignored_hit.
         if ignore_keys and blocking:
@@ -602,7 +755,11 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
 
         return LayerResult(code=self.code, metadata={
             'blocking': blocking,
+            'warnings': warnings,
             'b_gap_warnings': md_warnings,
             'b_tail_warnings': md_tail,
             'ignored_hit': ignored_hit,
+            'truly_missing': truly_missing,
+            'mentioned_only': mentioned_only,
+            'extra': extra,
         })

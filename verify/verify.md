@@ -4,7 +4,7 @@
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
 > `verify-source`（源语言）与 `derive-translate`（翻译版）都引用本流程，区别仅在于被校验的是哪个语言目录。
 >
-> **本文件同时是「更大的公用子流程」**：它编排 `verify/layers/<snake>/script/` 下的全部 18 个校验层模块，
+> **本文件同时是「更大的公用子流程」**：它编排 `verify/layers/<snake>/script/` 下的全部 17 个校验层模块，
 > 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/verify-source`、`../flows/derive-translate`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/layers/<snake>/<snake>.md` 的 SSOT。
 
@@ -24,8 +24,9 @@
 |------|--------|---------------|-------|--------------|-----------|------------|
 | EXTRACT | data-provider | data_provider | 0 | 否 | — | [data_provider](layers/data_provider/data_provider.md) |
 | D | section-continuity | section_continuity | 1 | 否 | — | [section_continuity](layers/section_continuity/section_continuity.md) |
-| A | missing-items | missing_items | 2 | 否 | — | [missing_items](layers/missing_items/missing_items.md) |
 | B | item-numbering-integrity | item_numbering_integrity | 3 | 否 | — | [item_numbering_integrity](layers/item_numbering_integrity/item_numbering_integrity.md) |
+
+> **注（2026-08-13 重构）**：原 A 层（missing-items，整章完整性 `truly_missing`/`mentioned_only`/`extra`）与原独立 Q/R 的查漏逻辑（整类首项缺失 + over-mark 守卫，原 P2 收于 EXTRACT 层）已**统一并入 B 层**。B 现为「查漏」唯一权威：`truly_missing`（书有、md 全宇宙无 → 阻断）、`mentioned_only`（仅复核）、`extra`（仅参考）、以及提取侧查漏均由其产出。EXTRACT 层退化为纯数据供给（items / entry_keys / all_keys / label_warns），与 B 解耦。
 | C | katex-validation | katex_validation | 4 | 否 | — | [katex_validation](layers/katex_validation/katex_validation.md) |
 | E | figure-completeness | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
 | F | figure-validity | figure_validity | 6 | 否 | — | [figure_validity](layers/figure_validity/figure_validity.md) |
@@ -53,8 +54,8 @@
 
 ## 本阶段规则（🔴 内联）
 - **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
-  - 原因：书级配置需待全书编号形态定型后，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；A–Q 若干判定需整章 / 整书上下文。
-- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（A 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
+  - 原因：书级配置需待全书编号形态定型后，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；B–Q 若干判定需整章 / 整书上下文。
+- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
 
 ## 出口条件

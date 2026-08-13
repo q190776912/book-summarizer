@@ -337,7 +337,7 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
 
 
 def _write_detect(out_dir, entries, md_lines):
-    figure_detect.FigureDetect(data=entries).dump(os.path.join(out_dir, "figure_detect.json"), "w", encoding="utf-8")
+    figure_detect.FigureDetect(data=entries).dump(os.path.join(out_dir, "figure_detect.json"))
     with open(os.path.join(out_dir, "figure_detect.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(md_lines) + "\n")
 

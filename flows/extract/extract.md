@@ -32,12 +32,20 @@
    total_chapters = len(chapter_map)
    chapter_map_ready = False
    while True:
+       0. 健康检查（每轮先做）：确认后台提取进程仍存活 ——
+          `tasklist` 中应有 pdfextract 的 `python.exe` 进程，且 `extract_pipeline.log`
+          末尾无 `Batch N–M FAILED` / `Pipeline finished` / `Traceback`。
+          若进程已不在 或 日志出现失败 → **立即排查原因**（读 `extract_pipeline.log`
+          与对应 `batch_*.log` 末段定位异常并修复），随后**直接重启流水线**
+          （脚本支持断点续跑，会从已落盘最大页+1 续跑，无需 --force）；
+          修复前不要继续推进后续步骤。
        1. current_max_page = max(现有 _extract/page_*.json 的页码)
        2. if not chapter_map_ready and current_max_page >= 5:
             从目录页读章名与书页码 → 写 chapter_map.json（见子流程 [`extract/chapter_map`](chapter_map/chapter_map.md)）；chapter_map_ready = True
        3. 若 current_max_page 自上次 MM audit 以来增长（建议新增 ≥1 稳定批次，如 50 页；或后台提取已结束）：
             对"新增稳定落盘区间"跑 MM Repair 完整链路（见子流程 [`extract/mm_repair`](mm_repair/mm_repair.md)）
    ```
+   - ⚠️ **流水线在首个批次失败时即整体停止**（日志 `Stopping due to batch failure`），**不会自动重试**；若不及时监控，会"静默死掉、0 页落盘"。因此每轮轮询**必须先做步骤 0 健康检查**，发现死掉立即排查+重启，绝不能在"以为还在跑"的状态下一步步空转。
    - **提取与 MM 修复门可并行**：MM Repair 只针对已落盘页码，绝不与提取进程写同一文件冲突。
    - **视觉审读是瓶颈**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行。
 

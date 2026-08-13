@@ -392,7 +392,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
         out = {"page": pno, "formulas": formulas, "text": pg["text"],
                "deskew": {"angle_deg": round(skew, 3),
                           "mode": deskew_mode}}
-        PageJson(data=out).dump(os.path.join(out_dir, f"page_{pno:03d}.json"), "w", encoding="utf-8")
+        PageJson(data=out).dump(os.path.join(out_dir, f"page_{pno:03d}.json"))
         log(f"  Write page {pno}: {len(formulas)}F {len(pg['text'])}T")
 
     phase3_elapsed = time.time() - phase3_t0

@@ -14,10 +14,10 @@ semantic label:
 Detected crops (named ``det_p{PAGE}_{IDX}.png`` by detection) are then renamed
 to ``chNN_figX.X.X.png`` (matched) or ``chNN_unnamed_K.png`` (unmatched, still
 embedded at summary as "图(未标号)"), and the assigned ``figure_index.json`` is
-written — the file ``verify_chapter.py`` (E/F layers) consumes.
+written — the file ``verify_chapter.py`` (figure layer E, unified) consumes.
 
-E/F semantics after assignment:
-  * a 图X.X.X referenced in OCR with NO nearby detected figure => E-layer
+figure-layer (E, unified) semantics after assignment:
+  * a 图X.X.X referenced in OCR with NO nearby detected figure => E-layer (fig_missing)
     MISSING (truly missed -> re-detect that page, or declare it in
     ``figure_manual_chN.json`` and run ``apply_manual_figures.py``).
   * a detected figure that could not be matched to any 图X.X.X => kept as

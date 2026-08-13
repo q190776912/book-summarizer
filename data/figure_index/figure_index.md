@@ -26,7 +26,7 @@ PDF 抽取阶段 2 的**命名索引**：把阶段 1 的检测框匹配到书源
 - `caption`：图注文本。
 
 ## 消费方
-- `../../verify/script/verify_chapter.py` 的 **E 层（图片完整性）** 与 **F 层（图片有效性）**。
+- `../../verify/script/verify_chapter.py` 的 **figure 层(E)：图片完整性 + 图片有效性（原 E/F 合并）**。
 - 命名 / 嵌入：`assign_figures.py` / `embed_figures.py` / `../../config/figure_manual_chN/apply_manual_figures.py`。
 
 ## 关联

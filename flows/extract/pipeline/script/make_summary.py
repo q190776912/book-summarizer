@@ -133,7 +133,7 @@ def main():
 
     lines.append("---")
     lines.append("注: M=缺失条目(A层) B=阻断项(B层) K=KaTeX错误(C层) Dmiss=整节缺失(D层) "
-                 "G=引用块连续性 G层 EG=例-证间隙 G层 FgMiss/FgInv=图片缺失/无效(E/F层)。")
+                 "G=引用块连续性 G层 EG=例-证间隙 G层 FgMiss/FgInv=图片缺失/无效(E层)。")
     txt = "\n".join(lines)
     open(OUT, "w", encoding="utf-8").write(txt)
     print(txt)

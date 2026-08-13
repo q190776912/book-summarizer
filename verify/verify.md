@@ -28,8 +28,9 @@
 
 > **注（2026-08-13 重构）**：原 A 层（missing-items，整章完整性 `truly_missing`/`mentioned_only`/`extra`）与原独立 Q/R 的查漏逻辑（整类首项缺失 + over-mark 守卫，原 P2 收于 EXTRACT 层）已**统一并入 B 层**。B 现为「查漏」唯一权威：`truly_missing`（书有、md 全宇宙无 → 阻断）、`mentioned_only`（仅复核）、`extra`（仅参考）、以及提取侧查漏均由其产出。EXTRACT 层退化为纯数据供给（items / entry_keys / all_keys / label_warns），与 B 解耦。
 | C | katex-validation | katex_validation | 4 | 否 | — | [katex_validation](layers/katex_validation/katex_validation.md) |
-| E | figure-completeness | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
-| F | figure-validity | figure_validity | 6 | 否 | — | [figure_validity](layers/figure_validity/figure_validity.md) |
+| E | figure（图完整性+图有效性，原 E/F 合并） | figure_completeness | 5 | 否 | — | [figure_completeness](layers/figure_completeness/figure_completeness.md) |
+
+> **注（2026-08-13 重构）**：原 F 层（figure-validity，图有效性 / cv2 解码校验：文件缺失·无法解码·单边<20px 阻断、近空白低方差仅警告）已**并入 E 层**。figure 校验现为代号 `E` 的单层：一次性载入 `figure_index.json` 并按章过滤，既做 caption↔index 对账（`fig_missing` 阻断 / `fig_extra` 警告），又做裁剪图解码校验（`fig_invalid` 阻断 / `fig_invalid_warn` 警告）。`code='F'` 及其 `figure_validity` 模块已退役（备份于 `verify/_retired_layers/figure_validity_2026-08-13/`）。
 | G | blockquote-continuity | blockquote_continuity | 7 | 是 | 5 | [blockquote_continuity](layers/blockquote_continuity/blockquote_continuity.md) |
 | H | structural-label-guard | structural_label_guard | 8 | 是 | 1 | [structural_label_guard](layers/structural_label_guard/structural_label_guard.md) |
 | I | item-separator | item_separator | 9 | 是 | 6 | [item_separator](layers/item_separator/item_separator.md) |

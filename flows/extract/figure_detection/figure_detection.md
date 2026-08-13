@@ -33,6 +33,3 @@
 - `../../../data/figure_detect/figure_detect.py`（`FigureDetect`）：`figure_detect.json` 数据结构。
 - `../../../data/figure_index/figure_index.py`：`figure_index.json` 数据结构。
 - `../../../lib/figure_io.py`（`load_fig_labels` / `build_fig_label_re` / `FIGURE_LABELS_DEFAULT`）：图号前缀的跨流程唯一读取点。
-
-## 子流程
-- 无独立子流程。图流水线全部规则（手动补图、E/F 校验衔接、嵌入后处理等）的 SSOT 见 [`../../write-source/figures/ref/figure_pipeline.md`](../../write-source/figures/ref/figure_pipeline.md)；配置字段见 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)。

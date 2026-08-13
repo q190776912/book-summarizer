@@ -19,8 +19,8 @@ This is the **detection phase** of the skill's two-phase figure pipeline.
     figure's "图 X.X.X" label from (a) its caption text or (b) the nearest
     "图 X.X.X" caption by position, renames the crop to
     ``chNN_figX.X.X.png`` (matched) or ``chNN_unnamed_K.png`` (unmatched), and
-    writes the assigned ``figure_index.json`` that ``verify_chapter.py`` (E/F
-    layers) consumes.
+    writes the assigned ``figure_index.json`` that ``verify_chapter.py`` (figure
+    layer E, unified) consumes.
 
 Keeping the two phases separate means detection is a dumb "save everything +
 position" pass, and the semantic naming is deferred until we know the chapter
@@ -125,7 +125,7 @@ def render_page(doc, pno, dpi, deskew_mode="auto",
     Delegates to the shared ``deskew.render_page`` so that figure
     bounding boxes live in the SAME coordinate space as the text/formula
     boxes produced by ``extract_book.py`` (both must use the identical
-    deskew render, otherwise caption matching and the E/F layers break).
+    deskew render, otherwise caption matching and the figure layer (E) breaks).
     """
     img_bgr, (W, H), _ = _deskew_render_page(
         doc, pno, dpi, mode=deskew_mode, max_angle=max_angle, threshold=threshold)

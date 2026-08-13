@@ -24,7 +24,7 @@
 图片提取分成两段：**阶段 1 检测（detection）** 与 **阶段 2 命名（assignment）**。这两段**不再内联在文本提取流水线里**，而是由独立的 `figure_detection` 子流程统一执行——在 **`verify_config.json`（含 `figure.labels`）配置就绪**、全书文本落盘之后跑一次全本（SSOT 见 [`../../../extract/figure_detection/figure_detection.md`](../../../extract/figure_detection/figure_detection.md)）。
 
 - **阶段 1 检测（detection，`flows/script/extract_figures`）**：`run_full_book()` 对全书每页做 DocLayout-YOLO 检测，裁图存 `figure/det_p{PAGE:03d}_{IDX:02d}.png`（**位置名，无图号**，不带"图6.1.1"这种语义名），写出 `figure_detect.json`。**只有带序标（`图 X.X` / `Fig X.X` / `Scheme X.X` 等）的图，才把其下方 caption（标号 + 说明）一并裁入同一张图**；无标号 caption 的图只裁图本身。
-- **阶段 2 命名（assignment，`flows/script/assign_figures`）**：`run_book()` 读 `figure_detect.json` + 章内 OCR 图注，根据 **bbox 位置 + OCR 图注文本** 判断每张检测到的图对应哪个"图 X.X.X"，重命名为 `figure/chNN_figX.X.X.png`（匹配）或 `chNN_unnamed_K.png`（未匹配），写出 `figure_index.json`（`../../../../verify/script/verify_chapter.py` 的 E/F 层消费）。
+- **阶段 2 命名（assignment，`flows/script/assign_figures`）**：`run_book()` 读 `figure_detect.json` + 章内 OCR 图注，根据 **bbox 位置 + OCR 图注文本** 判断每张检测到的图对应哪个"图 X.X.X"，重命名为 `figure/chNN_figX.X.X.png`（匹配）或 `chNN_unnamed_K.png`（未匹配），写出 `figure_index.json`（`../../../../verify/script/verify_chapter.py` 的 figure 层(E)消费）。
 
 **为什么拆出去**：图检测是 extract 阶段里**唯一读 `figure.labels`** 的环节。若在内联执行时 `figure.labels` 尚未配置，自定义前缀书（Scheme / Illustration 等）的 caption 会被漏识、退化成默认 `["图","Figure","Fig"]`。拆成独立子流程、待配置就绪后运行，从源头保证 `figure.labels` 先就位。本书确实无图时，直接跳过该子流程即可（`figure_index.json` 保持缺失，无需开关）。
 
@@ -113,13 +113,13 @@
 - 重跑单章检测：`extract_figures.run_chapter(...)`
 - 重跑单章分配：`assign_figures.run_chapter(...)`（保留 manual 条目）
 
-### 与 E/F 校验的衔接
+### 与 figure 层(E) 校验的衔接
 
-`figure_index.json` 落地后 `../../../../verify/script/verify_chapter.py` 启用 **E 层（图片完整性）** 与 **F 层（图片有效性）**：
+`figure_index.json` 落地后 `../../../../verify/script/verify_chapter.py` 启用 **figure 层(E)：图片完整性 + 图片有效性（原 E/F 合并）**：
 
 - **E 层 MISSING（真漏检）**：章内 OCR 引用了"图 X.X.X"但 `figure_index.json` 无对应条目 → 该图**根本没被检测到** → 去对应页**重新识别**（降 `--conf` 重跑 `extract_figures.py --ch N` 或手动补图）
 - **未命名（已检测，无图号）**：`figure_index.json` 中有该图条目但 `label==null` → 它**被找到了**，只是 caption 没被识别成"图 X.X.X" → **不阻断**
-- **F 层**：裁剪图缺失/无法解码/单边<20px → 阻断；近空白误检 → 仅警告
+- **figure 层(E) 有效性**：裁剪图缺失/无法解码/单边<20px → 阻断；近空白误检 → 仅警告
 - 两层前提：`figure_index.json` 存在且含本章 `chapter` 条目；否则 SKIP
 
 ---
@@ -142,7 +142,7 @@
 
 - 权重 `doclayout_yolo_ft.pt` 来自 **ModelScope `opendatalab/pdf-extract-kit-1.0`**
 - 加载器必须用 **`doclayout_yolo.YOLOv10`**，不能用 `ultralytics.YOLO`（后者在 `predict()` 时会自动 fuse 把 `Conv.bn` 删掉，触发 doclayout_yolo 0.0.4 的 `'Conv' object has no attribute 'bn'`）
-- `cv2`（opencv-python）用于读取；Windows 上 `cv2.imread` 读不了含中文路径的文件，`../../../../verify/script/verify_chapter.py` 的 F 层用 `np.fromfile`+`cv2.imdecode` 读；**`extract_figures.py` 已改用 PIL 保存裁剪图**（见下方『已知边界』），避免中文路径静默失败
+- `cv2`（opencv-python）用于读取；Windows 上 `cv2.imread` 读不了含中文路径的文件，`../../../../verify/script/verify_chapter.py` 的 figure 层(E)用 `np.fromfile`+`cv2.imdecode` 读；**`extract_figures.py` 已改用 PIL 保存裁剪图**（见下方『已知边界』），避免中文路径静默失败
 
 ---
 

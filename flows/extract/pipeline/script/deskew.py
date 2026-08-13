@@ -5,7 +5,7 @@ Both `extract_book.py` (MFD/MFR/OCR) and `flows/script/extract_figures.py`
 so they MUST share the SAME render+deskew routine.  Otherwise the
 text/formula boxes (`poly` / `bbox`) would live in the deskewed
 coordinate space while the figure boxes stay in the raw space, and the
-caption matching + E/F verification layers would break.
+caption matching + figure verification layer (E) would break.
 
 Algorithm
 ---------

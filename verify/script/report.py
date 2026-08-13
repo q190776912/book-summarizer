@@ -147,7 +147,7 @@ def print_result(r):
 
     # E-LAYER: figure completeness (analog of B-layer) — only if figure extraction ran.
     if r.get('fig_skipped'):
-        print("\nE/F-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
+        print("\nE-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
     else:
         if r['fig_missing']:
             problems += 1
@@ -169,11 +169,11 @@ def print_result(r):
                     print(f"  ~ fig-{k.encode('ascii', errors='replace').decode('ascii')}")
         if r['fig_invalid']:
             problems += 1
-            print(f"\nF-LAYER FIGURE VALIDITY ERRORS ({len(r['fig_invalid'])}):")
+            print(f"\nE-LAYER FIGURE VALIDITY ERRORS ({len(r['fig_invalid'])}):")
             for l in r['fig_invalid']:
                 print(l)
         if r['fig_invalid_warn']:
-            print(f"\nF-LAYER FIGURE SUSPICIOUS ({len(r['fig_invalid_warn'])}):")
+            print(f"\nE-LAYER FIGURE SUSPICIOUS ({len(r['fig_invalid_warn'])}):")
             for l in r['fig_invalid_warn']:
                 print(l)
 

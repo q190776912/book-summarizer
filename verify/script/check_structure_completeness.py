@@ -715,9 +715,21 @@ def main():
     cm_path = os.path.join(ext, "chapter_map.json")
     cm = json.load(open(cm_path, encoding="utf-8")) if os.path.exists(cm_path) else {"chapters": []}
     rng = {}
-    for c in cm.get("chapters", []):
-        n = c.get("chapter", c.get("num"))
-        rng[n] = (c.get("start"), c.get("end"))
+    # 兼容两种 chapter_map 格式：{"chapters":[{num,start,end}]} 与扁平 {"1":{start,end}}
+    # （与 build_structure._build_rng 一致，避免格式不一致导致 rng 为空、静默无报告）
+    if isinstance(cm, dict) and "chapters" in cm:
+        for c in cm["chapters"]:
+            n = c.get("num", c.get("chapter", c.get("ch")))
+            if n is None:
+                continue
+            rng[int(n)] = (c.get("start"), c.get("end"))
+    elif isinstance(cm, dict):
+        for kk, cc in cm.items():
+            s = cc.get("start", cc.get("start_page"))
+            e = cc.get("end", cc.get("end_page"))
+            if s is None or e is None:
+                continue
+            rng[int(kk)] = (int(s), int(e))
 
     for ch in (want or sorted(rng)):
         if ch not in rng:

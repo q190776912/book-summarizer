@@ -39,7 +39,7 @@
   - **判定不清仍须回归全书**：新类型的判定同样适用 规则2（回归全部 `page_*.json` 上下文），不得抽样定稿。
   - 补充：本规则与 `missing_label_policy.md` 互补——后者管"已识别类别但 OCR 漏抽的条目"（§2 凭知识库补写），本规则管"类别本身未知、需要扩展类型体系"的情形。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `figure` 块必须显式出现（自定义前缀→`labels` 非空、无图序标→`labels` 显式空数组 `[]`，二者皆不可"字段缺失"）。
-- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–7，判定树见 [`../../write-source/format/ref/book_patterns.md`](../../write-source/format/ref/book_patterns.md)）。
+- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–7）。
 
 ## 出口条件
 - 出口：`_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式；**`figure` 块必现**——有自定义前缀则 `labels` 非空、无图序标则 `labels` 显式空数组 `[]`，二者皆不可"字段缺失"）。
@@ -48,6 +48,3 @@
 - `../../../config/verify_config/make_config.py`：半自动配置生成（**公用配置脚本**，与流程解耦，说明见 `../../../config/verify_config/verify_config.md`）。
 - `../../../verify/script/verify_chapter.py`：消费配置做校验（`ConfigLoader.require_complete()`）。
 - `../../../config/verify_config/verify_config.py`：`BookConfig` / `GroupConfig` 数据模型（schema 实现 SSOT）。
-
-## 子流程
-- 无独立子流程。配置字段的权威说明见公用文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)（`verify_config.json` 完整 Schema、JSON 示例、旧格式拒绝规则）；漏识标签补写策略（`missing_label_policy.md`）属**校验流程**，见 [`../../../verify/missing_label_policy.md`](../../../verify/missing_label_policy.md)。

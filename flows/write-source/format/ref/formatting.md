@@ -635,7 +635,7 @@ Common patterns (after correction):
    - 禁止**无中生有**：不得为「看着像应该有编号」而编造 `\tag`；S 中没有的编号，宁可不加 `\tag`（退化为无编号公式）也不许编造；
    - 禁止**为统一风格篡改分隔符**：S 用 `（11.1-1）`(短横) 就用 `-`，S 用 `（11.1.1）`(点) 就用 `.`，不得把原书分隔符统一改成另一种；`norm()` 会把 `.\-·,` 任一分隔符归一为 `.` 再比对，但**总结里的 `\tag` 应与书源书写一致**，机器只判归一后是否等价、不强制书写形式。
 
-Q 层（`verify/layers/formula_tag/script/formula_tag.py`，`verify_config.json` 配置 `formula` map 时启用）仅做**序标结构**校验，公式**内容对错**由人核对 `formula_audit.md`（`verify --all` 末生成的对账报告）。
+Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置 `formula` map 时启用）仅做**序标结构**校验，公式**内容对错**由人核对 `formula_audit.md`（`verify --all` 末生成的对账报告）。
 
 11. **`$` 必须成对闭合，尤其注意中文标点**：`$formula，` 是最常见的隐蔽 bug。中文逗号/句号前缺少闭合 `$`，导致数学模式延续到下一行的 `$$` 首字符，使显示公式失效。
     - ❌ 错误：`对 $t>0,[空行]$$...$$`（`$t>0,` 没有闭合 → `$` 吞掉 `$$` 的首 `$`）

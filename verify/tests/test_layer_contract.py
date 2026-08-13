@@ -4,9 +4,9 @@ test_layer_contract.py — schema/contract test for the verify-layer registry.
 Goal (Tessa / Testing Expert):
   Prove that every layer contributes ONLY result keys that already exist in
   `DEFAULT_RESULT` (so the byte-compatible `verify_one` contract in
-  verify/layers/script/base.py never breaks when a new layer is added), and that every
+  verify/script/base.py never breaks when a new layer is added), and that every
   auto-fixable layer's `fix_dict` uses ONLY the known fix-fict keys
-  (`FIX_KEYS`, from verify/layers/script/base.py).
+  (`FIX_KEYS`, from verify/script/base.py).
 
 Run with stdlib unittest (no pytest dependency, runs anywhere):
   python -m unittest verify/test_layer_contract.py -v
@@ -33,11 +33,11 @@ import os
 
 import unittest
 from verify.script.register_all import LAYER_REGISTRY
-from verify.layers.script.base import DEFAULT_RESULT
-from verify.layers.script.base import VerifyContext
+from verify.script.base import DEFAULT_RESULT
+from verify.script.base import VerifyContext
 from verify_config import BookConfig, GroupConfig
 
-# Fix-dict contract keys (verify/layers/script/base.py): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
+# Fix-dict contract keys (verify/script/base.py): h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n
 FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'g', 'i', 'j', 'k', 'l', 'm', 'n'}
 
 # Allowed result-dict keys = the exact legacy contract mirrored by DEFAULT_RESULT.
@@ -112,7 +112,7 @@ class LayerContractTest(unittest.TestCase):
         standalone `fix_<snake>.py` modules registered via `register_fixer`
         (codes H/G/I/J/K/L/M/N preserved). `VerifyManager.fix` consumes FIXERS
         directly, so we validate FIXERS here instead of LAYER_REGISTRY."""
-        from verify.layers.script.base import FIXERS, fixable_ordered_fixers
+        from verify.script.base import FIXERS, fixable_ordered_fixers
         self.assertGreater(len(FIXERS), 0, "FIXERS registry has no fixers")
         for code, (fix_order, fn) in fixable_ordered_fixers():
             fr = fn(self.ctx)

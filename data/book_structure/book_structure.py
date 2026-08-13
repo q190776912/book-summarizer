@@ -11,7 +11,7 @@
 
 本模块是结构 JSON 的**唯一权威模型**：所有读写 / 遍历 / 回填都经本类，
 脚本不再裸操作 json 字典（见 ``verify/common/structure_io.py``、
-``verify/layers/verbose_gates``、``verify/script/check_structure_completeness.py``）。
+``verify/verbose_gates``、``verify/script/check_structure_completeness.py``）。
 
 序列化契约（对齐 data/data_schema.md 描述的 JsonData 基类）：
 ``to_dict()`` / ``from_dict()`` / ``dump()`` / ``load()``。

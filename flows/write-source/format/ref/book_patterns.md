@@ -101,7 +101,7 @@ python verify/script/verify_chapter.py --all _extract <book_dir>
       → 若确为三级书但有几个真·OCR 噪点：用 --ignore 登记
         （写入 _extract/ignore_ch{N}.json，附 ignore_ch{N}.md 举证）
 
-> 💡 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 §6.1 与 `verify/layers/item_numbering_integrity/item_numbering_integrity.md`）。
+> 💡 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 §6.1 与 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
 ```
 
 ---

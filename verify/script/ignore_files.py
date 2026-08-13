@@ -3,7 +3,7 @@ ignore_files.py — load --ignore / --ignore-figure files (per-book config).
 
 Relocated verbatim from verify_chapter.py (load_ignore / load_ignore_fig) so
 the deleted fig_layers.py (which used to own `normfig`) is no longer imported
-by the CLI. `normfig` is re-exported from verify.layers.script._fig_common.
+by the CLI. `normfig` is re-exported from verify.script._fig_common.
 """
 import os
 import sys

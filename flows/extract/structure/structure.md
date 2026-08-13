@@ -6,7 +6,7 @@
 **统一结构骨架 / 写作契约 + verify 编号项基准**：structure 子流程产出全书单一 `book_structure.json`（书对象，不再按章拆分、不再用数组包裹），一次产出同时满足两类需求：
 
 - **write-source 写作契约**：全书按章顺序的章节树，几节写几节、顺序照抄、每个编号项（定义/定理/例/…）必须落地、印刷标题进 `name`、练习全量纳入 `type:"exercise"`。
-- **verify 编号项基准**：展平树、过滤 `type!="exercise"` 即得本书编号项 `key` 集合（data_provider 改为读此 JSON，不再重跑抽取器，见 `verify/layers/data_provider`）。
+- **verify 编号项基准**：展平树、过滤 `type!="exercise"` 即得本书编号项 `key` 集合（data_provider 改为读此 JSON，不再重跑抽取器，见 `verify/data_provider`）。
 
 > 本文件是《结构契约 + verify 基准》的**唯一权威（SSOT）**。底层扫描/抽取（`scan_skeleton.py` / `extract_items*.py`）不再作为独立子流程暴露，仅作为 `build_structure.py` 的内部依赖被调用；本阶段只跑 `build_structure.py` 产 JSON。
 
@@ -34,12 +34,12 @@ python flows/extract/structure/script/build_structure <extract_dir>
 python verify/script/check_structure_completeness.py <extract_dir> [ch ...]            # dry-run：只出报告
 python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --backfill  # 写回 book_structure.json
 ```
-- 章节完整性 → 复用公共子流程 `verify/layers/section_continuity`（语义名 **section-continuity**，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。
+- 章节完整性 → 复用公共子流程 `verify/section_continuity`（语义名 **section-continuity**，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。
 - 把 `book_structure.json` 派生出「合成 md」（`## §C.S` 标题）喂给 D 层，D 层比对「书中真值章节集」vs 契约，检出**遗漏章节**：内部洞（`continuity_sections`）+ 尾部缺节（`missing_sections`），回填 `book_structure.json` 的 `section` 节点。
 - 🔴 **只校验章节级（level 2 = C.S）**：`book_structure` 只建模 `chapter → section → 条目`，**无 subsection 容器节点**，故 D 层只取 `levels[2]`（level 1 = 章前缀、level 2 = 节），不查 subsection（否则会把每个 C.S-K 条目误报成「缺失 subsection」）。
 
 **第 3 步 · 重要概念查漏 + 回填（复用 `item_numbering_integrity` / B 层）**
-- 条目完整性 → 复用公共子流程 `verify/layers/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把 `book_structure` 派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
+- 条目完整性 → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把 `book_structure` 派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
 - 具体**回填**由「源条目集（`scan_raw_items` 跨校验：标题锚定、全方案 / 全类型，抓抽取器漏检）− 契约」的结构化差集驱动（保留 `scan_raw_items` 作为稳健源侧交叉校验），只回填**重要概念**（排除练习类）：
   - `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本**自动回填**；
   - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
@@ -69,11 +69,11 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 「写完 MD 才发现」提前到「抽完即查、源侧兜底」。
 
 ### 复用的公共校验能力
-- **章节完整性** → 复用公共子流程 `verify/layers/section_continuity`（语义名 **section-continuity**，
+- **章节完整性** → 复用公共子流程 `verify/section_continuity`（语义名 **section-continuity**，
   `check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。把 `book_structure`
   派生「合成 md」（`## §C.S`）喂给 D 层，比对「书中真值章节集」vs 契约，只取 `levels[2]`（章节级）的
   内部洞 / 尾部缺节作为遗漏章节。与 verify 端同源，不产生第二套判定逻辑。
-- **条目完整性** → 复用公共子流程 `verify/layers/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）
+- **条目完整性** → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）
   的编号完整性逻辑。把 `book_structure` 派生「合成 md」（`**key Label**` 粗体头，按 `type` 反推标签以匹配 B 层解析，
   因 `build_structure` 产出的 `name` 已剥掉类型词）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
   实际**回填**由「源侧标题锚定扫描 `scan_raw_items`（覆盖全方案 three_level / two_level / en / fraleigh / gm / roman、

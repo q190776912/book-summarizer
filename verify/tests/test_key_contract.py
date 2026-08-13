@@ -19,21 +19,21 @@ import os, re, sys, io
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from verify.layers.script.base import DEFAULT_RESULT
+from verify.script.base import DEFAULT_RESULT
 
-LAYERS_DIR = os.path.join(_ROOT, "verify/layers")
+LAYERS_DIR = os.path.join(_ROOT, "verify")
 REPORT = os.path.join(_ROOT, "verify/script/report.py")
 
 # 管理器注入、不归属任何层的键（稳定基础设施，加层不受影响）。
-# 各层自己的键声明在 verify/layers/<snake>/<snake>.md 的 ```contract-keys 块中
-# （层文档 verify/layers/<snake>/<snake>.md 位于 <snake>/ 目录内；脚本 verify/layers/<snake>/script/<snake>.py）。
+# 各层自己的键声明在 verify/<snake>/<snake>.md 的 ```contract-keys 块中
+# （层文档 verify/<snake>/<snake>.md 位于 <snake>/ 目录内；脚本 verify/<snake>/script/<snake>.py）。
 MANAGER_INJECTED = {"ch", "md", "status", "extract_dir", "levels"}
 
 
 def load_doc_keys():
-    """Aggregate every layer's declared contract keys from verify/layers/<snake>/<snake>.md
+    """Aggregate every layer's declared contract keys from verify/<snake>/<snake>.md
     (per-layer sub-flow docs live INSIDE each <snake>/ directory; scripts under <snake>/script/).
-    NOTE: layer docs are one level deeper than the verify/layers/ root, so walk each <snake>/ subdir."""
+    NOTE: layer docs are one level deeper than the verify/ root, so walk each <snake>/ subdir."""
     keys = set()
     layers_dir = LAYERS_DIR
     if not os.path.isdir(layers_dir):
@@ -67,7 +67,7 @@ def load_report_keys():
 
 def test_layer_docs_match_default_result():
     doc_keys = load_doc_keys()
-    assert doc_keys, "no contract-keys parsed from verify/layers/*.md"
+    assert doc_keys, "no contract-keys parsed from verify/*.md"
     expected = doc_keys | MANAGER_INJECTED
     only_doc = expected - set(DEFAULT_RESULT.keys())
     only_code = set(DEFAULT_RESULT.keys()) - expected

@@ -2,13 +2,13 @@
 verify_chapter.py — the single MANDATORY gate for a chapter. It enforces ALL
 completeness/validity layers in one command.
 
-All verification layers live as independent modules under `verify/layers/`,
+All verification layers live as independent modules under `verify/`,
 registered in `verify/script/register_all.py` and orchestrated by
-`verify/layers/base.VerifyManager`.  This file is now a THIN SHELL:
+`verify/base.VerifyManager`.  This file is now a THIN SHELL:
 
   * The authoritative layer REGISTRY (ordered list, --fix scope) is
     `verify/verify.md` (SSOT).  Per-layer semantics / thresholds /
-    byte-contract live in `verify/layers/<semantic_name>/<snake>.md` — do NOT duplicate
+    byte-contract live in `verify/<semantic_name>/<snake>.md` — do NOT duplicate
     them here.  Run order == each layer's `order` attribute (auto-discovered).
   * Configuration is read ONCE by `config.ConfigLoader` (the single source
     of truth for verify_config.json + chapter_map.json + figure_index.json +
@@ -48,7 +48,7 @@ import sys, os, json, glob, re
 
 
 from verify_config import ConfigLoader, ConfigError
-from verify.layers.script.base import VerifyManager
+from verify.script.base import VerifyManager
 from verify.script.register_all import LAYER_REGISTRY
 from verify.script.report import print_result
 # --ignore / --ignore-figure loaders (relocated; no longer import fig_layers).

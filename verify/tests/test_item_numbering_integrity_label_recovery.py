@@ -50,7 +50,7 @@ import unittest
 
 from verify_config import BookConfig, GroupConfig
 from item_numbering_integrity import _md_gap_blocking
-from verify.layers.script.base import VerifyContext
+from verify.script.base import VerifyContext
 
 
 def _ctx_with_md(md_text, config):

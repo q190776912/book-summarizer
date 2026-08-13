@@ -1,7 +1,7 @@
 """config/verify_config/verify_config.py — single source of truth for ALL per-book verify configuration.
 
 This module replaces the old `ManagerConfig` (verify/registry.py) +
-`BNumberingConfig` (verify/layers/item_numbering_integrity/script/item_numbering_integrity.py) and the scattered inline reads of
+`BNumberingConfig` (verify/item_numbering_integrity/script/item_numbering_integrity.py) and the scattered inline reads of
 `chapter_map.json` / `figure_index.json`.  Every layer reads its configuration
 through a `ConfigLoader` instance (constructed ONCE per run), never by
 re-reading files or by receiving config field-by-field through a context object.

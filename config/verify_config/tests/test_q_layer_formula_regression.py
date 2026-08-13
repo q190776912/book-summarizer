@@ -63,7 +63,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from verify_config import BookConfig                                          # noqa: E402
-from verify.layers.script.base import VerifyContext                            # noqa: E402
+from verify.script.base import VerifyContext                            # noqa: E402
 from formula_tag import (                                 # noqa: E402
     QLayer, SourceFormulaIndex, build_formula_patterns)
 

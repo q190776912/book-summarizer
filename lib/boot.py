@@ -5,7 +5,7 @@ After the big refactor, the code packages (``extract``, ``figure``, ``format``,
 under the skill root.  Flow-stage packages live under ``flows/<stage>/script/<pkg>/`` (each stage's scripts are grouped in a ``<pkg>`` subpackage under its ``script/`` directory),
 and the shared ``verify`` engine is a proper package at the skill root level
 (``verify/``, parallel to ``flows/``), with each validation layer as a
-``verify/layers/<semantic_name>/`` subpackage.
+``verify/<semantic_name>/`` subpackage.
 
 Each intermediate-product JSON lives in its **own directory** under ``data/<json_name>/``
 (for example ``data/chapter_map/``, ``data/figure_index/``, ``data/formula_manifest/``),
@@ -18,7 +18,7 @@ its **own directory** under ``config/<json_name>/`` (for example
 ``import json_data`` / ``import verify_config`` / ``import manage_ignore`` / ...
 working no matter which script is the entry point, this module adds the skill root,
 the ``lib`` package, **every** ``flows/*/script`` directory, and the ``verify``
-package (with its ``layers/`` subpackages),
+package (with its per-layer ``<semantic_name>/`` subpackages),
 and **every direct child directory of ``data/``** and ``config/``** (so each
 ``data/<json_name>/`` and ``config/<json_name>/`` package is importable) to
 ``sys.path``.
@@ -54,11 +54,13 @@ def _register_verify_package(r):
 
     After the semantic-layout refactor the verify engine is a real package at
     the skill root (``verify/`` containing ``verify_chapter.py``,
-    ``register_all.py``, ``report.py`` and the ``layers/`` subpackage tree), so
-    ``import verify`` / ``from verify.layers import ...`` resolves through normal
-    package machinery.  We still register it explicitly (guarded by the
-    ``"verify" not in sys.modules`` check) so the historical import surface
-    works regardless of which entry script bootstrapped first.
+    ``register_all.py``, ``report.py`` and the per-layer ``<semantic_name>/``
+    subpackages), so ``import verify`` resolves through normal package machinery
+    and each validation-layer module is importable by its bare ``<snake>`` name
+    (boot injects ``verify/**/script`` into ``sys.path``).  We still register it
+    explicitly (guarded by the ``"verify" not in sys.modules`` check) so the
+    historical import surface works regardless of which entry script bootstrapped
+    first.
     """
     import importlib.util
     pkg_dir = os.path.join(r, "verify")

@@ -71,7 +71,7 @@
 ## 5. 消费者（只读，不裸操作 json）
 
 - `verify/common/structure_io.py`：`read_structure_items(ext_dir, ch)` → 经 `BookStructure.load` + `chapter_items` 返回编号项列表（被 `data_provider` 消费）。
-- `verify/layers/verbose_gates/script/verbose_gates.py`：`_load_contract` 经 `BookStructure.load` + `find_chapter` 取契约。
+- `verify/verbose_gates/script/verbose_gates.py`：`_load_contract` 经 `BookStructure.load` + `find_chapter` 取契约。
 - `verify/script/check_structure_completeness.py`：`check_chapter` 经 `BookStructure.load` + `find_chapter` 取章节节点做查漏——章节漏用 `section_continuity`（D 层 `check_d_layer`）检、条目漏用 `item_numbering_integrity`（B 层）检，回填后 `root.replace_chapter(tree)` + `save()` 写回，并以「完整 + 连续」闸门收尾。
 - `verify/script/report.py`：P-LAYER 提示串已指向 `book_structure.json`。
 

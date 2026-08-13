@@ -26,7 +26,7 @@
 ```
 
 ## 消费方
-- verify **EXTRACT 层**（权威说明见 `../../verify/layers/data_provider/data_provider.md`）：扫描 `_extract` 的
+- verify **EXTRACT 层**（权威说明见 `../../verify/data_provider/data_provider.md`）：扫描 `_extract` 的
   `page_*.json`，填 `ctx.items` / `ctx.entry_keys` / `ctx.all_keys`。
 - `flows/extract/structure/script/extract_items*.py`：读取条目与键集，产出章节 `.md`。
 - MM Repair 链路回写修正也落在 `page_*.json`（见 `../../flows/extract/mm_repair/mm_repair.md`）。

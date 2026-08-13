@@ -15,7 +15,7 @@ import lib.boot as _boot
 _boot.setup()
 
 import register_all  # noqa: F401  (triggers discovery + fix registration)
-from verify.layers.script.base import FIXERS, fixable_ordered_fixers
+from verify.script.base import FIXERS, fixable_ordered_fixers
 
 
 def test_fixers_registered_and_ordered():

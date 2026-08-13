@@ -107,7 +107,7 @@ SECGLUE_CN = re.compile(
     r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
     r'[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 
-# Blockquote head line (verify.layers.g_layer + format.fmt_extras).
+# Blockquote head line (verify.g_layer + format.fmt_extras).
 G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
 
 # Figure OCR markers (figure.build_figure_index + figure.build_precise_anchors).
@@ -120,7 +120,7 @@ FMT_SEC_RE = re.compile(r'^#{2,6}\s')
 FMT_HR_RE = re.compile(r'^\s*---\s*$')
 
 # Formula-number detectors (make_config + config/verify_config/tests +
-# verify.layers.formula_tag via FMT_* names).  Half/full-width parens both matched;
+# verify.formula_tag via FMT_* names).  Half/full-width parens both matched;
 # negative lookbehind rejects function-call parens like x(0)/f(0).
 F_SINGLE_RE = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
 F_DOT_RE = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+\.\d+)\s*[）)]')

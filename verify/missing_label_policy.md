@@ -1,7 +1,7 @@
 # 遗漏标签处理策略（Missing-Label Policy）
 
 > 🔴 **SSOT**：本书总结中"书中存在某条重要概念（定义/定理/引理/推论/命题），但 OCR 未识别其标题，导致总结缺失该条目"时的标准处理流程。
-> 由用户 2026-08-05 制定，配套代码实现见 [`layers/data_provider/data_provider.md`](layers/data_provider/data_provider.md) 与 `layers/data_provider/script/data_provider.py` 的"merged Q + over-mark 守卫"段；本文件只描述**策略与判定**，不重复代码。
+> 由用户 2026-08-05 制定，配套代码实现见 [`data_provider/data_provider.md`](data_provider/data_provider.md) 与 `data_provider/script/data_provider.py` 的"merged Q + over-mark 守卫"段；本文件只描述**策略与判定**，不重复代码。
 
 ## 1. 适用范围
 
@@ -58,7 +58,7 @@ B 层本就是"查漏"层。下列两项为 B 层查漏能力的子集（整类�
 
 - `flows/extract/script/b_layer` 的序列连续性检查：某节抽取到 `…-1,2,3,5,6,7` 而缺 `-4` 时，先重扫页面；重扫无果 → 仍判 `blocking`（"still missing after auto-recovery"）。
 - 这正是 4.9-4 被吞时的实际触发点；用 §2 Step 2 的 `manual_overrides` 登记后即解除。
-- **（与 B 层 MD 侧检测的关系）** 提取侧的此 `blocking` 属辅助检测，最终受 B 层 `item_numbering_integrity.py` 的「MD 存在性过滤」约束：若被报缺的编号实际已正确写在 `.md` 中（OCR 漏检、agent 已写出），该 `blocking` 会被抑制、不阻断——故「OCR 漏检但 .md 已写对」不会误报。权威的缺号判定见 [`layers/item_numbering_integrity/item_numbering_integrity.md`](layers/item_numbering_integrity/item_numbering_integrity.md)（MD 侧首项检验 + 连续性）。
+- **（与 B 层 MD 侧检测的关系）** 提取侧的此 `blocking` 属辅助检测，最终受 B 层 `item_numbering_integrity.py` 的「MD 存在性过滤」约束：若被报缺的编号实际已正确写在 `.md` 中（OCR 漏检、agent 已写出），该 `blocking` 会被抑制、不阻断——故「OCR 漏检但 .md 已写对」不会误报。权威的缺号判定见 [`item_numbering_integrity/item_numbering_integrity.md`](item_numbering_integrity/item_numbering_integrity.md)（MD 侧首项检验 + 连续性）。
 - 整类首项缺失（§3.1）与序列缺口（本节）是**互补**双保险：前者抓"整类首条连序列都不存在"的情形，后者抓"序列中间断号"。
 
 ## 5. 反例（为什么需要这整套机制）
@@ -69,6 +69,6 @@ B 层本就是"查漏"层。下列两项为 B 层查漏能力的子集（整类�
 
 ## 6. 相关文件
 
-- 代码：`layers/data_provider/script/data_provider.py`（`_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`）。
+- 代码：`data_provider/script/data_provider.py`（`_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`）。
 - 抽取覆盖：`flows/extract/structure/script/extract_items`（`manual_overrides` 合并 + `agent_recovered` 标记）、各书 `_extract/manual_overrides_ch{N}.json`。
 - 注册表：[`verify.md`](verify.md) 第 1 节（B 层）、第 3 节同步清单（本策略无新契约键，仅复用 `blocking`/`warnings`）。

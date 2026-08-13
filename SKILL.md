@@ -60,22 +60,22 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 ## 代码位置（重要）
 
-代码按流程组织在对应 `flows/<stage>/script/<pkg>/` 目录；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`），注册表与总编排见 `verify/verify.md` 与 `verify/layers`：
+代码按流程组织在对应 `flows/<stage>/script/<pkg>/` 目录；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`，位于 `verify/<语义名>/`），注册表与总编排见 `verify/verify.md` 与各校验层子包 `verify/<语义名>/`：
 
 - `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
 - `flows/extract/mm_repair/script`
 - `flows/script`
 - `flows/write-source/format/script/format`（含 `katex_validate.js` + `node_modules`）
-- `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；`layers/` 下每个校验层一个 `<语义名>/` 子包，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
+- `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；每个校验层一个 `<语义名>/` 子包，位于 `verify/<语义名>/`，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
 - `data/<json_name>/`：每个中间产物 JSON **独占一个目录**（如 `data/chapter_map`、`data/figure_index`、`data/formula_manifest`），内含 `<json_name>.md`（数据结构说明）+ `<json_name>.py`（模型类，继承 `data/lib/json_data.py` 基类）；JSON 数据结构索引见 `data/data_schema.md`。各 JSON 的校验/编排/书专用脚本在 `verify/formula-manifest/script`，不在 `data`。
 - `lib`：**公用方法与变量锚点**，保留在技能根目录，被所有包 import。当前含：
-  - `boot.py`：统一引导机制（`setup()` 把根目录 + `lib` + 所有 `flows/*/script`、`verify`（及其 `layers/` 子包）、`config/**/script`、`data/**/script` 注入 `sys.path`）。
+  - `boot.py`：统一引导机制（`setup()` 把根目录 + `lib` + 所有 `flows/*/script`、`verify`（含各校验层 `<语义名>/` 子包）、`config/**/script`、`data/**/script` 注入 `sys.path`）。
   - `config.py` / `numbering.py` / `regexlib.py`：跨流程的配置、编号、正则常量。
   - `util.py`：`chapter_of_page()` 等无状态小工具（原在 figure 包内两处字节级重复，已上提）。
   - `figure_io.py`：`load_figure_index()`——`figure_index.json` 的统一读取（原 figure 包返回 `[]`、verify 包返回 `None`，已统一为 `[]`；verify 侧调用方仅做真值/迭代判断，行为一致）。
   - `normalize_math.py`：公式定界符修复库（`normalize()` / `fix_backticks()` / `stats()`）——纯函数、无第三方依赖，被格式 / 校验流水线按需 `from lib.normalize_math import ...` 调用。对应的命令行入口在 `tools/normalize_math_cli.py`（直接 `python tools/normalize_math_cli.py <files>` 改写文件，会写 `.bak_mathfix` 备份）。
 
-各包仍用包名互相 `import`（如 `verify/layers/section_continuity/script/section_continuity.py` → `from extract_items_gm import ...`）。为保证搬进嵌套目录后 import 不断，新增 **`lib/boot.py`**：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 所有 `flows/*/script` 与 `verify/**/script` 注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
+各包仍用包名互相 `import`（如 `verify/section_continuity/script/section_continuity.py` → `from extract_items_gm import ...`）。为保证搬进嵌套目录后 import 不断，新增 **`lib/boot.py`**：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 所有 `flows/*/script` 与 `verify/**/script` 注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
 
 约定：
 - `flows/<stage>/script/README.md`：本流程脚本索引（真实代码已在该目录内）。

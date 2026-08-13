@@ -25,7 +25,7 @@ _boot.setup()
 import os, sys
 
 
-# P 层聚合阈值（与 verify/layers/verbose_gates/script/verbose_gates.py 中的 VERBOSE_PARA_GATE / VERBOSE_PROOF_GATE 一致）
+# P 层聚合阈值（与 verify/verbose_gates/script/verbose_gates.py 中的 VERBOSE_PARA_GATE / VERBOSE_PROOF_GATE 一致）
 from verbose_gates import VERBOSE_PARA_GATE, VERBOSE_PROOF_GATE
 
 def print_result(r):

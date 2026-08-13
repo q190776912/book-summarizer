@@ -62,7 +62,7 @@ from section_continuity import (
     _project, _rel_path, _split_num, _build_item_re,
     _partition_sections_by_level, check_d_layer, check_d_layer_gm,
 )
-from verify.layers.script.base import DEFAULT_RESULT
+from verify.script.base import DEFAULT_RESULT
 
 
 # --------------------------------------------------------------------------

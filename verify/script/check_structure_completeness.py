@@ -8,11 +8,11 @@ book_structure.json 会安静地缺章节 / 缺定义定理例。
 
 本脚本在「写书之前」把**两个公共校验层**接到 structure 步骤，分四步兜底：
 
-  * 第 2 步（章节）→ 复用公共子流程 `verify/layers/section_continuity`（语义名
+  * 第 2 步（章节）→ 复用公共子流程 `verify/section_continuity`（语义名
     section-continuity，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，
     独立于 extract_items），比对「书中真值章节集」vs `book_structure.json` 契约，
     检出遗漏章节（内部洞 `continuity_sections` + 尾部缺节 `missing_sections`）并回填。
-  * 第 3 步（条目）→ 复用公共子流程 `verify/layers/item_numbering_integrity`
+  * 第 3 步（条目）→ 复用公共子流程 `verify/item_numbering_integrity`
     （语义名 item-numbering-integrity，B 层）的编号完整性逻辑。为避免与 verify 端
     冲突（verify 端 B 层读「已写好的 .md」），structure 阶段把 `book_structure.json`
     派生出一份「合成 md」喂给 B 层、并把源条目集作为 `ctx.items` 喂给它，让 B 层的
@@ -54,10 +54,10 @@ _boot.setup()
 from data.book_structure.book_structure import BookStructure, StructureNode
 
 import page_json
-# 公共校验层（verify/layers/*/script 由 boot 注入 sys.path，可直接裸 import）：
+# 公共校验层（verify/*/script 由 boot 注入 sys.path，可直接裸 import）：
 from section_continuity import check_d_layer          # D 层：section-continuity（章节连续性）
 from item_numbering_integrity import ItemNumberingIntegrityLayer  # B 层：item-numbering-integrity（条目编号完整性）
-from verify.layers.script.base import VerifyContext   # B 层 run() 所需的精简运行时载体
+from verify.script.base import VerifyContext   # B 层 run() 所需的精简运行时载体
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,

@@ -573,6 +573,13 @@ def _run_b_layer(ch, start, end, ext, cfg, tree, source_items):
         ctx = VerifyContext(ch=ch, start=start, end=end, md_file=md_path,
                             ext_dir=ext, config=cfg)
         ctx.items = source_items            # 源条目集（供尾部校验：源 max vs md max）
+        # 修复接线：正常 verify 流程由 data_provider.keys_in_md 填充
+        # ctx.entry_keys / ctx.all_keys（按章过滤）；之前漏调导致 B 层看到空
+        # all_keys → 全部源条目被判缺失（假阳性 blocking）。
+        from data_provider import keys_in_md, _first_num
+        _ek, _ak = keys_in_md(ctx.md_file, groups=cfg.ordinal)
+        ctx.entry_keys = {k for k in _ek if _first_num(k) == ctx.ch}
+        ctx.all_keys = {k for k in _ak if _first_num(k) == ctx.ch}
         ctx.extraction_blocking = []        # structure 阶段无 EXTRACT 层；源侧缺失由 set-difference 直接算
         ctx.ignored_hit = []
         res = ItemNumberingIntegrityLayer().run(ctx)

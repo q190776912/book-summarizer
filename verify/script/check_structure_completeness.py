@@ -98,8 +98,10 @@ _LBL_EN = (r'(Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|'
            r'Remark|Axiom|Assertion|Conjecture|Algorithm|Assumption)')
 
 # 八种方案（标签前置 / 数字前置 × 三级 / 两级 × 中 / 英）。
-# 数字前置模式的标签为「可选」：有标签才视为可信条目；无标签的三级匹配标 reference
-# 交人工复核，无标签的两级匹配（大概率是章节号，如 "10.2"）直接丢弃，避免把章节当条目录入。
+# 数字前置模式的标签为「可选」：有标签视为可信条目；无标签的三级匹配先作候选，
+# 后续 step3 再判——仅当命中 _REF_RE（前向引用提及，如 "see 1.5-3"）才标 reference
+# 交人工复核，否则按真实条头计（readable 自动回填）；无标签的两级匹配（大概率是
+# 章节号，如 "10.2"）直接丢弃，避免把章节当条目录入。
 # 顺序：英文在前，中文在后——英文数字前置模式能捕获尾部标签（"3.5-1 Example"），
 # 必须优先于中文三级数字前置（否则会把带尾标签的英文项误判为无标签）。
 _PATTERNS = [
@@ -505,28 +507,48 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
 
-    raw_items = scan_raw_items(ext, ch, start, end)
-    raw_items = [it for it in raw_items if it["label"] not in _EXER_LABELS_RAW]
+    raw_items = [it for it in scan_raw_items(ext, ch, start, end)
+                 if it["label"] not in _EXER_LABELS_RAW]
 
-    # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）
-    missing_items = []
-    seen_canon = set(contract_items.keys())
+    # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
+    #    按 canon 取「最佳代表」去重：前向引用提及(_REF_RE 命中，如 page45
+    #    "Example 1.5-3 in the next section") 绝不能污染去重集合、掩盖同 canon
+    #    的真实条头(page49 "1.5-3 Completeness of c")——否则真实漏项被静默吞掉
+    #    （旧逻辑用平铺 seen_canon，引用提及先入集即把真实条头 continue 掉）。
+    #    真实条头（非引用提及）优先；同类则保留较早页（条头通常先于提及出现）。
+    best = {}
     for it in raw_items:
-        c = it["canon"]
-        if c is None or c in seen_canon:
+        c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
+        if c is None:
             continue
-        seen_canon.add(c)
+        is_ref = bool(_REF_RE.search(it.get("snippet", "")))
+        prev = best.get(c)
+        if prev is None:
+            best[c] = it
+            continue
+        prev_ref = bool(_REF_RE.search(prev.get("snippet", "")))
+        if (not is_ref) and prev_ref:
+            best[c] = it
+        elif (not is_ref) == (not prev_ref) and it["page"] < prev["page"]:
+            best[c] = it
+
+    missing_items = []
+    for c, it in best.items():
+        if c in contract_items:
+            continue
         garbled = not (len(c) >= 1 and all(isinstance(x, int) for x in c)
                        and (len(c) < 2 or c[1] <= 60) and (len(c) < 3 or c[2] <= 200))
+        is_ref = bool(_REF_RE.search(it.get("snippet", "")))
         if garbled:
+            # OCR 字母↔数字无法干净还原 → 交 agent 凭读图/知识回填。
             status = "needs_agent"
-        elif not it.get("has_label"):
-            # 数字前置三级但无显式标签：可能是真实漏项，也可能是前向引用；
-            # 不自动回填，标 reference 交人工/agent 复核。
-            status = "reference"
-        elif _REF_RE.search(it["snippet"]):
+        elif is_ref:
+            # 前向引用提及（see/refer to/cf./in the next…），非定义条头，
+            # 不自动回填，交人工/agent 复核。
             status = "reference"
         else:
+            # 真实条头（含三级数字前置无显式标签项，Kreyszig 等书此类即真实条目）
+            # → 可读、自动回填，不再误判为 reference 漏网。
             status = "readable"
         missing_items.append({
             "key": it["key"], "label": it["label"], "page": it["page"],

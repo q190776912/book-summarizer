@@ -214,6 +214,17 @@ def _parse_entry(inner, levels):
     if _CITE_RE.match(inner):
         return None
     _exact, _cap, re_label_first, re_num_first = _numpath_regexes(levels)
+    # Three-level books: a bare numpath with NO trailing text and NO label
+    # (e.g. "**1.5-4**") is a real item header whose type is implied — count it
+    # as 'uncat'.  This is REQUIRED for combined-numbering uncat counters
+    # (Kreyszig §1.5's bare keys) to be visible to the B-layer; otherwise the
+    # layer silently drops them and manufactures a false "缺号" (it would see
+    # §1.5 = [1,2,3,5,6,7,8,9] and report 缺号 4).  Two-level books keep bare
+    # numbers non-entries, because a bare "C.S" is ambiguous (section vs item);
+    # the guard `levels == 3` scopes this fallback to three-level books only.
+    if levels == 3 and _exact.match(inner):
+        comps = [int(x) for x in SEP_SPLIT_RE.split(inner)]
+        return comps, 'uncat'
     m = re_label_first.match(inner)
     if m:
         numpath = m.group(1)

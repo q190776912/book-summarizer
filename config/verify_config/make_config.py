@@ -22,10 +22,19 @@
        公式配置（type/depth/scope）。单分量 ≫ 多分量 → type1/depth1（scope 由
        是否「全书数值回落」判定：回落→scope3 节级重排，否则→scope1 全书）；多分量
        多 → type4/depth2/scope2；都抽不到返回 None（不写 formula 键）。
-  3. 写出 {"ordinal": <候选>, "language": <en if 候选 in (4,5,6,7) else cn>}，
-     若 detect_formula 非 None 再写入 "formula": {...}；并打印醒目提示：四级子
-     小节书（1.1.1.1）需手动补 section_types/section_depths；ordinal/formula 检测
-     不准请修正后再跑 verify。
+  3. 写出 {"ordinal": [<组>, ...], "language": <en if 候选 in (4,5,6,7) else cn>}：
+     - 在同一遍整书扫描中，按 LABEL_FORMS 收集『作为编号标题出现』的全部条目类型
+       标签词（含 Remark/评注/注、Exercise/习题/练习/问题/Problem、Axiom/公理 等，
+       不再刻意排除），**并按下文规则分组**：
+       * 同一遍扫描同时记录每条目标签词及其相邻编号组件；
+       * `_group_headings_by_counter` 判定哪些标签词**同升序（共享一个计数器）**——
+         即在同一个 scope 重置窗口内彼此不独立归 1 的，归入同一个 group 的 name；
+       * 各自有独立编号序列（在同样窗内独立从 1 重排）的标签词，各自成独立 group。
+       * 这正是 `ordinal` 数组的设计意图：一同升序的进同一对象，不升序的新增对象。
+       * 未检出任何条目类型时回退为单个 [["uncat"]] 兜底组。
+     - 若 detect_formula 非 None 再写入 "formula": {...}。
+     并打印醒目提示：四级子小节书（1.1.1.1）需手动补 section_types/section_depths；
+     检出的分组若与实际不符请手动合并/拆分后再跑 verify。
 
 ⚠️ 相位护栏：ordinal/formula 探测均要求 MM Repair 已完成（完成标记 _extraction_done.json
    存在；该标记仅在 MM Repair 模式 A+B 全部 apply 回 page_*.json 后由主 Agent 写出，不等同
@@ -67,16 +76,132 @@ ROMAN_RE = re.compile(r'^[IVXLCDM]+$')
 EN_TWO_RE = re.compile(
     r'\b(Theorem|Lemma|Definition|Proposition|Corollary)\s+\d+\.\d+')
 
+# EN 三级条目标签（Kreyszig 型）：标签 + 三段编号，或 三段编号 + 标签，例如
+# "Definition 1.5-3" / "1.5-3 Definition" / "Theorem 8.16.3"。
+# 必须在 EN_TWO_RE 之前判定：EN_TWO_RE 的 `\d+\.\d+` 会顺带吃掉三级编号的
+# 前两段（"Definition 1.5-3" → 匹配到 "Definition 1.5"），从而把 EN 三级书
+# 误判为 EN 两级（type 4），导致每个 "C.S-N" 项塌缩成 "Label C.S" 两级 key、
+# 丢弃段/项计数器——这正是 Kreyszig 类书被 make_config 错误生成配置后
+# 重建 book_structure.json 出现「大量遗漏」的根因。
+EN_THREE_RE = re.compile(
+    r'(?:\b(?:Theorem|Lemma|Definition|Proposition|Corollary)\s+\d+\.\d+[\.\-]\d+'
+    r'|\b\d+\.\d+[\.\-]\d+\s+(?:Theorem|Lemma|Definition|Proposition|Corollary)\b)')
+
 # CN 条目标签：定义|定义|引理|推论|命题 ... N.M（两级）或 N.M.K（三级）
 CN_TWO_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+(?!\.\d)')
 CN_THREE_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+\.\d+')
+
+# --- entry-type label vocabulary (detected as numbered headings) -----------
+# The FULL set of theorem-ish / remark / exercise labels that can appear as
+# NUMBERED HEADINGS in a math book.  make_config scans the whole book and
+# detects which of these actually occur; it then GROUPS them by whether they
+# share ONE ascending counter (see `_group_headings_by_counter`) — labels that
+# ascend together go in ONE group's `name`, labels with an independent counter
+# get their OWN group.  This is what the `ordinal` ARRAY is FOR: it is NOT a
+# fixed "main types vs others" split.  Order = stable output order within a
+# group.  `form_by_lower` maps a matched (possibly OCR-lowercased) surface
+# form back to the canonical spelling written into `name`.
+LABEL_FORMS = [
+    ("Definition",  ["Definition", "定义"]),
+    ("Theorem",     ["Theorem", "定理"]),
+    ("Lemma",       ["Lemma", "引理"]),
+    ("Corollary",   ["Corollary", "推论"]),
+    ("Proposition", ["Proposition", "命题"]),
+    ("Example",     ["Example", "例", "例题", "例子"]),
+    ("Remark",      ["Remark", "评注", "注", "注记", "附注", "Note", "Commentary"]),
+    ("Exercise",    ["Exercise", "习题", "练习", "问题", "Problem"]),
+    ("Axiom",       ["Axiom", "公理"]),
+]
+
+
+def _build_label_heading_regexes():
+    """Build, per canonical label, ONE regex that captures BOTH the label text
+    and the adjacent numeric key (so we can later tell which labels share a
+    counter).  Longer raw forms are tried first (e.g. 注记 before 注) so the
+    matched surface form is the longest one actually present.
+
+    Two arms, both capturing the number:
+      * label-first :  ``Label 1.5-3``  -> groups (label, num)
+      * number-first: ``1.5-3 Label``  -> groups (num, label)
+    CN forms matched literally; EN forms word-boundary + IGNORECASE.  Returns a
+    list of ``(canon_idx, regex, form_by_lower)``.
+    """
+    out = []
+    for ci, (canon, forms) in enumerate(LABEL_FORMS):
+        ordered = sorted(forms, key=len, reverse=True)   # longest first
+        label_alt = '|'.join(re.escape(f) for f in ordered)
+        form_by_lower = {f.lower(): f for f in forms}
+        num = r'\d[\d.\-–·/．－〜]*'
+        rx = re.compile(
+            r'(' + label_alt + r')\s*(' + num + r')'
+            r'|(' + num + r')\s+(' + label_alt + r')',
+            re.IGNORECASE)
+        out.append((ci, rx, form_by_lower))
+    return out
+
+
+def _is_header_boundary(tail):
+    """Decide whether a matched label+number is a real HEADING (return True)
+    or a cross-reference embedded in PROSE (return False).
+
+    We ACCEPT by default.  The only thing that flips us to "prose / cross-ref"
+    is an explicit continuation particle immediately after the number:
+      * CN possessive / locative particle: 的 / 中 / 里 / 上 / 处
+        (e.g. '定理 2.1 的证明' is a reference, not a heading).
+      * EN prose-continuation word: of / that / which / states / shows /
+        implies / is / are / and / but / where / see / given / let / then /
+        hence / thus / so …
+
+    A heading NAME must NOT be rejected — even a single latin letter
+    ('Definition 1.5-3 X') or a Han name ('定义 1.1.1 有界').  Rejecting those
+    was the bug that made the whole-book scan miss entries whose name began
+    with a letter / Han char, collapsing the detection back to ['uncat'].
+    """
+    s = tail.lstrip()
+    if not s:
+        return True
+    c = s[0]
+    if c in ':.。():（）)，,；;*':
+        return True
+    # CN possessive / locative particle => 'X 的…' / 'X 中…' prose, not a heading.
+    if re.match(r'^[的是在里上中处]', s):
+        return False
+    # EN prose-continuation word => cross-reference inside a sentence.
+    if re.match(
+        r'^(?:of|that|which|this|these|those|states?|shows?|implies?|'
+        r'means?|says?|is|are|was|were|and|but|where|see(?: also)?|'
+        r'given|let|then|hence|thus|so)\b', s, re.IGNORECASE):
+        return False
+    return True
+
+
+def _is_crossref_prefix(pre):
+    """The text immediately BEFORE the label must not be a citation particle
+    ('见 定义 1.5-3' / 'see Theorem 2.1') — that is a cross-reference, not a
+    heading.  We inspect the ~10 chars preceding the label."""
+    pre = pre[-10:].lower()
+    return bool(re.search(
+        r'(见|由|根据|参考|参见|据|依照|按|cf\.|see\b|below\b|viz\.|e\.g\.|i\.e\.)', pre))
+
+
+def _parse_comps(numstr):
+    """Parse a matched numeric key ('1.5-3') into a tuple of ints."""
+    parts = [p for p in SEP_SPLIT_RE.split(numstr) if p]
+    if not parts:
+        return None
+    try:
+        return tuple(int(x) for x in parts)
+    except ValueError:
+        return None
 
 # ---- formula detection (full-book, whole-book aggregation) ----------------
 # Reuse q_layer.norm's "（）→()" ASCII-normalisation idea: a standalone formula
 # number may appear in either full-width or half-width parens, so we match both.
 
 # Formula-number detectors — patterns shared from lib/regexlib.py
-from lib.regexlib import F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE, F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE
+from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
+                           F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
+                           SEP_SPLIT_RE)
 
 
 def detect_formula(extract_dir):
@@ -179,25 +304,145 @@ def _chapter_keys_are_roman(extract_dir):
     return bool(roman) and not bool(arabic), keys
 
 
-def _detect_ordinal_from_pages(extract_dir):
-    """Full-scan EVERY page_*.json of the book and vote on the label shape.
+# canonical NAME (EN) of each surface form — used for grouping decisions.
+_FORM_CANON = {}
+for _canon, _forms in LABEL_FORMS:
+    for _f in _forms:
+        _FORM_CANON[_f.lower()] = _canon
 
-    Specificity-first priority (CN three-level patterns also match the CN
-    two-level regex, so raw counts would bias toward two-level): CN three >
-    EN two > CN two; no hits -> default 3.
+# Theorem-ish MAIN types universally share ONE counter in a math book (and
+# that is what verify expects — the primary group).  Only Remark/Exercise
+# families are decided per-book by actual counter-sharing.
+MAIN_CANONS = {"Definition", "Theorem", "Lemma", "Corollary",
+               "Proposition", "Example", "Axiom"}
+
+
+def _group_headings_by_counter(headings, depth):
+    """Group detected ``(canon_idx, raw_form, comps)`` headings into counters.
+
+    Convention (universal for math books, and what ``verify`` expects): the
+    theorem-ish MAIN types (Definition/Theorem/Lemma/Corollary/Proposition/
+    Example/Axiom) share ONE counter -> they go in the primary group together.
+    Remark/评注/注 and Exercise/习题/练习/问题/Problem are decided PER BOOK by
+    whether they ascend together with the main counter (share it) or run on
+    their OWN independent sequence (get a separate group).  This is what the
+    ``ordinal`` ARRAY is for: labels that ascend together -> one object;
+    separate counters -> a NEW object.
+
+    A family is given its OWN group (the safe, conservative choice) when it
+    never co-occurs with the main counter in a comparable scope window — e.g.
+    its numbers use a different depth — because separate never manufactures
+    false gaps, whereas a wrong merge would.
+    """
+    from collections import defaultdict
+    if not headings:
+        return [["uncat"]]
+    canon_of = lambda f: _FORM_CANON.get(f.lower())
+    present = sorted({f for (ci, f, c) in headings})
+    order = {f: (i, j) for i, (_, forms) in enumerate(LABEL_FORMS)
+             for j, f in enumerate(forms)}
+
+    def sort_forms(fs):
+        return sorted(fs, key=lambda f: order.get(f, (999, 999)))
+
+    main_forms = sort_forms(f for f in present if canon_of(f) in MAIN_CANONS)
+    remark_forms = sort_forms(f for f in present if canon_of(f) == "Remark")
+    exercise_forms = sort_forms(f for f in present if canon_of(f) == "Exercise")
+
+    main_comps = [c for (ci, f, c) in headings if canon_of(f) in MAIN_CANONS]
+    primary = list(main_forms)
+    groups = []
+    if remark_forms:
+        rcomps = [c for (ci, f, c) in headings if canon_of(f) == "Remark"]
+        if _shares_main_counter(rcomps, main_comps):
+            primary += remark_forms
+        else:
+            groups.append(list(remark_forms))
+    if exercise_forms:
+        ecomps = [c for (ci, f, c) in headings if canon_of(f) == "Exercise"]
+        if _shares_main_counter(ecomps, main_comps):
+            primary += exercise_forms
+        else:
+            groups.append(list(exercise_forms))
+    groups.insert(0, primary)
+    return groups
+
+
+def _shares_main_counter(cand_comps, main_comps):
+    """True iff the candidate family shares the SAME ascending counter as the
+    main types (so it should merge into the primary group).  False (its OWN
+    group) when it runs on an INDEPENDENT parallel sequence.
+
+    Two signals prove independence (do NOT merge):
+      * DUPLICATE: in a shared scope window the candidate re-uses a number the
+        main counter already used (e.g. Problem 6.3-2 AND Definition 6.3-2 both
+        exist).  Parallel counters reuse numbers; a single shared sequence
+        never does.  This is the definitive discriminator between "same
+        counter" and "parallel independent counter" — the old logic that only
+        checked for a reset-to-1 falsely merged parallel counters.
+      * RESET: the candidate resets to 1 inside a window where the main counter
+        is already running — it starts its own sequence there.
+    If the candidate never co-occurs with the main counter in a comparable
+    window, return False (conservative: own group).
+    """
+    from collections import defaultdict
+    main_by_win = defaultdict(list)
+    for c in main_comps:
+        if len(c) >= 2:
+            main_by_win[c[:-1]].append(c[-1])
+    cand_by_win = defaultdict(list)
+    for c in cand_comps:
+        if len(c) >= 2:
+            cand_by_win[c[:-1]].append(c[-1])
+    shared = 0
+    for w, cnums in cand_by_win.items():
+        if w not in main_by_win:
+            continue
+        shared += 1
+        mnums = main_by_win[w]
+        # duplicate number in the same window => parallel independent counters
+        if any(n in mnums for n in cnums):
+            return False
+        # resets to 1 within a running window => its own sequence
+        if min(cnums) == 1:
+            return False
+    if shared == 0:
+        return False
+    return True
+
+
+def _detect_ordinal_from_pages(extract_dir):
+    """Full-scan EVERY page_*.json and (a) vote on the numbering FAMILY and
+    (b) detect which entry-type labels appear as numbered headings, then GROUP
+    them by whether they share ONE ascending counter.
+
+    Family vote: specificity-first (CN three > EN three > EN two > CN two); no
+    hits -> default 3.  The EN-three check precedes EN-two so a three-level EN
+    book (Kreyszig) is not mis-detected as EN two-level.
+
+    Label detection + grouping: during the SAME scan we collect every
+    (canon_idx, raw_form, comps) heading.  ``_group_headings_by_counter`` then
+    puts labels that ascend together (share a counter within a scope window)
+    into ONE group and gives labels with an independent reset their OWN group.
+    This is what the ``ordinal`` ARRAY is for — NOT a fixed main/other split.
+
+    Returns ``(family_int, groups, lang)`` where ``groups`` is a list of raw-
+    form lists (one per counter), primary group first; ``lang`` is the detected
+    language or None.
 
     Phase guard: only runs AFTER MM Repair is finished (`_extraction_done.json`
-    present — written only after mode A+B applied back to ``page_*.json``, NOT
-    merely when background text extraction reaches 100%).  If MM Repair is
-    incomplete we MUST NOT sample the first N pages and downgrade — we skip and
-    return the safe default instead.
+    present).  If MM Repair is incomplete we skip and return the safe default.
     """
     if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
         print('[make_config] MM Repair 未完成（缺 _extraction_done.json），'
               '跳过探测；请完成 MM Repair（模式 A+B 写回 page_*.json）后再生成配置。')
-        return 3  # default three_level (不降级抽样)
+        return 3, [["uncat"]], None  # default three_level (不降级抽样)
     pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
-    counts = {'cn_three': 0, 'en': 0, 'cn_two': 0}
+    counts = {'cn_three': 0, 'en_three': 0, 'en': 0, 'cn_two': 0}
+    label_res = _build_label_heading_regexes()
+    headings = []   # (canon_idx, raw_form, comps_tuple)
+    seen_en = False
+    seen_cn = False
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -208,24 +453,89 @@ def _detect_ordinal_from_pages(extract_dir):
         if not text:
             continue
         counts['cn_three'] += len(CN_THREE_RE.findall(text))
+        counts['en_three'] += len(EN_THREE_RE.findall(text))
         counts['en'] += len(EN_TWO_RE.findall(text))
         counts['cn_two'] += len(CN_TWO_RE.findall(text))
+        for ci, rx, form_by_lower in label_res:
+            for m in rx.finditer(text):
+                # label-first: groups 1=label, 2=num ; number-first: 3=num, 4=label
+                if m.group(1) is not None:
+                    lab_txt, numstr = m.group(1), m.group(2)
+                else:
+                    numstr, lab_txt = m.group(3), m.group(4)
+                prefix = text[:m.start()]
+                tail = text[m.end():]
+                # skip cross-references ('见 定义 1.5-3') and prose ('定理 2.1 的证明')
+                if _is_crossref_prefix(prefix) or not _is_header_boundary(tail):
+                    continue
+                form = form_by_lower.get(lab_txt.lower(), lab_txt)
+                comps = _parse_comps(numstr)
+                if not comps:
+                    continue
+                headings.append((ci, form, comps))
+                if form[0].isascii() and form[0].isalpha():
+                    seen_en = True
+                else:
+                    seen_cn = True
 
+    # family vote
     if counts['cn_three'] > 0:
-        return 3
-    if counts['en'] > 0:
-        return 4
-    if counts['cn_two'] > 0:
-        return 2
-    return 3  # default three_level
+        family = 3
+    elif counts['en_three'] > 0:
+        family = 3  # English three-level (Kreyszig) -> type 3, NOT 4
+    elif counts['en'] > 0:
+        family = 4
+    elif counts['cn_two'] > 0:
+        family = 2
+    else:
+        family = 3  # default three_level
+    # language: derive from the ACTUAL label forms seen
+    if seen_en:
+        lang = 'en'
+    elif seen_cn:
+        lang = 'cn'
+    else:
+        lang = None
+    # A numbered entry heading in a multi-level book must carry at least TWO
+    # numbering components (chapter.item / chapter.section.item).  A lone
+    # number next to a label ("Axiom 211", "Theorem 4", "Problem 135") is a
+    # cross-reference, footnote, page-reference or other prose mention — NOT a
+    # heading that DEFINES a new entry.  Kreyszig, for example, has 33 prose
+    # 'Axiom' mentions but ZERO real Axiom headings; keeping the 1-component
+    # noise would fabricate an 'Axiom' group.  Single-component headings are
+    # kept only for depth-1 (single global counter) books.
+    depth = ORDINAL_DEPTH.get(family, 3)
+    if depth >= 2:
+        headings = [h for h in headings if len(h[2]) >= 2]
+    # group by shared counter
+    groups = _group_headings_by_counter(headings, depth)
+    return family, groups, lang
 
 
 def detect_ordinal(extract_dir):
-    """Best-effort ordinal detection for a book's _extract dir."""
+    """Best-effort ordinal (numbering-family) detection for a book's _extract dir."""
     is_roman, _ = _chapter_keys_are_roman(extract_dir)
     if is_roman:
         return 5
-    return _detect_ordinal_from_pages(extract_dir)
+    family, _, _ = _detect_ordinal_from_pages(extract_dir)
+    return family
+
+
+def detect_labels(extract_dir):
+    """Flat list of ALL entry-type label forms detected as numbered headings
+    (across every counter group).  Empty => caller falls back to ``["uncat"]``.
+    """
+    _, groups, _ = _detect_ordinal_from_pages(extract_dir)
+    out = []
+    for g in groups:
+        out.extend(g)
+    seen = set()
+    res = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            res.append(x)
+    return res
 
 
 def main():
@@ -246,39 +556,49 @@ def main():
         print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。")
         return 0
 
-    ordinal = detect_ordinal(extract_dir)
-    # ORDINAL_LANGUAGE_DEFAULT already maps en-family ordinals (4/5/6/7) -> 'en'
-    # and cn-family (1/2/3) -> 'cn', matching the spec's "<en if 候选==4/5/6/7>".
-    language = ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
+    # One full scan yields the numbering family, the set of entry-type labels
+    # actually present as numbered headings, their GROUPING by shared counter,
+    # AND the book's language (derived from which label forms were seen).
+    # Labels that ascend together share ONE group; labels with an independent
+    # counter get their OWN group — that is what the `ordinal` ARRAY is for.
+    family, groups, lang = _detect_ordinal_from_pages(extract_dir)
+    ordinal = family
+    # Language: prefer the form-derived language (an EN three-level book like
+    # Kreyszig is type 3 but EN); fall back to the type->language default when
+    # no label form was detected.
+    language = lang if lang else ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
     depth = ORDINAL_DEPTH.get(ordinal, 3)
-
     # best-effort formula detection (full-book, whole-book aggregation; only
     # when the whole extraction is done — see detect_formula's phase guard).
     formula_cfg = detect_formula(extract_dir)
-    # v2 schema: `ordinal` is a LIST of GroupConfig dicts.  The default is a
-    # SINGLE uncat merged counter (one group).  `scope` and `depth` are two
-    # DISTINCT axes:
+    # v2 schema: `ordinal` is a LIST of GroupConfig dicts — one per counter.
+    # `scope` and `depth` are two DISTINCT axes:
     #   * `depth` = number of numbering components (form-driven from ORDINAL_DEPTH).
     #   * `scope` = ascending-range / counter-reset boundary:
     #       1 = book-wide, 2 = chapter-wide reset, 3 = section-wide reset.
-    #   scope is NOT mechanically tied to depth — it is form-driven per book,
-    #   derived from the book's actual ordinal labels (same family as type/depth).
-    #   make_config's best-effort default is chapter (2).  A deeper (e.g. three-
-    #   level) book whose counters reset per chapter stays at scope=2; only bump
-    #   to 3 when the book genuinely recounts per section.
-    # Different groups NEVER merge; a book needing per-label independent counters
-    # must declare multiple groups explicitly (always keeping one
-    # name=["uncat"] fallback).  Default behavior stays a single merged counter
-    # (R2 behavior change: NOT per-type independent).
+    #   Three-level numbering (type 3 / 5) resets the per-item counter PER
+    #   SECTION (1.5-1, 1.5-2 … then 1.6-1), so it MUST use scope=3.  Two-level
+    #   numbering (type 2 / 4 / 6 / 7) resets PER CHAPTER, so scope=2.
+    # Every group shares the book's detected `type`/`depth`/`scope`; only `name`
+    # differs (which labels share THIS counter). Different groups NEVER merge.
+    # (An earlier version hard-coded scope=2 for every book, which silently
+    # broke three-level books like Kreyszig — item_numbering_integrity then
+    # expected the item counter to continue across sections instead of
+    # restarting at 1, producing false "missing item" gaps.)
+    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2}
+    scope = SCOPE_BY_TYPE.get(ordinal, 2)
+    ordinal_arr = []
+    for name in groups:
+        ordinal_arr.append({
+            "type": ordinal,
+            "name": name if name else ["uncat"],
+            "depth": depth,
+            "scope": scope,
+        })
+    if not ordinal_arr:
+        ordinal_arr = [{"type": ordinal, "name": ["uncat"], "depth": depth, "scope": scope}]
     config = {
-        "ordinal": [
-            {
-                "type": ordinal,
-                "name": ["uncat"],
-                "depth": depth,
-                "scope": 2,
-            }
-        ],
+        "ordinal": ordinal_arr,
         "strict": True,
         "language": language,
     }
@@ -291,6 +611,14 @@ def main():
     print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
     print(f"   文件路径: {cfg_path}")
     print(f"   文件内容: {json.dumps(config, ensure_ascii=False)}")
+    if groups and groups != [["uncat"]]:
+        print(f"   · 检出 {sum(len(g) for g in groups)} 个标签词，按『是否同计数器』分为 {len(groups)} 个 group：")
+        for gi, g in enumerate(groups):
+            print(f"       group[{gi}] name={g}")
+        print("     （同升序（共享计数器）的标签进同一 group；独立编号序列的标签")
+        print("      各自成 group——这正是 ordinal 数组的设计意图。）")
+    else:
+        print("   · 未检出任何条目类型标签词，仅生成 [\"uncat\"] 兜底组。")
     print("   请人工核对后再跑 verify：")
     print("     · 若原 verify_config.json 是【整型 ordinal】旧格式，校验会直接报错")
     print("       exit 2；必须用本脚本 --force 重新生成（见")
@@ -298,9 +626,16 @@ def main():
     print("     · 若需公式序标校验（Q 层），formula 键已按书源公式形态 best-effort 写入；")
     print("       多分量书 scope 默认 2（章级跨章守卫），单分量且每节从 1 重排的书")
     print("       应 scope 3（如 Kreyszig 式 (N)），请核对 scope 是否正确。")
-    print("     · 默认产出为「单 uncat 合并计数」组；若要 定理/定义/练习 各自")
-    print("       独立计数，须手动把 ordinal 拆成多个 group（含一个")
-    print('       name=["uncat"] 兜底组）。')
+    print("     · 所有『作为编号标题出现』的标签词（含 Remark/评注/注、")
+    print("       Exercise/习题/练习/问题/Problem、Axiom/公理 等）都已自动检出，")
+    print("       并按『是否同升序（共享计数器）』分组：同升序的进同一 group、")
+    print("       独立编号序列的各自成 group。该分组由整书扫描的实际编号得出，")
+    print("       非硬编码；若某书实际共享而你书里分成多 group（或反之），请手动合并/拆分。")
+    print("     · 三级书（type 3/5，编号形如 1.5-3 / I.2.11）现在自动")
+    print("       赋 scope=3（每段重置计数器）；此前写死 scope=2 会让")
+    print("       item_numbering_integrity 误报跨节断号。EN 三级书（如 Kreyszig，")
+    print("       编号 Definition 1.5-3）也会正确判为 type 3，不再误判为 EN 两级")
+    print("       （type 4）而塌缩三级项。")
     print("     · 若为四级子小节书（1.1.1.1），需手动加")
     print('       "section_types": [1,2,3,4], "section_depths": [1,2,3,4]。')
     return 0

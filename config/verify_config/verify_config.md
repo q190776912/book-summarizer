@@ -2,16 +2,17 @@
 
 > 书级配置文件，位于本书 `_extract/verify_config.json`。是 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 的**唯一配置源**（配置缺失时 verify 硬失败，见 `config_setting` 流程 规则1；scan 仅告警安全网）。半自动生成脚本见 [`./make_config.py`](./make_config.py)（**需人工核对**，不声称自动正确）。
 
-## BookConfig 字段
+## 字段总览
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `ordinal` | `List[GroupConfig]` | 必填。每个 group：`{type(1–7), name:[标签类别], depth(段数≥1), scope(1=book/2=chapter/3=section)}`。数组首元素 `type` 即 `primary_type`，自动反推编号模式与小节层级。 |
+| `ordinal` | `List[GroupConfig]` | 必填。**分组选择器**：数组里每个对象 = 一组**共用同一条计数器**的条目标签（见下方「分组语义」核心节）。数组首元素 `type` 即 `primary_type`，自动反推编号模式与小节层级。 |
 | `language` | `str` | `'cn'` / `'en'`（默认 `'cn'`）。 |
 | `strict` | `bool` | 默认 `true`。 |
-| `ignore` | `List[str]` | 章节忽略列表。 |
+| `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, depth, scope:2, ignore:[]}`（见 `config_setting` 流程 规则3）。 |
 | `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |
+| `section_types` / `section_depths` | `List[int]` | 多数由 `primary_type` 自动反推；仅四级子小节 `1.1.1.1` 需显式覆盖。 |
 
 `figure.components`（可选，默认 2）控制图号**段数**，解决不同编号体例：
 - `1` = **全局整数序列**（如 Kreyszig "Fig. 1" / "Fig. 23" … 全书连续编号到 ~270）。**此类书必须声明 `"components": 1`**，否则 "Fig. 23" 因只有 1 段被正则 `{1,2}` 判为非图号，全部图沦为未命名。
@@ -19,27 +20,81 @@
 - `3` = 章.节.图（"Fig. 3.1.2"），更严格。
 
 `lib/figure_io.build_fig_label_re(labels, components)` 据此生成对应段数的捕获组；`load_fig_label_re(out_dir)` 一次性读取 `labels`+`components`。OCR 鲁棒性：`fig_label_alt` 对含 `i` 的前缀额外生成 `[il]` 变体，容忍 "Fig."→"Flg."（i 误读为 l）这类扫描噪声。
-| `section_types` / `section_depths` | `List[int]` | 多数由 `primary_type` 自动反推；仅四级子小节 `1.1.1.1` 需显式覆盖。 |
+
+## `ordinal` 数组：分组语义（核心）
+
+`ordinal` 之所以是**数组**而非单个对象，唯一的理由就是——**条目标签按"是否共用同一条计数器"分组**：
+
+- **同一个对象（`name` 数组）里的标签 = 一同升序、共用一条计数器的标签**。例如 Kreyszig 的 `Definition / Theorem / Lemma / Corollary / Example` 共用同一条"节内连续号"，所以放进同一个 `name`：`["Definition","Theorem","Lemma","Corollary","Example"]`。
+- **不是一同升序、各自独立计数的标签 = 新增一个对象**，绝不塞进别的组的 `name` 里。例如 Kreyszig 的 `Problem` 是节末独立编号（自己从 1 起号、不与主类交织），必须单独成组：`{"type":3,"name":["Problem"],...}`。
+- 一句话判据：**"一同升序就放一起，不是就不能放一起。"**
+
+### 为什么分组必须准确（与编号校验的因果）
+
+B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内部**进行，且**不同组永不合并**：
+
+- 正确分组（每组 = 恰好一条真实计数器）：组内编号拼成一条连续升序序列，校验能找到**真正的**缺号。
+- 把两条独立计数器误放进同一组 → 它们的编号拼不到一条连续序列 → 产生**假缺号**（误报缺号）。
+- 把一条计数器误拆成两组 → 每组只见序列的一部分 → 同样产生**假缺号**。
+
+⇒ **分组的唯一正确标准 = 标签是否共用同一条计数器**，与标签叫什么名字无关。
+
+### `name` 匹配规则（中英双语规范化）
+
+- `name` 里的字符串是"标签类别"，经 `_canon_label` 规范化后再与条目标签比对，所以**中英文自动对齐**：`定理`↔`Theorem`、`定义`↔`Definition`、`练习`↔`Exercise`/`习题`、`评注`↔`Remark`/`注`/`Note`、`例`↔`Example`、`命题`↔`Proposition`、`公理`↔`Axiom` 等。
+- 某条目标签匹配不到任何具名组的 `name` → 落入 **`uncat` 兜底组**（`uncat_group()` 回退到 `ordinal[0]`）。
+- 实践中两种合法用法：
+  1. **整本书只用一个计数器**（最常见）：直接一个 `uncat` 组即可，B 层把全部条目当一条序列校验连续性。
+  2. **书里有多个独立计数器**（如习题单独编号）：拆成多个具名组，并保留一个 `uncat` 组兜底未显式列出的标签。
+
+### 主类与 Remark/Exercise 的判定约定
+
+- **主类**（定义/定理/引理/推论/命题/例/公理）在绝大多数书里**共用同一条主计数器**，因此默认同组。`make_config` 也默认把主类视为同组，并通过扫描数据来确认。
+- **Remark（评注/注/Note）与 Exercise（习题/练习/Problem）**是否进主组，唯一标准仍是"是否与主类一同升序"：
+  - 若它们和主类交织共用一条号 → 进主组 `name`；
+  - 若它们各自独立计数（如节末习题 `Problem 6.3-2` 与正文 `Definition 6.3-2` 在同一窗口各自从 1 起号、甚至同号碰撞）→ **独立成组**。
+- ⚠️ **并行独立计数器的判别信号**：同一 scope 窗口内（如同一 `章.节`）候选标签与主类**出现相同的末位号**（数字碰撞），即二者并行编号、互不连续 → 必须分拆，不可因"没各自归 1"就误判为同组。`make_config` 的 `_shares_main_counter` 正是据此决定 Remark/Exercise 是否独立成组。
+
+### `primary_type` 与默认派生
+
+- `primary_type` = **第一个非 `uncat` 组**的 `type`（`primary_group()`，全 `uncat` 时回退 `ordinal[0]`）。它驱动小节层级（`ORDINAL_SECTION_TYPES`）与默认语言（`ORDINAL_LANGUAGE_DEFAULT`）的反推。
+- `language` 默认由 `primary_type` 派生（CN 家族→cn，EN 家族→en），显式写 `language` 可覆盖。
 
 ## GroupConfig 字段
 
-- `type`：编号风格码 1–7。
-- `name`：标签类别列表（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。
-- `depth`：编号阿拉伯数字段数（≥1）。
-- `scope`：计数重置边界（1=book / 2=chapter / 3=section）。
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `int` (1–8) | 编号风格码，决定段数与结构（见下「类型表」）。 |
+| `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。写 `["uncat"]` 表示兜底组。 |
+| `depth` | `int` | 编号阿拉伯数字段数（≥1），即一个条目键的数字分量数（如 `1.1-2` → 3）。 |
+| `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。 |
 
-## 如何选定 `ordinal` 首元素 `type`（判定树）
+### `type` 类型表（1–8）
 
-> 判定树**只用于确定 `ordinal` 数组的首元素 `type`**（即 `primary_type`）；配置在源语言初稿全部完成后统一生成（`make_config.py` 可半自动探测，但判定不清时以此树为准、人工核对）。翻译派生版不参与配置生成。
+| code | 名称 | 段数 | 说明 |
+|------|------|------|------|
+| 1 | single | 1 | 单级（仅章号）。 |
+| 2 | two_level | 2 | CN 两级 `N.M`（节优先，无章过滤）。 |
+| 3 | three_level | 3 | CN 三级 `N.M.K`（默认）。 |
+| 4 | en | 2 | EN 两级 `N.M`（章优先，富英文标签）。 |
+| 5 | roman | 3 | 三级 + 罗马章号（如 `I.2.3`）。 |
+| 6 | gm | 2 | Gelfand–Manin 风格：§2 标题 + 条目章内本地从 1 起号。 |
+| 7 | fraleigh | 2 | Fraleigh 风格：按节编号、无章号位。 |
+| 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题 `N.M.A`），如 Vakil。 |
+
+## 如何选定每个 group 的 `type`（判定树）
+
+> 判定树**只用于确定各组的 `type`**（即编号风格码）；分组（哪些标签同组）由上一节"是否共用计数器"决定。配置在源语言初稿全部完成后统一生成（`make_config.py` 可半自动探测，但判定不清时以此树为准、人工核对）。翻译派生版不参与配置生成。
 
 读 TOC / 抽一页原文，看编号长什么样？
 
-- 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（周民强型）→ `{"ordinal":[{"type":2,"name":["uncat"],"depth":2,"scope":2}]}`
-- 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"ordinal":[{"type":3,"name":["uncat"],"depth":3,"scope":3}]}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
-- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"ordinal":[{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`
-- 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"ordinal":[{"type":5,"name":["uncat"],"depth":3,"scope":3}]}`
-- Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"ordinal":[{"type":6,"name":["uncat"],"depth":2,"scope":2}]}`
-- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"ordinal":[{"type":7,"name":["uncat"],"depth":2,"scope":2}]}`
+- 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（周民强型）→ `{"type":2,"name":["uncat"],"depth":2,"scope":2}`
+- 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"type":3,"name":["uncat"],"depth":3,"scope":3}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
+- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":4,"name":["uncat"],"depth":2,"scope":2}`
+- 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"type":5,"name":["uncat"],"depth":3,"scope":3}`
+- Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"type":6,"name":["uncat"],"depth":2,"scope":2}`
+- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"type":7,"name":["uncat"],"depth":2,"scope":2}`
+- Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"depth":3,"scope":3}`
 - 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费 `book_structure.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
 
 > 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
@@ -47,12 +102,26 @@
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈1–7、`depth`≥1、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type`∈1–8、`depth`≥1、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## JSON 示例
 
-CN 三级（含公式序标）：
+**多独立计数器书（Kreyszig，正确分组范本）** — 主类共用一条节内计数器，`Problem` 独立成组；`Axiom/Note/Proposition/Remark` 无真实标题或纯噪声，不进配置：
+
+```json
+{
+  "ordinal": [
+    {"type": 3, "name": ["Definition", "Theorem", "Lemma", "Corollary", "Example"], "depth": 3, "scope": 3},
+    {"type": 3, "name": ["Problem"], "depth": 3, "scope": 3}
+  ],
+  "strict": true,
+  "language": "en",
+  "formula": {"type": 1, "depth": 1, "scope": 3, "ignore": []}
+}
+```
+
+CN 三级（含公式序标，单组最简写法）：
 
 ```json
 {

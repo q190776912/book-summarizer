@@ -406,7 +406,7 @@ class BookConfig:
                     raise ConfigError(f"[CONFIG] ordinal[{i}] 必须是对象（GroupConfig）")
                 t = int(g.get('type', ORDINAL_THREE_LEVEL))
                 if t not in ORDINAL_CODES:
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 1..7）")
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 1..8）")
                 nm = g.get('name') or ["uncat"]
                 if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
                     raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
@@ -575,7 +575,7 @@ class ConfigLoader:
             if g.type not in ORDINAL_CODES:
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].type={g.type}"
-                    f" 非法（应 1..7）。")
+                    f" 非法（应 1..8）。")
             if g.depth < 1:
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].depth={g.depth}"

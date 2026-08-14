@@ -16,7 +16,7 @@ Covers the new mandatory book-config gate:
 
 v2 schema contract (per config_setting 流程 规则1 / config/config_schema.md §配置字段说明):
   * `ordinal` is a LIST of `GroupConfig` dicts
-    (`{type:int 1..7, name:[str], depth:int>=1, scope:1|2|3}`).
+    (`{type:int 1..8, name:[str], depth:int>=1, scope:1|2|3}`).
   * `BookConfig.from_dict` REJECTS the old int/str `ordinal` with a ConfigError
     carrying the "make_config --force" migration hint.
   * `require_complete()` has two caller stances (config_setting 流程 规则1):
@@ -374,6 +374,113 @@ class TestMakeConfig(unittest.TestCase):
                          "skip and exit 0. out=%s err=%s" % (out[-500:], err[-500:]))
         self.assertIn("已存在", out + err)
         self.assertIn("跳过", out + err)
+
+    def test_make_config_en_three_level_detects_type3_scope3(self):
+        # Regression for Kreyszig-style EN three-level books. Items are numbered
+        # "Definition 1.5-3" / "1.5-3 Definition" (label + three-component number).
+        # make_config MUST detect type 3 (NOT EN two-level type 4) and assign
+        # scope 3 (per-section counter reset). The phase-guard marker
+        # (_extraction_done.json) is required so detection actually scans the
+        # pages instead of falling back to the default three_level(3).
+        ext = tempfile.mkdtemp(prefix="qc_en3_")
+        with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
+            json.dump({"chapters": [{"ch": 1, "start": 1, "end": 1}]}, f)
+        with open(os.path.join(ext, "_extraction_done.json"), "w", encoding="utf-8") as f:
+            json.dump({"done": True}, f)
+        page = {"text": [
+            {"text": "1.1-1 Definition (Metric). 1.1-2 Theorem (Completeness).",
+             "poly": [0, 200, 100, 210, 100, 220, 0, 220]},
+            {"text": "Definition 1.5-3 (Bounded). 1.5-4 Lemma (Hahn).",
+             "poly": [0, 300, 100, 310, 100, 320, 0, 320]},
+        ]}
+        with open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8") as f:
+            json.dump(page, f)
+        rc, out, err = _run([MAKE_CLI, ext])
+        self.assertEqual(rc, 0,
+                         "make_config should exit 0. out=%s err=%s"
+                         % (out[-500:], err[-500:]))
+        with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
+            gen = json.load(f)
+        self.assertIsInstance(gen["ordinal"], list)
+        grp = gen["ordinal"][0]
+        self.assertEqual(grp["type"], 3,
+                         "EN three-level book must detect type 3, got %r (out=%s)"
+                         % (grp, out[-500:]))
+        self.assertEqual(grp["scope"], 3,
+                         "three-level book must get scope 3, got %r" % grp)
+
+    def test_make_config_fills_detected_labels_cn(self):
+        # Incremental label fill (the "detect one, fill one" fix): a CN
+        # three-level book whose pages contain numbered headings for ALL six
+        # main entry types must generate a group whose `name` lists exactly
+        # those detected labels (NOT the old hard-coded ["uncat"]). The
+        # phase-guard marker (_extraction_done.json) is required for detection
+        # to actually scan the pages.
+        ext = tempfile.mkdtemp(prefix="qc_labels_cn_")
+        with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
+            json.dump({"chapters": [{"ch": 1, "start": 1, "end": 1}]}, f)
+        with open(os.path.join(ext, "_extraction_done.json"), "w", encoding="utf-8") as f:
+            json.dump({"done": True}, f)
+        page = {"text": [{"text":
+            "1.1.1 定义 X。1.2.1 定理 Y。1.3.1 引理 Z。"
+            "1.4.1 推论 W。1.5.1 命题 V。1.6.1 例 U。",
+            "poly": [0, 200, 100, 210, 100, 220, 0, 220]}]}
+        with open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8") as f:
+            json.dump(page, f)
+        rc, out, err = _run([MAKE_CLI, ext])
+        self.assertEqual(rc, 0,
+                         "make_config should exit 0. out=%s err=%s"
+                         % (out[-500:], err[-500:]))
+        with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
+            gen = json.load(f)
+        self.assertIsInstance(gen["ordinal"], list)
+        self.assertEqual(len(gen["ordinal"]), 1)
+        name = gen["ordinal"][0]["name"]
+        self.assertNotEqual(name, ["uncat"],
+                            "detected labels must replace the default ['uncat']")
+        for expected in ["定义", "定理", "引理", "推论", "命题", "例"]:
+            self.assertIn(expected, name,
+                          "detected label %s missing from name %r" % (expected, name))
+        # type 3 (CN three-level) + scope 3 still hold alongside the label fill.
+        self.assertEqual(gen["ordinal"][0]["type"], 3)
+        self.assertEqual(gen["ordinal"][0]["scope"], 3)
+
+    def test_make_config_fills_detected_labels_en(self):
+        # EN three-level (Kreyszig-style) book: numbered "Definition/Lemma/
+        # Theorem" headings must be filled into `name` (stable LABEL_FORMS
+        # order), reproducing the hand-written Kreyszig config shape.
+        ext = tempfile.mkdtemp(prefix="qc_labels_en_")
+        with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
+            json.dump({"chapters": [{"ch": 1, "start": 1, "end": 1}]}, f)
+        with open(os.path.join(ext, "_extraction_done.json"), "w", encoding="utf-8") as f:
+            json.dump({"done": True}, f)
+        page = {"text": [
+            {"text": "1.1-1 Definition (Metric). 1.1-2 Theorem (Complete).",
+             "poly": [0, 200, 100, 210, 100, 220, 0, 220]},
+            {"text": "Definition 1.5-3 (Bounded). 1.5-4 Lemma (Hahn). "
+                     "1.6-1 Corollary (Baire). 1.7-1 Proposition (Open). "
+                     "1.8-1 Example (Convergent).",
+             "poly": [0, 300, 100, 310, 100, 320, 0, 320]},
+        ]}
+        with open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8") as f:
+            json.dump(page, f)
+        rc, out, err = _run([MAKE_CLI, ext])
+        self.assertEqual(rc, 0,
+                         "make_config should exit 0. out=%s err=%s"
+                         % (out[-500:], err[-500:]))
+        with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
+            gen = json.load(f)
+        self.assertIsInstance(gen["ordinal"], list)
+        self.assertEqual(len(gen["ordinal"]), 1)
+        name = gen["ordinal"][0]["name"]
+        self.assertNotEqual(name, ["uncat"])
+        for expected in ["Definition", "Theorem", "Lemma", "Corollary",
+                         "Proposition", "Example"]:
+            self.assertIn(expected, name,
+                          "detected label %s missing from name %r" % (expected, name))
+        self.assertEqual(gen["ordinal"][0]["type"], 3)
+        self.assertEqual(gen["ordinal"][0]["scope"], 3)
+        self.assertEqual(gen["language"], "en")
 
     def test_make_config_real_no_config_book_then_cleanup(self):
         # Real no-config book (discovered at runtime): make_config should

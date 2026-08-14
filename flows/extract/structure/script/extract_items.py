@@ -27,7 +27,45 @@ from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
 from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH, ORDINAL_THREE_LEVEL,
                         ORDINAL_DEPTH, BookConfig, GroupConfig)
 
-def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chapter, label_re, cite_re, num_re):
+# ---------------------------------------------------------------------------
+# Label word -> semantic label (canonical CN).  Case-insensitive so English
+# keywords captured lowercase by OCR (e.g. "Zorn's lemma") still map correctly.
+# Priority: 练习/习题 > 例/example > 定义/definition > 定理/theorem >
+# 引理/lemma > 推论/corollary > 命题/proposition.
+# ---------------------------------------------------------------------------
+_LABEL_MAP = [
+    (r'练习|习题', '练习'),
+    (r'例|example', '例'),
+    (r'定义|definition', '定义'),
+    (r'定理|theorem', '定理'),
+    (r'引理|lemma', '引理'),
+    (r'推论|corollary', '推论'),
+    (r'命题|proposition', '命题'),
+]
+
+
+def _label_from_raw(raw):
+    raw = (raw or '').lower()
+    for pat, lab in _LABEL_MAP:
+        if re.search(pat, raw):
+            return lab
+    return 'uncat'
+
+
+def _first_label_pos(s):
+    """Return the label of the type word closest to the START of s (i.e.
+    closest to the item number), or None. Used to prefer an item's own
+    heading label over a type word merely mentioned later as a cross-reference.
+    """
+    best = None
+    for pat, lab in _LABEL_MAP:
+        for mm in re.finditer(pat, s, re.IGNORECASE):
+            if best is None or mm.start() < best[0]:
+                best = (mm.start(), lab)
+    return best[1] if best else None
+
+
+def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re):
     """Helper: process a regex match and append to raw_matches if valid."""
     ch_num = int(m.group(1))
     if ch_num != chapter:
@@ -50,7 +88,23 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     #     cite word ("据") sits at the tail of the prior block, one block away.
     if i > 0:
         prev_tail = all_blocks[i-1][2][-15:].strip()
-        if cite_re.search(prev_tail):
+        if cite_re_tail.search(prev_tail):
+            return
+
+    # 0c. Parenthesized number -> cross-reference, NOT an item definition.
+    #     A genuine Kreyszig heading never wraps its own number in parentheses
+    #     (it writes "8.4-2 Lemma (Ranges).", never "(8.4-2) Lemma"). Forms like
+    #     "(8.3-4, below)" or "(Lemma 8.4-2)" are references where the citation
+    #     cue sits AFTER the number, so the before-only cite_re (step 0) cannot
+    #     catch them. Skip when an opening paren sits within 12 chars BEFORE the
+    #     number AND a closing paren within 12 chars AFTER it (number enclosed).
+    #     Genuine "N.S-N Lemma (Title)" headings have the '(' only AFTER the
+    #     number, so they are preserved. "(谱定理) 9.9-1" has its ')' BEFORE the
+    #     number, so it is also preserved.
+    _opn = txt.rfind('(', 0, m.start());  _opn = _opn if _opn != -1 else txt.rfind('（', 0, m.start())
+    if _opn != -1 and (m.start() - _opn) <= 12:
+        _clo = txt.find(')', m.end());  _clo = _clo if _clo != -1 else txt.find('）', m.end())
+        if _clo != -1 and (_clo - m.end()) <= 12:
             return
 
     # 1. A FULL label word (定理/定义/引理/推论/命题/例) immediately before the number,
@@ -84,25 +138,45 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
         if num_re.search(before) or num_re.search(after_ctx) or re.search(r'[到至～]', before + after_ctx):
             return
 
+    # 3b. Cross-reference / fragment guard. A genuine item heading places the
+    #     number at (or very near) the start of its OCR block. If the number is
+    #     mid-block AND the text immediately before it contains a lowercase
+    #     preposition/citation AND there is no type word and no inherited
+    #     section label nearby, it is a cross-reference ("...in 3.4-5..." /
+    #     "In Def. 4.7-1 we state ... Baire's theorem"), not an item
+    #     definition — skip it. This prevents phantom items and the
+    #     mis-classification they cause when nearby prose mentions a different
+    #     type word (e.g. "Baire's theorem" flipping 4.7-1 to theorem).
+    if m.start() > 6:
+        _pre = txt[max(0, m.start() - 15):m.start()]
+        _near = txt[max(0, m.start() - 12):m.end() + 12]
+        _has_type = re.search(
+            r'(?:定理|定义|引理|推论|命题|例|Definition|Theorem|Lemma|Corollary|Proposition|Example)',
+            _near, re.IGNORECASE)
+        if (not _has_type and not active_section_label and
+                re.search(r'\b(in|to|of|by|for|with|that|this|as|at|from|into|onto)\b',
+                          _pre, re.IGNORECASE)):
+            return
+
     label = 'uncat'
-    ctx_self = (before[-60:] if len(before) > 60 else before) + after[:40]
-    lm = label_re.search(ctx_self)
-    if lm:
-        raw = lm.group()
-        if re.search(r'练习|习题|Example', raw):
-            label = '练习'
-        elif re.search(r'例|Example', raw):
-            label = '例'
-        elif re.search(r'定义|Definition', raw):
-            label = '定义'
-        elif re.search(r'定理|Theorem', raw):
-            label = '定理'
-        elif re.search(r'引理|Lemma', raw):
-            label = '引理'
-        elif re.search(r'推论|Corollary', raw):
-            label = '推论'
-        elif re.search(r'命题|Proposition', raw):
-            label = '命题'
+    ctx_self = (before[-90:] if len(before) > 90 else before) + after[:160]
+    # A type word IMMEDIATELY adjacent to the number is the item's own heading
+    # label and outranks type words mentioned later in the same block as
+    # cross-references (e.g. "8.3-4 Corollary (...). In Theorem 8.3-3" must be
+    # Corollary, not Theorem). Prefer the occurrence closest to the number.
+    near_after = after[:30]
+    near_before = before[-12:] if before else ""
+    la = _first_label_pos(near_after)
+    if la:
+        label = la
+    elif near_before:
+        lb = _first_label_pos(near_before)
+        if lb:
+            label = lb
+    if label == 'uncat':
+        lm = label_re.search(ctx_self)
+        if lm:
+            label = _label_from_raw(lm.group())
 
     if label == 'uncat' and active_section_label:
         label = active_section_label
@@ -110,22 +184,14 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     if label == 'uncat':
         if i > 0:
             prev_txt = all_blocks[i-1][2]
-            prev_label = label_re.search(prev_txt[-40:])
+            prev_label = label_re.search(prev_txt[-120:])
             if prev_label:
-                raw = prev_label.group()
-                if re.search(r'练习|习题|Example', raw):
-                    label = '练习'
-                elif re.search(r'例|Example|定义|Definition', raw):
-                    label = '例' if re.search(r'例|Example', raw) else '定义'
+                label = _label_from_raw(prev_label.group())
         if label == 'uncat' and i < len(all_blocks) - 1:
             next_txt = all_blocks[i+1][2]
-            next_label = label_re.search(next_txt[:40])
+            next_label = label_re.search(next_txt[:120])
             if next_label:
-                raw = next_label.group()
-                if re.search(r'练习|习题|Example', raw):
-                    label = '练习'
-                elif re.search(r'例|Example|定义|Definition|定理|Theorem', raw):
-                    label = '例' if re.search(r'例|Example', raw) else ('定义' if re.search(r'定义|Definition', raw) else '定理')
+                label = _label_from_raw(next_label.group())
 
     text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
     raw_matches.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
@@ -305,15 +371,30 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     num_re = re.compile(r'(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)')
     label_re = re.compile(
         r'(?:定义|定理|引理|推论|命题|练习|习题)\s*（'
-        r'|例(?:子)?|Exercise|Example'
-        r'|Definition|Theorem|Lemma|Corollary|Proposition'
+        r'|例(?:子)?'
+        r'|Example|Exercise'
+        r'|\bDefinition\b|\bTheorem\b|\bLemma\b|\bCorollary\b|\bProposition\b',
+        re.IGNORECASE
     )
     # Two-level 练习 / 习题 / Example pass (R3): CN three-level books number
     # exercises per chapter.section ("练习 4.1"), which the 3-component num_re
     # above never matches. Kept separate so the cross-ref filter and the
     # 3-component pass stay clean.
     ex_re = re.compile(r'(练习|习题|Example)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
-    cite_re = re.compile(r'(见|由|根据|参考|参见|据|Cf\.)')
+    # Case-insensitive so OCR-mangled lowercase "cf." / "see" / "below" /
+    # "Secs." cross-references are caught (previously only the capitalized
+    # "Cf." was matched, letting "(cf. 5.1-3)" through as a phantom item).
+    # Used for the SAME-block check (step 0), where a genuine item's number is
+    # at the block start so `before` is empty and never matches by accident.
+    cite_re = re.compile(
+        r'(见|由|根据|参考|参见|据|cf\.|see\b|below\b|viz\.|e\.g\.|i\.e\.|Secs?\.)',
+        re.IGNORECASE)
+    # Narrow set for the PREV-block-tail check (step 0b): only strong
+    # cross-reference cues that indicate an OCR split mid-citation. A broad
+    # set here wrongly skips the NEXT block's genuine item whenever any prior
+    # block happens to end with "Sec." / "see" / "below" (e.g. "...in Sec. 11.3."
+    # killed the following "3.7-3 Laguerre polynomials").
+    cite_re_tail = re.compile(r'(见|由|根据|参考|参见|据|cf\.)', re.IGNORECASE)
     # Step 3: section heading (e.g. "§1.1 Name", "1.1 Name"). NOT matching "1.1-1" (numbered items).
     sec_heading_re = re.compile(r'^(?:§\s*)?(\d+)' + SEP_TIGHT + r'(\d+)(?:\s{2,}|\s+[^\d\-])')
     # Section-level label: a text block that is a standalone "例子" or "Examples" heading
@@ -353,7 +434,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
         # Step 4: find all number patterns (primary 3-group N.S-i)
         for m in num_re.finditer(txt):
             _add_match(m, txt, p, i, all_blocks, raw_matches,
-                       active_section_label, chapter, label_re, cite_re, num_re)
+                       active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re)
 
         # Step 4b: fallback 2-group pattern for garbled "21_7" → 2.1-7
         m2 = fallback_re.search(txt)
@@ -371,7 +452,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
                     after_garbled = txt[m2.end():].strip()
                     if len(after_garbled) >= 8 and any('\u4e00' <= ch <= '\u9fff' or ch.isalpha() for ch in after_garbled[:12]):
                         _add_match(m2, txt, p, i, all_blocks, raw_matches,
-                                   active_section_label, chapter, label_re, cite_re, num_re)
+                                   active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re)
 
         # ---- Pass: two-level 练习 (R3) ----
         # CN three-level books number 练习 per chapter.section (e.g. 练习 4.1),

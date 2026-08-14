@@ -28,6 +28,18 @@
 ## 出口条件
 - 出口：`figure_detect.json` 与 `figure_index.json` 均存在，且 `figure_index.json` 涵盖全部已建章节（或本书无图而跳过）。
 
+## 环境前提
+- 权重 `doclayout_yolo_ft.pt` 来自 **ModelScope `opendatalab/pdf-extract-kit-1.0`**
+- 加载器必须用 **`doclayout_yolo.YOLOv10`**，不能用 `ultralytics.YOLO`（后者在 `predict()` 时会自动 fuse 把 `Conv.bn` 删掉，触发 doclayout_yolo 0.0.4 的 `'Conv' object has no attribute 'bn'`）
+- `cv2`（opencv-python）用于读取；Windows 上 `cv2.imread` 读不了含中文路径的文件，verify 的 figure 层(E)（`../../../verify/script/verify_chapter.py`）用 `np.fromfile`+`cv2.imdecode` 读；**`extract_figures.py` 已改用 PIL 保存裁剪图**，避免中文路径静默失败
+
+## 已知边界
+- 跨页大图被 DocLayout-YOLO 各检出一个框，目前**不合并**，会得到两个文件名
+- 只取 `figure`(class 3) 裁，**不裁表格/公式块**（模型另有 `table`(5)/`isolate_formula`(8) 类，脚本忽略）
+- 图注序标识别**跟随本书体例**：前缀词由 `verify_config.json` 的 `figure.labels` 决定（默认 `["图","Figure","Fig"]`，可扩成 `Scheme` / `Illustration` 等），不再写死中英语词表；caption 无图号且同页邻近无该书图号时命名为 `chNN_unnamed_K.png`
+- `--conf` 默认 0.25；觉得误检多就调高，漏检多就调低
+- **Windows + 非 ASCII 路径的静默失败**：OpenCV 的 `cv2.imwrite` 在 Windows 上对含中文等非 ASCII 字符的路径会**静默返回 False**（已知 OpenCV 缺陷），导致检测阶段只生成 `figure_detect.json` / `figure_index.json` 元数据但 `figure/` 下没有 PNG。`extract_figures.py` 已改为 PIL 保存，回跑即修复；若 `_extract/` 已是历史遗留数据没有 PNG，可写 `regen_figures.py` 用 fitz 渲染 + PIL 裁剪，按 `figure_index.json` 的 `page+bbox+file` 重建
+
 ## 相关代码（路径相对 skill 根目录）
 - `flows/script/extract_figures`（`run_full_book` / `run_chapter` / `detect_pages_range` / `parse_fig_label`）：DocLayout-YOLO 检测 + 裁图 + caption 合并。`run_full_book` 为全本书检测入口（被本子流程调用）。
 - `flows/script/assign_figures`（`run_book` / `run_chapter` / `gather_refs`）：章内 OCR 图注 → 语义号分配。`run_book` 为全本书分配入口（被本子流程调用）。

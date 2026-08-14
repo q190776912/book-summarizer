@@ -38,9 +38,11 @@ def _find_node():
 def _find_node_modules():
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [
-        # skill-local node_modules lives with the katex tooling under
-        # verify/format_verify/script/node_modules
+        # canonical: skill ROOT node_modules (self-contained, preferred)
+        os.path.normpath(os.path.join(_ROOT, 'node_modules')),
+        # legacy fallback: skill-local node_modules beside the katex tooling
         os.path.normpath(os.path.join(here, 'node_modules')),
+        # managed node workspace (global fallback)
         r'C:\Users\ye190\.workbuddy\binaries\node\workspace\node_modules',
         os.path.normpath(os.path.join(here, '..', '..', '..', 'binaries', 'node',
                                        'workspace', 'node_modules')),

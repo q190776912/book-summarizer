@@ -17,10 +17,7 @@ import lib.boot as _boot
 _boot.setup()
 
 from verify.script.base import VerifyLayer, LayerResult
-from key_parse import keys_in_md, _first_num, sortkey
-from verify_config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN
-from verify.script.ordinal import int_to_roman
-from verify.script.structure_io import read_structure_items
+from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 
 # ---------------------------------------------------------------------------
 # data_provider.py — EXTRACT provider (order 0).
@@ -93,15 +90,7 @@ class ExtractLayer(VerifyLayer):
         label_warns = check_label_consistency(items)
 
         cfg = ctx.config
-        if ctx.config.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
-            # keys_in_md 需要 md 的罗马章前缀（标题是裸 per-section 序数）。
-            entry_keys, all_keys = keys_in_md(
-                ctx.md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ctx.ch))
-        else:
-            entry_keys, all_keys = keys_in_md(ctx.md_file, groups=cfg.ordinal)
-        if ctx.config.primary_type == ORDINAL_EN:
-            entry_keys = {k for k in entry_keys if _first_num(k) == ctx.ch}
-            all_keys = {k for k in all_keys if _first_num(k) == ctx.ch}
+        entry_keys, all_keys = md_keys_for_chapter(ctx.md_file, cfg, ctx.ch)
 
         # Populate context for B / C / D / … layers. 本层只供水、不做事；
         # 所有缺失项比对 / 查漏 / 阻断均由 B 层完成，B 与 EXTRACT 解耦。

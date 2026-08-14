@@ -25,6 +25,10 @@ _boot.setup()
 
 from data.book_structure.book_structure import BookStructure
 
+from key_parse import keys_in_md, _first_num
+from verify.script.ordinal import int_to_roman
+from verify_config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN
+
 
 TYPE_TO_LABEL = {
     'definition': '定义', 'theorem': '定理', 'lemma': '引理',
@@ -54,3 +58,21 @@ def read_structure_items(ext_dir, ch):
             'text': n.name,
         })
     return items
+
+
+def md_keys_for_chapter(md_file, cfg, ch):
+    """返回某章在 md 中出现过的 (entry_keys, all_keys)，已按章过滤。
+
+    这是 EXTRACT 子流程层与 check_structure_completeness 公共脚本共用的
+    「md 键集」取数缝，从 data_provider.ExtractLayer.run 抽出，避免公共
+    编排脚本反向依赖 data_provider 子流程内部函数。
+    """
+    if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
+        entry_keys, all_keys = keys_in_md(
+            md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ch))
+    else:
+        entry_keys, all_keys = keys_in_md(md_file, groups=cfg.ordinal)
+    if cfg.primary_type == ORDINAL_EN:
+        entry_keys = {k for k in entry_keys if _first_num(k) == ch}
+        all_keys = {k for k in all_keys if _first_num(k) == ch}
+    return entry_keys, all_keys

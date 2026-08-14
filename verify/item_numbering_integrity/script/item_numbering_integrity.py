@@ -37,7 +37,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from verify.script.base import VerifyLayer, LayerResult
-from verify.script.key_parse import sortkey, _canon_label
+from key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
 from verify_config import ORDINAL_THREE_LEVEL
 
@@ -81,7 +81,7 @@ def _numpath_regexes(levels):
     # CoROLLARY). Without it the label-first match fails -> the B-layer parses
     # ZERO bold entries for the EN .md and silently reports no gaps (false
     # pass). Chinese labels are case-insensitive anyway, so this is safe for
-    # every book. Mirrors ENTRY_RE_EN_C in key_parse.py (same fix applied there).
+    # every book. Mirrors ENTRY_RE_EN_C in lib/key_parse.py (same fix applied there).
     label_first = re.compile(r'^(?:' + _ENTRY_LABELS + r')\s*' + cap.pattern,
                              re.IGNORECASE)
     num_first = re.compile(r'^' + cap.pattern + r'\s+(.*)$')
@@ -537,9 +537,8 @@ def _md_gap_blocking(ctx):
 
 
 # ---------------------------------------------------------------------------
-# Merged P2 from EXTRACT provider (2026-08-13): 提取侧查漏 —— 整类首项缺失
-# (Q) + over-mark 守卫。EXTRACT 层现为纯数据供给（items/entry_keys/all_keys/
-# label_warns），查漏逻辑统一归 B，B 与 EXTRACT 解耦：EXTRACT 只供水、不做事。
+# 提取侧查漏：整类首项缺失 (Q) + over-mark 守卫。
+# EXTRACT 侧只供给数据（items/entry_keys/all_keys/label_warns），查漏逻辑统一由 B 层处理；
 # 复用 B 现有 `blocking` / `warnings` 键，不加新契约键。
 # ---------------------------------------------------------------------------
 CAT_WORDS = ['定义', '定理', '引理', '推论', '命题']
@@ -691,7 +690,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
         extra = sorted(all_keys - extracted, key=sortkey)
 
-        # --- P2：提取侧查漏（原 EXTRACT 层 merged Q + over-mark 守卫，现并入 B）---
+        # --- P2：提取侧查漏（Q 类整项缺失 + over-mark 守卫，归 B 层统一处理）---
         blocking = []
         warnings = []
         _merged_category_first_missing(ctx, all_keys, blocking)

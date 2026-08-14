@@ -19,7 +19,7 @@
 统一合成为**单一 `book_structure.json` 书对象**，一次产出同时满足两类需求：
   · write-source 写作契约：章节顺序、条目/练习齐全、印刷标题（name 带序标）。
   · verify 编号项基准：展平树、filter type!="exercise" 即得本书编号项集合
-    （data_provider 改为读此 JSON，不再重跑抽取器）。
+    （data_provider 以本 JSON 为编号项基准）。
 
 设计要点（与 verify/data_provider 对齐）
 --------------------------------------
@@ -84,7 +84,7 @@ from verify_config import (ORDINAL_EN, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
                            ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
-from verify.script.key_parse import _canon_label
+from key_parse import _canon_label
 from data.book_structure.book_structure import BookStructure, StructureNode
 
 

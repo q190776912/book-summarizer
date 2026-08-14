@@ -79,4 +79,4 @@
 
 - 生成：`build_structure <extract_dir> [ch ...]`，增量合并（按 `key` 替换或追加章节），章序按数字排；全程只产出/更新这一个文件。
 - 回填：`check_structure_completeness.py <extract_dir> [ch ...] --backfill` 写回同一 `book_structure.json`（先备份）。
-- 旧书迁移：旧版的每章结构文件不再被消费，**须对该书重跑 `build_structure`** 生成单文件 `book_structure.json`（`structure_io` 缺失时返回空，由 B 层如实报缺项，不静默通过）。
+- 消费方只读单文件 `book_structure.json`；旧版每章结构文件不再被读取。若某书仍是旧版多文件结构，**对该书重跑 `build_structure`** 生成单文件 `book_structure.json`（`structure_io` 缺失时返回空，由 B 层如实报缺项，不静默通过）。

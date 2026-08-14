@@ -107,10 +107,9 @@ class LayerContractTest(unittest.TestCase):
         """Every registered fixer (FIXERS, the post-merge fix mechanism) emits
         ONLY known fix-dict keys (FIX_KEYS).
 
-        Historically auto-correct logic lived on auto_fixable VerifyLayers; the
-        format-verify consolidation (2026-08-13) relocated all fixers into
-        standalone `fix_<snake>.py` modules registered via `register_fixer`
-        (codes H/G/I/J/K/L/M/N preserved). `VerifyManager.fix` consumes FIXERS
+        Auto-correct logic lives on standalone `fix_<snake>.py` modules
+        registered via `register_fixer` (codes H/G/I/J/K/L/M/N preserved),
+        NOT on auto_fixable VerifyLayers. `VerifyManager.fix` consumes FIXERS
         directly, so we validate FIXERS here instead of LAYER_REGISTRY."""
         from verify.script.base import FIXERS, fixable_ordered_fixers
         self.assertGreater(len(FIXERS), 0, "FIXERS registry has no fixers")

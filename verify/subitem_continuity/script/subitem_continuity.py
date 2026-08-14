@@ -21,7 +21,7 @@ subitem_continuity.py — O-LAYER (order 15): ordinal sub-item gap detection (wa
 
 Non-blocking: emits '~' (tail/OCR cross-ref) and 'x' (head/internal) lines but is
 NEVER auto-fixed and never forces a FAIL by itself. check_ordinal_subitem_gaps is
-Self-contained implementation of check_ordinal_subitem_gaps (bodies relocated from the deleted structure_layers.py), forwarding the OCR cross-reference args.
+Self-contained implementation of check_ordinal_subitem_gaps, forwarding the OCR cross-reference args.
 """
 
 from verify.script.base import VerifyLayer, LayerResult, LayerFixResult

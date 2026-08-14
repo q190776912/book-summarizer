@@ -51,7 +51,7 @@ from verify_config import ConfigLoader, ConfigError
 from verify.script.base import VerifyManager
 from verify.script.register_all import LAYER_REGISTRY
 from verify.script.report import print_result
-# --ignore / --ignore-figure loaders (relocated; no longer import fig_layers).
+# --ignore / --ignore-figure loaders.
 from verify.script.ignore_files import load_ignore, load_ignore_fig
 
 

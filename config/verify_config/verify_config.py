@@ -479,9 +479,8 @@ class ConfigLoader:
       * ignore_ch{N}.json / ignore_fig_ch{N}.json — per-chapter noise (auto)
       * manual_overrides_ch{N}.json        — per-chapter extraction overrides
 
-    Previously these were read inline in several places (registry.py,
-    verify_chapter.py, context.py); now they are consolidated here so layers
-    never re-read files or receive config field-by-field.
+    Config files are read once here so layers never re-read files or receive
+    config field-by-field.
     """
 
     def __init__(self, extract_dir: str, book_dir: str,

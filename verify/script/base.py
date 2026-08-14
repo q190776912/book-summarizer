@@ -1,10 +1,9 @@
 """verify/script/base.py — layer contract, registry, orchestration, and the
 slim VerifyContext runtime carrier.
 
-Relocated from verify/registry.py (layer contract + orchestration) and
-verify/context.py (VerifyContext).  The CONFIG itself now lives in
-`config` (ConfigLoader / BookConfig); this module is purely about the
-layer execution machinery, NOT config loading.
+Layer contract, registry, orchestration, and the slim VerifyContext runtime
+carrier.  Config loading lives in `config` (ConfigLoader / BookConfig); this
+module is purely about the layer execution machinery, NOT config loading.
 
 The manager produces a BYTE-COMPATIBLE result dict that mirrors the legacy
 `verify_one()` return contract (the exact key set consumed by
@@ -69,7 +68,7 @@ class Finding:
 class LayerResult:
     """Result of running one layer.
 
-    `legacy`  — the original return value of the relocated legacy function.
+    `legacy`  — the return value kept byte-compatible with `verify_one()` for backward compatibility.
     `metadata`— the subset of keys this layer contributes to the merged
                 verify_one result dict. Last-writer-wins on key collision.
     `findings`— optional structured findings (unused by legacy gate).
@@ -199,7 +198,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
 
 
 class VerifyContext:
-    """Slim per-run runtime carrier (relocated from context.py).
+    """Slim per-run runtime carrier for layer execution state.
 
     Holds ONLY runtime state + a reference to the immutable per-chapter
     BookConfig (built by ConfigLoader.config_for_chapter).  It does NOT load
@@ -317,8 +316,8 @@ class VerifyManager:
         """Run every auto-fix in `fix_order`, returning the byte-compatible
         change dict {h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n}.
 
-        修复实现位于独立的 `fix_<snake>.py` 模块（经 FIXERS 注册）。当 FIXERS 为空
-        （过渡期 / 尚未迁移修复器）时，回退到各层的 `layer.fix`（旧路径），保证 --fix 不回归。
+        修复实现主体位于独立的 `fix_<snake>.py` 模块（经 FIXERS 注册）。当 FIXERS 为空
+        时，回退到各层的 `layer.fix`（旧路径），保证 --fix 不回归。
         """
         cfg = self.loader.book
         ctx = VerifyContext(

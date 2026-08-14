@@ -21,7 +21,7 @@ import json, re
 from lib.regexlib import SEP_TIGHT
 
 # ---------------------------------------------------------------------------
-# ENGLISH-aware extraction (merged from extract_items_en.py)
+# ENGLISH-aware extraction (two-level English numbering)
 # For English textbooks with two-level numbering (Theorem 1.1, Definition 1.1,
 # Example 1.25, ...). Returns items shaped like the CN path: {key, label, page, text}.
 # ---------------------------------------------------------------------------

@@ -1,8 +1,6 @@
 """book-summarizer shared path bootstrap.
 
-After the big refactor, the code packages (``extract``, ``figure``, ``format``,
-``pipeline``, ``formula``, ``verify``, ``mm_repair``) no longer live directly
-under the skill root.  Flow-stage packages live under ``flows/<stage>/script/<pkg>/`` (each stage's scripts are grouped in a ``<pkg>`` subpackage under its ``script/`` directory),
+Flow-stage packages live under ``flows/<stage>/script/<pkg>/`` (each stage's scripts are grouped in a ``<pkg>`` subpackage under its ``script/`` directory),
 and the shared ``verify`` engine is a proper package at the skill root level
 (``verify/``, parallel to ``flows/``), with each validation layer as a
 ``verify/<semantic_name>/`` subpackage.
@@ -52,15 +50,14 @@ def _register_verify_package(r):
     """Expose the verify engine (now a proper package at ``<root>/verify/``) under
     the canonical name ``verify``.
 
-    After the semantic-layout refactor the verify engine is a real package at
-    the skill root (``verify/`` containing ``verify_chapter.py``,
-    ``register_all.py``, ``report.py`` and the per-layer ``<semantic_name>/``
-    subpackages), so ``import verify`` resolves through normal package machinery
-    and each validation-layer module is importable by its bare ``<snake>`` name
-    (boot injects ``verify/**/script`` into ``sys.path``).  We still register it
-    explicitly (guarded by the ``"verify" not in sys.modules`` check) so the
-    historical import surface works regardless of which entry script bootstrapped
-    first.
+    The verify engine is a real package at the skill root (``verify/`` containing
+    ``verify_chapter.py``, ``register_all.py``, ``report.py`` and the per-layer
+    ``<semantic_name>/`` subpackages), so ``import verify`` resolves through
+    normal package machinery and each validation-layer module is importable by
+    its bare ``<snake>`` name (boot injects ``verify/**/script`` into
+    ``sys.path``).  It is still registered explicitly (guarded by the
+    ``"verify" not in sys.modules`` check) so the import surface works regardless
+    of which entry script bootstrapped first.
     """
     import importlib.util
     pkg_dir = os.path.join(r, "verify")

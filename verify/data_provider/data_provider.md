@@ -15,14 +15,14 @@
 
 ## 本阶段规则（阻断性 / 可修复）
 - 本身不是 pass/fail 判定层，但 `book_structure.json` 缺失 / 无 `page_*.json` → 数据缺失 → 下游 FAIL。
-- **必跑**（Every layer ALWAYS runs，旧的 disable 机制已删除；不存在 `code != 'EXTRACT'` 特判）。
+- **必跑**（Every layer ALWAYS runs；不存在 `code != 'EXTRACT'` 特判或 disable 机制）。
 
 ## 出口条件
 本层不产出阻断性结论，仅向 `ctx` / 结果字典注入数据；若数据源缺失则经由下游层表现为整章 FAIL。
 
 ## 相关代码（`verify/data_provider/script/data_provider.py`）
 - `code = 'EXTRACT'`，`order = 0`，`auto_fixable = False`。
-- `ctx.items` / `ctx.entry_keys` / `ctx.all_keys` / `ctx.label_warns` 为本层唯一产出；其中 `all_keys` 为辅助键、**不进入 legacy 字节契约**（不影响 `print_result` 输出）。
+- `ctx.items` / `ctx.entry_keys` / `ctx.all_keys` / `ctx.label_warns` 为本层唯一产出；其中 `all_keys` 为辅助键、**不进入字节级输出契约**（不影响 `print_result` 输出）。
 - 缺失项比对、查漏、阻断（`truly_missing` / `mentioned_only` / `extra` / 提取侧 `blocking` / `warnings` / `ignored_hit`）**全部由 B 层计算并写 `ctx`**，本层不再参与——B 与 EXTRACT 解耦：EXTRACT 只供水，B 只查漏。
 
 ## 子流程
@@ -51,4 +51,4 @@ items
 entry_keys
 label_warns
 ```
-> 本层**不**产出 `blocking` / `warnings` / `ignored_hit` / `extracted`（这些现由 B 层计算）。`all_keys` 为辅助 ctx 键（供 B 做完整性差集），**不进入 legacy 字节结果字典**，故不列入上方契约键。
+> 本层**不**产出 `blocking` / `warnings` / `ignored_hit` / `extracted`（这些现由 B 层计算）。`all_keys` 为辅助 ctx 键（供 B 做完整性差集），**不进入字节级输出结果字典**，故不列入上方契约键。

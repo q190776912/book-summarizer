@@ -50,7 +50,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/extract_figures` · `…/assign_figures.py` |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，已并入 verify）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，已并入 verify，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 H 层 `h_mbq` + G 层在 `--fix` 自动兜底） |
+| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 H 层 `h_mbq` + G 层在 `--fix` 自动兜底） |
 | 嵌图 | `flows/script/embed_figures` |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖序标集合成员 + 序列顺序(ORDER_MISMATCH) + 小节定位(MISPLACED)；公式内容保真人工核对 |
@@ -64,13 +64,15 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
 - `flows/extract/mm_repair/script`
 - `flows/script`
-- `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；原 `flows/write-source/script` 已并入此处；其中格式修复类由 verify 的 H/G 等层在 `--fix` 兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）
+- `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；生产期格式化 CLI 工具集中于此处；其中格式修复类由 verify 的 H/G 等层在 `--fix` 兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）
 - `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；每个校验层一个 `<语义名>/` 子包，位于 `verify/<语义名>/`，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
+> ⚠️ **共享基础件定位（消除"extract 依赖 verify"错觉）**：`verify_config`（位于 `config/verify_config/`）与 `key_parse`（位于 `lib/key_parse.py`，已从 `verify/script/` 迁出）属跨流程**共用基础件**——extract、config 工具与 verify 均依赖，并非 verify 私有；extract 反向 import 它们属正常基础件复用，不构成流程耦合。`verify/script/gm_scan.py` 与 `verify/script/ordinal.py` 中的 `scan_gm_blocks` / `int_to_roman` 等是从 `flows/extract/structure/script/extract_items_gm.py` **解耦复制**的纯函数副本，单一真源仍在 `extract_items_gm.py`，修改须同步两处。
+
 - `data/<json_name>/`：每个中间产物 JSON **独占一个目录**（如 `data/chapter_map`、`data/figure_index`），内含 `<json_name>.md`（数据结构说明）+ `<json_name>.py`（模型类，继承 `data/lib/json_data.py` 基类）；JSON 数据结构索引见 `data/data_schema.md`。各 JSON 的校验/编排脚本就近放在消费它的流程或 `verify` 层内，不在 `data`。
 - `lib`：**公用方法与变量锚点**，保留在技能根目录，被所有包 import。当前含：
   - `boot.py`：统一引导机制（`setup()` 把根目录 + `lib` + 所有 `flows/*/script`、`verify`（含各校验层 `<语义名>/` 子包）、`config/**/script`、`data/**/script` 注入 `sys.path`）。
   - `config.py` / `numbering.py` / `regexlib.py`：跨流程的配置、编号、正则常量。
-  - `util.py`：`chapter_of_page()` 等无状态小工具（原在 figure 包内两处字节级重复，已上提）。
+  - `util.py`：`chapter_of_page()` 等无状态小工具（集中提供，无状态、无第三方依赖，供各包按需 `from lib.util import ...` 调用）。
   - `figure_io.py`：`load_figure_index()`——`figure_index.json` 的统一读取（原 figure 包返回 `[]`、verify 包返回 `None`，已统一为 `[]`；verify 侧调用方仅做真值/迭代判断，行为一致）。
   - `normalize_math.py`：公式定界符修复库（`normalize()` / `fix_backticks()` / `stats()`）——纯函数、无第三方依赖，被格式 / 校验流水线按需 `from lib.normalize_math import ...` 调用。对应的命令行入口在 `tools/normalize_math_cli.py`（直接 `python tools/normalize_math_cli.py <files>` 改写文件，会写 `.bak_mathfix` 备份）。
 

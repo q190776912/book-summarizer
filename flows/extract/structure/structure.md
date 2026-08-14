@@ -3,12 +3,12 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-**统一结构骨架 / 写作契约 + verify 编号项基准**：structure 子流程产出全书单一 `book_structure.json`（书对象，不再按章拆分、不再用数组包裹），一次产出同时满足两类需求：
+**统一结构骨架 / 写作契约 + verify 编号项基准**：structure 子流程产出全书单一 `book_structure.json`（书对象，单文件承载全书章节），一次产出同时满足两类需求：
 
 - **write-source 写作契约**：全书按章顺序的章节树，几节写几节、顺序照抄、每个编号项（定义/定理/例/…）必须落地、印刷标题进 `name`、练习全量纳入 `type:"exercise"`。
-- **verify 编号项基准**：展平树、过滤 `type!="exercise"` 即得本书编号项 `key` 集合（data_provider 改为读此 JSON，不再重跑抽取器，见 `verify/data_provider`）。
+- **verify 编号项基准**：展平树、过滤 `type!="exercise"` 即得本书编号项 `key` 集合（data_provider 直接读此 JSON 作为编号项基准，不经抽取器，见 `verify/data_provider`）。
 
-> 本文件是《结构契约 + verify 基准》的**唯一权威（SSOT）**。底层扫描/抽取（`scan_skeleton.py` / `extract_items*.py`）不再作为独立子流程暴露，仅作为 `build_structure.py` 的内部依赖被调用；本阶段只跑 `build_structure.py` 产 JSON。
+> 本文件是《结构契约 + verify 基准》的**唯一权威（SSOT）**。底层扫描/抽取（`scan_skeleton.py` / `extract_items*.py`）仅作为 `build_structure.py` 的内部依赖被调用；本阶段只跑 `build_structure.py` 产 JSON。
 
 ## 前置
 - 全书 `page_*.json` 已落盘且过 MM Repair（extract 主流程出口满足）。
@@ -63,37 +63,21 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 ## 源侧完整性校验与回填（写书前兜底）
 
 ### 动机
-`build_structure` 本身只做「抽取 + 合并」，**不再内嵌源侧缺口恢复**（源侧缺口恢复由校验层负责；抽取器只负责把 raw 条目抓出来）。
-若只靠抽取器，漏抓的定义/定理/例会安静地缺进 JSON；且非三级书在 structure 阶段原本就无源侧查漏。
+`build_structure` 本身只做「抽取 + 合并」，**不内嵌源侧缺口恢复**（源侧缺口恢复由校验层负责；抽取器只负责把 raw 条目抓出来）。
+若只靠抽取器，漏抓的定义/定理/例会安静地缺进 JSON；非三级书不在 structure 阶段做源侧查漏。
 本步骤在「写书之前」调用校验层的源侧重完整性工具（`verify/script/check_structure_completeness.py`，复用 `section_continuity` 公共子流程 + 独立标题锚定扫描），把查漏从
 「写完 MD 才发现」提前到「抽完即查、源侧兜底」。
 
 ### 复用的公共校验能力
-- **章节完整性** → 复用公共子流程 `verify/section_continuity`（语义名 **section-continuity**，
-  `check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。把 `book_structure`
-  派生「合成 md」（`## §C.S`）喂给 D 层，比对「书中真值章节集」vs 契约，只取 `levels[2]`（章节级）的
-  内部洞 / 尾部缺节作为遗漏章节。与 verify 端同源，不产生第二套判定逻辑。
-- **条目完整性** → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）
-  的编号完整性逻辑。把 `book_structure` 派生「合成 md」（`**key Label**` 粗体头，按 `type` 反推标签以匹配 B 层解析，
-  因 `build_structure` 产出的 `name` 已剥掉类型词）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
-  实际**回填**由「源侧标题锚定扫描 `scan_raw_items`（覆盖全方案 three_level / two_level / en / fraleigh / gm / roman、
-  全类型 定义/定理/引理/推论/命题/例/练习，作为抽取器的独立交叉校验）− 契约」的结构化差集驱动。
+章节 / 条目完整性均复用 verify 的 `section_continuity`（D 层）与 `item_numbering_integrity`（B 层）公共能力（语义名 **section-continuity** / **item-numbering-integrity**）——本阶段只把 `book_structure` 派生「合成 md」喂入，不另立评判逻辑。具体 raw 重扫方式、levels 取值、合成 md 格式与回填状态分流见 **§步骤 第 2 / 3 步**，此处不重复逐步行文。
 
-### 比对与混合回填（用户 2026-08-12 选定「混合」）
-比对「书中真值集」vs `book_structure.json` 契约，得到遗漏章节 / 遗漏定义定理例清单，按状态分流：
-- **readable（可读遗漏项）**：编号 / 标签 / 页码 / 标题均能从 OCR 干净取出 → 脚本直接插回 `book_structure.json`。
-  回填节点与 `build_structure` **逐字段一致**（`key` 三级=`C.S-N`、两级中文=`标签C.S`、两级英文=`标签 C.S`；
-  `type` 由 label 经同一张 `_LABEL_TO_TYPE` 映射；`name = "key 印刷标题"`；`page_start/page_end = 页码`），
-  故 write-source / verify 可原样消费。
-- **reference（疑似引用）**：块内命中强引用标记（see / refer to / cf. / the following …）或数字前置三级**无显式标签**
-  → 不自动回填，交人工 / agent 复核（可能是前向引用而非定义）。
-- **needs_agent（乱码 / 被吞）**：OCR 字母↔数字无法干净还原 → 交 agent 凭知识 / 读图回填（沿用
-  `config/manual_overrides_chN` + `（OCR无法识别）` 既定机制，见 `verify/missing_label_policy.md`）。
+### 比对与混合回填
+比对「书中真值集」vs `book_structure.json` 契约得到遗漏清单，按 `readable` / `reference` / `needs_agent` 三态分流回填（状态定义、回填节点字段约束与 §步骤 第 3 步**逐字段一致**，均见 **§步骤 第 3 步**，此处不重复）。回填写回命令与闸门判定见 **§步骤 第 2 / 4 步**。
 
 ### 健壮性要点
-- **多位数章节号**（ch10 / ch11 …）已支持：数字串按 OCR 容错（`A→4, B→8, O→0, S→5 …`）整段归一，不再因单字符捕获而漏扫整章。
+- **多位数章节号**（ch10 / ch11 …）已支持：数字串按 OCR 容错（`A→4, B→8, O→0, S→5 …`）整段归一，避免单字符捕获导致漏扫整章。
 - **两级数字前置无标签**的匹配（大概率是章节号，如 `10.2`）直接丢弃，避免把章节当条目录入。
-- 章节查漏复用 `section_continuity` 公共能力，与 verify 端同源，不产生第二套判定逻辑。
+- 章节查漏复用 `section_continuity` 公共能力，与 verify 端同源。
 
 ### 产物
 `<extract_dir>/completeness_reports/ch<N>_completeness_report.json`，含：
@@ -117,7 +101,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
   "sub_sec": [ /* 仅 chapter / section 含此键，递归同结构 */ ]
 }
 ```
-- **顶层**为书对象（`key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>），`sub_sec` 内按章顺序嵌套 `type:"chapter"` 节点；章/`section` 递归继续挂 `sub_sec`。全文件只有一个 JSON 对象，不再按章拆分、不用数组直接包裹章节。
+- **顶层**为书对象（`key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>），`sub_sec` 内按章顺序嵌套 `type:"chapter"` 节点；章/`section` 递归继续挂 `sub_sec`。全文件只有一个 JSON 对象，单文件承载全书章节。
 - **`name` 带序标**：序标位置随书（前/后皆可），与原文一致；只含标题不含正文内容。
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：叶子 `== page_start`；容器（chapter/section）取**末代子孙页**。

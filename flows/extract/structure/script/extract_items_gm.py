@@ -59,7 +59,7 @@ import os
 import re
 import json
 
-from verify.script.key_parse import (
+from key_parse import (
     _canon_label, EN_LABEL_KINDS, GM_HEAD_LABEL_RE, GM_LABELED_RE, gm_head_label,
 )
 
@@ -94,7 +94,7 @@ def int_to_roman(n):
 
 # ---------------------------------------------------------------------------
 # OCR regexes (extractor/D-layer side).  The .md-side counterparts live in
-# verify/script/key_parse.py; GM_HEAD_LABEL_RE / GM_LABELED_RE are shared there.
+# lib/key_parse.py; GM_HEAD_LABEL_RE / GM_LABELED_RE are shared there.
 # ---------------------------------------------------------------------------
 
 # Section heading in the OCR: "§1. Triangulated Spaces" / "$2. Simplicial Sets" /

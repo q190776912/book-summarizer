@@ -6,15 +6,15 @@
 > 🔴 **嵌入是强制步骤，不是可选建议。** 图像未嵌入会导致校验阶段的图片完整性检查不过。
 
 ## 目的
-把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目（定义/定理/引理/命题/推论/例/证明）引用到的图，嵌入到该条目处；未引用的图不写入。本子流程（write-source 阶段）**只负责嵌图**；其上游的检测 / 命名由 extract 阶段的 `figure_detection` 子流程完成（SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)），产物 `figure_index.json` 即本子流程的输入契约。手动补图作为命名环节的 remediation 也在此说明。
+把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目（定义/定理/引理/命题/推论/例/证明）引用到的图，嵌入到该条目处；未引用的图不写入。本子流程（write-source 阶段）**只负责嵌图**；其上游的检测 / 命名由 extract 阶段的 `figure_detection` 子流程完成，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**（检测 / 命名规则由 extract 阶段文档承载，本文件不重复）。手动补图作为命名环节的 remediation 也在此说明。
 
 ## 前置
-- 图片流水线检测 / 命名已跑（或历史数据已补图）：上游 `figure_detection` 子流程产出 `figure_index.json` + `figure/*.png` 已存在（SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)）。
+- 图片流水线检测 / 命名已跑（或历史数据已补图）：上游产出 `figure_index.json` + `figure/*.png` 已存在（输入契约）。
 - 该章 `.md` 初稿已写好。
 
 ## 步骤（有序，脚本自动化、幂等）
 
-本子流程（write-source 阶段）只负责**嵌图**：把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目引用到的图，嵌入到该条目处。其上游——**检测（Detection）与命名（Assignment）**——已拆为 extract 阶段的独立 `figure_detection` 子流程统一执行（SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)），产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**：
+本子流程（write-source 阶段）只负责**嵌图**：把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目引用到的图，嵌入到该条目处。上游的**检测（Detection）与命名（Assignment）**由 extract 阶段的 `figure_detection` 子流程统一执行，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**：
 
 - `figure/chNN_figX.X.X.png`（已命名图）
 - `figure/chNN_unnamed_K.png`（已检测、无图号）
@@ -41,10 +41,10 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 
 手动图在**每次 assignment 重跑时都会被保留**（`assign_figures.py` 不删 `source="manual"` 的条目/文件）。
 
-### 工作流衔接（figure_detection 子流程）
-图检测 / 命名已拆为 extract 阶段的独立子流程 `figure_detection`（SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)），待 `figure.labels` 配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即本子流程的**输入契约**。本子流程不重复描述检测 / 命名细节（不伸手进 extract 阶段），只消费其产物并嵌图。本书确实无图时，`figure_index.json` 保持缺失，本子流程也随之跳过。
+### 工作流衔接（上游 figure_detection 子流程）
+图检测 / 命名由 extract 阶段的独立子流程 `figure_detection` 负责，待 `figure.labels` 配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即本子流程的**输入契约**。本子流程不重复描述检测 / 命名细节，只消费其产物并嵌图。本书确实无图时，`figure_index.json` 保持缺失，本子流程也随之跳过。
 
-若某章 E 层报"图 X.X.X missing"（真漏检 / 漏命名），重跑或手动补图的方法见 `figure_detection.md` 与下方「手动补图」。
+若某章 E 层报"图 X.X.X missing"（真漏检 / 漏命名），重跑或手动补图的处置见下方「手动补图」。
 
 #### 与 figure 层(E) 校验的衔接
 `figure_index.json` 落地后 `../../../verify/script/verify_chapter.py` 启用 **figure 层(E)：图片完整性 + 图片有效性**：
@@ -67,14 +67,14 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - 本步是校验的**前置依赖**：先嵌图，再跑 `verify_chapter.py`（其图片嵌入检查、块引用连续性检查）。
 
 ## 上游环境前提 / 已知边界（检测 + 命名阶段）
-本子流程只做嵌图，不涉及图检测 / 命名的运行环境。检测阶段的权重、加载器、OpenCV/PIL 路径陷阱、`--conf`、跨页不合并、只取 `figure` 类、caption 序标跟随 `figure.labels` 等**环境前提与已知边界**均属 extract 阶段的 `figure_detection` 子流程，SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)。
+本子流程只做嵌图，不涉及图检测 / 命名的运行环境。检测阶段的权重、加载器、OpenCV/PIL 路径陷阱、`--conf`、跨页不合并、只取 `figure` 类、caption 序标跟随 `figure.labels` 等**环境前提与已知边界**由 extract 阶段的 `figure_detection` 子流程承载（属上游文档范畴，本文件不重复）。本子流程只需确认输入契约 `figure_index.json` + `figure/*.png` 已就绪。
 
 ## 出口条件
 - 出口：本章（或全书）被引用图已嵌入、flex 格式合规；`figure_index.json` 已落地且本章 E 层可 PASS（或本书确实无图、`figure_index.json` 缺失）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/script/embed_figures`：嵌图（幂等，含缩进进块 / 连续性修复 / flex 包装）——本子流程核心脚本。
-- `flows/script/extract_figures` / `flows/script/assign_figures`：图片检测 / 命名，属 extract 阶段 `figure_detection` 子流程（产出 `figure_index.json`；SSOT 见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)）。
+- `flows/script/extract_figures` / `flows/script/assign_figures`：图片检测 / 命名，属 extract 阶段 `figure_detection` 子流程（产出本子流程的输入契约 `figure_index.json`）。
 - `../../../config/figure_manual_chN/apply_manual_figures.py`：E 层 FAIL 时手动补图。
 - `figure/inspect_tool.py`：定位图所在页的可视化检查工具。
 
@@ -88,7 +88,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run
 # 手动补图（命名环节 remediation，回写 figure_index.json）
 "<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/config/figure_manual_chN/apply_manual_figures.py" "<extract>" <ch> --pdf "<pdf>"
 ```
-> 检测 / 命名（`extract_figures` / `assign_figures`）属 extract 阶段的 `figure_detection` 子流程，命令详见 [`../../extract/figure_detection/figure_detection.md`](../../extract/figure_detection/figure_detection.md)。
+> 检测 / 命名（`extract_figures` / `assign_figures`）属 extract 阶段的 `figure_detection` 子流程，命令见 `flows/script/extract_figures` / `flows/script/assign_figures`。
 
-## 子流程
-- [`figure_detection` 子流程](../../extract/figure_detection/figure_detection.md)：检测/命名从文本提取流水线拆出、待 `figure.labels` 配置就绪后统一执行的独立子流程（SSOT）。
+## 上游子流程
+- **figure_detection（extract 阶段）**：图片检测 / 命名，产出本子流程的输入契约 `figure_index.json` + `figure/*.png`；其规则与命令由 extract 阶段文档承载，本文件不重复。

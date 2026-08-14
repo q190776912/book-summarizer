@@ -2,25 +2,9 @@
 
 目的
 ----
-`build_structure` 产出 `book_structure.json`（书对象契约，SSOT）。但抽取器（`extract_items` 等）
-的源侧捡漏只覆盖三级书且诊断被丢弃，非三级书在 structure 阶段**没有任何源侧查漏**，
-book_structure.json 会安静地缺章节 / 缺定义定理例。
+`build_structure` 产出 `book_structure.json`（书对象契约）。抽取器源侧捡漏覆盖不全，非三级书在 structure 阶段没有源侧查漏，book_structure.json 会安静地缺章节 / 缺定义定理例。
 
-本脚本在「写书之前」把**两个公共校验层**接到 structure 步骤，分四步兜底：
-
-  * 第 2 步（章节）→ 复用公共子流程 `verify/section_continuity`（语义名
-    section-continuity，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，
-    独立于 extract_items），比对「书中真值章节集」vs `book_structure.json` 契约，
-    检出遗漏章节（内部洞 `continuity_sections` + 尾部缺节 `missing_sections`）并回填。
-  * 第 3 步（条目）→ 复用公共子流程 `verify/item_numbering_integrity`
-    （语义名 item-numbering-integrity，B 层）的编号完整性逻辑。为避免与 verify 端
-    冲突（verify 端 B 层读「已写好的 .md」），structure 阶段把 `book_structure.json`
-    派生出一份「合成 md」喂给 B 层、并把源条目集作为 `ctx.items` 喂给它，让 B 层的
-    分组 / 编号 / ignore 逻辑校验 book_structure 的条目完整性；具体回填由
-    「源条目集（scan_raw_items 跨校验）− 契约」的结构化差集驱动（保留原
-    scan_raw_items 作为稳健的源侧交叉校验，专门抓抽取器漏检）。
-  * 第 4 步（完整性与连续性闸门）→ 回填后重跑第 2 / 第 3 步，断言遗漏章节 / 可读遗漏项
-    / B 层 blocking 全部归零，保证 book_structure 既完整又连续。
+步骤与状态分流的权威叙述（四步流程、readable / reference / needs_agent 分流、完整 + 连续闸门）见 `flows/extract/structure/structure.md` 的「步骤（第 2–4 步）/ 源侧完整性校验与回填」一节；本文件仅承载该脚本的实现与调用方式。本脚本在「写书之前」把 `verify/section_continuity`（D 层）与 `verify/item_numbering_integrity`（B 层）两个公共校验层接到 structure 步骤做兜底，回填后由「完整 + 连续」闸门复核。
 
 用法
 ----

@@ -1,9 +1,9 @@
 """
 ignore_files.py — load --ignore / --ignore-figure files (per-book config).
 
-Relocated verbatim from verify_chapter.py (load_ignore / load_ignore_fig) so
-the deleted fig_layers.py (which used to own `normfig`) is no longer imported
-by the CLI. `normfig` lives in verify.script.fig_common.
+Loaders for --ignore / --ignore-figure files (per-book config). `normfig`
+lives in verify.script.fig_common; this module centralizes ignore-file
+loading so the CLI does not import fig_common internals directly.
 """
 import os
 import sys
@@ -24,7 +24,7 @@ _boot.setup()
 import json
 import os
 
-from verify.script.key_parse import normkey
+from key_parse import normkey
 from verify.script.fig_common import normfig
 
 

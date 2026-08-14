@@ -103,7 +103,7 @@ def load_fig_components(out_dir):
 
 
 def build_fig_label_re(labels, components=2):
-    """Compiled regex that finds a figure caption label (图 X.X / Figure X.X / …)
+    r"""Compiled regex that finds a figure caption label (图 X.X / Figure X.X / …)
     in text and captures its sequential number (group 1). Driven by BOOK-SPECIFIC
     `labels` AND `components`, so each book's OWN figure numbering is honored.
     Returns a never-matching regex when `labels` is empty (explicit no-figure-labels

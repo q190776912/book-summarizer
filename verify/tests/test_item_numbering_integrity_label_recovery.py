@@ -3,7 +3,7 @@ test_item_numbering_integrity_label_recovery.py
 
 Regression test for the v2 B-layer label-recovery fix.
 
-BACKGROUND (Koopman per-type regression after the v2 config refactor)
+BACKGROUND (Koopman per-type regression under the v2 config schema)
 ---------------------------------------------------------------------
 v2 groups B-layer counters by `gi:prefix` where `gi` is the group index.
 For *per-type* groups (each label in its OWN GroupConfig, e.g. a dedicated

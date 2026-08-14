@@ -1,13 +1,19 @@
 """
 key_parse.py — key/label regexes + canon maps + parsing/canonization helpers.
 
-This module is the single home for ALL key/label parsing logic used across the
-verify package: the three-level / two-level / English key regexes, the label
-canonicalization maps (_LABEL_CANON etc.), `normkey`, `keys_in_md`, `sortkey`
-and `_first_num`. It has NO heavy dependencies (no cv2 / torch) so it can be
-imported standalone in a bare environment.
+Single home for ALL key/label parsing logic used across the skill (extract
+flows, verify layers, and config tools): the three-level / two-level / English
+key regexes, the label canonicalization maps (_LABEL_CANON etc.), `normkey`,
+`keys_in_md`, `sortkey` and `_first_num`. It has NO heavy dependencies (no
+cv2 / torch) so it can be imported standalone in a bare environment.
 
-The inter-component separator policy now lives in `lib/regexlib`
+This module is a shared `lib/` primitive (not owned by any single flow or the
+verify engine), so it is importable anywhere via the bare name `key_parse`
+(boot injects `lib/` into sys.path). It must NOT import anything from
+`flows.*` or `verify.*` (other than the already-shared `lib.regexlib` and the
+`config/verify_config` model), to keep the extract/verify boundary clean.
+
+The inter-component separator policy lives in `lib/regexlib`
 (SEP_TIGHT / SEP_WIDE / canon helpers).  This module imports SEP_TIGHT and
 rebuilds every label-embedded regex with it, and re-exports the label-FREE
 shared regexes (KEY_RE / ENTRY_RE / ROMAN_KEY_RE) so all callers stay unchanged.

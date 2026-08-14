@@ -16,9 +16,9 @@ _boot.setup()
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见
 # verify/format_verify/format_verify.md（SSOT）；本文件仅含实现，勿在此复述叙事。
-"""format_verify.py — F-LAYER (order 6): MERGED format verification.
+"""format_verify.py — F-LAYER (order 6): unified format verification.
 
-Unifies the nine legacy format layers that were consolidated on 2026-08-13:
+fixer 代号 H/G/I/J/K/L/M/N 对应的检测项：
 
     C  katex_validation        -> KaTeX render validation (subprocess)
     G  blockquote_continuity   -> quote-block continuity / nested / example-proof gap
@@ -30,11 +30,9 @@ Unifies the nine legacy format layers that were consolidated on 2026-08-13:
     M  math_blockquote_leak    -> `>` lines inside display math blocks
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
-All detection bodies are inlined here (relocated verbatim from the former nine
-format layers).  The layer returns the 16 byte-contract keys those layers
-used to emit, plus the `heading_sep` detection key added 2026-08-13 (covered by
-`DEFAULT_RESULT` and the contract test's dynamic `ALLOWED` set) — so `report.py`,
-`verify_chapter.py`, and the contract tests stay green.
+所有检测逻辑内联于本文件；本层产出 16 个字节契约键，并追加 `heading_sep` 检测键（由
+`DEFAULT_RESULT` 与契约测试的动态 `ALLOWED` 集覆盖）——故 `report.py`、
+`verify_chapter.py` 与契约测试保持通过。
 
 Auto-fix is NOT performed by this layer: it is implemented by the eight
 `fix_*.py` modules in this same `script/` directory, which self-register via
@@ -63,8 +61,7 @@ def check_katex(md_file):
 
     The checker lives at `verify/format_verify/script/check_katex.py` (the
     whole katex detection subsystem — check_katex + katex_heuristics +
-    katex_render + katex_validate.js — was consolidated into verify on
-    2026-08-13). Resolve it from the skill root (`_ROOT`) so it always points
+    katex_render + katex_validate.js). Resolve it from the skill root (`_ROOT`) so it always points
     at the live file.  The subprocess is guarded: any failure to launch
     (missing node / katex JS runtime) or a non-zero exit degrades to
     "(False, [])" — never crashes `verify_one`."""

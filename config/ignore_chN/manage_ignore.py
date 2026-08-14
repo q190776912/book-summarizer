@@ -36,7 +36,7 @@ import json
 
 # Add skill directory to path to import verify_chapter functions
 
-from verify.script.key_parse import normkey
+from key_parse import normkey
 
 
 def load_ignore_dict(path):

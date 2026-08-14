@@ -20,11 +20,6 @@ _boot.setup()
 """
 figure_completeness.py — E-LAYER (order 5): unified FIGURE layer.
 
-Merges the former E (completeness) and F (validity) layers into a single
-figure layer. Both consumed the same whole-book `figure_index.json` and shared
-the identical SKIP precondition (absent index OR no entries for this chapter),
-so unifying removes a duplicate index load + chapter-filter pass.
-
 Checks performed (all on chapter-filtered index entries):
   * completeness (was E): caption labels referenced in chapter OCR but absent
     from figure_index.json -> `fig_missing` (blocking FAIL); extracted labels

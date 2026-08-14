@@ -20,9 +20,6 @@ from page_json import PageJson
 # -*- coding: utf-8 -*-
 """inspect_tool.py — consolidated inspection / raw-dump utilities for book-summarizer.
 
-Merged from the previously-standalone scripts:
-  dump_page.py, mkraw.py, dump_raw.py, find_all_items.py
-
 Subcommands:
   page <raw_dir> <page|start-end> [--formulas] [--raw]
         View one page (or a page range) of OCR JSON under <raw_dir>.

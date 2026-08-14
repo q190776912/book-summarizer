@@ -16,7 +16,7 @@ separator is WILDCARDED:
 
 This module depends only on ``re`` / ``functools`` (standalone, no cv2/torch),
 and contains NO label knowledge — label-embedded regexes stay in
-``verify/script/key_parse.py``.
+``lib/key_parse.py``.
 
 Imported as ``from lib.regexlib import ...`` (the skill root is on sys.path).
 
@@ -91,7 +91,7 @@ def split_numpath(s, levels):
 
 # --- shared label-FREE compiled regexes (all built from SEP_TIGHT) ----------
 # Label-embedded regexes (ENTRY_RE_ROMAN, FR_*, ENTRY_RE_2, ENTRY_RE_EN*,
-# GM_LABELED_RE …) live in verify/script/key_parse.py, which imports SEP_TIGHT from
+# GM_LABELED_RE …) live in lib/key_parse.py, which imports SEP_TIGHT from
 # here and rebuilds them with the wildcard separator.
 KEY_RE = re.compile(r'(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+' + SEP_TIGHT + r'\d+' + SEP_TIGHT + r'\d+)[^*]*\*+')

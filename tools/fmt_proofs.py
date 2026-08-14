@@ -65,7 +65,7 @@ def main():
         print("No 第*.md found in", d)
         sys.exit(1)
     if do_check:
-        print("[check] 格式修复已迁移到 verify：请改用 `verify --fix <dir>`。")
+        print("[check] 格式修复请用 `verify --fix <dir>`。")
         print("[check] 本工具现在只做生产期变换（stage1 包块引用 + 可选 stage2 编号）。")
         return
     # --- 生产期：只做 stage1（包块引用 + 条目间 ---）+ 可选 stage2（编号） ---

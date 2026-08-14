@@ -358,7 +358,7 @@ $$
 | M | fix_math_blockquote_leak.py | 10 | `m` | m_dm_gt |
 | N | fix_blockquote_spacing.py | 11 | `n` | n_bq_empty |
 
-> `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n}`（与旧 `fix_all_layers` 一致，新增 `c` 为 KaTeX 自动修复）。
+> `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n}`（键序固定为上述顺序，新增 `c` 为 KaTeX 自动修复）。
 
 ## 字节契约键
 ```contract-keys

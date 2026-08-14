@@ -10,13 +10,11 @@
 
 ## 步骤（有序）
 1. 以已校验源语言版为唯一蓝本，**逐条翻译**出翻译版：条目 / 编号 / 公式 / 图片位置必须 1:1 对应，不得增删或自行发挥；中文版首现术语照旧标 `(English)`。
-2. 对翻译版跑格式后处理（`tools/wrap_examples_bq.py` / `tools/fmt_proofs.py`；KaTeX 检测/修复 `verify/format_verify/script/check_katex.py` 与 `fix_katex.py` 由 `verify --fix` 自动调用）与嵌图（Step 3.5）。
-3. 批量校验翻译版：
+2. 对翻译版跑批量校验至 PASS：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # 针对翻译版
    ```
    未过则 `--fix` 修复 + 重验，至多 2 次仍不过继续修，**严禁停下来问用户**。
-4. 中英两版必须 1:1 同构；源语言修补后翻译版须同步修补（单向：先英后中）。
 
 ## 本阶段规则（🔴 内联）
 - **规则1 — 源语言优先**：中文版是英文版的**派生**，不是平行独立文件。英文书每章顺序：先写英文源版 → 完全校验 / 修复至 PASS → 再据已校验英文版逐条翻译中文版。
@@ -29,8 +27,6 @@
 
 ## 相关代码（路径相对 skill 根目录）
 - `../../verify/script/verify_chapter.py`：`--all` 校验翻译版。
-- `tools/*` + `flows/script/embed_figures`：翻译版格式后处理与嵌图（同 `write-source`）。
 
 ## 子流程
-- 写作 / 格式 / 嵌图规则见 [`write-source`](../write-source/write-source.md) 及其子流程。
 - 校验层见 [`../../verify/verify.md`](../../verify/verify.md)（各层 SSOT 总入口）。

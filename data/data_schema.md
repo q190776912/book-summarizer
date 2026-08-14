@@ -4,8 +4,8 @@
 与 `<json_name>.py`（模型类，继承 `lib/json_data.py` 基类）。脚本分两类：
 
 - **构造器**（产生该 JSON）：就在对应目录的 `<json_name>.py`，CLI 直接写盘。
-- **流程 / 校验脚本**（消费或校验该 JSON，不产新 JSON）：留在 `../verify/formula-manifest/script`
-  或对应 `../flows` 阶段，**不在** `.`。
+- **流程 / 校验脚本**（消费或校验该 JSON，不产新 JSON）：留在对应 `../flows` 阶段或
+  `../verify` 各层，**不在** `。`。
 
 ## 目录清单（含 in-skill 构造器）
 
@@ -14,9 +14,6 @@
 | `chapter_map.json` | [chapter_map/](chapter_map) | `ChapterMap` | 构造器 |
 | `figure_index.json` | [figure_index/](figure_index) | `FigureIndex` | 构造器（同时产出 `figure_embed_overrides.json`） |
 | `figure_embed_overrides.json` | [figure_embed_overrides/](figure_embed_overrides) | `FigureEmbedOverrides` | 构造器（由 `figure_index` 生成器写入） |
-| `*_formulas.json` | [formula_manifest/](formula_manifest) | `FormulaManifest` | 构造器 |
-| `book_chN_formulas.json` | [build_book_manifest/](build_book_manifest) | `BookFormulaIndex` | 构造器 |
-| `*_filled.json` | [fill_book_labels/](fill_book_labels) | `FormulaFill` | 构造器 |
 | `repairs.json` | [repairs/](repairs) | `Repairs` | 构造器 |
 | `book_structure.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/extract/structure/script/build_structure.py` 调用；书对象，不再按章拆分） |
 

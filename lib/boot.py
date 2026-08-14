@@ -8,13 +8,13 @@ and the shared ``verify`` engine is a proper package at the skill root level
 ``verify/<semantic_name>/`` subpackage.
 
 Each intermediate-product JSON lives in its **own directory** under ``data/<json_name>/``
-(for example ``data/chapter_map/``, ``data/figure_index/``, ``data/formula_manifest/``),
+(for example ``data/chapter_map/``, ``data/figure_index/``),
 each containing a ``<json_name>.md`` (the spec) and ``<json_name>.py`` (the model class,
 a subclass of the shared base ``data/lib/json_data.py``).  Each config JSON lives in
 its **own directory** under ``config/<json_name>/`` (for example
 ``config/verify_config/``, ``config/ignore_chN/``), each containing a specific-named
 ``<json_name>.md`` doc and its model / instantiation script.  To keep
-``import chapter_map`` / ``import figure_index`` / ``import formula_manifest`` /
+``import chapter_map`` / ``import figure_index`` /
 ``import json_data`` / ``import verify_config`` / ``import manage_ignore`` / ...
 working no matter which script is the entry point, this module adds the skill root,
 the ``lib`` package, **every** ``flows/*/script`` directory, and the ``verify``

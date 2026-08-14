@@ -62,6 +62,8 @@ _EMPTY_Q: Dict[str, object] = {
     'q_fabricated': [],
     'q_inconsistent': [],
     'q_missing': [],
+    'q_order_mismatch': [],
+    'q_misplaced': [],
     'q_rows': [],
 }
 
@@ -89,6 +91,13 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 # supplies `type` but no explicit `depth`.  Mirrors config.ORDINAL_SECTION_TYPES
 # lengths so the formula config aligns with the entry-ordinal config shape.
 _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3}
+
+# Heading regex used to assign a book-source formula its enclosing section.
+# Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ...".
+# Attribution rule: a formula's enclosing section is the nearest preceding
+# numbered heading line (the canonical convention carried over when the
+# formula-manifest subsystem's capability was merged into this Q layer).
+_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:\.\d+)+)\b')
 
 
 def build_formula_patterns(ncomp: int) -> List[str]:
@@ -188,12 +197,22 @@ class SourceFormulaIndex:
         self._by_chapter: Dict[int, Set[str]] = {}
         # normalized number -> first source text snippet (for the audit report)
         self._source_text: Dict[str, str] = {}
+        # ORDER_MISMATCH / MISPLACED support (populated during build / build_sectioned):
+        #   _primary_pos  : normalized number -> earliest (page, y) occurrence
+        #   _book_section : normalized number -> book-side enclosing section (first occurrence)
+        #   _cur_heading  : running "nearest preceding heading" during a scan
+        self._primary_pos: Dict[str, tuple] = {}
+        self._book_section: Dict[str, str] = {}
+        self._cur_heading: Optional[str] = None
 
     # -- public API ---------------------------------------------------------
     def build(self, ch: int, start: int, end: int) -> None:
         """Scan page_{start:03d}.json .. page_{end:03d}.json and collect S."""
         self._by_chapter = {}
         self._source_text = {}
+        self._primary_pos = {}
+        self._book_section = {}
+        self._cur_heading = None
         nums: Set[str] = set()
         for pg in range(int(start), int(end) + 1):
             fp = os.path.join(self.extract_dir, f'page_{pg:03d}.json')
@@ -208,7 +227,13 @@ class SourceFormulaIndex:
                 txt = block.get('text', '') if isinstance(block, dict) else ''
                 if not txt:
                     continue
-                self._scan_text(txt, nums)
+                y = None
+                if isinstance(block, dict):
+                    poly = block.get('poly') or []
+                    if len(poly) >= 2:
+                        y = poly[1]
+                self._track_heading(txt)
+                self._scan_text(txt, nums, pg, y)
         self._by_chapter[ch] = nums
 
     def build_sectioned(self, ch: int, start: int, end: int,
@@ -223,6 +248,8 @@ class SourceFormulaIndex:
         ``section_key -> set(normalised numbers)`` plus the chapter-wide union.
         """
         sectioned: Dict[str, Set[str]] = {s: set() for s in md_sections}
+        self._primary_pos = {}
+        self._book_section = {}
         cur = 0  # index into md_sections
         for pg in range(int(start), int(end) + 1):
             fp = os.path.join(self.extract_dir, f'page_{pg:03d}.json')
@@ -261,6 +288,11 @@ class SourceFormulaIndex:
                     if j > cur:
                         cur = j
                 sec = md_sections[cur] if cur < len(md_sections) else md_sections[-1]
+                y = None
+                if isinstance(block, dict):
+                    poly = block.get('poly') or []
+                    if len(poly) >= 2:
+                        y = poly[1]
                 # Only count `(N)` from display-formula blocks (short standalone
                 # numbers or math-bearing blocks); reject CJK-prose reference
                 # blocks ("由(3)式…") which would otherwise create false
@@ -275,6 +307,10 @@ class SourceFormulaIndex:
                         if not n or n in self.ignore or not self._plausible(n):
                             continue
                         sectioned[sec].add(n)
+                        # first occurrence's section == book-side definition section
+                        if n not in self._book_section:
+                            self._book_section[n] = sec
+                        self._record_pos(n, pg, y)
                         # capture a short book-source snippet for the audit so
                         # MISSING rows can be judged real-vs-OCR-noise
                         if n not in self._source_text:
@@ -303,8 +339,44 @@ class SourceFormulaIndex:
     def source_text(self, n: str) -> str:
         return self._source_text.get(n, '')
 
+    def primary_pos(self, n: str):
+        """Earliest (page, y) occurrence of `n` (definition site), or None."""
+        return self._primary_pos.get(n)
+
+    def book_section(self, n: str):
+        """Book-side enclosing section of `n`'s definition, or None."""
+        return self._book_section.get(n)
+
+    def source_numbers(self) -> Set[str]:
+        """All book-source formula numbers this index extracted (works for both
+        the plain `build()` and the sectioned `build_sectioned()` paths — neither
+        relies on `_by_chapter`, which only the plain path populates)."""
+        return set(self._primary_pos.keys())
+
     # -- helpers ------------------------------------------------------------
-    def _scan_text(self, txt: str, nums: Set[str]) -> None:
+    def _track_heading(self, txt: str) -> None:
+        """Update the running nearest-preceding-heading from a short numbered
+        line (e.g. "2.3.2 Preliminaries").  A formula's enclosing section is the
+        nearest preceding numbered heading line.
+        """
+        s = txt.strip()
+        hm = _HEAD_RE.match(s)
+        if hm and len(s) < 80:
+            self._cur_heading = hm.group(1)
+
+    def _record_pos(self, n: str, pg, y) -> None:
+        """Record the earliest (page, y) occurrence of `n` (its definition site)."""
+        if n not in self._primary_pos or (pg, y) < self._primary_pos[n]:
+            self._primary_pos[n] = (pg, y)
+
+    def _update_pos(self, n: str, pg, y) -> None:
+        """Record earliest position AND anchor the book-side section to the
+        first occurrence's enclosing heading (the definition location)."""
+        self._record_pos(n, pg, y)
+        if n not in self._book_section and self._cur_heading is not None:
+            self._book_section[n] = self._cur_heading
+
+    def _scan_text(self, txt: str, nums: Set[str], pg=None, y=None) -> None:
         for pat in self.patterns:
             for m in pat.finditer(txt):
                 raw = m.group(1)
@@ -319,6 +391,8 @@ class SourceFormulaIndex:
                         idx = 0
                     snippet = txt[max(0, idx - 20): idx + len(span) + 20]
                     self._source_text[n] = snippet[:60]
+                if pg is not None:
+                    self._update_pos(n, pg, y)
 
     @staticmethod
     def _block_has_math(txt: str) -> bool:
@@ -727,6 +801,78 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     return fab, inc, miss, rows
 
 
+def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
+                                 ignore: Optional[Set[str]] = None,
+                                 reset_on_section: bool = True) -> tuple:
+    """Derive ORDER_MISMATCH + MISPLACED (both WARN, non-blocking) from the
+    same data Q already has — no three-stage manifest pipeline needed.
+
+    * ORDER_MISMATCH: for formula numbers present in BOTH the summary and the
+      book-source set, the summary's document order must follow the book's
+      reading order (primary occurrence position).  Any inversion is flagged.
+      When ``reset_on_section`` is True (per-section-restart books, scope==3)
+      the order window resets on each new ``## §N.M`` so the repeated numbers
+      across sections don't false-positive; when False (chapter / book scope,
+      globally-unique numbers) the window spans sections so cross-section
+      inversions are also caught.
+    * MISPLACED: a summary formula's enclosing ``## §N.M`` section must equal
+      the book-source formula's definition section (``book_section``).
+
+    Returns ``(om_list, mp_list)``; each row:
+        ``{'number', 'status', 'summary_latex'(<=60), 'source_text': ''}``.
+
+    Only numbers actually extracted from the book source are considered
+    (FABRICATED / MISSING are reported by the existing compare functions and
+    are never double-counted here).
+    """
+    ignore = set(ignore or set())
+    om: List[Dict[str, str]] = []
+    mp: List[Dict[str, str]] = []
+    seen_om: Set[str] = set()
+    seen_mp: Set[str] = set()
+
+    union = src.source_numbers()
+    prev_sec = None
+    prev_pos = None
+    for sec, t in tags_sec:
+        if not t.normalized or t.normalized in ignore:
+            continue
+        n = t.normalized
+        if n not in union:
+            continue  # FABRICATED handled elsewhere; skip here
+        # ORDER-window reset on summary-section change (only for per-section
+        # restart books, where numbers repeat across sections).
+        if reset_on_section and sec != prev_sec:
+            prev_pos = None
+        prev_sec = sec
+        # ORDER_MISMATCH: summary lists n AFTER a formula whose book position is
+        # later than n's -> the sequence got offset / shuffled.
+        cur = src.primary_pos(n)
+        if cur is not None and prev_pos is not None and cur < prev_pos:
+            if n not in seen_om:
+                seen_om.add(n)
+                om.append({
+                    'number': n,
+                    'status': 'ORDER_MISMATCH',
+                    'summary_latex': t.latex[:60],
+                    'source_text': '',
+                })
+        if cur is not None:
+            prev_pos = cur
+        # MISPLACED: summary section != book definition section.
+        bsec = src.book_section(n)
+        if bsec is not None and bsec != sec:
+            if n not in seen_mp:
+                seen_mp.add(n)
+                mp.append({
+                    'number': n,
+                    'status': 'MISPLACED',
+                    'summary_latex': t.latex[:60],
+                    'source_text': '',
+                })
+    return om, mp
+
+
 class QLayer(VerifyLayer):
     code = 'Q'
     name = 'formula-tag'
@@ -819,11 +965,15 @@ class QLayer(VerifyLayer):
                 union = built['_union']
                 fab, inc, miss, rows = _compare_sectioned(
                     tags_sec, src_sec, md_sections, union, fignore, src)
+                om, mp = _compute_order_and_section(
+                    tags_sec, src, fignore, reset_on_section=True)
                 return LayerResult(code='Q', metadata={
                     'q_checked': True,
                     'q_fabricated': fab,
                     'q_inconsistent': inc,
                     'q_missing': miss,
+                    'q_order_mismatch': om,
+                    'q_misplaced': mp,
                     'q_rows': rows,
                 })
 
@@ -831,11 +981,16 @@ class QLayer(VerifyLayer):
         src = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix, fignore)
         src.build(ctx.ch, ctx.start, ctx.end)
 
+        tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
+        om, mp = _compute_order_and_section(
+            tags_sec, src, fignore, reset_on_section=False)
         fab, inc, miss, rows = _compare(tags, src, ctx.ch, chapter_prefix, fignore)
         return LayerResult(code='Q', metadata={
             'q_checked': True,
             'q_fabricated': fab,
             'q_inconsistent': inc,
             'q_missing': miss,
+            'q_order_mismatch': om,
+            'q_misplaced': mp,
             'q_rows': rows,
         })

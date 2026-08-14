@@ -54,7 +54,7 @@ class Figure:
     """One entry of ``figure_index.json``.
 
     Field set matches the canonical schema documented in
-    ``flows/write-source/figures/ref/figure_pipeline.md``:
+    ``flows/write-source/figures/figures.md``:
     chapter / page / fig_idx / label / bbox / conf / file / caption / source.
     """
     chapter: int

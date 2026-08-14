@@ -1,11 +1,11 @@
-# Flow: verify（批量校验 / 通用校验关卡 / Stage 4）
+# Flow: verify（批量校验 / 通用校验关卡）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
-> `verify-source`（源语言）与 `derive-translate`（翻译版）都引用本流程，区别仅在于被校验的是哪个语言目录。
+> `write-source`（步骤 3，源语言）与 `derive-translate`（翻译版）都引用本流程，区别仅在于被校验的是哪个语言目录。
 >
 > **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 17 个校验层模块，
-> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/verify-source`、`../flows/derive-translate`
+> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`、`../flows/derive-translate`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
 ## 目的
@@ -39,7 +39,7 @@
    ```
 3. 未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。
 4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/<snake>/script/<snake>.py`，文档 `verify/<snake>/<snake>.md`，各自 SSOT）。
-5. （可选，位置+内容保真）跑公式 manifest 对账（见子流程 `formula-manifest`）。
+5. 公式序标保真（序列顺序 `ORDER_MISMATCH` + 小节定位 `MISPLACED`）已由 Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖；公式**内容**保真仍靠人工核对（机器不判内容对错）。
 
 ## 本阶段规则（🔴 内联）
 - **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
@@ -60,7 +60,6 @@
 
 ## 子流程
 - **各校验层**：`verify/<snake>/<snake>.md`（脚本在 `verify/<snake>/script/<snake>.py`，见上方注册表表格链接）——每层一个可独立引用的公用子流程。
-- [`formula-manifest`](formula-manifest/formula-manifest.md) — 公式 manifest 保真对账（Step 3.6）。
 
 ## 新增一个校验层（模块约定）
 1. 在 `verify/<snake>/script/` 下新建 `<snake>.py` 模块（`<snake>` 为小写蛇形语义名）。

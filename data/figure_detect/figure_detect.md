@@ -26,4 +26,4 @@ PDF 抽取阶段 1 的**原始检测**记录，由图检测模型（MFD）逐页
 - 检测 / 命名 / 裁剪的**消费**脚本（`extract_figures.py` / `assign_figures.py` /
   `embed_figures.py`）属图流水线编排，**留 `../../flows`**；`apply_manual_figures.py`
   已归并到其 JSON 目录 `../../config/figure_manual_chN`。
-- 流水线参考：`../../flows/write-source/figures/ref/figure_pipeline.md`。
+- 流水线参考：`../../flows/write-source/figures/figures.md`。

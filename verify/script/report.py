@@ -393,6 +393,8 @@ def print_result(r):
         q_fab = r.get('q_fabricated', []) or []
         q_inc = r.get('q_inconsistent', []) or []
         q_miss = r.get('q_missing', []) or []
+        q_om = r.get('q_order_mismatch', []) or []
+        q_mp = r.get('q_misplaced', []) or []
         if q_fab:
             problems += 1
             print(f"\nQ-LAYER FORMULA FABRICATED ({len(q_fab)}): summary \\tag number "
@@ -412,10 +414,26 @@ def print_result(r):
                   f"or register in the `formula.ignore` list):")
             for row in q_miss:
                 print(f"  ~ {row.get('number', '')}  {row.get('source_text', '')}")
+        if q_om:
+            print(f"\nQ-LAYER FORMULA ORDER_MISMATCH ({len(q_om)}) [WARN, non-blocking]: "
+                  f"summary document order disagrees with the book's reading order "
+                  f"(sequence offset / shuffle) — verify formulas are listed in the "
+                  f"same order as the book:")
+            for row in q_om:
+                print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
+        if q_mp:
+            print(f"\nQ-LAYER FORMULA MISPLACED ({len(q_mp)}) [WARN, non-blocking]: "
+                  f"summary formula's enclosing section differs from the book-side "
+                  f"definition section — check the \\tag is under the right section:")
+            for row in q_mp:
+                print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
         q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)
+        q_om_n, q_mp_n = len(q_om), len(q_mp)
     else:
         q_fab_n = q_inc_n = q_miss_n = 0
+        q_om_n = q_mp_n = 0
     q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
+              f"/ {q_om_n} q-om / {q_mp_n} q-mp "
               if q_checked else "")
 
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：

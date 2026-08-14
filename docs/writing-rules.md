@@ -2,7 +2,7 @@
 
 # 写作规则（Formatting & Content Rules）
 
-> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片流水线见 `../flows/write-source/figures/ref/figure_pipeline.md`，校验关卡见 `../verify/verify.md`。
+> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片流水线见 `../flows/write-source/figures/figures.md`，校验关卡见 `../verify/verify.md`。
 
 ---
 
@@ -727,7 +727,7 @@ Q 层（`verify/formula_tag/script/formula_tag.py`，`verify_config.json` 配置
   > **例**：第三个例子描述。
   ```
   **故障模式**：多例连续（`> **例**\n> \n> **例**` 或 `> **例**\n> **例**`）会使得阅读时看不出条目间的边界，verify/script/verify_chapter.py 的 I 层也会漏检（因为 I 层只检测相邻顶层 `---`，块引用内的续行不算）。
-- **格式一致性由 `format/fmt_proofs.py` 兜底**：写完后运行 `python format/fmt_proofs.py <book_dir> --number` 自动修复。
+- **格式一致性由 `tools/fmt_proofs.py` 兜底**：写完后运行 `python tools/fmt_proofs.py <book_dir> --number` 自动修复（该工具属 `tools/` 下的 CLI 工具，亦可由 `verify --fix` 的格式修复层 H/C/G/I/J/K/L/M/N 在源/译版统一兜底）。
 
 ---
 

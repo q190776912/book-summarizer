@@ -140,6 +140,15 @@ def print_result(r):
     if r.get('fig_skipped'):
         print("\nE-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
     else:
+        # Language-aware figure prefix: honor the book's own figure labels
+        # (verify_config.json `figure.labels`) instead of a hardcoded 图.
+        try:
+            from lib.figure_io import load_fig_labels
+            _fig_labels = load_fig_labels(r.get('extract_dir', ''))
+            _fig_prefix = '图' if any('图' in l for l in _fig_labels) else (
+                (_fig_labels[0] + ' ') if _fig_labels and _fig_labels[0] != '图' else 'Fig. ')
+        except Exception:
+            _fig_prefix = '图'
         if r['fig_missing']:
             problems += 1
             print(f"\nE-LAYER FIGURE COMPLETENESS MISSING ({len(r['fig_missing'])}): caption(s) referenced in "
@@ -147,7 +156,7 @@ def print_result(r):
                   f"those pages or register in ignore_fig_ch{r['ch']}.json:")
             for k in r['fig_missing']:
                 try:
-                    print(f"  ! 图{k}")
+                    print(f"  ! {_fig_prefix}{k}")
                 except UnicodeEncodeError:
                     print(f"  ! fig-{k.encode('ascii', errors='replace').decode('ascii')}")
         if r['fig_extra']:
@@ -155,7 +164,7 @@ def print_result(r):
                   f"(possible mislabel / duplicate caption pairing, review):")
             for k in r['fig_extra']:
                 try:
-                    print(f"  ~ 图{k}")
+                    print(f"  ~ {_fig_prefix}{k}")
                 except UnicodeEncodeError:
                     print(f"  ~ fig-{k.encode('ascii', errors='replace').decode('ascii')}")
         if r['fig_invalid']:

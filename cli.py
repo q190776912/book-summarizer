@@ -41,6 +41,8 @@ DISPATCH = {
     "extract-book": "flows/extract/pipeline/script/extract_book.py",
     "extract-pipeline": "flows/extract/pipeline/script/extract_pipeline.py",
     "make-summary": "flows/extract/pipeline/script/make_summary.py",
+    "split-chapters": "tools/split_chapters.py",
+    "audit-counts": "verify/script/audit_counts.py",
 }
 
 

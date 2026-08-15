@@ -40,6 +40,7 @@ import os, json, re
 
 from page_json import PageJson
 from verify.script.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
+from lib.figure_io import load_fig_components
 
 
 # --- attribution (figure -> owning item block) ---------------------------------
@@ -200,7 +201,8 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
         if e.get('label'):
             extracted.add(normfig(e['label']))
     caption = set()
-    cap_re = fig_cap_re(ext)  # book-specific prefix set (verify_config.json figure.labels)
+    cap_re = fig_cap_re(ext)  # book-specific prefix + component set (verify_config.json figure.labels / figure.components)
+    components = load_fig_components(ext)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
     for p in range(start, end + 1):
         fp = os.path.join(ext, f'page_{p:03d}.json')
         if not os.path.exists(fp):
@@ -212,9 +214,15 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
             if not txt:
                 continue
             for m in cap_re.finditer(txt):
-                parts = m.group(1).split('.')
-                if len(parts) >= 2 and int(parts[0]) == ch:
-                    caption.add(normfig(m.group(1)))
+                num = m.group(1)
+                if components == 1:
+                    # global integer figure numbering (e.g. Kreyszig "Fig. 2");
+                    # no chapter prefix, so compare on the bare number directly.
+                    caption.add(normfig(num))
+                else:
+                    parts = num.split('.')
+                    if len(parts) >= 2 and int(parts[0]) == ch:
+                        caption.add(normfig(num))
     missing = sorted(caption - extracted - ignore_fig, key=sortkey)
     extra = sorted(extracted - caption, key=sortkey)
 

@@ -72,7 +72,7 @@ def fix_backticks(t: str) -> str:
 
 # ---- Class B: re-join chopped $...$ (LOCAL, anchored, SAFE rules only) ----
 def _fix_norm_bars(t: str) -> str:
-    """Norm bars (backslash + '|') around a $...$ region, optional trailing subscript.
+    r"""Norm bars (backslash + '|') around a $...$ region, optional trailing subscript.
 
     Handles both-sided  \\| $x$ \\|_N  ->  $\\|x\\|_N$  in one shot.
     The pipe is matched via re.escape so it is NEVER an alternation operator.
@@ -153,7 +153,7 @@ def _protect_and_apply(t: str, fn) -> str:
 
 
 def _fix_misc(t: str) -> str:
-    """A few safe whole-text joins for super/sub-script that was split from a
+    r"""A few safe whole-text joins for super/sub-script that was split from a
     $...$ math region (these span a math boundary, so they are not handled by the
     non-math-only bare-field pass):
         l^$\infty$  ->  $l^\infty$

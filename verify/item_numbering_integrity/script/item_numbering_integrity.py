@@ -185,7 +185,25 @@ _PARTICLES = set('的 和 与 及 以 由 见 据 按 因 若 当 但 且 或 �
                 '外 之 而 并 将 已 为 使 给 向 到 自 经 比 较 证 推 应'.split())
 
 
-def _is_reference_tail(tail):
+def _is_citation_starter(s):
+    """True if `s` opens with an explicit cross-reference marker.  Lets the EN
+    relaxation below still drop genuine references like 'see Theorem 4.1' /
+    'cf. Example 2' while counting descriptive titles that start with a content
+    word ('Space', 'Banach', 'A space', 'The open mapping theorem')."""
+    head = re.match(r'[A-Za-z]+', s)
+    if not head:
+        return False
+    return head.group(0).lower() in ('see', 'cf', 'viz', 'ibid')
+
+
+# Explicit cross-reference starters for CJK (Han-start) tails.  A descriptive
+# item title may start with ANY other Han char — including negation '不' ("不完备的
+# 赋范空间" = Incomplete normed spaces) or '由' ("由...定义的度量") — so only these
+# unambiguous citation words mark a reference; everything else is a REAL entry.
+_CN_CITATION_STARTERS = ('见', '据', '按', '参', '依', 'cf')
+
+
+def _is_reference_tail(tail, lang=None):
     s = tail.lstrip()
     if not s:
         return True
@@ -197,13 +215,28 @@ def _is_reference_tail(tail):
     # Han-starting tail as a reference silently drops legitimate entries and
     # manufactures false "缺号".
     if c.isascii() and c.isalpha():     # English prose / latin citation
+        # EN books carry descriptive item titles in English (Latin-start), e.g.
+        # "2.2-3 Space l^p".  These are REAL entries, not references — only drop
+        # them when the tail opens with an explicit citation marker.  CN books
+        # keep the legacy behaviour (any Latin-start tail = reference) because
+        # their descriptive titles start with Han chars, so a Latin-start in a
+        # CN md is almost always a citation / English-term reference.
+        if lang == 'en':
+            return _is_citation_starter(s)
         return True
-    if '一' <= c <= '鿿' and c in _PARTICLES:
-        return True
+    if '一' <= c <= '鿿':
+        # Only an EXPLICIT cross-reference marker marks a reference.  A
+        # descriptive title may start with any other Han char — including
+        # negation '不' ("不完备的赋范空间") or '由' ("由...定义的度量") — so
+        # anything that is not a citation word is a REAL entry (uncat), never a
+        # silently-dropped reference.  This mirrors the EN branch above.
+        if lang != 'en' and c in _CN_CITATION_STARTERS:
+            return True
+        return False
     return False
 
 
-def _parse_entry(inner, levels):
+def _parse_entry(inner, levels, lang=None):
     """Return (comps, label) for a real numbered entry header, else None.
 
     comps is the list of exactly `levels` integer components (the numbering
@@ -250,7 +283,7 @@ def _parse_entry(inner, levels):
             return comps, lm.group(0)
         # 无标准类型词：描述性标题（「4.11-2 必要条件」）→ 归 uncat，
         # combined 下并入节序列一起计连续性（仍是真实条目，不应漏计）。
-        if tail and not _is_reference_tail(tail):
+        if tail and not _is_reference_tail(tail, lang):
             comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
             return comps, 'uncat'
         return None
@@ -263,7 +296,7 @@ def _parse_entry(inner, levels):
     if m2:
         numpath = m2.group(1)
         tail = inner[m2.end():].strip()
-        if tail and not _is_reference_tail(tail):
+        if tail and not _is_reference_tail(tail, lang):
             comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
             return comps, 'uncat'
     # Fallback: label preceded by a name/attribution (e.g.
@@ -432,7 +465,7 @@ def _md_gap_blocking(ctx):
         inner = span.group(1).strip()
         parsed = None
         for lv in _depth_candidates:
-            parsed = _parse_entry(inner, lv)
+            parsed = _parse_entry(inner, lv, ctx.language)
             if parsed:
                 break
         if not parsed:
@@ -517,13 +550,28 @@ def _md_gap_blocking(ctx):
             # (label_candidates) so an ignore entry "Theorem 12.3" matches the
             # emitted token even though the grouping key only carries `gi`.
             full = (prefix_str + '-' if prefix_str else '') + str(n)
+            matched = False
             for lab in label_candidates:
                 token = f"{lab} {full}" if lab and lab != 'uncat' else full
                 token_norm = f"{_norm_label(lab)} {full}" if lab and lab != 'uncat' else full
                 if (_norm_sep(token) in known or _norm_sep(token_norm) in known
                         or _norm_sep(f"{gk}:{n}") in known
                         or f"{gk}:{n}" in ignore):
-                    return
+                    matched = True
+                    break
+            if matched:
+                # 审核护栏：ignore 只应抑制「.md 中真实存在、但属 OCR 乱码」的条头，
+                # 不得用于掩盖「源侧序列洞」（被忽略的编号在 .md 中本就不存在）。
+                # 若 n 不在 present（是洞而非现令牌头），抑制它等于隐藏真实缺项 →
+                # 改为发出 IGNORE-SUSPECT 警告，交由 agent 复核
+                # （补 manual_overrides 或举证稀疏），而非静默放行。
+                if n not in present:
+                    warnings.append(
+                        f"  [IGNORE-SUSPECT] {gk} 缺号 {n}（序列 {first}..{last}）："
+                        f"ignore 条目掩盖了一个源侧序列洞（{full} 在 .md 中并不存在），"
+                        f"疑似隐藏真实缺项。请核对源书：若确为稀疏编号请在 ignore 注明举证；"
+                        f"若 .md 本应含 {full} 请用 manual_overrides 补回，勿用 ignore 隐藏。")
+                return
             msg = (f"{gk} 缺号 {n}（序列 {first}..{last} 不连续 — "
                    f"严格模式：请核对源书确认是稀疏编号(登记 ignore)还是确有遗漏(应补写)）")
             if cfg.strict:

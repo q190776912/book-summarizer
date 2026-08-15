@@ -40,15 +40,23 @@
 3. 未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。
 4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/<snake>/script/<snake>.py`，文档 `verify/<snake>/<snake>.md`，各自 SSOT）。
 5. 公式序标保真（序列顺序 `ORDER_MISMATCH` + 小节定位 `MISPLACED`）已由 Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖；公式**内容**保真仍靠人工核对（机器不判内容对错）。
+6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对所有 17 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
+   ```bash
+   python verify/script/audit_ignore.py <extract_dir> [--chapter N] [--json]
+   ```
+   - 判定：**SUSPECT**（退出码 1）= ignore 了真实存在的条目 / 掩盖连续序列洞 / 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides_ch{N}.json` 补回真实缺项；仅当确认确为书本身稀疏编号才保留 ignore 并补举证。**SAFE** = 无邻居、无对应源内容，疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
+   - **`verify_chapter.py` 已自动在 B 层收尾执行此步**（单章模式审该章、`--all` 模式审全书）；出现 SUSPECT 时整体退出码非 0，校验不得判 PASS，须先复核 / 补 `manual_overrides` 再重验。
+   - 写书前校验 `check_structure_completeness.py`（D/B 预检）同样在报告中附 `ignore_audit` 字段（SUSPECT 数），CLI 输出 `IGNORE-AUDIT(suspect=N)`。
 
 ## 本阶段规则（🔴 内联）
 - **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
   - 原因：书级配置需待全书编号形态定型后，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；B–Q 若干判定需整章 / 整书上下文。
 - **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
+- **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。
 
 ## 出口条件
-- 出口：`verify/script/verify_chapter.py --all` 对**该语言全部章节 `exit 0`**（`verify PASS + KaTeX OK`）。
+- 出口：`verify/script/verify_chapter.py --all` 对**该语言全部章节 `exit 0`**（`verify PASS + KaTeX OK`），且**收尾的 B 层编号 ignore agent 审计无 SUSPECT**（存在编号 ignore 条目时 `audit_ignore.py` 退出码须为 0；SUSPECT 即未通过）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `script/verify_chapter.py`：统一强制校验关卡（`--all` / `--fix`）。

@@ -42,10 +42,20 @@ import page_json
 from section_continuity import check_d_layer          # D 层：section-continuity（章节连续性）
 from item_numbering_integrity import ItemNumberingIntegrityLayer  # B 层：item-numbering-integrity（条目编号完整性）
 from verify.script.base import VerifyContext   # B 层 run() 所需的精简运行时载体
+from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,
 )
+
+# manual_overrides_chN：手写恢复条目（OCR 完全吃掉标题时，agent 凭书补写并登记）。
+# 校验层检测到 B 层序列缺口、但 scan_raw_items 因 OCR 丢号而看不到该条目时，
+# 由本步从此文件取回并回填进契约 —— 这是「校验出来，然后填进去」的设计回收路径，
+# 取代用 ignore 隐藏真实缺口的错误做法。
+try:
+    import manual_overrides_chN as _mo_mod
+except Exception:
+    _mo_mod = None
 
 # === 源侧条目扫描：标题锚定，覆盖全方案 / 全类型 ============================
 # 作为「源条目集」喂给 B 层（ctx.items）并做 set-difference 差集回填；它是独立于
@@ -370,7 +380,15 @@ def insert_item(tree, key, label, page, canon, snippet=""):
         if cand is not None:
             sn = cand
     if sn is not None:
-        sn.sub_sec.append(node)
+        # 按 canon 顺序插入，保证合成 md / write-source 输出的条目序列连续有序
+        # （否则回填项会被 append 到末尾，导致 2.1-4 排在 2.1-8 之后）。
+        idx = len(sn.sub_sec)
+        for i, child in enumerate(sn.sub_sec):
+            cc = _canon_key(_PRIMARY, str(child.key) if isinstance(child.key, str) else str(child.key))
+            if cc is not None and canon is not None and cc > canon:
+                idx = i
+                break
+        sn.sub_sec.insert(idx, node)
         _fix_pages(tree)
         return True, sec_key or "(page-proximity)"
     tree.sub_sec.append(node)
@@ -646,6 +664,26 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             ok, where = insert_item(tree, mi["key"], mi["label"], mi["page"], c, mi["snippet"])
             if ok:
                 backfilled_items.append({"key": mi["key"], "where": where, "page": mi["page"]})
+        # ---- 手写恢复条目回填（manual_overrides_chN.json）----
+        # 覆盖「B 层检测到序列缺口，但 scan_raw_items 因 OCR 丢号而完全看不到该条目」
+        # 的情形：从 manual_overrides 取回 agent 凭书补写的条目，回填进契约。
+        # 这样校验逻辑既能「检测」缺口、又能「填回」，无需借助 ignore 隐藏真实缺项。
+        if _mo_mod is not None:
+            mo_path = os.path.join(ext, f"manual_overrides_ch{ch}.json")
+            mo_list = _mo_mod.load_manual_overrides(mo_path)
+            if mo_list:
+                for mo in mo_list:
+                    mk = mo.get("key")
+                    if not mk:
+                        continue
+                    c = _canon_key(_PRIMARY, mk)
+                    if c is None or c in contract_items:
+                        continue  # 已在校验起点契约中，跳过（避免重复插入）
+                    ok, where = insert_item(tree, mk, mo.get("label", "uncat"),
+                                            mo.get("page", 0), c, mo.get("text", ""))
+                    if ok:
+                        backfilled_items.append({"key": mk, "where": where,
+                                                 "page": mo.get("page"), "source": "manual_override"})
         if backfilled_items or backfilled_sections:
             # 回填后整体写回单文件书对象：用 ch_node 替换本书根下同 key 章节，再 save。
             bs.root.replace_chapter(tree)
@@ -660,12 +698,14 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         "chapter": ch,
         "contract_items": len(contract_items),
         "contract_sections": sorted(contract_sections),
+        "ignore_audit": run_audit(ext, ch),  # ignore 条目审核：SUSPECT 提示 agent 复核
         "raw_items_scanned": _count_raw_items(ext, ch, start, end),
         "raw_sections_present": sorted(set(sec_detail.get("continuity", []) + sec_detail.get("tail", []))),
         "missing_sections": missing_sections,
         "missing_items": missing_items,
         "backfilled_items": backfilled_items,
         "backfilled_sections": backfilled_sections,
+        "manual_override_backfills": [b for b in backfilled_items if b.get("source") == "manual_override"],
         "section_detail": sec_detail,
         "b_layer": {
             "blocking": bmeta.get("blocking", []),
@@ -686,7 +726,8 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
           f"missing(sections={len(missing_sections)}[{len(sec_detail.get('continuity', []))}cont/{len(sec_detail.get('tail', []))}tail], "
           f"items={len(missing_items)}[{n_read}r/{n_ref}ref/{n_agent}a])"
           + (f" | BACKFILLED(items={len(backfilled_items)}, sections={len(backfilled_sections)})" if backfill else "")
-          + f" | GATE={'PASS' if gate['passed'] else 'FAIL'}")
+          + f" | GATE={'PASS' if gate['passed'] else 'FAIL'}"
+          + (f" | IGNORE-AUDIT(suspect={report['ignore_audit']['suspect_count']})" if report['ignore_audit']['suspect_count'] else ""))
     return report
 
 

@@ -369,6 +369,34 @@ def fix_all_layers(md_file, book_dir=None):
     return mgr.fix(md_file)
 
 
+def _run_ignore_audit(ext, chapter=None):
+    """🔴 B 层（条目编号完整性）校验的强制最后一步，隶属 D/B 结构完整性域。
+
+    作用域严格限定为 **编号 ignore**（B 层 item_numbering_integrity 消费的
+    ignore / known_gaps / ignore_keys + 各 ignore_chN.json）。它**不是**对所有
+    17 个校验层的全局末步：
+      * Q 层公式豁免走独立命名空间 `formula.ignore`，不被本审计覆盖；
+      * E 层图豁免走 `ignore_fig`，不被本审计覆盖。
+
+    仅当被验证章节存在「编号 ignore 条目」时本步才生效（即"有 ignore 的 D/B
+    校验流程"才需此步）；编号 ignore 为空时静默返回 0（审计对本次校验不适用）。
+    返回 SUSPECT 数；>0 时校验流程不应 PASS（交由 agent 复核 / 补 manual_overrides）。
+    """
+    try:
+        from verify.script.audit_ignore import run_audit, _print_report
+    except Exception as e:
+        print("\n[IGNORE-AUDIT] 跳过：无法导入 audit_ignore（%s）" % e)
+        return 0
+    rep = run_audit(ext, chapter)
+    if rep["total"] == 0:
+        # 无编号 ignore → 审计不在本次 D/B 校验作用域内，静默跳过（不污染其他层输出）。
+        return 0
+    print()
+    print("[IGNORE-AUDIT] B 层(条目编号) ignore 条目 agent 审计（D/B 域强制最后一步）")
+    _print_report(rep)
+    return rep["suspect_count"]
+
+
 def main():
     try:
         _main_impl()
@@ -440,6 +468,10 @@ def _main_impl():
                             print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
 
         ok = verify_all(ext, book_dir, extra_ignore=extra_ignore)
+        # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
+        suspect = _run_ignore_audit(ext)
+        if suspect:
+            ok = False
         sys.exit(0 if ok else 1)
 
     # Single-chapter mode — strip flags AND their values from positional args.
@@ -475,7 +507,9 @@ def _main_impl():
             print(f"[FIX] Ch{ch}: {', '.join(parts)}")
     r = verify_one(ch, start, end, md, ext, book_dir_single, extra_ignore=extra_ignore)
     status = print_result(r)
-    sys.exit(0 if status == 'PASS' else 1)
+    # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
+    suspect = _run_ignore_audit(ext, ch)
+    sys.exit(0 if (status == 'PASS' and suspect == 0) else 1)
 
 
 def _all_md_files(book_dir):

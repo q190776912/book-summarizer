@@ -94,13 +94,20 @@ SECTION_ROLE_SUBSECTION    = 3
 SECTION_ROLE_SUBSUBSECTION = 4
 SECTION_ROLE_CODES = (1, 2, 3, 4)
 
-# Default section-types (role codes) per ordinal code. This is the BACK-COMPAT
-# fallback when a verify_config.json does not explicitly declare `section_types`.
-# It mirrors the historical D-layer behaviour exactly:
-#   * ordinals 2/4/6/7 only verified the section level (2-part numbers);
-#   * ordinal 3/5 verified subsections (3-part numbers, 1.1.1) — previously via
-#     the dead D_MD_NESTED_SEC_RE, now live for the first time;
-#   * ordinal 1 is single-level (chapter only).
+# Default section-types (role codes) per ordinal code. BACK-COMPAT fallback
+# used only when a verify_config.json does not explicitly declare
+# `section_types`/`section_depths`.  The verified section hierarchy is
+# ORTHOGONAL to the item-numbering depth: it describes how many NESTED SECTION
+# levels the book's markdown / source actually has (## §N, ## §N.M, ## §N.M.K),
+# NOT how many components an item key carries.  For the historic three-level CN
+# families (type 3 / 5 / 8) the convention is that the book genuinely nests
+# sections three deep (chapter / section / subsection 1.1.1), so the default is
+# [1, 2, 3] — item keys such as ``1.3-4`` whose deepest component is an ITEM
+# counter (NOT a subsection) are the Kreyszig-shaped exception and must declare
+# ``"section_depths": [1, 2]`` explicitly; make_config.py detects and emits
+# this automatically so the fallback is only reached by genuine 3-level books.
+# Two-level families verify chapter + section only ([1, 2]); single-level
+# verifies the chapter prefix ([1]).
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 7: [1, 2], 8: [1, 2, 3],

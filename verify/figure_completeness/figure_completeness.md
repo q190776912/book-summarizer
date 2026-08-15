@@ -8,23 +8,36 @@
 图完整性（覆盖度）+ 图有效性（文件可解码性）：OCR 引用了图注但裁剪图缺失 → 可能漏检；以及裁剪图文件缺失 / 损坏 / 过小 / 近空白 → 嵌入后无图或误检。
 
 ## 步骤（语义与检查内容）
-- 仅当 `_extract/figure_index.json` 存在且含本章 `chapter` 条目时运行；否则 SKIP（绝不阻断）。
-- 载入 `figure_index.json` **一次**，按 `chapter` 过滤出本章条目（无 `chapter` 字段的全书文件则不过滤），随后做两类检查：
-  - **完整性 COMPLETENESS（原 E）**：用 `fig_cap_re`（每本书 `figure.labels` 前缀）扫 `page_*.json` 的 OCR 文本，抽本章图注号集合；与索引 `extracted` 求差。
-    - **MISSING FIGURE（阻断 FAIL）**：章内 OCR 引用了「图 X.X.X」但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` → 重跑 `extract_figures.py`/`assign_figures.py` 刷新或手动补图。
-    - **EXTRA（仅 WARN）**：裁剪图 `label` 在本章 OCR 找不到对应图注，疑似误配对。
-  - **有效性 VALIDITY（原 F）**：对本章每条 index 条目，用 `np.fromfile`+`cv2.imdecode`（绕开 Windows 中文路径下 `cv2.imread` 静默失败）打开 `<ext>/<file>`。
-    - **INVALID（阻断 FAIL）**：缺失文件 / 无法解码 / 单边 <20px。
-    - **SUSPICIOUS（仅 WARN）**：近空白（灰度方差 <50，疑似误检文字块）。
-- 无 `figure_index.json`（未跑图片提取）的章节自动 SKIP，绝不阻断。
-- 注入 `fig_skipped`（= `result is None` 完整语义：文件缺失 **或** 本章无图条目，两种情况都 SKIP）。
+1. 仅当 `_extract/figure_index.json` 存在且含本章 `chapter` 条目时运行；否则 SKIP（绝不阻断）。无 `figure_index.json`（未跑图片提取）的章节亦自动 SKIP，绝不阻断。
+2. 载入 `figure_index.json` **一次**，按 `chapter` 过滤出本章条目（无 `chapter` 字段的全书文件则不过滤）；随后做三类检查（完整性 / 有效性 / 归属），具体判定见下方「规则」。
+3. 归属检查（ATTRIBUTION，覆盖「图悬在块外」盲区）：把 md 切成逻辑块、解析每条 `<img>` 的 `alt` 里的 item 指针、判定该图是否落在引用它的 item 块内。背景与判定逻辑见下方「规则 · 归属」。
+4. 注入 `fig_skipped`（= `result is None` 完整语义：文件缺失 **或** 本章无图条目，两种情况都 SKIP）。
 
-## 本阶段规则（阻断性 / 可修复）
+## 规则
+### 完整性 COMPLETENESS（原 E）
+- 用 `fig_cap_re`（每本书 `figure.labels` 前缀）扫 `page_*.json` 的 OCR 文本，抽本章图注号集合；与索引 `extracted` 求差。
+- **MISSING FIGURE（阻断 FAIL）**：章内 OCR 引用了「图 X.X.X」但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` → 重跑 `extract_figures.py`/`assign_figures.py` 刷新或手动补图。
+- **EXTRA（仅 WARN）**：裁剪图 `label` 在本章 OCR 找不到对应图注，疑似误配对。
+
+### 有效性 VALIDITY（原 F）
+- 对本章每条 index 条目，用 `np.fromfile`+`cv2.imdecode`（绕开 Windows 中文路径下 `cv2.imread` 静默失败）打开 `<ext>/<file>`。
+- **INVALID（阻断 FAIL）**：缺失文件 / 无法解码 / 单边 <20px。
+- **SUSPICIOUS（仅 WARN）**：近空白（灰度方差 <50，疑似误检文字块）。
+
+### 归属 ATTRIBUTION（新增）
+- 背景：原 E/F/H 层都不检查「图是否落在引用它的 item 块内」——这是 verifier 的覆盖盲区（Kreyszig §1.5-9 的图曾被嵌入脚本 `find_after` 保守地推出 `>` 块、悬在节末，长期无校验抓出）。由 `check_figure_attribution(md_file)` 实现。
+- 逻辑块切分：`blockquote`（`>` 行）、`item_top`（顶层 `**N.M-K**`）、`section`（`## `）、`floating`（裸 `<div>`/`<img>` 无 `>` 前缀）。
+- item 指针解析：`alt` 里的 `_ALT_ITEM_RE`（`Example|Theorem|Def.|Proof of Theorem … N.M-K`，大小写不敏感）。
+- **fig_misattributed（仅 WARN，不阻断）**——嵌入脚本历史保守策略可能合法地把部分图放在块外，但盲区必须暴露而非隐藏：
+  - `floating` 图且最近归属 item 是 `blockquote` → 报（应移入该 `>` 块）。
+  - `blockquote` 块内图但其最近归属 item 与块标题 `ref` 不一致 → 报。
+  - `item_top` 块内图且 `alt` 指向的 item 与块 `ref` 不一致 → 报。
+- 正例基准：§1.3-4（fig7，在 `**1.3-4 Theorem**` 后的 `>` 块内）、§1.6-2（fig11，同）、§1.5-9（fig9/fig10，修复后已收进 `> **1.5-9 Example**` 块内）→ 均不报。
+
+### 阻断性 / 可修复
 - 有图时 `fig_missing` 或 `fig_invalid` 非空 → 阻断 FAIL。
+- `fig_extra` / `fig_invalid_warn` / `fig_misattributed` 仅 WARN（不阻断）。
 - `auto_fixable = False`。
-
-## 出口条件
-有图且 `fig_missing` 非空 → 整章 FAIL（漏检）；`fig_invalid` 非空 → 整章 FAIL（图文件问题）；`fig_extra` / `fig_invalid_warn` 仅 WARN（不阻断）。
 
 ## 相关代码（`verify/figure_completeness/script/figure_completeness.py`）
 - `code = 'E'`，`order = 5`，`auto_fixable = False`。
@@ -59,5 +72,6 @@ fig_missing
 fig_extra
 fig_invalid
 fig_invalid_warn
+fig_misattributed
 fig_skipped
 ```

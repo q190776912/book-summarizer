@@ -46,12 +46,13 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 
 若某章 E 层报"图 X.X.X missing"（真漏检 / 漏命名），重跑或手动补图的处置见下方「手动补图」。
 
-#### 与 figure 层(E) 校验的衔接
-`figure_index.json` 落地后 `../../../verify/script/verify_chapter.py` 启用 **figure 层(E)：图片完整性 + 图片有效性**：
-- **E 层 MISSING（真漏检）**：章内 OCR 引用了"图 X.X.X"但 `figure_index.json` 无对应条目 → 该图**根本没被检测到** → 去对应页**重新识别**（降 `--conf` 重跑 `extract_figures.py --ch N` 或手动补图）
-- **未命名（已检测，无图号）**：`figure_index.json` 中有该图条目但 `label==null` → 它**被找到了**，只是 caption 没被识别成"图 X.X.X" → **不阻断**
-- **figure 层(E) 有效性**：裁剪图缺失/无法解码/单边<20px → 阻断；近空白误检 → 仅警告
-- 两层前提：`figure_index.json` 存在且含本章 `chapter` 条目；否则 SKIP
+#### 与 figure 层(E) 校验的衔接（遵循 `../../../verify/figure_completeness/figure_completeness.md`）
+`figure_index.json` 落地后 `../../../verify/script/verify_chapter.py` 启用 **figure 层(E)**，做三类检查（结构与判定以 figure_completeness.md 的「规则」节为唯一权威）：
+
+- **完整性 COMPLETENESS**：章内 OCR 引用了「图 X.X.X」但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` → **MISSING（阻断 FAIL）**，该图根本没被检测到 → 去对应页重新识别（降 `--conf` 重跑 `extract_figures.py --ch N` 或手动补图）；裁剪图 `label` 在本章 OCR 找不到对应图注 → **EXTRA（仅 WARN）**，疑似误配对。
+- **有效性 VALIDITY**：裁剪图缺失文件 / 无法解码 / 单边 <20px → **INVALID（阻断 FAIL）**；近空白（灰度方差 <50，疑似误检文字块）→ **SUSPICIOUS（仅 WARN）**。
+- **归属 ATTRIBUTION（新增，覆盖「图悬在块外」盲区）**：每个 `<img>` 须落在 caption/`alt` 所指 item 的块内（`> **证明/例**` 块的图带 `>` 前缀；陈述级配图在条目陈述段之后顶层）。图悬在块外（如历史嵌入脚本 `find_after` 对「`>` 块首行」锚点保守推出块）→ **fig_misattributed（仅 WARN，不阻断）**。这与 [`../../../docs/writing-rules.md`](../../../docs/writing-rules.md) 的图片嵌入规则（caption→条目映射 + 归属层级）形成「写作规范 ↔ 校验把关」闭环：writing-rules 规定图怎么放，figure 层(E) 验证放对了没。
+- 前提：`figure_index.json` 存在且含本章 `chapter` 条目，否则 SKIP（绝不阻断）；无 `figure_index.json`（未跑图片提取）的章节亦 SKIP。
 
 ## 本阶段规则（🔴 内联）
 - **flex 容器格式铁律（2026-07-27 立）**：`<div style="display:flex; ...">` 与 `<img>`、`<img>` 与 `</div>` 之间**禁止出现空行**。合法形态：
@@ -64,7 +65,8 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - **书特有覆盖映射**：图注无明确条目编号但内容明显属某条目时，在该书 `_extract/figure_embed_overrides.json` 声明精确锚点（字段 `anchors` / `is_proof`、JSON 示例与生成脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）；无此文件则纯靠启发式。
 - **自动锚点匹配的局限**（嵌入后处理）：`../../script/embed_figures.py` 用启发式匹配图注（caption）与条目标签（`**定义X.X**`, `**定理X.X**` 等）。当 OCR 图注文本噪声大、或图无文字标注（如图1.1 Venn 图只有 "图1.1" 而无 "定义1.4" 字样）时，匹配会失败，脚本输出 `no item ref`。**对此情况，必须创建 `_extract/figure_embed_overrides.json` 手动声明锚点**（字段 `anchors` / `is_proof`、JSON 示例与自动产出脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）。此文件在中文教材（Venn 图、拓扑示意图等无文字图注的图）中几乎是必选项。
 - **嵌入后 C 层 "missing blank line after `</div>`"**：顶层（非块引用内）图片的 `</div>` 后缺空行会导致 Markdown 解析器吞内容，C 层报错。详见 [`../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行`](../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行)。
-- 本步是校验的**前置依赖**：先嵌图，再跑 `verify_chapter.py`（其图片嵌入检查、块引用连续性检查）。
+- **图归属层级铁律（与 verify figure 层(E) attribution 对应）**：图的归属层级由 caption 决定（详见 [`../../../docs/writing-rules.md`](../../../docs/writing-rules.md) 图片嵌入规则「强制：图必须归属到正确的层级」）：caption 含 `证明` / `例N` 的图 → 必须缩进进对应 `> **证明/例**` 块引用内（带 `>` 前缀，绝不可写成顶层行打断块）；陈述级配图（无 `证明`/`例`）→ 放在条目陈述段之后的**顶层**，与 `> **证明**` 块并列、互不嵌套。图悬在块外会被 verify figure 层(E) 报 `fig_misattributed`（仅 WARN）。嵌入脚本 `embed_figures.py` 的 `find_after()` 对「`>` 块首行」锚点会保守地把图推到块外——写作/嵌图后须确认图确实落在引用它的 item 块内，而非依赖脚本默认位置。
+- 本步是校验的**前置依赖**：先嵌图，再跑 `verify_chapter.py`（其图片嵌入检查、块引用连续性检查、figure 层(E) 归属校验）。
 
 ## 上游环境前提 / 已知边界（检测 + 命名阶段）
 本子流程只做嵌图，不涉及图检测 / 命名的运行环境。检测阶段的权重、加载器、OpenCV/PIL 路径陷阱、`--conf`、跨页不合并、只取 `figure` 类、caption 序标跟随 `figure.labels` 等**环境前提与已知边界**由 extract 阶段的 `figure_detection` 子流程承载（属上游文档范畴，本文件不重复）。本子流程只需确认输入契约 `figure_index.json` + `figure/*.png` 已就绪。

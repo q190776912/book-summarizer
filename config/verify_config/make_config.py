@@ -35,6 +35,13 @@
      - 若 detect_formula 非 None 再写入 "formula": {...}。
      并打印醒目提示：四级子小节书（1.1.1.1）需手动补 section_types/section_depths；
      检出的分组若与实际不符请手动合并/拆分后再跑 verify。
+4. 同时显式写出 `section_types` / `section_depths`（D 层要校验的**小节层级**，
+   即书里实际有 `## §N` / `## §N.M` / `## §N.M.K` 几级标题——与条目编号深度
+   正交，不能由 ordinal 类型直接推定）。判定口径见 `_detect_section_hierarchy`：
+   扫描整书 OCR，看最深层 k（= 条目深度）是否存在"带标题、非条目标签"的真三级
+   小节头；存在 → `[1..k]`（如真正的 1.1.1 小节书），不存在（如 Kreyszig 的
+   `1.3-4 Theorem`，最深层是条目计数器而非小节）→ `[1..k-1]`。这样 type 3/5/8
+   书不再被一律误判为三级小节，而是按实际结构给出正确层级。
 
 ⚠️ 相位护栏：ordinal/formula 探测均要求 MM Repair 已完成（完成标记 _extraction_done.json
    存在；该标记仅在 MM Repair 模式 A+B 全部 apply 回 page_*.json 后由主 Agent 写出，不等同
@@ -68,6 +75,95 @@ import glob
 
 sys.stdout.reconfigure(encoding='utf-8')
 from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
+
+# --- section hierarchy (D-layer) -------------------------------------------
+# `section_depths` MUST NOT be inferred from the ordinal type alone — it
+# describes how many NESTED SECTION levels the book's markdown / source actually
+# has (## §N / ## §N.M / ## §N.M.K), which is ORTHOGONAL to the item-numbering
+# depth.  A type-3 book can legitimately be either:
+#   * a genuine 3-level-section book  (md has `#### §1.1.1`; items like
+#     `1.1.2 定义`)                                  -> section_depths = [1, 2, 3]
+#   * a Kreyszig-shaped book (md only `## §1.3`; items like `1.3-4 Theorem`,
+#     deepest component IS the item counter, NOT a subsection)
+#                                                          -> section_depths = [1, 2]
+# The only reliable way to tell them apart is to scan the raw OCR: does the
+# deepest level k (= item depth) contain any k-component numbered line that is a
+# GENUINE section header (a number followed by a non-label TITLE) rather than a
+# LABELED ITEM?  See `_detect_section_hierarchy` for the implementation.
+_SEP_RE = re.compile(r'[.\-–·/．－〜]')
+# Capture ONLY the leading number (optionally prefaced by OCR-glued §/8).  The
+# trailing title is inspected separately via `rest` so a label keyword's first
+# letter is never stripped off (the old `\s+\S` suffix ate the 'T' of 'Theorem'
+# and turned labeled items into phantom section headers).
+_SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
+_LABEL_KW_RE = re.compile(
+    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|Definition|Theorem|'
+    r'Lemma|Proposition|Corollary|Example|Axiom|Exercise|Remark)')
+
+
+def _detect_section_hierarchy(extract_dir, item_depth):
+    """Return the D-layer `section_depths` list for this book.
+
+    `section_depths` enumerates the nested section levels (chapter / section /
+    subsection / ...) the D-layer verifies.  It is ORTHOGONAL to the item
+    numbering depth, but the item key's own components CONSTRAIN it:
+
+      * item_depth == 1 (single global counter `N`)  -> only a chapter prefix
+        exists; sections are verified at level 1  -> [1].
+      * item_depth == 2 (`N.M` — chapter.item OR chapter.section) -> the 2nd
+        component IS the section, so a 2-level section is GUARANTEED to exist;
+        -> [1, 2]  (no OCR scan needed; this is what type 2/4/6/7 use).
+      * item_depth == 3 (`N.M.K`) -> the first two components are chapter +
+        section (level 2 proven), and the 3rd component is the ITEM counter by
+        default.  Sections nest to level 3 ONLY when the source genuinely has
+        subsection headers (real `#### §1.1.1`); otherwise it is Kreyszig-
+        shaped and stays at [1, 2].  We scan the raw OCR for ANY k-component
+        numbered line that is a GENUINE section header (number + non-label
+        TITLE, e.g. `1.1.1 Metric Spaces`, `§1.1.1 小节二`) as opposed to a
+        labeled item (`1.3-4 Theorem`) to decide.
+
+    Cross-references (`see 1.2.3`) are excluded via `_is_crossref_prefix`.
+    (The schema currently caps items at 3 components, so level 3 is the max.)
+    """
+    if item_depth <= 1:
+        return [1]
+    if item_depth == 2:
+        return [1, 2]
+    # item_depth == 3: sections are [1, 2] unless genuine subsection headers
+    # are present in the raw OCR.
+    k = item_depth
+    has_genuine_k = False
+    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    for pg in pages:
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            txt = b.get('text', '').strip() if isinstance(b, dict) else ''
+            if not txt:
+                continue
+            m = _SEC_HEAD_RE.match(txt)
+            if not m:
+                continue
+            rest = txt[m.end():].lstrip()
+            if not rest or not rest[0].isalnum():
+                continue  # number with no following title -> not a header line
+            comps = [x for x in _SEP_RE.split(m.group(1)) if x]
+            if len(comps) != k:
+                continue
+            if _is_crossref_prefix(txt[:m.start()]):
+                continue
+            title = rest[:12]
+            if _LABEL_KW_RE.search(title):
+                continue  # labeled item, not a section header
+            if re.search(r'[A-Za-z一-鿿]', title):
+                has_genuine_k = True
+                break
+        if has_genuine_k:
+            break
+    return [1, 2, 3] if has_genuine_k else [1, 2]
 
 # 罗马数字章号形态（chapter_map 的 key / ch 字段全为罗马字母且无阿拉伯数字）
 ROMAN_RE = re.compile(r'^[IVXLCDM]+$')
@@ -604,11 +700,22 @@ def main():
     }
     if formula_cfg is not None:
         config["formula"] = formula_cfg
+    # Explicit section hierarchy (D-layer).  NOT inferred from the ordinal type
+    # (that would wrongly force every type-3/5/8 book to 3 levels); instead we
+    # scan the raw OCR to see whether the deepest level k is a genuine section
+    # (e.g. `#### §1.1.1`) or just the item counter (Kreyszig `1.3-4`).  This
+    # overrides the ORDINAL_SECTION_TYPES fallback so Kreyszig-shaped books get
+    # the correct [1, 2] instead of the over-verifying [1, 2, 3].
+    sd = _detect_section_hierarchy(extract_dir, depth)
+    config["section_depths"] = sd
+    config["section_types"] = list(range(1, len(sd) + 1))
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
     print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
+    print(f"   小节层级 section_types={config['section_types']} "
+          f"section_depths={config['section_depths']}（已显式写出，避免默认回退过度校验）。")
     print(f"   文件路径: {cfg_path}")
     print(f"   文件内容: {json.dumps(config, ensure_ascii=False)}")
     if groups and groups != [["uncat"]]:

@@ -203,6 +203,12 @@ class SourceFormulaIndex:
         #   _cur_heading  : running "nearest preceding heading" during a scan
         self._primary_pos: Dict[str, tuple] = {}
         self._book_section: Dict[str, str] = {}
+        # Per-(section, number) membership in the book source. Unlike the global
+        # `_book_section` (which only keeps the FIRST occurrence and is useless
+        # for per-section-restart numbering where every section repeats (1)..(N)),
+        # this maps `(sec, n) -> sec` so a formula `\tag{n}` under section `sec`
+        # is "correctly placed" iff `(sec, n)` actually exists in the book.
+        self._book_section_sec: Dict[tuple, str] = {}
         self._cur_heading: Optional[str] = None
 
     # -- public API ---------------------------------------------------------
@@ -237,7 +243,8 @@ class SourceFormulaIndex:
         self._by_chapter[ch] = nums
 
     def build_sectioned(self, ch: int, start: int, end: int,
-                        md_sections: List[str]) -> Dict[str, Set[str]]:
+                        md_sections: List[str],
+                        ncomp: int = 1) -> Dict[str, Set[str]]:
         """Per-section variant for books that number formulas within each
         section (Kreyszig: every section restarts at (1)).
 
@@ -293,11 +300,27 @@ class SourceFormulaIndex:
                     poly = block.get('poly') or []
                     if len(poly) >= 2:
                         y = poly[1]
-                # Only count `(N)` from display-formula blocks (short standalone
-                # numbers or math-bearing blocks); reject CJK-prose reference
-                # blocks ("由(3)式…") which would otherwise create false
-                # MISSING rows.
-                if not self._block_has_math(txt):
+                # Only count `(N)` from genuine display-formula blocks.
+                #
+                # For per-section *standalone* numbering (Kreyszig, ncomp==1)
+                # the only authoritative source of a numbered formula is a
+                # STANDALONE bare label block — `(N)` / `（N）` optionally
+                # followed by `.` or a space — i.e. the canonical formula tag
+                # sitting on its own line beneath a displayed equation.  A
+                # longer block that merely *contains* `(N)` inside running prose
+                # ("the last sum in (13)", "From (1), with r→∞", an OCR stray
+                # "(1) (b) B(x₀;r)=…") is a cross-reference / definition marker,
+                # NOT a numbered formula, and must be rejected — otherwise it
+                # pollutes S and produces false MISSING rows ("13"/"1") for
+                # numbers the book never labels.  The general `_block_has_math`
+                # heuristic (which also admits math-bearing blocks) is too loose
+                # for the standalone case, so we apply the stricter bare-label
+                # gate here; for multi-component books (ncomp>=2) the standalone
+                # pattern rarely fires on prose and the old heuristic is kept.
+                if ncomp == 1:
+                    if not re.fullmatch(r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*', txt):
+                        continue
+                elif not self._block_has_math(txt):
                     continue
                 # extract formula numbers and attach to the current section
                 for pat in self.patterns:
@@ -310,6 +333,8 @@ class SourceFormulaIndex:
                         # first occurrence's section == book-side definition section
                         if n not in self._book_section:
                             self._book_section[n] = sec
+                        # (sec, n) membership — authoritative for per-section books
+                        self._book_section_sec[(sec, n)] = sec
                         self._record_pos(n, pg, y)
                         # capture a short book-source snippet for the audit so
                         # MISSING rows can be judged real-vs-OCR-noise
@@ -397,12 +422,19 @@ class SourceFormulaIndex:
     @staticmethod
     def _block_has_math(txt: str) -> bool:
         """Heuristic: is `txt` a DISPLAY-formula block (whose trailing `(N)`
-        is a genuine numbered formula) rather than CJK prose containing an
-        inline reference like "由(3)式可得"?  Genuine formula blocks are either
-        very short (a standalone `(N)` / `（N）` number) or contain math
-        markers (`=`, `∑`, LaTeX commands, Greek letters, …).  Pure prose
-        blocks are rejected so inline references don't inflate the source
-        formula set and produce false MISSING rows.
+        is a genuine numbered formula) rather than prose containing an
+        inline reference like "由(3)式可得" / "the last sum in (13)" / an OCR
+        artifact like "(1) (b) B(x₀;r)="?
+
+        Genuine formula blocks are either very short (a standalone `(N)` /
+        `（N）` number — the canonical Kreyszig formula label) or contain real
+        math (an `=`/relation, a sum/integral, a Greek letter, a LaTeX
+        command, …).  A longer block is treated as PROSE-REFERENCE (rejected)
+        unless it carries a math marker, because genuine numbered formulas in
+        this book are either a bare `(N)` or sit next to a displayed equation.
+        This prevents prose/reference noise from entering the source formula
+        set S and producing false MISSING rows (e.g. "(13)" in "the last sum
+        in (13)", which the book never labels as a numbered formula).
         """
         s = txt.strip()
         if len(s) <= 8:
@@ -860,7 +892,18 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         if cur is not None:
             prev_pos = cur
         # MISPLACED: summary section != book definition section.
-        bsec = src.book_section(n)
+        # For per-section-restart numbering (scope==3) the global
+        # `book_section` only records the FIRST occurrence of `n` across the
+        # whole chapter (every section repeats (1)..(N)), so comparing it to the
+        # summary's section produces 10 false MISPLACED.  Use the per-(sec, n)
+        # membership instead: a `\tag{n}` is correctly placed iff the book source
+        # actually carries `(n)` inside `sec`.  Fall back to the global
+        # `book_section` only when per-section tracking recorded nothing (e.g.
+        # chapter-scope books where a number is globally unique).
+        if (sec, n) in src._book_section_sec:
+            bsec = src._book_section_sec[(sec, n)]
+        else:
+            bsec = src.book_section(n)
         if bsec is not None and bsec != sec:
             if n not in seen_mp:
                 seen_mp.add(n)
@@ -960,7 +1003,7 @@ class QLayer(VerifyLayer):
                 tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
                 src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore)
                 built = src.build_sectioned(ctx.ch, ctx.start, ctx.end,
-                                            md_sections)
+                                            md_sections, ncomp=ncomp)
                 src_sec = built['_sectioned']
                 union = built['_union']
                 fab, inc, miss, rows = _compare_sectioned(

@@ -477,7 +477,7 @@ Common patterns (after correction):
 
 - 图块**不算独立编号条目**，不触发「条目间用 `---` 分隔」的 item 计数；但插入图块后，**图块与下一条目之间仍需 `---`**。
 - 图片占位符前的 `---` 与图片块之间的空行**不可省略**（KaTeX 校验关心 `$$` 前的空行；图片块虽非公式，保留空行利于阅读）。
-- 不引用 `verify/script/verify_chapter.py` 的 figure 层(E)作为嵌入正确性的依据：figure 层(E)只检查「**书里有这张图且 `.md` 提到对应图号**」，它**不**验证嵌入位置是否正确——位置正确性由本节规则的 caption→条目映射保证。
+- **嵌入位置由 figure 层(E) 的 attribution 检查把关**：figure 层(E) 现已在「完整性 + 有效性」之外新增 **归属 ATTRIBUTION** 检查——每个 `<img>` 须落在 caption/`alt` 所指 item 的块内（证明/例图带 `>` 前缀、陈述级配图在条目陈述段后顶层），图悬在块外会报 `fig_misattributed`（仅 WARN）。因此本节「caption→条目映射 + 归属层级」规则与 figure 层(E) 形成「写作规范 ↔ 校验把关」闭环：写时按本规则放，verify 时由 figure 层(E) 验证。figure 层(E) 的具体判定（三类检查的阻断/WARN 分档、逻辑块切分、`_ALT_ITEM_RE` 解析等）以 [`../verify/figure_completeness/figure_completeness.md`](../verify/figure_completeness/figure_completeness.md) 的「规则」节为唯一权威，本书不重复描述。
 
 ### 反例
 

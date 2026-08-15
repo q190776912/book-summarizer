@@ -167,6 +167,13 @@ def print_result(r):
             print(f"\nE-LAYER FIGURE SUSPICIOUS ({len(r['fig_invalid_warn'])}):")
             for l in r['fig_invalid_warn']:
                 print(l)
+        if r.get('fig_misattributed'):
+            problems += 1
+            print(f"\nE-LAYER FIGURE MISATTRIBUTED ({len(r['fig_misattributed'])}): "
+                  f"figure floats outside / inside the wrong item block (its caption "
+                  f"references an item but it is not inside that item's block):")
+            for l in r['fig_misattributed']:
+                print(l)
 
     # ===========================================================================
     # F-LAYER FORMAT: 统一格式校验总结。
@@ -451,6 +458,7 @@ def print_result(r):
               f"/ {len(d.get('continuity_sections', []))} D-layer section-gaps "
               f"/ {len(d.get('missing_sections', []))} D-layer missing tail sections "
               f"/ {len(r.get('fig_missing', []))} fig-missing / {len(r.get('fig_invalid', []))} fig-invalid "
+              f"/ {len(r.get('fig_misattributed', []))} fig-misattributed "
               f"/ F:{f_n} F-layer-format "
               f"/ {len([g for g in o_gaps if g.strip().startswith('x')])} o-layer-subitem "
               f"/ {len(p_exer)} p-layer-exer-block / {len(p_noise)} p-layer-noise "

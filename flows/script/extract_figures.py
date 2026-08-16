@@ -219,7 +219,7 @@ def load_chapter_map(out_dir):
                 def _se(ch):
                     return (ch.get("start") or ch.get("start_page"),
                             ch.get("end") or ch.get("end_page"))
-                return {ch["num"]: {"start": _se(ch)[0], "end": _se(ch)[1]}
+                return {(ch.get("num") or ch.get("ch")): {"start": _se(ch)[0], "end": _se(ch)[1]}
                         for ch in chapters}
             return {int(k): v for k, v in raw.items()}
         except Exception:

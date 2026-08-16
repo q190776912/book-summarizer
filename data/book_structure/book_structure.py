@@ -115,6 +115,11 @@ class StructureNode:
             return int(self.page_end)
         for c in self.sub_sec:
             c.recompute_pages()
+        if self.type == "chapter":
+            # 章级区间已按 chapter_map 权威值回填（build_chapter 末尾），不从子节点重算，
+            # 否则无编号条目 / 空 section 的章会被塌缩回 page_start（实测 Ch14: 377→377，
+            # 应为 375–398）。章节内部子区间仍由递归决定。书根（type=-1）继续在此聚合章区间。
+            return int(self.page_end)
         self.page_start = min(c.page_start for c in self.sub_sec)
         self.page_end = max(c.page_end for c in self.sub_sec)
         return int(self.page_end)

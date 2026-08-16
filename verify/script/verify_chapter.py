@@ -47,7 +47,7 @@ from page_json import PageJson
 import sys, os, json, glob, re
 
 
-from verify_config import ConfigLoader, ConfigError
+from verify_config import ConfigLoader, ConfigError, _norm_win
 from verify.script.base import VerifyManager
 from verify.script.register_all import LAYER_REGISTRY
 from verify.script.report import print_result
@@ -444,8 +444,8 @@ def _main_impl():
         if i + 2 >= len(pos):
             print("Usage: python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json]")
             sys.exit(2)
-        ext = pos[i + 1]
-        book_dir = pos[i + 2]
+        ext = _norm_win(pos[i + 1])
+        book_dir = _norm_win(pos[i + 2])
 
         # Apply --fix to all chapters before verification
         if '--fix' in sys.argv:
@@ -497,7 +497,7 @@ def _main_impl():
 
     ch = int(args[0]); start = int(args[1]); end = int(args[2])
     md = args[3]
-    ext = args[4]
+    ext = _norm_win(args[4])
     book_dir_single = os.path.dirname(ext) if ext else None
 
     if fix_requested:

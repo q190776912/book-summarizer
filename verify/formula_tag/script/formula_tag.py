@@ -105,6 +105,15 @@ _LETTER_LED_RE = re.compile(
     r'\s*[.·]\s*'
     r'\d+(?:[a-zA-Z])?'
     r'\s*[）)]')
+# Root fix (2026-08-16): numbered ITEM labels (Definition/Theorem/Remark/
+# Example/Proposition/Corollary/Exercise/Lemma N.N.N — including common OCR
+# misspellings "Defnition"/"Exercse") are NOT formula tags.  A bare (non-strong)
+# pattern hit that sits immediately after one of these keywords is the item
+# label, not a displayed equation; it must be skipped so it cannot pollute the
+# source formula set S and force a spurious `\tag` in the summary (false green).
+_ITEM_LABEL_RE = re.compile(
+    r'(definition|theorem|remark|example|proposition|corollary|'
+    r'exercise|lemma|defnition|exercse)\b', re.IGNORECASE)
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -121,6 +130,14 @@ _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3}
 # numbered heading line (the canonical convention carried over when the
 # formula-manifest subsystem's capability was merged into this Q layer).
 _HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:\.\d+)+)\b')
+
+# Figure-caption leader prefixes (Bug #22).  A text block whose stripped content
+# STARTS with one of these keywords is a figure caption, NOT a formula-bearing
+# line.  Captions may embed math (e.g. `|Φλ|`) and sub-labels like "Fig. 2.2A" /
+# "Fig. 2.3(a)"; the embedded `N.N` must NOT be mistaken for a numbered display
+# formula (which would fabricate a spurious source number and trigger a q-miss).
+# The leading-prefix heuristic is deliberately book-agnostic.
+_CAPTION_LEAD_RE = re.compile(r'^\s*(?:figure|fig\.?\b|图)', re.IGNORECASE)
 
 
 def build_formula_patterns(ncomp: int) -> List[str]:
@@ -268,6 +285,10 @@ class SourceFormulaIndex:
                 txt = block.get('text', '') if isinstance(block, dict) else ''
                 if not txt:
                     continue
+                # Bug #22: figure captions embed math + sub-labels that look
+                # like formula numbers ("Fig. 2.2A"); skip them entirely.
+                if self._is_figure_caption(txt):
+                    continue
                 y = None
                 if isinstance(block, dict):
                     poly = block.get('poly') or []
@@ -305,6 +326,10 @@ class SourceFormulaIndex:
             for block in data.get('text', []) or []:
                 txt = block.get('text', '') if isinstance(block, dict) else ''
                 if not txt:
+                    continue
+                # Bug #22: skip figure-caption lines (they embed math + sub-labels
+                # that look like formula numbers, e.g. "Fig. 2.2A").
+                if self._is_figure_caption(txt):
                     continue
                 # Advance the current section using the "section-start" signal:
                 # an entry number `C.S-1` (the first definition/theorem heading
@@ -454,6 +479,26 @@ class SourceFormulaIndex:
                 if need_gate and not self._is_strong_signal(span) and not has_math:
                     continue
                 raw = m.group(1)
+                # Root fix (2026-08-16): a figure sub-caption label such as
+                # "Figure 1.1.1b" / "Fig. 2.2A" matches the lettered-sub-equation
+                # pattern but is NOT a numbered formula.  Real formula sub-
+                # equations appear as a STANDALONE `(8.11a)` (no adjacent
+                # "Figure" keyword) and stay captured.  Skip the figure-anchored
+                # case so it cannot fabricate a spurious source number
+                # (false q-miss).  Book-agnostic: only fires when the figure
+                # keyword directly precedes the numbered sublabel.
+                if re.search(r'\bfig\w*\.?\s+\d+[.\-·,]\d+[.\-·,]\d+[a-zA-Z]', txt,
+                             re.IGNORECASE):
+                    continue
+                # Root fix (2026-08-16): a numbered ITEM label ("Definition
+                # 2.1.2.") is not a displayed-formula tag.  Bare (non-strong)
+                # hits immediately preceded by an item-label keyword are skipped
+                # so they do not pollute S (and thus do not force a spurious
+                # `\tag` in the summary — the "false green" the user forbids).
+                if not self._is_strong_signal(span):
+                    _pre = txt[max(0, m.start() - 24):m.start()]
+                    if _ITEM_LABEL_RE.search(_pre):
+                        continue
                 n = self.norm(raw)
                 if not n or n in self.ignore or not self._plausible(n):
                     continue
@@ -466,6 +511,17 @@ class SourceFormulaIndex:
                     self._source_text[n] = snippet[:60]
                 if pg is not None:
                     self._update_pos(n, pg, y)
+
+    @staticmethod
+    def _is_figure_caption(txt: str) -> bool:
+        """True if `txt` is a figure-caption line (starts with a figure-label
+        keyword).  Such lines must be excluded from formula-number extraction
+        (Bug #22): their embedded math (`|Φλ|`) trips the `_block_has_math`
+        gate and their sub-labels ("Fig. 2.2A") would otherwise be misread as a
+        numbered display formula, fabricating a spurious source number."""
+        if not txt:
+            return False
+        return bool(_CAPTION_LEAD_RE.match(txt))
 
     @staticmethod
     def _block_has_math(txt: str) -> bool:
@@ -648,6 +704,10 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
             for b in data.get('text', []) or []:
                 t = b.get('text', '') if isinstance(b, dict) else ''
                 if not t:
+                    continue
+                # Bug #22: figure captions embed math + sub-labels that look like
+                # formula numbers; exclude them so they don't skew the shape count.
+                if SourceFormulaIndex._is_figure_caption(t):
                     continue
                 ts = t.strip()
                 if _standalone.fullmatch(ts):

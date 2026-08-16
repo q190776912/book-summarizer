@@ -45,7 +45,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_EN, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,
+    ORDINAL_EN, ORDINAL_EN3, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,
 )
 
 # manual_overrides_chN：手写恢复条目（OCR 完全吃掉标题时，agent 凭书补写并登记）。
@@ -166,13 +166,28 @@ def _is_three(scheme):
     return scheme in ('cn3_lf', 'cn3_nf', 'en3_lf', 'en3_nf')
 
 
-def scan_raw_items(ext, ch, start, end):
+def scan_raw_items(ext, ch, start, end, primary_type=None):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的 book_structure.json 契约格式一致
     （三级 = "C.S-N"；两级中文 = "标签C.S"；两级英文 = "标签 C.S"），
     以便回填后能被 write-source / verify 原样消费。
+
+    EN3 书（ORDINAL_EN3，标签在前三段式 `Label C.S.N`）特别处理：条目标号
+    恒带显式标签词，而图号/公式号（`FIGURE 1.1.1` / `(1.1.1)` / 图版面
+    `1.1.1b`）是「无标签的三段数字」。因此禁用数字前置的三段裸号方案
+    `en3_nf` / `cn3_nf`（它们会误吞图版面 `1.1.1b` 为 `1.1-18` 伪项），
+    仅保留标签前置方案。这与 extract_items_en3 的「要求标签词」一致。
     """
+    patterns = _PATTERNS
+    if primary_type == ORDINAL_EN3:
+        # EN3 书条目恒带显式标签词（`Label C.S.N`），且编号按类型独立成序
+        # （Definition 2.1.1 与 Remark 2.1.1 并存）。禁用「数字前置三段裸号」方案
+        # en3_nf / cn3_nf（会误吞图版面 `1.1.1b`→`1.1-18` 伪项），仅保留标签前置
+        # 三段方案 en3_lf / cn3_lf（要求标签词，天然排除图号/公式号）。其余两级
+        # 方案也禁用——本书严格三级，避免把语篇里的 `Definition 2.1` 误判为两级项。
+        patterns = [(rgx, sch) for (rgx, sch) in _PATTERNS
+                    if sch in ('en3_lf', 'cn3_lf')]
     out = []
     for p in range(start, end + 1):
         fp = os.path.join(ext, f"page_{p:03d}.json")
@@ -186,7 +201,7 @@ def scan_raw_items(ext, ch, start, end):
             txt = blk.get("text", "").strip()
             if not txt:
                 continue
-            for rgx, scheme in _PATTERNS:
+            for rgx, scheme in patterns:
                 m = rgx.match(txt)
                 if not m:
                     continue
@@ -264,6 +279,21 @@ def _canon_key(primary_type, key):
     return tuple(int(x) for x in nums) if nums else None
 
 
+def _composite_key(primary_type, label, canon):
+    """把契约/源侧条目表示为可比较的键。
+
+    对「标签内含」方案（含显式类型词、且编号按类型独立成序的书：CN 三级 / 二级、
+    EN 二级 / 三级 EN3 等），同一 ``(C,S,N)`` 会跨类型出现（如 Definition 2.1.1 与
+    Remark 2.1.1 并存），若只按数字 canon 比对会把两者折叠成同一键，导致契约丢失
+    条目、集合差把真实漏项静默吞掉（假绿）。故此类方案用 ``(label_lower, canon)``
+    复合键，label 区分类型；无标签方案（纯数字三级等）仍用 canon 本身。
+    """
+    if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
+                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3):
+        return (str(label).lower(), canon)
+    return canon
+
+
 def load_contract(tree):
     """从结构树（StructureNode）提取 (tree, items: {canon: node}, sections: set(str 'C.S'))。
 
@@ -285,7 +315,8 @@ def load_contract(tree):
             return
         canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
         if canon is not None:
-            items[canon] = n
+            label = _TYPE_TO_LABEL.get(n.type, "uncat")
+            items[_composite_key(_PRIMARY, label, canon)] = n
     walk(tree)
     return tree, items, sections
 
@@ -525,7 +556,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
 
-    raw_items = [it for it in scan_raw_items(ext, ch, start, end)
+    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type)
                  if it["label"] not in _EXER_LABELS_RAW]
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
@@ -539,21 +570,26 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
         c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
         if c is None:
             continue
+        # 复合键（标签内含方案下含类型词）：同一 (C,S,N) 跨类型并存时，
+        # 去重集合与「契约命中」判断均按 (label, canon) 区分，避免把
+        # Definition 2.1.1 / Remark 2.1.1 折叠、静默吞掉真实漏项。
+        ck = _composite_key(cfg.primary_type, it["label"], c)
         is_ref = bool(_REF_RE.search(it.get("snippet", "")))
-        prev = best.get(c)
+        prev = best.get(ck)
         if prev is None:
-            best[c] = it
+            best[ck] = it
             continue
         prev_ref = bool(_REF_RE.search(prev.get("snippet", "")))
         if (not is_ref) and prev_ref:
-            best[c] = it
+            best[ck] = it
         elif (not is_ref) == (not prev_ref) and it["page"] < prev["page"]:
-            best[c] = it
+            best[ck] = it
 
     missing_items = []
-    for c, it in best.items():
-        if c in contract_items:
+    for ck, it in best.items():
+        if ck in contract_items:
             continue
+        c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
         garbled = not (len(c) >= 1 and all(isinstance(x, int) for x in c)
                        and (len(c) < 2 or c[1] <= 60) and (len(c) < 3 or c[2] <= 200))
         is_ref = bool(_REF_RE.search(it.get("snippet", "")))

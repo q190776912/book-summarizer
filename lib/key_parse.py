@@ -42,7 +42,8 @@ from lib.regexlib import (
 )
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM, ORDINAL_FRALEIGH,
-    ORDINAL_THREE_LEVEL, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS, _canon_label,
+    ORDINAL_EN3, ORDINAL_THREE_LEVEL, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
+    _canon_label,
 )
 
 # GM (Gelfand-Manin) section/entry separators: the shared wildcard set
@@ -124,6 +125,23 @@ ENTRY_RE_EN_C = re.compile(
     re.IGNORECASE)
 PROSE_RE_EN_C = re.compile(
     r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
+
+# EN3 (ORDINAL_EN3 / type 9): English three-level, LABEL-FIRST dots (Label C.S.N),
+# e.g. Lasota & Mackey《Chaos, Fractals, and Noise》.  Items are numbered three
+# deep (Remark 1.1.1 / Definition 2.3.4 / Theorem 3.2.1).  IDENTICAL in spirit to
+# ORDINAL_EN but with a THIRD numeric component.  The label is captured (group 1)
+# so keys_in_md can canonize it to the Chinese structure key (Remark -> 评注,
+# Example -> 例, Definition -> 定义, ...) aligning with book_structure.json.  The
+# bold `**` prefix naturally excludes FIGURE 1.1.1 / (1.1.1) figure/formula numbers
+# (no label word), avoiding key collisions with the item set.
+ENTRY_RE_EN3_C = re.compile(
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')'
+    r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
+PROSE_RE_EN3_C = re.compile(
+    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b'
+    r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 
 # --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
@@ -235,6 +253,12 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+            elif t == ORDINAL_EN3:
+                for m in ENTRY_RE_EN3_C.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}"
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_EN3_C.finditer(line):
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
             elif t == ORDINAL_FRALEIGH:
                 for m in FR_ENTRY_RE.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"

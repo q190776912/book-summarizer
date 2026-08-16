@@ -53,6 +53,7 @@
     # 全书：不传 <ch> 即扫全部章
     # 编号模式由 verify_config.json 的 ordinal 自动判定，无需 --scheme
 """
+import glob
 import os
 import sys
 from pathlib import Path
@@ -78,9 +79,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 import scan_skeleton
 from extract_items import extract_items, extract_items_two_level
 from extract_items_en import extract_items_en
+from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
-from verify_config import (ORDINAL_EN, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
+from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
                            ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
@@ -127,6 +129,13 @@ def _section_of_key(key, ordinal):
     """从带类型的条目 key 推导其所属『章节号』（用于挂到 section 节点）。
 
     返回 "C.S"（字符串）或 None（交由页码归并）。
+
+    注（Bug #20）：EN 两级编号下，key 形如 "Example 2.7" 会被派生为章节号 "2.7"。
+    真实存在的小节（§2.1–§2.6）由条目与小结共同确立；而 Example 2.7/2.8/2.9 这类
+    「仅示例、无对应小结标题」的派生号属于幽灵小节，由 ``build_chapter`` 借助章节
+    小结 markdown 的二级标题（``## §N.M``）统一剔除，而非在此短路返回 None——因为
+    短路会让所有 EN 条目失去派生小节能力，致使 scan_skeleton 两级模式本就漏扫的
+    真实小节（如 §2.1–§2.6）也一并丢失（回归）。故此处按通用规则返回 "C.S"。
     """
     if ordinal == ORDINAL_TWO_LEVEL:
         # 中文两级：key 形如 "定义1.1"（标签自有计数器），无章节分量 -> 页码归并
@@ -150,6 +159,40 @@ def _section_of_exer(num):
     if len(nums) >= 2:
         return f"{nums[0]}.{nums[1]}"
     return None
+
+
+def _real_subsections_from_markdown(ext, ch):
+    """读取章节小结 markdown（``<book_dir>/Chapter{ch}_*.md``），返回其二级标题
+    ``## §N.M`` 对应的小节号集合（如 ``{"2.1", "2.2", ...}``）；集合元素均为恰好
+    两段数字（``\\d+\\.\\d+``），不含 ``2.3.1`` 这类子子节。
+
+    返回语义（Bug #20 过滤用）：
+      · 返回集合  -> 小结 markdown 存在且含二级小节标题，启用「派生小节校验」；
+      · 返回 None  -> 无小结 markdown 或标题为空，不启用过滤，保持原行为
+                      （兼容尚未产出小结、或路径命名不同的书，避免误删）。
+
+    典型用法：EN 两级编号下，Example 2.7/2.8/2.9 会被错误派生为幽灵小节
+    §2.7/§2.8/§2.9；而小结 markdown 的真实小节只有 §2.1–§2.6，据此剔除幽灵小节，
+    使示例就近归并到正确的真实小节下。
+    """
+    book_dir = os.path.dirname(ext.rstrip("/")) or ext
+    cands = []
+    for pat in (f"Chapter{ch}_*.md", f"chapter{ch}_*.md"):
+        cands.extend(glob.glob(os.path.join(book_dir, pat)))
+    if not cands:
+        return None
+    nums = set()
+    sec_re = re.compile(r'^#{2}\s+.*?(\d+\.\d+)(?:\.\d+)*')
+    for path in cands:
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                for line in fh:
+                    m = sec_re.match(line.rstrip("\n"))
+                    if m and re.fullmatch(r'\d+\.\d+', m.group(1)):
+                        nums.add(m.group(1))
+        except OSError:
+            continue
+    return nums if nums else None
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +278,11 @@ def _chapter_title(cm, ch):
 # ---------------------------------------------------------------------------
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
-    if primary == ORDINAL_EN:
-        items = extract_items_en(ext, start, end, want_examples=True)
+    if primary in (ORDINAL_EN, ORDINAL_EN3):
+        if primary == ORDINAL_EN:
+            items = extract_items_en(ext, start, end, want_examples=True)
+        else:
+            items = extract_items_en3(ext, ch, start, end, want_examples=True)
         kept = []
         for it in items:
             lab, _, num = it["key"].partition(" ")
@@ -317,6 +363,19 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         return sec_pages.get(n, derived_sec_firstpage.get(n, start))
     all_sec_nums.sort(key=_sec_sort_key)
 
+    # Bug #20：用章节小结 markdown 的二级小节标题校验「条目派生小节」，剔除幽灵小节
+    # （如 EN 两级下 Example 2.7/2.8/2.9 错误派生的 §2.7/§2.8/§2.9）。仅当小结
+    # markdown 存在且含二级小节标题时才启用过滤；否则保持原行为（兼容无小结的书）。
+    real_sub = _real_subsections_from_markdown(ext, ch)
+    if real_sub is not None:
+        _kept_derived = {}
+        for n, pg in derived_sec_firstpage.items():
+            if n in sec_pages or n in real_sub:
+                _kept_derived[n] = pg
+        derived_sec_firstpage = _kept_derived
+        all_sec_nums = list(sec_pages.keys()) + [n for n in derived_sec_firstpage if n not in sec_pages]
+        all_sec_nums.sort(key=_sec_sort_key)
+
     sec_nodes = {}
     for n in all_sec_nums:
         title = sec_titles.get(n, "")
@@ -383,6 +442,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     chapter = _node(str(ch), "chapter", ch_name, start)
     chapter["sub_sec"] = sub
     _fix_pages(chapter)
+    # 章边界以 chapter_map 权威区间 (start, end) 为准，禁止被子节点递归覆盖。
+    # 修复：Ch8/14–18 等无编号条目（或 section 无子项）的章，_fix_pages 会把
+    # chapter.page_end 塌缩回 page_start（start），致 book_structure 章级页码失真
+    # （实测 Ch8: ps=215 pe=215，应为 215–252）。section/item 子区间仍由 _fix_pages
+    # 递归决定（取末代子孙页），此处仅锁定章级区间为 chapter_map 真值。
+    chapter["page_start"], chapter["page_end"] = start, end
     return chapter
 
 

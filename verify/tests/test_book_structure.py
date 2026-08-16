@@ -86,15 +86,21 @@ def test_book_save_load_roundtrip():
 
 def test_recompute_pages_recursive():
     bs = _make_book()
-    # reset container pages to force recompute from leaf pages
+    # 章级区间视为 chapter_map 权威值：recompute_pages 对 chapter 节点跳过重算，
+    # 不再从子节点派生（修复无编号条目 / 空 section 的章 page_end 塌缩回 page_start）。
+    # 这里章节点自带权威区间 (1,10)，故意比子节点派生值 (1,5) 更宽。
     bs.root.page_start = 0; bs.root.page_end = 0
     for ch in bs.root.sub_sec:
-        ch.page_start = 0; ch.page_end = 0
+        ch.page_start, ch.page_end = 1, 10  # 模拟 build_chapter 回填 chapter_map 权威值
     bs.save(tempfile.mkdtemp(prefix="bstest_"))  # triggers recompute
     ch = bs.find_chapter("1")
-    # leaf pages span 1..5 (def p1, exercise p2, theorem p5) -> chapter 1..5
-    assert ch.page_start == 1 and ch.page_end == 5, (ch.page_start, ch.page_end)
-    assert bs.root.page_start == 1 and bs.root.page_end == 5
+    # 章级保留权威区间 (1,10)，不被子节点重算覆盖（关键：≠ 子节点派生的 1..5）
+    assert ch.page_start == 1 and ch.page_end == 10, (ch.page_start, ch.page_end)
+    # section/item 子节点仍按末代子孙页递归重算：§1.2 仅含定理 p5 -> (5,5)
+    sec12 = next(s for s in ch.sub_sec if s.key == "1.2")
+    assert sec12.page_start == 5 and sec12.page_end == 5, (sec12.page_start, sec12.page_end)
+    # 书根聚合章区间
+    assert bs.root.page_start == 1 and bs.root.page_end == 10
 
 
 def test_replace_chapter_upsert():

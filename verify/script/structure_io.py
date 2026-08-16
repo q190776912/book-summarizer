@@ -27,7 +27,7 @@ from data.book_structure.book_structure import BookStructure
 
 from key_parse import keys_in_md, _first_num
 from verify.script.ordinal import int_to_roman
-from verify_config import ORDINAL_EN, ORDINAL_GM, ORDINAL_ROMAN
+from verify_config import ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN
 
 
 TYPE_TO_LABEL = {
@@ -72,7 +72,7 @@ def md_keys_for_chapter(md_file, cfg, ch):
             md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ch))
     else:
         entry_keys, all_keys = keys_in_md(md_file, groups=cfg.ordinal)
-    if cfg.primary_type == ORDINAL_EN:
+    if cfg.primary_type in (ORDINAL_EN, ORDINAL_EN3):
         entry_keys = {k for k in entry_keys if _first_num(k) == ch}
         all_keys = {k for k in all_keys if _first_num(k) == ch}
     return entry_keys, all_keys

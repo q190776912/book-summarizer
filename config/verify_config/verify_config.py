@@ -28,6 +28,7 @@ Config schema (see config/config_schema.md §配置字段说明):
 """
 import json
 import os
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set
 
@@ -61,18 +62,23 @@ ORDINAL_ROMAN = 5          # three-level with ROMAN chapter (e.g. I.2.3)
 ORDINAL_GM = 6             # two-level, bare per-section ordinals (no chapter)
 ORDINAL_FRALEIGH = 7       # two-level, section-based numbering (no chapter)
 ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
+ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.g. Lasota & Mackey
+                          #   《Chaos, Fractals, and Noise》. 条目形如 `Remark 1.1.1` /
+                          #   `Definition 2.3.4` / `Theorem 3.2.1`，编号三段 C.S.N；与 type 3
+                          #   (CN 三级虚线键 `C.S-N`) 不同：要求显式英文标签词，因此天然
+                          #   排除 `FIGURE 1.1.1` / `(1.1.1)` 等图号/公式号（避免键碰撞）。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 7, 8)
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 5: 'roman', 6: 'gm', 7: 'fraleigh',
+    4: 'en', 5: 'roman', 6: 'gm', 7: 'fraleigh', 8: 'vakil', 9: 'en3',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3, 9: 3}
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 7: 'fraleigh'}
+ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 7: 'fraleigh', 9: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 7: 'en', 8: 'en'}
+ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 7: 'en', 8: 'en', 9: 'en'}
 # Default figure-label prefixes (used when verify_config.json has no
 # `figure.labels`). Mirrors lib.figure_io.FIGURE_LABELS_DEFAULT — duplicated on
 # purpose to keep verify_config.py import-clean (no figure-module import).
@@ -111,6 +117,7 @@ SECTION_ROLE_CODES = (1, 2, 3, 4)
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 7: [1, 2], 8: [1, 2, 3],
+    9: [1, 2],
 }
 
 # --- formula sequence-label (Q-LAYER) config ------------------------------
@@ -476,6 +483,29 @@ class BookConfig:
         )
 
 
+def _norm_win(path):
+    """Normalize a filesystem path so native Windows Python can stat it.
+
+    Git-bash / MSYS style paths such as ``/d/study/foo`` (leading slash + a
+    single drive letter) are NOT understood by ``os.path.exists`` / ``open`` on
+    native Windows Python, which expects ``D:/study/foo``.  Convert the prefix
+    to a drive letter and return ``os.path.normpath(path)``.  Any other path
+    (POSIX absolute, relative, already drive-letter, non-Windows OS) is returned
+    unchanged (after normpath).  This is the single choke-point that fixes the
+    "未找到 verify_config.json" failure when a user passes a ``/x/...`` path on
+    Windows (Bug #21).
+    """
+    if not path:
+        return path
+    m = re.match(r'^/([a-zA-Z])/(.*)$', path)
+    if m:
+        path = f"{m.group(1).upper()}:/{m.group(2)}"
+    elif re.match(r'^/([a-zA-Z])$', path):
+        # bare drive root, no subpath ("/d")
+        path = f"{path[1].upper()}:/"
+    return os.path.normpath(path)
+
+
 class ConfigLoader:
     """Reads ALL per-book configuration from disk ONCE and exposes it.
 
@@ -492,8 +522,11 @@ class ConfigLoader:
 
     def __init__(self, extract_dir: str, book_dir: str,
                  extra_ignore: Optional[List[str]] = None):
-        self.extract_dir = extract_dir
-        self.book_dir = book_dir
+        # Bug #21: normalize git-bash style paths (/d/...) to Windows drive
+        # letters (D:/...) so os.path.exists / open work on native Windows
+        # Python.  Idempotent for already-normal paths.
+        self.extract_dir = _norm_win(extract_dir)
+        self.book_dir = _norm_win(book_dir)
         self.verify_config_path: Optional[str] = None
         self.verify_config_has_ordinal: bool = False
         self.book = self._load_verify_config()

@@ -189,6 +189,20 @@ def _collect_ignore(ext):
     return entries
 
 
+_EVIDENCE_TOKENS = ("VERIFIED-SPARSE", "已核实跳号", "源书真实跳号", "sparse numbering")
+
+
+def _is_evidenced_sparse(reason):
+    """ignore 理由是否明确记录了『已核实的源书稀疏跳号』证据。
+
+    仅当理由携带显式证据标记时，才把序列洞 ignore 降级为非阻断 ACCEPTED；
+    无证据的序列洞 ignore 仍判 SUSPECT 阻断——保住护栏（防止用 ignore 隐藏真实缺项）。
+    """
+    if not reason:
+        return False
+    return any(tok in reason for tok in _EVIDENCE_TOKENS)
+
+
 def run_audit(ext, chapter=None):
     """审计全书（或指定章）ignore 条目。返回结构化结果 dict。"""
     entries = _collect_ignore(ext)
@@ -206,6 +220,7 @@ def run_audit(ext, chapter=None):
     results = list(unparsed)
     suspect = len([u for u in unparsed if u["verdict"] == "SUSPECT"])
     safe = 0
+    accepted = 0
     for ch in chapters:
         ch_entries = by_ch.get(ch, [])
         if not ch_entries:
@@ -224,10 +239,16 @@ def run_audit(ext, chapter=None):
                 prev = (parsed[0], parsed[1], num - 1)
                 nxt = (parsed[0], parsed[1], num + 1)
                 if prev in canons and nxt in canons:
-                    rec.update(verdict="SUSPECT",
-                               why="连续编号序列洞（邻居 %s 与 %s 均在契约中）→ 应经 manual_overrides 补回，勿用 ignore 隐藏"
-                               % (f"{parsed[0]}.{parsed[1]}-{num-1}", f"{parsed[0]}.{parsed[1]}-{num+1}"))
-                    suspect += 1
+                    if _is_evidenced_sparse(reason):
+                        rec.update(verdict="ACCEPTED",
+                                   why="已核实的源书稀疏跳号（理由含 VERIFIED-SPARSE / 源书真实跳号 证据）→ "
+                                       "书源真实无此号，总结如实省略，非隐藏缺项，审计通过(非阻断)")
+                        accepted += 1
+                    else:
+                        rec.update(verdict="SUSPECT",
+                                   why="连续编号序列洞（邻居 %s 与 %s 均在契约中）→ 应经 manual_overrides 补回，勿用 ignore 隐藏"
+                                   % (f"{parsed[0]}.{parsed[1]}-{num-1}", f"{parsed[0]}.{parsed[1]}-{num+1}"))
+                        suspect += 1
                 elif noise:
                     rec.update(verdict="SUSPECT",
                                why="源侧存在『带标签但无编号』条头（OCR 丢号迹象）→ 建议 manual_overrides 恢复，而非 ignore 隐藏")
@@ -243,16 +264,18 @@ def run_audit(ext, chapter=None):
             results.append(rec)
 
     return {"entries": results, "suspect_count": suspect, "safe_count": safe,
-            "total": len(results)}
+            "accepted_count": accepted, "total": len(results)}
 
 
 def _print_report(rep):
     print("=" * 72)
-    print("ignore 条目审核报告  (SUSPECT=%d  SAFE=%d  TOTAL=%d)"
-          % (rep["suspect_count"], rep["safe_count"], rep["total"]))
+    print("ignore 条目审核报告  (SUSPECT=%d  ACCEPTED=%d  SAFE=%d  TOTAL=%d)"
+          % (rep["suspect_count"], rep.get("accepted_count", 0),
+             rep["safe_count"], rep["total"]))
     print("=" * 72)
     for r in rep["entries"]:
-        tag = {"SUSPECT": "⚠ 可疑", "SAFE": "✓ 安全", "SKIP": "· 跳过"}.get(r["verdict"], r["verdict"])
+        tag = {"SUSPECT": "⚠ 可疑", "SAFE": "✓ 安全", "ACCEPTED": "✓ 已核实",
+               "SKIP": "· 跳过"}.get(r["verdict"], r["verdict"])
         print("\n[%s] %s   (来源: %s)" % (tag, r.get("key", "?"), r.get("source", "?")))
         if r.get("reason"):
             print("   登记原因: %s" % r["reason"])
@@ -260,7 +283,11 @@ def _print_report(rep):
     print("\n" + "=" * 72)
     if rep["suspect_count"]:
         print("结论：存在 %d 条 SUSPECT，建议 agent 复核——优先用 manual_overrides 补回真实缺项，"
-              "确认确为稀疏编号 / 真噪声才保留 ignore 并补举证。" % rep["suspect_count"])
+              "确认确为稀疏编号 / 真噪声才保留 ignore 并补举证（理由须含 VERIFIED-SPARSE 证据）。"
+              % rep["suspect_count"])
+    elif rep.get("accepted_count", 0):
+        print("结论：无 SUSPECT；%d 条为已核实的源书稀疏跳号（带证据），非隐藏缺项，审计通过(非阻断)。"
+              % rep["accepted_count"])
     else:
         print("结论：未发现可疑 ignore 条目。")
 

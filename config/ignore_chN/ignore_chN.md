@@ -50,9 +50,11 @@
   ```bash
   python verify/script/audit_ignore.py <_extract> [--chapter N] [--json]
   ```
-  逐条核对 ignore 条目与契约（book_structure.json）及源（page_*.json）的关系，给出判定：
-  - **SUSPECT**（退出码 1）：ignore 了真实存在的条目 / 掩盖连续序列洞 / 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides` 补回；仅当确认确为稀疏编号才保留 ignore 并补举证。
-  - **SAFE**：契约无前后邻居、源侧无对应内容 → 疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
+    逐条核对 ignore 条目与契约（book_structure.json）及源（page_*.json）的关系，给出判定：
+    - **SUSPECT**（退出码 1）：ignore 了真实存在的条目 / 掩盖连续序列洞（前后皆契约正邻居且无证据）/ 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides_ch{N}.json` 补回真实缺项；仅当确认确为书本身稀疏编号才保留 ignore 并补举证。
+    - **SAFE**：契约无前后邻居、源侧无对应内容 → 疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
+    - 🟢 **ACCEPTED**（非阻断）：序列洞型 ignore（`prev`/`nxt` 均在契约中），但**理由含显式证据标记**（`VERIFIED-SPARSE` / `源书真实跳号` / `已核实跳号` / `sparse numbering`）→ 判为「书源真实无此号，总结如实省略，非隐藏缺项」。该 verdict 不计入 SUSPECT、不抬高退出码（`audit_ignore.py` 退出码仍为 0，校验可 PASS），仅作非阻断记录。**无证据标记的序列洞 ignore 一律仍判 SUSPECT**——证据标记是本例外的唯一开关，防误用护栏不降级。
+    - 📌 **证据标记约定（强制）**：要让序列洞 ignore 走 ACCEPTED 而非 SUSPECT，其理由字符串**必须包含**上述四个标记之一（推荐开头写 `VERIFIED-SPARSE ...`）。原因须明确指出该节在源书中的真实编号断点（如「§4.9 实际编号 4.9-1、4.9-2，随后直接跳到 4.9-4，page_280 末为 4.9-2、page_281 起为 4.9-4 Definition」），使后续审计 / 人工复核可一键确认。
 - **B 层护栏**：`item_numbering_integrity` 的 `emit` 已加护栏——`ignore` 仅当被忽略编号在 .md 中**真实存在**（现令牌头）时才抑制；若被忽略的是序列洞（编号不存在），不再静默放行，而发出 `[IGNORE-SUSPECT]` 警告交由 agent 复核。
 - **写书前校验**：`check_structure_completeness.py` 会在报告中附 `ignore_audit` 字段（SUSPECT 数），CLI 输出 `IGNORE-AUDIT(suspect=N)`，便于写书前发现误用。
 - **🔴 B 层（D/B 结构完整性域）校验流程强制最后一步**：本审计只作用于**编号 ignore**（B 层 `item_numbering_integrity` 消费集合），是 D 层（§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，**不是对所有 17 层的全局末步**——Q 层 `formula.ignore`、E 层 `ignore_fig` 各有独立命名空间，不在此审计范围。`verify_chapter.py`（单章模式审该章、`--all` 模式审全书）已在 B 层收尾**自动执行本审计**，且仅当存在编号 ignore 时才生效（无编号 ignore 静默跳过）；出现 SUSPECT 时整体退出码非 0，校验不得判 PASS。即"有编号 ignore 的 D/B 校验流程就必须 agent 审计"不是建议而是流程硬步骤——登记 / 修改编号 ignore 后跑 `verify_chapter.py`，收尾的 `[IGNORE-AUDIT]` 报告即本步证据；SUSPECT 须先经 `manual_overrides` 补回或补举证再重验。

@@ -44,7 +44,12 @@
    ```bash
    python verify/script/audit_ignore.py <extract_dir> [--chapter N] [--json]
    ```
-   - 判定：**SUSPECT**（退出码 1）= ignore 了真实存在的条目 / 掩盖连续序列洞 / 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides_ch{N}.json` 补回真实缺项；仅当确认确为书本身稀疏编号才保留 ignore 并补举证。**SAFE** = 无邻居、无对应源内容，疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
+   - 判定（三种 verdict）：
+     - **SUSPECT**（退出码 1）= ignore 了真实存在的条目 / 掩盖连续序列洞（前后都是契约正邻居 `prev`、`nxt`，却无证据塞了 ignore）/ 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides_ch{N}.json` 补回真实缺项；仅当确认确为书本身稀疏编号才保留 ignore 并补举证。
+     - **SAFE** = 无邻居、无对应源内容，疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
+     - 🟢 **ACCEPTED**（非阻断，审计通过）= 序列洞型 ignore（`prev`/`nxt` 均在契约中），但**理由含显式证据标记**（`VERIFIED-SPARSE` / `源书真实跳号` / `已核实跳号` / `sparse numbering` 之一）→ 判定为「书源真实无此号，总结如实省略，非隐藏缺项」。该 verdict **不计入 SUSPECT、不抬高退出码**（`audit_ignore.py` 退出码仍为 0，校验可 PASS），仅作非阻断记录；但仅当理由携带上述证据标记时才成立——**无证据标记的序列洞 ignore 一律仍判 SUSPECT**，防误用护栏不降级。
+   - 🔧 **B 层稀疏跳号 ignore 的匹配**：`item_numbering_integrity` 的 `emit(n)` 已对 § 内按标签分组的条目**额外匹配裸键 `C.S-N` 形式的 ignore**（如 `4.9-3`）——无论该节按 `Definition`/`Theorem` 等何种标签分组，裸键 ignore 都能命中抑制。这是让「书源真实稀疏跳号」类 ignore（如 §4.9 实际为 4.9-1、4.9-2 → 4.9-4）能正确生效、同时仍走审计 ACCEPTED 例外的关键。
+   - 🔧 **B 层顺序校验（ORDERING，始终 BLOCKING）**：同一「节前缀」内按阅读顺序去重后的编号序列必须单调不减；若出现「大号在前、小号在后」（如 2.6-8 掉到 2.6-11 之后、§2.7 洗牌 `[9,1,2,3,6,7,8,5,10,11,4]`）即判 `WARN (BLOCKING)`，**不随 `strict` 降级**（"靠后的号跑到前面之后"属确定性错误，必须修）。该检查只比对 `.md` 自身编号、与契约 `page_start` 无关——既绕开契约被习题/章首页污染的问题，也暴露了 Ch2 §2.6/§2.7 的真实错序。去重排除章首摘要/TOC 与证明标题 `X.Y-Z 的证明`，避免 Ch4 CN 章首"四块基石"列表造成的伪回归。详见 [item_numbering_integrity](item_numbering_integrity/item_numbering_integrity.md) 的「顺序校验」小节。
    - **`verify_chapter.py` 已自动在 B 层收尾执行此步**（单章模式审该章、`--all` 模式审全书）；出现 SUSPECT 时整体退出码非 0，校验不得判 PASS，须先复核 / 补 `manual_overrides` 再重验。
    - 写书前校验 `check_structure_completeness.py`（D/B 预检）同样在报告中附 `ignore_audit` 字段（SUSPECT 数），CLI 输出 `IGNORE-AUDIT(suspect=N)`。
 
@@ -53,7 +58,7 @@
   - 原因：书级配置需待全书编号形态定型后，D 层 `section_depths` / Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；B–Q 若干判定需整章 / 整书上下文。
 - **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
-- **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。
+- **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。（🟢 例外：带 `VERIFIED-SPARSE` 等显式证据标记的序列洞 ignore 判 `ACCEPTED`，非阻断、不阻止 PASS——因其是书源真实跳号而非隐藏缺项；无证据标记则仍 SUSPECT。）
 
 ## 出口条件
 - 出口：`verify/script/verify_chapter.py --all` 对**该语言全部章节 `exit 0`**（`verify PASS + KaTeX OK`），且**收尾的 B 层编号 ignore agent 审计无 SUSPECT**（存在编号 ignore 条目时 `audit_ignore.py` 退出码须为 0；SUSPECT 即未通过）。

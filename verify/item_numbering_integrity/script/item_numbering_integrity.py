@@ -53,6 +53,10 @@ _TAIL_GAP_CAP = 5
 _SPAN_RE = re.compile(r'\*\*([^\n]*?)\*\*')
 _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)')
 
+# 证明标题（"X.Y-Z 的证明" / "X.Y-Z Proof."）是证明小节，不是被定义的条目，
+# 不得计入条目序列（既会污染缺号 present 集合，也会在顺序校验里制造伪回归）。
+_PROOF_RE = re.compile(r'^(证明|的证明|proof|beweis|demonstration|dem\b)', re.IGNORECASE)
+
 # The inter-component separator is now SEP_TIGHT, defined ONCE in lib.regexlib
 # and reused everywhere so every book's punctuation variant normalizes the same
 # way.  Different books use '.' or '-' (or fullwidth variants) interchangeably
@@ -273,6 +277,9 @@ def _parse_entry(inner, levels, lang=None):
     if m:
         numpath = m.group(1)
         tail = m.group(2).strip()
+        # 证明标题「X.Y-Z 的证明 / Proof.」→ 非定义条头，直接排除
+        if _PROOF_RE.match(tail):
+            return None
         # 类型词可能在专名之后（「2.5-4 黎斯引理」「5.1-2 巴拿赫不动点定理」）；
         # 在余串里搜索首个类型词当 label，边界检查放到类型词之后。
         lm = re.search(r'(?:' + _ENTRY_LABELS + r')', tail)
@@ -493,6 +500,7 @@ def _md_gap_blocking(ctx):
         entries.append((gk, item_num, key, label, prefix_str))
 
     groups = defaultdict(list)
+    section_order = defaultdict(list)   # prefix_str -> [item_num,...] 阅读顺序（跨类型，用于顺序错乱检测）
     present_md = set()
     for gk, num, key, label, prefix_str in entries:
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
@@ -501,6 +509,9 @@ def _md_gap_blocking(ctx):
         # per-type sub-sequences -> false "缺号" (the original bug).
         groups[gk].append((num, key))
         present_md.add(key)
+        # 阅读顺序记录（无论 per-type/combined，同一节前缀 §C.S 的编号按出现先后入列，
+        # 用于跨类型顺序错乱检测：例如 2.6-8 这种 Example 掉到 2.6-11 这种 Lemma 之后）。
+        section_order[prefix_str].append(num)
 
     ignore = ctx.ignore
     # Normalize known_gaps separators (dot <-> dash) so user-written dot form
@@ -556,7 +567,8 @@ def _md_gap_blocking(ctx):
                 token_norm = f"{_norm_label(lab)} {full}" if lab and lab != 'uncat' else full
                 if (_norm_sep(token) in known or _norm_sep(token_norm) in known
                         or _norm_sep(f"{gk}:{n}") in known
-                        or f"{gk}:{n}" in ignore):
+                        or f"{gk}:{n}" in ignore
+                        or _norm_sep(full) in known or full in ignore):
                     matched = True
                     break
             if matched:
@@ -588,6 +600,30 @@ def _md_gap_blocking(ctx):
             for n in range(1, first):
                 if n not in present:
                     emit(n)
+
+    # --- 顺序校验 (ORDERING, 始终 BLOCKING) ---
+    # 同「节前缀(prefix_str)」内，阅读顺序中的编号必须单调不减；若某编号出现在
+    # 更大编号之后（如 §2.6 阅读顺序 …7,9,10,11,8），即为「编号错位」（8 号掉到
+    # 后面），属确定性错误：只依赖 markdown 自身编号序列，与契约 page_start 无关
+    # （即使契约被习题/交叉引用污染也会命中，因为只比对 .md 自身的编号顺序）。
+    # 此类"靠后的号跑到前面之后"必须硬阻断、不得 PASS（用户明确要求：不能要）。
+    # 去重：同编号只保留最后一次"真实定义"出现，排除章首目录/TOC 与证明标题
+    # "X.Y-Z 的证明"（已被 _parse_entry 过滤）造成的伪回归。
+    for pref, seq in sorted(section_order.items()):
+        if len(seq) < 2:
+            continue
+        last_pos = {}
+        for i, num in enumerate(seq):
+            last_pos[num] = i
+        ordered = [num for num, _ in sorted(last_pos.items(), key=lambda kv: kv[1])]
+        for i in range(1, len(ordered)):
+            if ordered[i] < ordered[i - 1]:
+                blocking.append(
+                    f"  WARN (BLOCKING): 顺序错乱 @{pref or '<章级>'}: 编号 {ordered[i]} "
+                    f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
+                    f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
+                    f"将 {pref}-{ordered[i]} 移到正确位置。")
+                break  # 每节只报一次，避免洪水
 
     # 尾部校验：.md 最大号 vs 提取契约（源）同组最大号（非阻断）
     tail_warnings = _md_tail_warnings(ctx, cfg, groups)

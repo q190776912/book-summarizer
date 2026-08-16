@@ -86,10 +86,19 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     # 0b. Citation words at the END of the PREVIOUS OCR block. OCR often splits a
     #     sentence such as "因此，据" | "9.5-1知P是一个投影" into two blocks, so the
     #     cite word ("据") sits at the tail of the prior block, one block away.
+    #     但若当前编号是「独立真条头」（位于块首且其后紧跟定义陈述，而非引用语言），
+    #     则前块尾的引用词只是上一句的完整结尾（如 "…Cf. 2.6-2."），不应误杀本块
+    #     的真定义（2.7-4 "Zero operator" 因此被误删）。故仅当当前匹配本身是交叉
+    #     引用（编号在块中部，或编号后紧跟引用语言）时才跳过。
     if i > 0:
         prev_tail = all_blocks[i-1][2][-15:].strip()
         if cite_re_tail.search(prev_tail):
-            return
+            _after0b = txt[m.end():m.end() + 30].lstrip()
+            _is_xref = (m.start() > 0) or re.match(
+                r'(states?|shows?|proves?|implies?|follows?|知|见|据|由|根据|参考|参见)\b',
+                _after0b, re.IGNORECASE)
+            if _is_xref:
+                return
 
     # 0c. Parenthesized number -> cross-reference, NOT an item definition.
     #     A genuine Kreyszig heading never wraps its own number in parentheses
@@ -147,7 +156,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     #     definition — skip it. This prevents phantom items and the
     #     mis-classification they cause when nearby prose mentions a different
     #     type word (e.g. "Baire's theorem" flipping 4.7-1 to theorem).
-    if m.start() > 6:
+    if m.start() > 0:
         _pre = txt[max(0, m.start() - 15):m.start()]
         _near = txt[max(0, m.start() - 12):m.end() + 12]
         _has_type = re.search(
@@ -158,7 +167,32 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
                           _pre, re.IGNORECASE)):
             return
 
+    # 3c. 编号紧跟「引用动词 / 引用结构」→ 交叉引用（引用他人结论），不是本条目定义。
+    #     仅在编号紧后方（去掉前导空白/标点后）的「起始位置」出现才算，避免误伤真
+    #     定义（"2.6-6 Multiplication by t" 里的 "by t" 小写，不匹配）。
+    #     真条头编号后是定义陈述（术语 / "(…)"），不会以 states/shows/we have/see/
+    #     cf./below/above/as in 或 "by <大写专有名词>"（如 "by Banach"）开头。引用读作
+    #     "Theorem 2.7-9 states that…" / "(cf. 2.7-9)" / "as in 2.7-9" /
+    #     "4.7-3 … by Banach and Steinhaus"。这些绝不能成为条目，否则会把交叉引用
+    #     页（章首页）当成定义页，污染 page_start 与总结内容。
+    #     「by [A-Z]」必须大小写敏感（(?-i:)），否则 "by t"（乘法 by t）会被误判。
+    _after_ref = txt[m.end():m.end() + 30].lstrip()
+    if re.match(
+        r'(states?|shows?|proves?|implies?|follows?)\s+that'
+        r'|we\s+have'
+        r'|see\s+(also\s+)?'
+        r'|cf\.|below|above'
+        r'|as\s+in'
+        r'|by\s+(?-i:[A-Z])', _after_ref, re.IGNORECASE):
+        return
+
     label = 'uncat'
+    # 编号是否位于「块首附近」——这是「真条头」的位置特征。交叉引用/习题里的
+    # 编号通常埋在块中部（如 "9. In 2.6-8, write…" / "Theorem 2.7-9 states…"），
+    # m.start() 明显 > 1。下面只允许真条头位置的匹配继承标签，阻断交叉引用
+    # 借相邻块/章节标签「伪装」成条目并去重覆盖真定义（2.6-8 锚到习题页、
+    # 2.7-9 锚到交叉引用页 的根因）。
+    at_head = m.start() <= 1
     ctx_self = (before[-90:] if len(before) > 90 else before) + after[:160]
     # A type word IMMEDIATELY adjacent to the number is the item's own heading
     # label and outranks type words mentioned later in the same block as
@@ -178,23 +212,24 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
         if lm:
             label = _label_from_raw(lm.group())
 
-    if label == 'uncat' and active_section_label:
+    if label == 'uncat' and active_section_label and at_head:
         label = active_section_label
 
     if label == 'uncat':
         if i > 0:
             prev_txt = all_blocks[i-1][2]
             prev_label = label_re.search(prev_txt[-120:])
-            if prev_label:
+            if prev_label and at_head:
                 label = _label_from_raw(prev_label.group())
         if label == 'uncat' and i < len(all_blocks) - 1:
             next_txt = all_blocks[i+1][2]
             next_label = label_re.search(next_txt[:120])
-            if next_label:
+            if next_label and at_head:
                 label = _label_from_raw(next_label.group())
 
     text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
-    raw_matches.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+    raw_matches.append({'key': key, 'page': p, 'label': label,
+                        'text': text_preview, 'mstart': m.start()})
 
 # ---------------------------------------------------------------------------
 # TWO-LEVEL numbering scheme (e.g. 周民强《实变函数论》）
@@ -471,13 +506,76 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
             raw_matches.append({'key': key, 'page': p, 'label': '练习',
                                 'text': txt[max(0, m.start() - 5):m.end() + 80].replace('\n', ' ')})
 
-    # ---- Dedup: prefer non-裸 label ----
-    seen = {}
+    # ---- Dedup: prefer the EARLIEST GENUINE heading -------------------------
+    # A single key can be mentioned on several pages: its REAL definition page
+    # (a genuine item heading) plus various references/usages (forward refs like
+    # "Example 1.5-3 in the next section", chapter-summary listings on the
+    # chapter-opening page, "this theorem states that…", "(below)", etc.).
+    # The page_start we emit must point at the definition page, because
+    # write-source fetches that page's text to summarise the item — a wrong
+    # anchor silently poisons the summary content (hard to detect later).
+    #
+    # The old rule ("first occurrence, with uncat → non-uncat override") let a
+    # reference that happened to inherit a label from a neighbour block override
+    # the genuine (uncat) definition. We now rank occurrences by GENUINENESS:
+    #   · genuine  = number at block head (or followed by its own type word /
+    #                paren title) AND not a reference context
+    #   · reference = number followed by a period (sentence fragment), "(below)",
+    #                "in the next section", "this theorem", reference verbs
+    #                (states/shows/proves/implies/follows that, we have, see,
+    #                 cf., below/above, as in, by <Capitalised>), …
+    # Among genuine occurrences pick the EARLIEST (definition page); if none is
+    # genuine, fall back to the earliest occurrence (no regression for keys whose
+    # only mention is a reference).
+    def _after_of(it):
+        key = it['key']
+        mstart = it.get('mstart', 0)
+        ko = 5 if mstart >= 5 else mstart   # offset of key start within text slice
+        return it['text'][ko + len(key):]
+
+    _REF_AFTER_NEG = re.compile(
+        r'^\.'                                              # 1. period right after number → sentence fragment
+        r'|\(below\)|\(above\)'                             # 2. (below)/(above)
+        r'|in the next|in the following|in §|in sec'          # 3. forward/backward section ref
+        r'|this\s+(?:theorem|lemma|space|definition|result|operator)\b'  # 4. "this X"
+        r'|\b(?:states?|shows?|proves?|implies?|follows?)\s+that'        # 5a. 3c verbs + that
+        r'|\bwe\s+have\b'                                   # 5b
+        r'|\bsee\s+(?:also\s+)?'                            # 5c
+        r'|cf\.|\b(?:below|above)\b'                        # 5d
+        r'|\bas\s+in\b'                                     # 5e
+        r'|\bby\s+(?-i:[A-Z])',                             # 5f. case-sensitive "by Banach"
+        re.IGNORECASE)
+    _TYPE_POS = re.compile(
+        r'^(?:Definition|Theorem|Lemma|Corollary|Proposition|Example)\b',
+        re.IGNORECASE)
+
+    def _is_genuine(it):
+        mstart = it.get('mstart', 0)
+        at_head = mstart <= 1
+        after = _after_of(it).lstrip()
+        if _REF_AFTER_NEG.search(after):
+            return False
+        positive = (at_head
+                    or bool(_TYPE_POS.match(after))
+                    or (after.startswith('(')
+                        and '(below)' not in after[:20]
+                        and '(above)' not in after[:20]))
+        return positive
+
+    seen = {}            # key -> chosen item
+    seen_genuine = {}    # key -> whether chosen item is genuine
     for it in raw_matches:
-        if it['key'] not in seen:
-            seen[it['key']] = it
-        elif seen[it['key']]['label'] == 'uncat' and it['label'] != 'uncat':
-            seen[it['key']] = it
+        k = it['key']
+        g = _is_genuine(it)
+        if k not in seen:
+            seen[k] = it
+            seen_genuine[k] = g
+        elif not seen_genuine[k] and g:
+            # upgrade: a later genuine definition displaces an earlier
+            # non-genuine (reference) occurrence
+            seen[k] = it
+            seen_genuine[k] = True
+        # if both genuine or both non-genuine, keep the earlier one (already set)
 
     items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
 

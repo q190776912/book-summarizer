@@ -406,60 +406,86 @@ for _canon, _forms in LABEL_FORMS:
     for _f in _forms:
         _FORM_CANON[_f.lower()] = _canon
 
-# Theorem-ish MAIN types universally share ONE counter in a math book (and
-# that is what verify expects — the primary group).  Only Remark/Exercise
-# families are decided per-book by actual counter-sharing.
-MAIN_CANONS = {"Definition", "Theorem", "Lemma", "Corollary",
-               "Proposition", "Example", "Axiom"}
-
-
 def _group_headings_by_counter(headings, depth):
     """Group detected ``(canon_idx, raw_form, comps)`` headings into counters.
 
-    Convention (universal for math books, and what ``verify`` expects): the
-    theorem-ish MAIN types (Definition/Theorem/Lemma/Corollary/Proposition/
-    Example/Axiom) share ONE counter -> they go in the primary group together.
-    Remark/评注/注 and Exercise/习题/练习/问题/Problem are decided PER BOOK by
-    whether they ascend together with the main counter (share it) or run on
-    their OWN independent sequence (get a separate group).  This is what the
-    ``ordinal`` ARRAY is for: labels that ascend together -> one object;
-    separate counters -> a NEW object.
+    Every detected entry-type family (Definition/Theorem/Lemma/Corollary/
+    Proposition/Example/Axiom/Remark/Exercise/...) is clustered by whether it
+    ACTUALLY shares ONE ascending counter with a reference family — NOT by a
+    hard-coded "main types always merge" rule.  Two families that never re-use
+    a number nor reset to 1 inside a shared scope window share a counter; a
+    family that resets to 1 (or duplicates a number) inside a running window
+    runs on its OWN independent sequence and gets a separate group.  This is
+    what the ``ordinal`` ARRAY is for: labels that ascend together -> one
+    object; separate counters -> a NEW object.
 
     A family is given its OWN group (the safe, conservative choice) when it
-    never co-occurs with the main counter in a comparable scope window — e.g.
-    its numbers use a different depth — because separate never manufactures
-    false gaps, whereas a wrong merge would.
+    never co-occurs with the reference counter in a comparable scope window,
+    because separate never manufactures false gaps, whereas a wrong merge
+    would.
     """
     from collections import defaultdict
     if not headings:
         return [["uncat"]]
     canon_of = lambda f: _FORM_CANON.get(f.lower())
-    present = sorted({f for (ci, f, c) in headings})
+    by_canon = defaultdict(lambda: {"forms": set(), "comps": []})
+    for (ci, f, c) in headings:
+        canon = canon_of(f)
+        if canon is None:
+            continue
+        by_canon[canon]["forms"].add(f)
+        by_canon[canon]["comps"].append(c)
+    if not by_canon:
+        return [["uncat"]]
+
     order = {f: (i, j) for i, (_, forms) in enumerate(LABEL_FORMS)
              for j, f in enumerate(forms)}
 
     def sort_forms(fs):
         return sorted(fs, key=lambda f: order.get(f, (999, 999)))
 
-    main_forms = sort_forms(f for f in present if canon_of(f) in MAIN_CANONS)
-    remark_forms = sort_forms(f for f in present if canon_of(f) == "Remark")
-    exercise_forms = sort_forms(f for f in present if canon_of(f) == "Exercise")
+    def _counter_min_max(comps):
+        # (min, max) of the per-item counter numbers across all scope windows.
+        nums = [c[-1] for c in comps if len(c) >= 1]
+        return (min(nums), max(nums)) if nums else (0, 0)
 
-    main_comps = [c for (ci, f, c) in headings if canon_of(f) in MAIN_CANONS]
-    primary = list(main_forms)
+    # Reference counter selection.
+    # Default to the family with the MOST detected headings (the previous
+    # behaviour).  That choice is correct for the common case and, crucially,
+    # for books where every family is independently numbered (each resets to 1)
+    # such as Koopman -> 8 separate single-type groups.  HOWEVER, when that
+    # most-frequent family does NOT start at 1 it cannot be the TRUE primary of
+    # a shared ascending chain: a sibling that legitimately resets to 1
+    # (Definition 1.1 in a Definition 1.1 / Theorem 1.2 / Lemma 1.3 chain) would
+    # then be mis-split into its own group.  In that case we fall back to the
+    # family that BEGINS at 1 (the true primary) and has the LARGEST span
+    # (largest max number) -- the full 1..N primary, not a mid-chain fragment.
+    # Independent parallel counters also start at 1, but the true primary spans
+    # the full range, so the largest max among from-1 families selects it.
+    # We only switch away from "most headings" when that reference itself fails
+    # to start at 1: unconditionally preferring a from-1 family would change the
+    # reference for normally-numbered books too, which (because
+    # _shares_main_counter is reference-dependent) triggers spurious merges such
+    # as Koopman's Corollary/Problem.  The hard fallback (no family starts at 1)
+    # keeps the most-headings choice.
+    ref_canon = max(by_canon, key=lambda cc: len(by_canon[cc]["comps"]))
+    if _counter_min_max(by_canon[ref_canon]["comps"])[0] != 1:
+        starts_at_1 = [cc for cc in by_canon
+                       if _counter_min_max(by_canon[cc]["comps"])[0] == 1]
+        if starts_at_1:
+            ref_canon = max(starts_at_1,
+                            key=lambda cc: _counter_min_max(by_canon[cc]["comps"])[1])
+    ref_comps = by_canon[ref_canon]["comps"]
+    primary = sort_forms(by_canon[ref_canon]["forms"])
     groups = []
-    if remark_forms:
-        rcomps = [c for (ci, f, c) in headings if canon_of(f) == "Remark"]
-        if _shares_main_counter(rcomps, main_comps):
-            primary += remark_forms
+    for canon, data in by_canon.items():
+        if canon == ref_canon:
+            continue
+        forms = sort_forms(data["forms"])
+        if _shares_main_counter(data["comps"], ref_comps):
+            primary += forms
         else:
-            groups.append(list(remark_forms))
-    if exercise_forms:
-        ecomps = [c for (ci, f, c) in headings if canon_of(f) == "Exercise"]
-        if _shares_main_counter(ecomps, main_comps):
-            primary += exercise_forms
-        else:
-            groups.append(list(exercise_forms))
+            groups.append(forms)
     groups.insert(0, primary)
     return groups
 

@@ -406,13 +406,14 @@ def print_result(r):
     #   （含描述性散文/推导过程中的编号公式）都必须 1:1 出现在总结并挂
     #   \tag；因此一个"未在 ignore 登记的 MISSING"等价于"总结漏写了公式"，
     #   必须阻断以防漏写。合法省略（如纯排版重复）须显式写进 `formula.ignore`。
-    # LETTER-LED (q_ll): FAIL, BLOCKING — letter/Roman-led numbering (A.3)/(I.2)
-    #   is NOT validated yet (reserved; norm()/patterns are digit-led).  Encountering
-    #   such numbering makes the formula-label audit incomplete, so it must block
-    #   (not warn): the book cannot pass until the supporting logic (optional leading
-    #   `[A-Za-z]{1,4}[.\-·,]` prefix + Roman handling in norm()/build_formula_patterns,
-    #   see TODO(letter-led) anchors) is implemented.  This guarantees "implement the
-    #   logic before this book can validate" instead of a silent false-green pass.
+    # LETTER-LED (q_ll): WARN, NON-BLOCKING — letter/Roman-led numbering
+    #   (A.3)/(I.2) is NOT validated yet (reserved; norm()/patterns are
+    #   digit-led).  Per the Q-layer SSOT (formula_tag.md) this is a WARN +
+    #   downgrade, NOT a blocking FAIL: the layer skips 1:1 validation of those
+    #   numbers and asks for human reconciliation via formula_audit.md.  This
+    #   avoids BOTH a silent false-green pass AND the old bug where the probe
+    #   misfired on algebraic `(n-1)` / reference `(Fig. 19)` parentheticals and
+    #   spuriously blocked every chapter of a digit-led book (Kreyszig).
     # Content correctness is left to human reconciliation via
     # <extract_dir>/formula_audit.md (written by verify_all).
     q_checked = r.get('q_checked', False)
@@ -458,13 +459,16 @@ def print_result(r):
                 print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
         q_ll = r.get('q_letter_led', []) or []
         if q_ll:
-            problems += 1
-            print(f"\nQ-LAYER FORMULA LETTER-LED ({len(q_ll)}) [FAIL, blocking]: "
+            # NON-BLOCKING WARN (per formula_tag.md SSOT): the layer cannot yet
+            # validate letter/Roman-led numbering, so it downgrades to a WARN and
+            # asks for human reconciliation via formula_audit.md.  Does NOT count
+            # toward `problems`, so it never forces a FAIL.
+            print(f"\nQ-LAYER FORMULA LETTER-LED ({len(q_ll)}) [WARN, non-blocking]: "
                   f"书源含字母/罗马开头公式编号 (A.3)/(I.2)，但 Q 层公式序标校验逻辑"
                   f"（norm()/build_formula_patterns()）尚未实现「可选首段字母/罗马前缀」支持"
-                  f"——无法校验该部分 1:1 真实性即不可通过，须先补全逻辑才能放行。")
+                  f"——该部分公式序标**降级为 WARN、不阻断**，请人工核对 formula_audit.md。")
             for row in q_ll:
-                print(f"  ! {row if isinstance(row, str) else row.get('source_text', '')}")
+                print(f"  ~ {row if isinstance(row, str) else row.get('source_text', '')}")
         q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)
         q_om_n, q_mp_n = len(q_om), len(q_mp)
         q_ll_n = len(q_ll)

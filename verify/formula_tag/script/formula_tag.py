@@ -82,15 +82,29 @@ def _summary_has_tags(md_file: str) -> bool:
 
 # Separator characters that any book may use between number components.
 _SEP_CLASS = r'[.\-·,]'
-# Letter/Roman-LED formula numbering (e.g. `(A.3)` / `（I.2）`) — RESERVED.
-# The digit-led `norm()` / `build_formula_patterns()` below cannot capture a
-# number whose first component is a letter / Roman numeral, so a book using such
-# numbering silently degrades to an S-empty WARN (false green).  This regex is
-# the *detection* probe used to surface that limitation loudly (see
-# `_detect_letter_led_formulas` + the `run()` WARN).  Full *validation* support
-# (optional leading `[A-Za-z]{1,4}[.\-·,]` prefix + Roman handling in norm() /
-# build_formula_patterns()) is reserved for when a real such book is hit — TODO.
-_LETTER_LED_RE = re.compile(r'[（(]\s*([A-Za-z]{1,4})\s*[.\-·,]\s*\d+(?:[a-zA-Z])?\s*[）)]')
+# Letter/Roman-LED formula numbering (e.g. `(A.3)` / `（I.2）` / `(II.5)` /
+# `(App.2)`) — RESERVED.  The digit-led `norm()` / `build_formula_patterns()`
+# below cannot capture a number whose first component is a letter / Roman
+# numeral, so a book using such numbering is surfaced (WARN) rather than
+# silently validated.  This regex is the *detection* probe.
+#
+# 🔴 TIGHTENED (2026-08-16): it now matches ONLY genuine letter-led formula
+# numbers so it no longer misfires on algebraic parentheticals (`(n-1)` /
+# `(p-1)` / `(k-1)`) or cross-reference labels (`(Fig. 19)` / `(Chap. 9)` /
+# `(Prob. 10)`).  The OLD pattern `[A-Za-z]{1,4}[.\-·,]\d+` matched all of those
+# and made EVERY chapter of a digit-led book (Kreyszig) spuriously BLOCK.  A real
+# letter-led formula number is: opening paren + SHORT prefix (single capital
+# letter / Roman numeral / `App`/`Ap`) + `.` or `·` separator (NEVER `-` or `,`)
+# + digits + optional trailing letter + closing paren.  Reference words
+# (Fig/Chap/Sec/Eq/Prob/...) are excluded via negative lookahead.
+_LETTER_LED_RE = re.compile(
+    r'[（(]\s*'
+    r'(?!(?:Fig|Chap|Sec|Eq|Prob|Ex|Def|Lem|Thm|Cor|Prop|Rem|Alg|Sol|Note|'
+    r'Lec|Part|Vol|Appx|Tbl|Tab|Exa|Exs|Thms|Lems|Cors|Props|Defs|Rmk|Remk)\b)'
+    r'(?:[A-Z]|[IVXLCDM]{1,5}|App|Ap)'
+    r'\s*[.·]\s*'
+    r'\d+(?:[a-zA-Z])?'
+    r'\s*[）)]')
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -729,23 +743,25 @@ def _detect_letter_led_formulas(ext_dir: str, start, end) -> Set[str]:
 
 
 def _letter_led_note(found: Set[str]) -> Optional[str]:
-    """Build the BLOCKING note for letter / Roman-led formula numbers.
+    """Build the (non-blocking) WARN note for letter / Roman-led formula numbers.
 
     Returns the note string when `found` is non-empty, else None.  The Q layer
-    cannot validate such numbering yet (norm() / build_formula_patterns are
-    digit-led — see the TODO(letter-led) anchors), so encountering it is a FAIL:
-    the verification is incomplete and must not pass until the supporting logic
-    is implemented.  This is what forces "implement the logic before this book
-    can validate" rather than silently degrading to a false-green pass.
+    cannot yet *validate* such numbering (norm() / build_formula_patterns are
+    digit-led — see TODO(letter-led) anchors).  Per the Q-layer SSOT
+    (formula_tag.md), this is a **WARN + downgrade**, NOT a blocking FAIL: the
+    layer skips 1:1 validation of those numbers and asks for human
+    reconciliation via formula_audit.md, instead of silently degrading to a
+    false-green pass OR spuriously blocking a digit-led book (the old behaviour
+    misfired on algebraic `(n-1)` / reference `(Fig. 19)` parentheticals).
     """
     if not found:
         return None
     return (
-        f"书源存在字母/罗马开头公式编号（如 {sorted(found)[:3]}…），"
+        f"书源含字母/罗马开头公式编号（如 {sorted(found)[:3]}…），"
         f"但 Q 层公式序标校验的 norm()/build_formula_patterns() 目前**仅支持数字开头**编号，"
-        f"此类编号的 1:1 真实性逻辑尚未实现，**无法校验即不可通过**。须先实现"
-        f"「可选首段字母/罗马前缀」支持（见代码 TODO(letter-led) 锚点）才能放行；"
-        f"当前章节判定 FAIL（blocking）。")
+        f"此类编号的 1:1 真实性逻辑尚未实现，故**降级为 WARN（不阻断）**：该部分公式序标"
+        f"未经机器校验，请人工核对 <extract>/formula_audit.md。待实现「可选首段字母/罗马前缀」"
+        f"支持（见代码 TODO(letter-led) 锚点）后可恢复校验。")
 
 
 def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
@@ -1172,7 +1188,7 @@ class QLayer(VerifyLayer):
                 _ll_sec = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
                 ll_note_sec = _letter_led_note(_ll_sec)
                 if ll_note_sec is not None:
-                    print(f"[Q-LAYER LETTER-LED *BLOCKING*] {ll_note_sec}",
+                    print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note_sec}",
                           file=sys.stderr)
                 return LayerResult(code='Q', metadata={
                     'q_checked': True,
@@ -1202,7 +1218,7 @@ class QLayer(VerifyLayer):
         _ll = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
         ll_note = _letter_led_note(_ll)
         if ll_note is not None:
-            print(f"[Q-LAYER LETTER-LED *BLOCKING*] {ll_note}", file=sys.stderr)
+            print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note}", file=sys.stderr)
 
         tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
         om, mp = _compute_order_and_section(

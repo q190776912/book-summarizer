@@ -687,6 +687,12 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # 而 Koopman（标签为章级两段、噪声为函数/散文括号）不再被误判。
         single_re = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
         dotted_paren = re.compile(r'[（(]\s*(\d+\.\d+)\s*[）)]')
+        # 3-component (C.S.N) numbers are also genuine multi-component formula
+        # labels; the original dotted_paren only matched 2 components, so
+        # chapter-wide 3-component books (e.g. Lasota-Mackey 5.7.21) were wrongly
+        # diagnosed as single-component and failed the pre-flight. Count them as
+        # dotted too.
+        dotted_paren3 = re.compile(r'[（(]\s*(\d+\.\d+\.\d+)\s*[）)]')
         dotted_eq = re.compile(r'\b(?:Eq\.?|Equation)\s+(\d+\.\d+)')
         dotted_cn = re.compile(r'式\s*[（(]?\s*(\d+\.\d+)')
         _standalone = re.compile(r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*')
@@ -712,10 +718,11 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
                 ts = t.strip()
                 if _standalone.fullmatch(ts):
                     # Genuine standalone formula label on its own line.
-                    if dotted_paren.search(t) or dotted_eq.search(t) or dotted_cn.search(t):
+                    if dotted_paren.search(t) or dotted_eq.search(t) or dotted_cn.search(t) or dotted_paren3.search(t):
                         dotted += (len(dotted_paren.findall(t))
                                    + len(dotted_eq.findall(t))
-                                   + len(dotted_cn.findall(t)))
+                                   + len(dotted_cn.findall(t))
+                                   + len(dotted_paren3.findall(t)))
                     elif single_re.search(t):
                         single += len(single_re.findall(t))
                     continue
@@ -726,7 +733,8 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
                 if _has_math(t):
                     dotted += (len(dotted_paren.findall(t))
                                + len(dotted_eq.findall(t))
-                               + len(dotted_cn.findall(t)))
+                               + len(dotted_cn.findall(t))
+                               + len(dotted_paren3.findall(t)))
         return single, dotted
 
     # 1) Configured patterns extract nothing but the book clearly HAS formulas.

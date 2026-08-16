@@ -55,31 +55,58 @@ G_TOPLEVEL_BREAK_RE = re.compile(
 
 # ── 块引用内（ > **label ）结构标签 ─────────────────────────────────────
 
-# h_layer.H_STRUCT_BQ（check，L117）。形态：块引用、缺「式」、中英标签、带负向断言。
+# Shared: name-prefixed structural label, e.g. `斯捷克洛夫定理 4.11-4`,
+# `魏尔斯特拉斯逼近定理 4.11-5`, `Steklov's Theorem 4.11-4`.
+# The structural keyword (定理/Theorem/...) is EMBEDDED in the name rather
+# than at the start, so the OLD `**定理`-anchored regexes silently missed
+# them when they appeared inside a blockquote — producing a false-green PASS.
+# A dotted item number (or a heading delimiter) MUST follow the keyword so
+# incidental theorem mentions inside proofs (e.g. `> **由 斯捷克洛夫定理 可知**`)
+# are NOT mis-flagged.
+_STRUCT_NAME = r"[\u4e00-\u9fffA-Za-z·.'-]+"
+_STRUCT_KW = (r'(?:定理|定义|引理|推论|命题|断言|公理'
+             r'|Theorem|Lemma|Corollary|Proposition|Axiom|Definition)')
+_STRUCT_NAME_FORM = (
+    _STRUCT_NAME + r'\s*' + _STRUCT_KW +
+    r'(?=\s*\d{1,3}(?:[.．\-－]\d{1,3}){1,2}|[（(\[.\:;])'
+)
+
+# h_layer.H_STRUCT_BQ（check）。形态：块引用、缺「式」、中英标签、带负向断言。
 H_STRUCT_BQ_RE = re.compile(
-    r'^\s*>\s+\*\*(?:'
+    r'^\s*>\s+\*\*'
+    r'(?:'
     r'(?:定义|定理|引理|推论|命题|断言|公理'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-    # A label followed by `的证明…` (e.g. `定理3.66的证明思路`) is a *proof
-    # sketch*, NOT a structural theorem — it legitimately lives inside a `>`
-    # blockquote, so don't flag it as a structural-label-in-blockquote violation.
-    r'(?![\d.]*的证明)'
+    r'|' + _STRUCT_NAME_FORM +
     r')'
+    # A label followed by `的证明…` (e.g. `定理3.66的证明思路`,
+    # `斯捷克洛夫定理 4.11-4 的证明`) is a *proof sketch*, NOT a structural
+    # theorem — it legitimately lives inside a `>` blockquote, so don't flag
+    # it as a structural-label-in-blockquote violation. The class spans the
+    # item number (digits / `.` / `-` / `．` / `－` / space) so the lookahead
+    # can reach `的证明` even when a hyphenated number sits between.
+    r'(?![\d.\-－．\s]*的证明)'
 )
 
-# h_layer.fix 内局部 H_BQ_FIX（L389）。形态：块引用、带「式」、中英标签、带负向断言。
+# h_layer.fix 内局部 H_BQ_FIX。形态：块引用、带「式」、中英标签、带负向断言。
 # 与 H_STRUCT_BQ_RE 仅差一个「式」——Phase-1 必须保留为独立常量，不可合并。
 H_STRUCT_BQ_FIX_RE = re.compile(
-    r'^\s*>\s+\*\*(?:'
+    r'^\s*>\s+\*\*'
+    r'(?:'
     r'(?:定义|定理|引理|推论|命题|断言|公理|式'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
-    r'(?![\d.]*的证明)'
+    r'|' + _STRUCT_NAME_FORM +
     r')'
+    r'(?![\d.\-－．\s]*的证明)'
 )
 
-# h_layer 内联（L261 / L309）。形态：块引用、带「式」、仅中文标签、无负向断言。
+# h_layer 内联。形态：块引用、带「式」、中英标签、无负向断言（用于 unlabeled
+# 检查跳过——结构性标签不应被误判为「未标注块引用」）。
 H_INLINE_STRUCT_BQ_RE = re.compile(
-    r'^\s*>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理|式)'
+    r'^\s*>\s+\*\*'
+    r'(?:定义|定理|引理|推论|命题|断言|公理|式'
+    r'|' + _STRUCT_NAME_FORM +
+    r')'
 )
 
 # ── 例 / 证明 等块引用标签（非 定义 家族，但属「加粗标签」，本次一并抽取） ──
@@ -100,6 +127,23 @@ I_ITEM_NUMFIRST_RE = re.compile(
     r'.*?'
     r'(?:定义|定理|引理|推论|命题|断言|公理|应用|例|注|'
     r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Example|Application|Remark)'
+)
+
+# i_layer：鲁棒条目检测器（覆盖 关键词开头 / 编号在前 / 名称+关键词+尾随编号 三种体例，
+# 含多词英文名如 `Polya Convergence Theorem 4.11-3`、`Weierstrass Approximation Theorem 4.11-5`）。
+# 用于 check_i_separators 与 fix_i_separators，使分隔线校验不再对名称前缀定理假绿
+# （旧 I_ITEM_STRUCT_RE / I_ITEM_NUMFIRST_RE 只认关键词开头与编号在前尾词为结构关键词，
+#  漏掉「名称+定理」与「编号在前+非关键词尾词(Requirement)」体例）。
+I_ITEM_RE = re.compile(
+    r'^\*\*(?:'
+    r'(?:定义|定理|引理|推论|命题|断言|公理'
+    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)'
+    r'|\d{1,3}(?:[.．\-－]\d{1,3}){1,2}\s'
+    r'|[\u4e00-\u9fffA-Za-z·.\'\- ]+?\s*'
+      r'(?:定理|定义|引理|推论|命题|断言|公理'
+      r'|Theorem|Lemma|Corollary|Proposition|Axiom|Definition)'
+      r'(?=\s*\d{1,3}(?:[.．\-－]\d{1,3}){1,2})'
+    r')'
 )
 
 # g_layer._EX_RE。

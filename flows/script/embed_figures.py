@@ -175,14 +175,14 @@ def parse_ref(cap):
 
 
 def read_lines(p):
-    return open(p, "r", encoding="utf-8").read().splitlines()
+    return open(p, "r", encoding='utf-8').read().splitlines()
 
 
 def write_lines(p, ls):
     t = "\n".join(ls)
     if not t.endswith("\n"):
         t += "\n"
-    open(p, "w", encoding="utf-8").write(t)
+    open(p, "w", encoding='utf-8').write(t)
 
 
 def find_first_match(lines, candidates):

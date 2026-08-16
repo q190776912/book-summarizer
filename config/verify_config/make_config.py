@@ -577,8 +577,15 @@ def _detect_ordinal_from_pages(extract_dir):
     # family vote
     if counts['cn_three'] > 0:
         family = 3
-    elif counts['en_three'] > 0:
-        family = 3  # English three-level (Kreyszig) -> type 3, NOT 4
+    elif counts['en_three'] > 0 and counts['en_three'] >= counts['en']:
+        # English three-level (Kreyszig, "Definition 1.5-3") -> type 3.
+        # Require three-level to DOMINATE two-level: in a genuine EN-three book
+        # every three-level item also yields a two-level prefix match, so
+        # en_three ~= en; a predominantly EN-two-level book (e.g. Koopman,
+        # "Definition 1.1") has en >> en_three, so it must NOT be flipped to
+        # type 3 (which would make the CN three-level extractor misinterpret the
+        # book's N.N.N subsections as fake N.N-N items).
+        family = 3
     elif counts['en'] > 0:
         family = 4
     elif counts['cn_two'] > 0:

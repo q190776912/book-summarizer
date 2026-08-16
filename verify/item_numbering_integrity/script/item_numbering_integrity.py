@@ -500,7 +500,13 @@ def _md_gap_blocking(ctx):
         entries.append((gk, item_num, key, label, prefix_str))
 
     groups = defaultdict(list)
-    section_order = defaultdict(list)   # prefix_str -> [item_num,...] 阅读顺序（跨类型，用于顺序错乱检测）
+    # 🔴 顺序错乱检测必须按 (prefix, type) 分组，不能仅按 prefix_str 混排所有类型。
+    # 许多书（如 Koopman Ch1）每个条目环境在章内独立编号（Definition 1.1 /
+    # Proposition 1.1 / Example 1.1 / Remark 1.1 同为 ".1"），类型重置导致 "1"
+    # 出现在更大编号之后——这是合法重置，非错位。仅按 prefix_str 混排会把这种
+    # 合法重置误判为 BLOCKING 顺序错乱。gk 已编码类型(group index)，与「缺号」
+    # 检查保持一致地按 gk 分组即可正确按类型隔离顺序校验。
+    section_order = defaultdict(list)   # gk -> [item_num,...] 阅读顺序（按类型隔离，用于顺序错乱检测）
     present_md = set()
     for gk, num, key, label, prefix_str in entries:
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
@@ -511,7 +517,7 @@ def _md_gap_blocking(ctx):
         present_md.add(key)
         # 阅读顺序记录（无论 per-type/combined，同一节前缀 §C.S 的编号按出现先后入列，
         # 用于跨类型顺序错乱检测：例如 2.6-8 这种 Example 掉到 2.6-11 这种 Lemma 之后）。
-        section_order[prefix_str].append(num)
+        section_order[gk].append(num)
 
     ignore = ctx.ignore
     # Normalize known_gaps separators (dot <-> dash) so user-written dot form
@@ -609,9 +615,14 @@ def _md_gap_blocking(ctx):
     # 此类"靠后的号跑到前面之后"必须硬阻断、不得 PASS（用户明确要求：不能要）。
     # 去重：同编号只保留最后一次"真实定义"出现，排除章首目录/TOC 与证明标题
     # "X.Y-Z 的证明"（已被 _parse_entry 过滤）造成的伪回归。
-    for pref, seq in sorted(section_order.items()):
+    for gk_key, seq in sorted(section_order.items()):
         if len(seq) < 2:
             continue
+        # gk = "{gi}:{prefix_str}"（类型已编码在 gi 中）；还原展示用的前缀。
+        _parts = gk_key.split(':', 1)
+        pref = _parts[1] if len(_parts) > 1 else gk_key
+        if pref == 'file' or pref.startswith('file:') or pref == '':
+            pref = '<章级>'
         last_pos = {}
         for i, num in enumerate(seq):
             last_pos[num] = i
@@ -619,7 +630,7 @@ def _md_gap_blocking(ctx):
         for i in range(1, len(ordered)):
             if ordered[i] < ordered[i - 1]:
                 blocking.append(
-                    f"  WARN (BLOCKING): 顺序错乱 @{pref or '<章级>'}: 编号 {ordered[i]} "
+                    f"  WARN (BLOCKING): 顺序错乱 @{pref}: 编号 {ordered[i]} "
                     f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
                     f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
                     f"将 {pref}-{ordered[i]} 移到正确位置。")

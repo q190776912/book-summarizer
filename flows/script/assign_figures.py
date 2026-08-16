@@ -274,7 +274,7 @@ def write_figure_index_md(out_dir):
                 for e in entries if e.get("label")]
     md_lines += [f"- 图(未标号, p{e['page']})：![fig]({e['file']})"
                  for e in entries if not e.get("label")]
-    with open(os.path.join(out_dir, "figure_index.md"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_dir, "figure_index.md"), "w", encoding='utf-8') as f:
         f.write("\n".join(md_lines) + "\n")
 
 

@@ -261,7 +261,7 @@ def _extract_items(ext, ch, start, end, book, manual=None):
 # ---------------------------------------------------------------------------
 # 单章结构构建
 # ---------------------------------------------------------------------------
-def build_chapter(ext, ch, start, end, book, cm):
+def build_chapter(ext, ch, start, end, book, cm, manual=None):
     ordinal = book.primary_type
     language = book.language
     mode = scan_skeleton._mode_for_ordinal(ordinal, language)
@@ -285,7 +285,7 @@ def build_chapter(ext, ch, start, end, book, cm):
         dedup_sec.append(sec_best[num])
 
     # 3) 抽取器条目（权威 ITEM，排除练习类）
-    raw_items = _extract_items(ext, ch, start, end, book)
+    raw_items = _extract_items(ext, ch, start, end, book, manual=manual)
     items = [it for it in raw_items
              if (it.get("label") or "").strip() not in _EXERCISE_LABELS]
 
@@ -413,6 +413,10 @@ def main():
     cm = chapter_map.load_chapter_map_raw(os.path.join(ext, "chapter_map.json"))
     rng = _build_rng(cm)
 
+    # 解析每章 manual_overrides_ch{N}.json（恢复 OCR 漏识的真实条目，如 4.9-3）。
+    # 仅在 ConfigLoader 成功构建时可用（except 分支降级只读 verify_config，无 overrides）。
+    _loader_obj = locals().get("loader")
+
     # 书名：取 book_dir 的目录名（ConfigLoader 已持有 book_dir = <book>）。
     book_dir = os.path.dirname(ext.rstrip("/")) or ext
     book_name = os.path.basename(book_dir) if book_dir else ""
@@ -427,7 +431,8 @@ def main():
             print("ch%-3d SKIP (not in chapter_map)" % ch)
             continue
         start, end = rng[ch]
-        chapter = build_chapter(ext, ch, start, end, book, cm)
+        manual = _loader_obj.manual_for_chapter(ch) if _loader_obj else None
+        chapter = build_chapter(ext, ch, start, end, book, cm, manual=manual)
         node = StructureNode.from_dict(chapter)
         replaced = bs.root.replace_chapter(node)
         n_item = sum(1 for _ in _iter_items(chapter)

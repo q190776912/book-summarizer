@@ -27,13 +27,23 @@ import re
 
 from verify.script.base import LayerFixResult, register_fixer
 from verify.script.struct_labels import (
-    I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
+    I_ITEM_RE, I_ITEM_EXAMPLE_RE,
 )
 
 
 def fix_i_separators(md_file):
     """I-LAYER auto-fix: insert `---` between consecutive items without separator.
-    Returns number of separators inserted."""
+    Returns number of separators inserted.
+
+    Uses the robust item detector (I_ITEM_RE) so name-prefixed theorems
+    (e.g. `**Hahn-Banach Theorem 4.3-1**`, `**Polya Convergence Theorem 4.11-3**`)
+    and number-first non-keyword items (`**4.11-2 Requirement.**`) are correctly
+    recognized — the OLD narrow regexes silently skipped them, producing
+    false-green PASS on missing separators.
+
+    Each inserted `---` gets a blank line above AND below (rule 12 / l_sep_blanks);
+    an existing blank line is not duplicated.
+    """
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -43,8 +53,7 @@ def fix_i_separators(md_file):
 
     item_lines = []
     for i, ln in enumerate(lines):
-        if (I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)
-                or I_ITEM_NUMFIRST_RE.match(ln)):
+        if (I_ITEM_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)):
             item_lines.append(i)
     item_lines = sorted(set(item_lines))
 
@@ -67,13 +76,23 @@ def fix_i_separators(md_file):
         if not has_sep and not section_between:
             insertions.append(j)
 
-    for pos in sorted(set(insertions), reverse=True):
-        lines.insert(pos, '---')
-        changes += 1
+    insert_set = set(insertions)
+    if not insert_set:
+        return 0
+    new_lines = []
+    for idx, ln in enumerate(lines):
+        if idx in insert_set:
+            # blank line above (unless previous line already blank)
+            if new_lines and new_lines[-1].strip() != '':
+                new_lines.append('')
+            new_lines.append('---')
+            new_lines.append('')  # blank line below
+        new_lines.append(ln)
 
-    if changes > 0:
+    if len(new_lines) != len(lines):
         with open(md_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write('\n'.join(new_lines))
+        changes = len(insert_set)
     return changes
 
 

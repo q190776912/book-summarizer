@@ -43,11 +43,11 @@ def is_embed_line(ln):
 
 
 def strip_file(path):
-    lines = open(path, encoding="utf-8").read().splitlines()
+    lines = open(path, encoding='utf-8').read().splitlines()
     out = [ln for ln in lines if not is_embed_line(ln)]
     removed = len(lines) - len(out)
     if removed:
-        open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+        open(path, "w", encoding='utf-8').write("\n".join(out) + "\n")
     return removed
 
 

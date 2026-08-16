@@ -48,7 +48,7 @@ from verify.script.struct_labels import (
     G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE,
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
-    I_ITEM_STRUCT_RE, I_ITEM_EXAMPLE_RE, I_ITEM_NUMFIRST_RE,
+    I_ITEM_RE, I_ITEM_EXAMPLE_RE,
 )
 from lib.regexlib import G_HEAD, FMT_HR_RE, FMT_SEC_RE
 
@@ -233,11 +233,19 @@ _H_UL_FOOTNOTE = re.compile(r'^\s*>\s*\^\{')
 
 _H_MISSING_BQ = re.compile(
     r'^\s*\*\*(?:'
+    # keyword-first label word, then content / punctuation / end-of-bold
+    # (the OLD pattern required the keyword to be immediately followed by `**`,
+    #  so it only matched a bare `**Example**` and never fired on real
+    #  examples like `**Example 1.1-2**:` or `**证明：...` — fixed here).
     r'(?:证明|证|证明思路|证明概要|注记|说明'
-    r'|Proof|Example|Solution|Note|Remark)'
-    r'|例(?:\s*\d[\d.]*)?'
-    r'|注(?:\s*\d[\d.]*)?'
-    r')\*\*'
+    r'|Proof|Example|Solution|Note)(?![\w\-])'
+    r'|例(?:\s*\d[\d.]*)?'           # 例 / 例1 / 例 1  (then content)
+    r'|注(?:\s*\d[\d.]*)?'           # 注 / 注1
+    # number-first form: N.S-N + label word
+    # (e.g. Kreyszig `3.1-3 Example (...)`, `3.1-3 例子（...）`)
+    r'|\d{1,3}(?:[.．\-－]\d{1,3}){1,2}\s*'
+    r'(?:例|例子|Example|Solution|Proof|Note|Remark|证明|证|说明|注)'
+    r')'
 )
 
 _H_MISSING_BQ_FOOTNOTE = re.compile(r'^\s*\{')
@@ -480,8 +488,7 @@ def check_i_separators(md_file):
     # Collect all item-starting line numbers
     item_lines = []
     for i, ln in enumerate(lines):
-        if (I_ITEM_STRUCT_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)
-                or I_ITEM_NUMFIRST_RE.match(ln)):
+        if (I_ITEM_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln)):
             item_lines.append(i)
     item_lines = sorted(set(item_lines))
     # Check consecutive pairs

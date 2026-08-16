@@ -5,7 +5,7 @@
 > **注册机制**：本层脚本位于 `verify/formula_tag/script/formula_tag.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/*/script/` 自动发现并注册。`code = 'Q'` 是稳定字母代号（被 SKILL.md 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
 
 ## 目的
-总结里带 `\tag{X}` 的公式，其序标必须与**书源公式编号集合 S** 1:1 对应；编造/错位/跨章阻断 FAIL，遗漏默认 WARN，公式内容人工对账。除编号集合成员关系外，Q 层还校验**编号序列顺序（ORDER_MISMATCH）**与**小节定位（MISPLACED）**——二者均为 WARN（非阻断），使 Q 成为覆盖编号集合成员 + 序列顺序 + 小节定位的完整公式序标校验。
+总结里带 `\tag{X}` 的公式，其序标必须与**书源公式编号集合 S** 1:1 对应；编造/错位/跨章阻断 FAIL，遗漏（未在 `formula.ignore` 登记）阻断 FAIL，公式内容人工对账。除编号集合成员关系外，Q 层还校验**编号序列顺序（ORDER_MISMATCH）**与**小节定位（MISPLACED）**——二者均为 WARN（非阻断），使 Q 成为覆盖编号集合成员 + 序列顺序 + 小节定位的完整公式序标校验。
 
 ## ⚠️ 执行前置（Pre-flight，强制）
 > **本层是 opt-in，配置缺失会静默 no-op**——若 `verify_config.json` 没有 `formula` 块，Q 层直接返回中性 `q_*` 元数据、不写报告、不计入 FAIL。**这会让执行者误以为"公式校验已通过"，实际根本没跑。** 因此运行本层前，agent 必须完成以下前置，缺一不可：
@@ -45,22 +45,23 @@
 - **序标校验（自动 FAIL）**：
   - `q_fabricated`(FABRICATED)：总结 `\tag` 编号归一后**不在 S**（编造/串号）→ 始终 FAIL。
   - `q_inconsistent`(INCONSISTENT)：编号**重复**，或**跨章**（`scope == 2` 时首分量 ≠ 当前章号）→ 始终 FAIL。
-- **遗漏校验（默认 WARN，永不阻断）**：
-  - `q_missing`(MISSING)：S 中属于本章、规范、前缀匹配的编号在总结无对应 `\tag` → 仅 WARN；书源确有该编号但属合理省略时，把它加入 `formula.ignore` 跳过比对，而非升级为 FAIL。
+- **遗漏校验（未登记 `formula.ignore` 时阻断 FAIL）**：
+  - `q_missing`(MISSING)：S 中属于本章、规范、前缀匹配的编号在总结无对应 `\tag` → **FAIL（阻断）**。writing-rules 硬性要求 7 规定书源所有带编号公式（含描述性散文中的推导式）都必须保留，故"未登记的遗漏"即"漏写公式"。书源确有该编号但属合法省略（如纯排版重复）时，把它加入 `formula.ignore` 跳过比对；未在 `ignore` 登记的遗漏一律阻断，以防漏写描述性推导公式。
 - **序列顺序校验（WARN，永不阻断）**：
   - `q_order_mismatch`(ORDER_MISMATCH)：总结文档序与书源阅读序（按公式首次出现的 `page, y` 位置）不一致 → 仅 WARN。`scope==3`（节级重置，编号每节重复）时按 `## §N.M` 窗口独立判定（跨节重置避免重复编号误报）；`scope==2/1`（编号全局唯一）时窗口跨节，连跨节顺序偏移也捕获；仅对 S 中命中的编号判定，不与 FABRICATED/MISSING 重复计数。
 - **小节定位校验（WARN，永不阻断）**：
-  - `q_misplaced`(MISPLACED)：总结公式所在 `## §N.M` 小节 ≠ 书源该公式定义所在小节（按最近前方标题归因）→ 仅 WARN。捕获"标号挂错节"（如把书源 §2.4 的 `2.6` 写到了 §2.3 之下）。
+  - `q_misplaced`(MISPLACED)：总结公式所在 `## §N.M` 小节与书源该公式定义所在小节**非前缀兼容**时 → 仅 WARN。判定用"前缀兼容"而非精确相等：书源定义于更深子节（如 §1.3.1）而总结置于其祖先节（§1.3）视为**正确**（子节是父节后代，不算挂错节）；仅当二者真正分叉（书源 §1.4 却放 §1.3、或书源 §1.3.5 却放 §1.3.2）才报 MISPLACED。捕获"标号挂错节"。
 - **公式内容校验（人工对账）**：`verify_all` 末聚合各章 `q_rows` 写出 `<extract_dir>/formula_audit.md`，并排列出「总结 LaTeX / 书源文本片段」，机器**不判内容对错**。
-- **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN「书源公式编号未抽到，请检查 verify_config.json 的 formula 配置」，**不判编造/遗漏 FAIL**。
+- **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错，**或书源采用字母/罗马开头编号 `(A.3)`/`(I.2)` 这类 Q 层暂不支持的形态（预留待实现）**），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。字母/罗马开头场景由 `_detect_letter_led_formulas` 提前探测并把 WARN 文案改为「该格式暂不校验、须人工核对 formula_audit」，避免误导成配置错。
 
 ## 本阶段规则（阻断性 / 可修复）
 - FABRICATED / INCONSISTENT → 始终 FAIL（阻断）。
-- MISSING / ORDER_MISMATCH / MISPLACED → 仅 WARN，永不阻断（OCR 位置/标题噪声下不误 FAIL）。
+- MISSING（未在 `formula.ignore` 登记）→ FAIL（阻断）；已登记 ignore 的编号不计入 MISSING。
+- ORDER_MISMATCH / MISPLACED → 仅 WARN，永不阻断（OCR 位置/标题噪声下不误 FAIL）。
 - 不可 `--fix`（审计层，须回写作阶段修正编号）。
 
 ## 出口条件
-FABRICATED / INCONSISTENT 非空 → 整章 FAIL；MISSING / ORDER_MISMATCH / MISPLACED 仅 WARN。
+FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登记、MISSING 非空 → 整章 FAIL；ORDER_MISMATCH / MISPLACED 仅 WARN。
 
 ## 相关代码（`verify/formula_tag/script/formula_tag.py`）
 - `code = 'Q'`，`order = 17`（当前最大层 P=16 之后），`auto_fixable = False`。
@@ -79,13 +80,13 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；MISSING / ORDER_MISMATCH / MI
 - **前置（缺一不可）**：`verify_config.json` 须配 `formula` map（`type`/`depth`/`scope`），
 否则 Q 层静默 no-op（见本层顶部警告）。看到 `[Q-LAYER WARN]` 必须补全配置，禁止宣称公式校验通过。
 - **触发门（report.py）**：`Q-LAYER FORMULA FABRICATED` / `Q-LAYER FORMULA INCONSISTENT` → 始终 FAIL；
-`Q-LAYER FORMULA MISSING` / `Q-LAYER FORMULA ORDER_MISMATCH` / `Q-LAYER FORMULA MISPLACED` → 仅 WARN（非阻断）。
+`Q-LAYER FORMULA MISSING`（未登记 ignore）→ FAIL（阻断）；`Q-LAYER FORMULA ORDER_MISMATCH` / `Q-LAYER FORMULA MISPLACED` → 仅 WARN（非阻断）。
 - **修复步骤**：
   1. `FABRICATED`（总结 `\tag` 编号不在 S → 编造/串号）→ 回源核对，删掉或改正 `\tag`。
   2. `INCONSISTENT`（重复/跨章）→ 修正 `\tag` 使其唯一且属本章。
-  3. `MISSING`（WARN）→ 书源确有该编号但属合理省略时加入 `formula.ignore`；否则补 `\tag`。
+  3. `MISSING`（FAIL，阻断）→ 书源确有该编号但属合法省略（如排版重复）时加入 `formula.ignore`；否则补写该公式并挂 `\tag`。未登记 ignore 的遗漏一律阻断以防漏写。
   4. `ORDER_MISMATCH`（WARN）→ 总结中公式列举顺序与书源阅读顺序不符（串位/偏移）→ 核对并调整 `\tag` 出现顺序使其与书源一致。
-  5. `MISPLACED`（WARN）→ 公式 `\tag` 所在小节与书源定义小节不符（标号挂错节）→ 把该 `\tag` 移到正确的 `## §N.M` 之下。
+  5. `MISPLACED`（WARN）→ 公式 `\tag` 所在小节与书源定义小节**非前缀兼容**（标号挂错节）→ 把该 `\tag` 移到正确的 `## §N.M` 之下（注意：书源定义于更深子节如 §N.M.K、总结置于其祖先节 §N.M 视为正确，无需移动）。
   6. S 为空降级（配置错）→ 回头修正 `formula.depth/scope` 让书源抽到编号，不要当成“通过”。
   7. 重跑 verify，确认 FABRICATED / INCONSISTENT 为空（WARN 项按需清理）。
 

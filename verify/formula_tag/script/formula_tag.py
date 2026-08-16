@@ -82,6 +82,15 @@ def _summary_has_tags(md_file: str) -> bool:
 
 # Separator characters that any book may use between number components.
 _SEP_CLASS = r'[.\-·,]'
+# Letter/Roman-LED formula numbering (e.g. `(A.3)` / `（I.2）`) — RESERVED.
+# The digit-led `norm()` / `build_formula_patterns()` below cannot capture a
+# number whose first component is a letter / Roman numeral, so a book using such
+# numbering silently degrades to an S-empty WARN (false green).  This regex is
+# the *detection* probe used to surface that limitation loudly (see
+# `_detect_letter_led_formulas` + the `run()` WARN).  Full *validation* support
+# (optional leading `[A-Za-z]{1,4}[.\-·,]` prefix + Roman handling in norm() /
+# build_formula_patterns()) is reserved for when a real such book is hit — TODO.
+_LETTER_LED_RE = re.compile(r'[（(]\s*([A-Za-z]{1,4})\s*[.\-·,]\s*\d+(?:[a-zA-Z])?\s*[）)]')
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -111,6 +120,12 @@ def build_formula_patterns(ncomp: int) -> List[str]:
     """
     if ncomp is None or ncomp < 1:
         ncomp = 1
+    # TODO(letter-led): books whose formula numbers START with a letter / Roman
+    # numeral (e.g. `(A.3)` / `（I.2）`) are NOT supported yet.  To add support,
+    # prepend an optional leading prefix `([A-Za-z]{1,4}[.\-·,])?` to `group`
+    # below (and mirror it in norm()), then add a `letter` branch to
+    # `_validate_formula_config` so the pre-flight stops treating them as a
+    # mis-config.  Until then, `_detect_letter_led_formulas` surfaces a WARN.
     # Capture the optional trailing letter suffix (e.g. `8.11a`) so that
     # sub-formula numbers extracted from the book source match the summary's
     # `\tag{8.11a}`.  Without this, `norm()` keeps the suffix on the summary
@@ -189,11 +204,17 @@ class SourceFormulaIndex:
 
     def __init__(self, extract_dir: str, patterns: List[str],
                  chapter_prefix: bool = True,
-                 ignore: Optional[Set[str]] = None) -> None:
+                 ignore: Optional[Set[str]] = None,
+                 ncomp: Optional[int] = None) -> None:
         self.extract_dir = extract_dir
         self.patterns = [re.compile(p) for p in (patterns or [])]
         self.chapter_prefix = chapter_prefix
         self.ignore = set(ignore or set())
+        # ncomp (depth) enables the Bug #18 source-noise gate in _scan_text:
+        # only multi-component books (ncomp>=2) need it, because their bare
+        # `N.N` pattern otherwise matches section headings / cross-references /
+        # figure sub-numbers / bibliography page numbers as "formula numbers".
+        self._ncomp = ncomp
         self._by_chapter: Dict[int, Set[str]] = {}
         # normalized number -> first source text snippet (for the audit report)
         self._source_text: Dict[str, str] = {}
@@ -402,15 +423,28 @@ class SourceFormulaIndex:
             self._book_section[n] = self._cur_heading
 
     def _scan_text(self, txt: str, nums: Set[str], pg=None, y=None) -> None:
+        # 🔴 Bug #18 修复（增强）：多分量编号 (ncomp>=2) 的 bare `N.N` pattern
+        # 会命中节标题 ("1.1 Introduction")、图号子图 ("Fig. 1.1a")、参考文献
+        # 页码 ("pp. 1-34") 等散文数字串——这些非公式编号须被拦截，否则污染
+        # 书源集合 S，制造假 MISSING。但「括号包裹的公式编号」`(C.N)` 是书源
+        # 与 summary 共用的强信号：既用于标注公式，也用于散文交叉引用
+        # ("By (3.1) we get A.")。一刀切门禁会把散文里的 `(3.1)` 漏抽，导致
+        # summary 合法的 \tag{3.1} 被误判 FABRICATED、且 S 不全。
+        # 策略：仅对「裸 / 无强前缀」命中施加 _block_has_math 门禁；带括号或
+        # 带 Eq./Equation/式 前缀的命中（强信号）无条件保留。ncomp==1 不门禁。
+        need_gate = (self._ncomp is not None and self._ncomp >= 2)
+        has_math = self._block_has_math(txt) if need_gate else True
         for pat in self.patterns:
             for m in pat.finditer(txt):
+                span = m.group(0)
+                if need_gate and not self._is_strong_signal(span) and not has_math:
+                    continue
                 raw = m.group(1)
                 n = self.norm(raw)
                 if not n or n in self.ignore or not self._plausible(n):
                     continue
                 nums.add(n)
                 if n not in self._source_text:
-                    span = m.group(0)
                     idx = txt.find(span)
                     if idx < 0:
                         idx = 0
@@ -446,6 +480,23 @@ class SourceFormulaIndex:
                      r'omega|cdot|dots|partial)', txt):
             return True
         if re.search(r'[αβγδεζηθικλμνξπρστυφχψωΓΔΘΛΞΠΣΦΨΩ]', txt):
+            return True
+        return False
+
+    @staticmethod
+    def _is_strong_signal(span: str) -> bool:
+        """True if a matched number token is a STRONG formula-number signal:
+        parenthesized `(C.N)` / `（C.N）`, or prefixed by `Eq.` / `Equation` /
+        `式`. Strong signals are ALWAYS kept, even in math-free prose (they also
+        serve as cross-references, e.g. "By (3.1) we get A."). Bare `C.N`
+        tokens are NOT strong and stay subject to the _block_has_math gate
+        (they cover section headings, figure numbers, reference pages, etc.)."""
+        s = span.strip()
+        if not s:
+            return False
+        if s[0] in ('(', '（') and s[-1] in (')', '）'):
+            return True
+        if re.match(r'(?i)^(eq\.?|equation|式)', s):
             return True
         return False
 
@@ -497,6 +548,11 @@ class SourceFormulaIndex:
             s = s[1:-1].strip()
         m = re.match(r'(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
         if not m:
+            # TODO(letter-led): tokens like `A.3` / `I.2` (letter / Roman
+            # prefix) fall through here and return None.  When support lands,
+            # extend this regex with an optional leading `([A-Za-z]{1,4}
+            # [.\-·,])?` group and normalise it.  Until then such numbers are
+            # intentionally un-validated (see `_detect_letter_led_formulas`).
             return None
         core = m.group(1)
         suffix = m.group(2)
@@ -547,10 +603,24 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # correctly seen as single-dominated — unlike a distinct-number SET,
         # which collapses to a handful of values and lets a few stray dotted
         # matches flip the classification.
+        #
+        # 🔴 噪声门禁（Bug #17 修复）：原始实现用裸正则直接数所有 `(N)` / `(C.N)`
+        # 出现次数，把函数调用 `f(0)`、交叉引用散文 `(1)`、行内 `x(0)` 等噪声也
+        # 计入，导致「单分量出现次数 ≫ 多分量」误判（如 Koopman Ch1：真实公式
+        # 编号全是章级两段 `(1.1)`，但噪声把单分量次数抬到 90 > 68，pre-flight
+        # 错误地强制 scope=3 并阻断整章）。这里复用真实抽取用的「真公式编号」门禁：
+        #   * 单分量只计「独立成行的标签块」 `(N)` / `（N）`（与 build_sectioned
+        #     对 ncomp==1 的 fullmatch 门禁一致）；
+        #   * 两段只计「含数学的块」（`_block_has_math`，与 ncomp>=2 门禁一致），
+        #     散文里的 `(1.2) 暗示` 不计入。
+        # 这样 Kreyszig（真·单分量每段重置，标签独立成行）仍被正确识别为单分量主导，
+        # 而 Koopman（标签为章级两段、噪声为函数/散文括号）不再被误判。
         single_re = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
         dotted_paren = re.compile(r'[（(]\s*(\d+\.\d+)\s*[）)]')
         dotted_eq = re.compile(r'\b(?:Eq\.?|Equation)\s+(\d+\.\d+)')
         dotted_cn = re.compile(r'式\s*[（(]?\s*(\d+\.\d+)')
+        _standalone = re.compile(r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*')
+        _has_math = SourceFormulaIndex._block_has_math
         single = dotted = 0
         for pg in range(int(start), int(end) + 1):
             fp = os.path.join(ext_dir, f'page_{pg:03d}.json')
@@ -565,10 +635,24 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
                 t = b.get('text', '') if isinstance(b, dict) else ''
                 if not t:
                     continue
-                single += len(single_re.findall(t))
-                dotted += (len(dotted_paren.findall(t))
-                           + len(dotted_eq.findall(t))
-                           + len(dotted_cn.findall(t)))
+                ts = t.strip()
+                if _standalone.fullmatch(ts):
+                    # Genuine standalone formula label on its own line.
+                    if dotted_paren.search(t) or dotted_eq.search(t) or dotted_cn.search(t):
+                        dotted += (len(dotted_paren.findall(t))
+                                   + len(dotted_eq.findall(t))
+                                   + len(dotted_cn.findall(t)))
+                    elif single_re.search(t):
+                        single += len(single_re.findall(t))
+                    continue
+                # Non-standalone: only count two-component numbers inside a
+                # math-bearing block (genuine displayed-equation labels).  Bare
+                # prose references / function-call parens are rejected so they
+                # never inflate the single count.
+                if _has_math(t):
+                    dotted += (len(dotted_paren.findall(t))
+                               + len(dotted_eq.findall(t))
+                               + len(dotted_cn.findall(t)))
         return single, dotted
 
     # 1) Configured patterns extract nothing but the book clearly HAS formulas.
@@ -616,9 +700,58 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     return None
 
 
+def _detect_letter_led_formulas(ext_dir: str, start, end) -> Set[str]:
+    """RESERVED probe: find letter / Roman-led formula numbers in the book
+    source (e.g. `(A.3)` / `（I.2）`).
+
+    These are NOT yet validated by the Q layer (norm() / build_formula_patterns
+    are digit-led).  Detecting them lets `run()` emit a clear WARN instead of
+    silently degrading to a false-green S-empty pass.  Scans the same
+    `page_*.json` `text[]` the real extractor reads.  Returns the raw matched
+    tokens (for the surfaced message), or an empty set when none are found.
+    """
+    found: Set[str] = set()
+    for pg in range(int(start), int(end) + 1):
+        fp = os.path.join(ext_dir, f'page_{pg:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = PageJson.load(fp).data
+        except Exception:
+            continue
+        for b in data.get('text', []) or []:
+            t = b.get('text', '') if isinstance(b, dict) else ''
+            if not t:
+                continue
+            for m in _LETTER_LED_RE.finditer(t):
+                found.add(m.group(0).strip())
+    return found
+
+
+def _letter_led_note(found: Set[str]) -> Optional[str]:
+    """Build the BLOCKING note for letter / Roman-led formula numbers.
+
+    Returns the note string when `found` is non-empty, else None.  The Q layer
+    cannot validate such numbering yet (norm() / build_formula_patterns are
+    digit-led — see the TODO(letter-led) anchors), so encountering it is a FAIL:
+    the verification is incomplete and must not pass until the supporting logic
+    is implemented.  This is what forces "implement the logic before this book
+    can validate" rather than silently degrading to a false-green pass.
+    """
+    if not found:
+        return None
+    return (
+        f"书源存在字母/罗马开头公式编号（如 {sorted(found)[:3]}…），"
+        f"但 Q 层公式序标校验的 norm()/build_formula_patterns() 目前**仅支持数字开头**编号，"
+        f"此类编号的 1:1 真实性逻辑尚未实现，**无法校验即不可通过**。须先实现"
+        f"「可选首段字母/罗马前缀」支持（见代码 TODO(letter-led) 锚点）才能放行；"
+        f"当前章节判定 FAIL（blocking）。")
+
+
 def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
              chapter_prefix: bool = True,
-             ignore: Optional[Set[str]] = None) -> tuple:
+             ignore: Optional[Set[str]] = None,
+             s_empty_note: Optional[str] = None) -> tuple:
     """Compare summary tags against the book-source set S.
 
     Returns (fab, inc, miss, rows) where fab/inc/miss are lists of row dicts
@@ -707,7 +840,11 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
             'number': '',
             'status': 'WARN',
             'summary_latex': '',
-            'source_text': '书源公式编号未抽到，请检查 verify_config.json 的 formula 配置',
+            'source_text': (
+                s_empty_note
+                or '书源公式编号未抽到（可能是 formula 的 depth/scope 配错，'
+                   '或书源采用字母/罗马开头编号 (A.3)/(I.2) 这类 Q 层暂不支持的'
+                   '形态——预留待实现）；公式序标校验对本章降级，不可报"通过"。'),
         })
 
     return fab, inc, miss, rows
@@ -833,6 +970,25 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     return fab, inc, miss, rows
 
 
+def _section_prefix_compatible(a: str, b: str) -> bool:
+    """True if section strings `a`, `b` are component-prefix-compatible
+    (one is an ancestor of the other).  Resolves the spurious MISPLACED that
+    arose whenever the summary's heading granularity differed from the book's:
+    e.g. the summary emits only `## §1.3` while the book defines the formula
+    under `§1.3.1` / `§1.3.2` — those are descendants of §1.3, NOT misplaced.
+    A genuine misplacement (book §1.4 but summary §1.3, or book §1.3.5 but
+    summary §1.3.2) shares no prefix and is still flagged."""
+    try:
+        ca = [int(x) for x in a.split('.')]
+        cb = [int(x) for x in b.split('.')]
+    except ValueError:
+        return a == b
+    if not ca or not cb:
+        return a == b
+    short, long = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
+    return short == long[:len(short)]
+
+
 def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                                  ignore: Optional[Set[str]] = None,
                                  reset_on_section: bool = True) -> tuple:
@@ -904,7 +1060,7 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             bsec = src._book_section_sec[(sec, n)]
         else:
             bsec = src.book_section(n)
-        if bsec is not None and bsec != sec:
+        if bsec is not None and not _section_prefix_compatible(bsec, sec):
             if n not in seen_mp:
                 seen_mp.add(n)
                 mp.append({
@@ -1010,6 +1166,14 @@ class QLayer(VerifyLayer):
                     tags_sec, src_sec, md_sections, union, fignore, src)
                 om, mp = _compute_order_and_section(
                     tags_sec, src, fignore, reset_on_section=True)
+                # RESERVED letter/Roman-led: same BLOCKING probe as the chapter
+                # path — a letter-led book must not silently pass via section
+                # scope either.
+                _ll_sec = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
+                ll_note_sec = _letter_led_note(_ll_sec)
+                if ll_note_sec is not None:
+                    print(f"[Q-LAYER LETTER-LED *BLOCKING*] {ll_note_sec}",
+                          file=sys.stderr)
                 return LayerResult(code='Q', metadata={
                     'q_checked': True,
                     'q_fabricated': fab,
@@ -1017,17 +1181,34 @@ class QLayer(VerifyLayer):
                     'q_missing': miss,
                     'q_order_mismatch': om,
                     'q_misplaced': mp,
+                    'q_letter_led': [ll_note_sec] if ll_note_sec is not None else [],
                     'q_rows': rows,
                 })
 
         tags = _extract_summary_tags(ctx.md_file)
-        src = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix, fignore)
+        src = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix, fignore,
+                                 ncomp=ncomp)
         src.build(ctx.ch, ctx.start, ctx.end)
+
+        # RESERVED: letter / Roman-led formula numbering (e.g. (A.3)/(I.2)).
+        # norm()/patterns are digit-led, so such numbering is NEVER validated by
+        # the Q layer.  Whenever the book source actually contains letter-led
+        # formula numbers — regardless of whether S is empty — surface a BLOCKING
+        # FAIL (via q_letter_led): the verification is incomplete and must not
+        # pass until the supporting logic lands.  This is the "implement the
+        # logic before this book can validate" guarantee that prevents the
+        # false-green case (prose like "3.1 Theorem" can populate S with
+        # digit-led numbers while the letter-led ones stay silently un-validated).
+        _ll = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
+        ll_note = _letter_led_note(_ll)
+        if ll_note is not None:
+            print(f"[Q-LAYER LETTER-LED *BLOCKING*] {ll_note}", file=sys.stderr)
 
         tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
         om, mp = _compute_order_and_section(
             tags_sec, src, fignore, reset_on_section=False)
-        fab, inc, miss, rows = _compare(tags, src, ctx.ch, chapter_prefix, fignore)
+        fab, inc, miss, rows = _compare(
+            tags, src, ctx.ch, chapter_prefix, fignore, s_empty_note=ll_note)
         return LayerResult(code='Q', metadata={
             'q_checked': True,
             'q_fabricated': fab,
@@ -1035,5 +1216,6 @@ class QLayer(VerifyLayer):
             'q_missing': miss,
             'q_order_mismatch': om,
             'q_misplaced': mp,
+            'q_letter_led': [ll_note] if ll_note is not None else [],
             'q_rows': rows,
         })

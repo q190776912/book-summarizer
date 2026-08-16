@@ -400,8 +400,19 @@ def print_result(r):
             print(g)
 
     # Q-LAYER: formula sequence-label audit (opt-in; no-op when `formula` map absent).
-    # FABRICATED / INCONSISTENT -> always FAIL (blocking).  MISSING -> WARN only
-    # (never blocking; books register genuine gaps in the map's `ignore` list).
+    # FABRICATED / INCONSISTENT -> always FAIL (blocking).
+    # MISSING -> FAIL (blocking) UNLESS the number is explicitly registered in
+    #   `formula.ignore`.  writing-rules 硬性要求 7 规定：书源所有带编号公式
+    #   （含描述性散文/推导过程中的编号公式）都必须 1:1 出现在总结并挂
+    #   \tag；因此一个"未在 ignore 登记的 MISSING"等价于"总结漏写了公式"，
+    #   必须阻断以防漏写。合法省略（如纯排版重复）须显式写进 `formula.ignore`。
+    # LETTER-LED (q_ll): FAIL, BLOCKING — letter/Roman-led numbering (A.3)/(I.2)
+    #   is NOT validated yet (reserved; norm()/patterns are digit-led).  Encountering
+    #   such numbering makes the formula-label audit incomplete, so it must block
+    #   (not warn): the book cannot pass until the supporting logic (optional leading
+    #   `[A-Za-z]{1,4}[.\-·,]` prefix + Roman handling in norm()/build_formula_patterns,
+    #   see TODO(letter-led) anchors) is implemented.  This guarantees "implement the
+    #   logic before this book can validate" instead of a silent false-green pass.
     # Content correctness is left to human reconciliation via
     # <extract_dir>/formula_audit.md (written by verify_all).
     q_checked = r.get('q_checked', False)
@@ -425,11 +436,13 @@ def print_result(r):
             for row in q_inc:
                 print(f"  ! {row.get('number', '')}  {row.get('summary_latex', '')}")
         if q_miss:
-            print(f"\nQ-LAYER FORMULA MISSING ({len(q_miss)}) [WARN, non-blocking]: "
-                  f"book-source formula numbers absent from the summary (review / add, "
-                  f"or register in the `formula.ignore` list):")
+            problems += 1
+            print(f"\nQ-LAYER FORMULA MISSING ({len(q_miss)}) [FAIL, blocking]: "
+                  f"书源带编号公式在总结中缺失（漏写公式）。"
+                  f"恢复该公式并挂 \\tag{{<原书编号>}}；若确属可省略的排版重复，"
+                  f"须显式登记到 `formula.ignore`。未登记的遗漏一律阻断以防漏写：")
             for row in q_miss:
-                print(f"  ~ {row.get('number', '')}  {row.get('source_text', '')}")
+                print(f"  ! {row.get('number', '')}  {row.get('source_text', '')}")
         if q_om:
             print(f"\nQ-LAYER FORMULA ORDER_MISMATCH ({len(q_om)}) [WARN, non-blocking]: "
                   f"summary document order disagrees with the book's reading order "
@@ -443,13 +456,24 @@ def print_result(r):
                   f"definition section — check the \\tag is under the right section:")
             for row in q_mp:
                 print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
+        q_ll = r.get('q_letter_led', []) or []
+        if q_ll:
+            problems += 1
+            print(f"\nQ-LAYER FORMULA LETTER-LED ({len(q_ll)}) [FAIL, blocking]: "
+                  f"书源含字母/罗马开头公式编号 (A.3)/(I.2)，但 Q 层公式序标校验逻辑"
+                  f"（norm()/build_formula_patterns()）尚未实现「可选首段字母/罗马前缀」支持"
+                  f"——无法校验该部分 1:1 真实性即不可通过，须先补全逻辑才能放行。")
+            for row in q_ll:
+                print(f"  ! {row if isinstance(row, str) else row.get('source_text', '')}")
         q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)
         q_om_n, q_mp_n = len(q_om), len(q_mp)
+        q_ll_n = len(q_ll)
     else:
         q_fab_n = q_inc_n = q_miss_n = 0
         q_om_n = q_mp_n = 0
+        q_ll_n = 0
     q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
-              f"/ {q_om_n} q-om / {q_mp_n} q-mp "
+              f"/ {q_om_n} q-om / {q_mp_n} q-mp / {q_ll_n} q-ll "
               if q_checked else "")
 
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：

@@ -263,9 +263,11 @@ def process_file(path, fix):
     errors.extend(find_bare_math_errors(lines))
 
     # --- Pass 1i: equation number annotation outside $$ block (rule #10) ---
-    # Detect lines starting with （式 (N.M)） that follow a $$ closing line.
-    # These should use \tag{N.M} inside the formula block instead.
-    _eq_ann_re = re.compile(r'^（式\s*\(\d+\.\d+\)）')
+    # Detect lines like （式 (1.17)）/（式 (7)）/（式 (11.1-1)）/（式 (A.3)） that
+    # follow a $$ closing line. Regardless of the book's numbering form (single /
+    # multi-level, dot / hyphen, alphabetic), the number must go inside \tag{...}
+    # within the $$ block — never as a standalone line after the block.
+    _eq_ann_re = re.compile(r'^（式\s*\([^()]*\)）')
     for i, line in enumerate(lines):
         s = line.strip()
         if _eq_ann_re.match(s):
@@ -278,7 +280,7 @@ def process_file(path, fix):
             if prev_close is not None:
                 errors.append(
                     f'line {i + 1}: 公式编号标注（式 (...)）在 $$ 块外部 — '
-                    f'应改用 \\tag{{N.M}} 写入公式行末尾')
+                    f'应改用 \\tag{{<原书编号>}} 写入公式行末尾（编号形态逐字照搬原书）')
 
     # --- Pass 1j: blockquote-escaped display math (`$$` after `>` without `> $$`) ---
     # When a `$$` opens a display math block after a `>` line but WITHOUT the `>`

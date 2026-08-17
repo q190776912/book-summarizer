@@ -102,21 +102,21 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_3_infers_three_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_2_infers_two_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 2, "depth": 2, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 2, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_TWO_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2])
         self.assertEqual(cfg.section_depths, [1, 2])
         self.assertEqual(cfg.max_level, 2)
 
     def test_ordinal_1_infers_single_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 1, "depth": 1, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 1, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_SINGLE)
         self.assertEqual(cfg.section_types, [1])
         self.assertEqual(cfg.section_depths, [1])
@@ -124,7 +124,7 @@ class TestBookConfigFromDict(unittest.TestCase):
 
     def test_ordinal_5_roman_infers_three_level(self):
         # roman (ordinal=5) is a three-level book -> subsection level now live.
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 5, "depth": 3, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 5, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_ROMAN)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
@@ -184,7 +184,7 @@ class TestBookConfigFromDict(unittest.TestCase):
     # -- helpers: max_level / section_depth / section_role --
     def test_helpers_on_three_level(self):
         cfg = BookConfig.from_dict(
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
+            {"ordinal": [{"type": 3, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.max_level, 3)
         self.assertEqual(cfg.section_depth(1), 1)
@@ -361,7 +361,6 @@ class TestCheckDLayerE2E(unittest.TestCase):
         cfg = BookConfig(
             ordinal=[GroupConfig(
                 type=primary_type,
-                depth=ORDINAL_DEPTH.get(primary_type, 3),
                 scope=SCOPE_CHAPTER,
             )],
             section_types=list(section_types or []),
@@ -407,7 +406,7 @@ class TestCheckDLayerE2E(unittest.TestCase):
         ext = os.path.join(tmp, "_extract")
         _make_page(os.path.join(ext, "page_001.json"), pages)
         cfg = BookConfig(
-            ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL, depth=3,
+            ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL,
                                  scope=SCOPE_CHAPTER)],
             section_types=[1, 2, 3, 4],
             section_depths=[1, 2, 3, 4],
@@ -439,7 +438,7 @@ class TestCheckDLayerGM(unittest.TestCase):
         md_path, ext, _ = self._gm_setup(
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM, depth=2,
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM,
                                              scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)
@@ -456,7 +455,7 @@ class TestCheckDLayerGM(unittest.TestCase):
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1},
                 {"sec": 2, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM, depth=2,
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM,
                                              scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)
@@ -472,7 +471,7 @@ class TestCheckDLayerGM(unittest.TestCase):
         md_path, ext, _ = self._gm_setup(
             md, pages, {"chapters": [{"num": 1, "sections": [
                 {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_ROMAN, depth=3,
+        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_ROMAN,
                                              scope=SCOPE_CHAPTER)])
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertNotIn("levels", out)

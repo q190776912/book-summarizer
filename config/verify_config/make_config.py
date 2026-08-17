@@ -323,7 +323,8 @@ def detect_formula(extract_dir):
     decides the global formula config by whole-book aggregation (never by
     sampling the first N pages).
 
-    Returns a ``{"type", "depth", "scope", "ignore"}`` dict, or ``None`` when
+    Returns a ``{"type", "scope", "ignore"}`` dict (``depth`` is DERIVED from
+    ``type`` via ORDINAL_DEPTH, so it is not part of the config), or ``None`` when
     neither shape is detected (caller then simply omits the ``formula`` key).
 
     Phase guard: requires MM Repair to be finished (``_extraction_done.json``
@@ -373,10 +374,10 @@ def detect_formula(extract_dir):
                 scope = 3
                 break
             seen_max = max(seen_max, n)
-        return {"type": 1, "depth": 1, "scope": scope, "ignore": []}
+        return {"type": 1, "scope": scope, "ignore": []}
     if dotted_count > single_count and dotted_count > 0:
         # Two-component book -> chapter-level numbering (scope 2).
-        return {"type": 4, "depth": 2, "scope": 2, "ignore": []}
+        return {"type": 4, "scope": 2, "ignore": []}
     return None
 
 
@@ -750,11 +751,10 @@ def main():
         ordinal_arr.append({
             "type": ordinal,
             "name": name if name else ["uncat"],
-            "depth": depth,
             "scope": scope,
         })
     if not ordinal_arr:
-        ordinal_arr = [{"type": ordinal, "name": ["uncat"], "depth": depth, "scope": scope}]
+        ordinal_arr = [{"type": ordinal, "name": ["uncat"], "scope": scope}]
     config = {
         "ordinal": ordinal_arr,
         "strict": True,

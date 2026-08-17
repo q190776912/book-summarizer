@@ -122,7 +122,14 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 # ORDINAL style code -> default component count, used when the `formula` map
 # supplies `type` but no explicit `depth`.  Mirrors config.ORDINAL_SECTION_TYPES
 # lengths so the formula config aligns with the entry-ordinal config shape.
-_DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3}
+# Canonical `type` -> numbering-depth map.  SINGLE source of truth, shared with
+# config/verify_config/verify_config.py (ORDINAL_DEPTH).  `depth` is NOT an
+# independent config field in the `formula` map — it is always derived from
+# `type`, so we reuse ORDINAL_DEPTH directly instead of a second, drift-prone map.
+try:
+    from verify_config import ORDINAL_DEPTH as _DEFAULT_DEPTH_BY_TYPE
+except Exception:  # pragma: no cover — boot normally injects config/verify_config
+    _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3, 9: 3}
 
 # Heading regex used to assign a book-source formula its enclosing section.
 # Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ...".
@@ -365,6 +372,28 @@ class SourceFormulaIndex:
                     j = _section_match(cs, md_sections, cur)
                     if j > cur:
                         cur = j
+                # Strogatz-style section advance: the book carries clean section
+                # TITLES ("4.1 Examples and Definitions", "4.6 Superconducting
+                # Josephson Junctions") instead of Kreyszig's `C.S-1` entry
+                # markers.  Advance `cur` ONLY to the *immediate next* summary
+                # section when a source heading matches it exactly (sequential
+                # progression).  This prevents out-of-order section *mentions*
+                # (chapter roadmaps, cross-references) on early pages from
+                # jumping `cur` forward and sweeping later pages' numbers into
+                # the wrong section.  A 3-level heading like `7.2.1` reduces to
+                # `7.2` and still confirms the next section.  Monotonic by
+                # construction (cur only ever +1).  For Kreyszig this is
+                # redundant with the dash markers above and lands on the same
+                # section, so behaviour is unchanged.  Without any advance
+                # signal, `cur` would stick at 0 and every book number would
+                # pile into the first section, producing mass false MISSING.
+                _hm = _HEAD_RE.match(txt.strip())
+                if _hm and len(txt.strip()) < 80:
+                    _hs = _hm.group(1)
+                    _hp = _hs.split('.')
+                    _h2 = '.'.join(_hp[:2]) if len(_hp) >= 2 else _hs
+                    if cur + 1 < len(md_sections) and _h2 == md_sections[cur + 1]:
+                        cur = cur + 1
                 sec = md_sections[cur] if cur < len(md_sections) else md_sections[-1]
                 y = None
                 if isinstance(block, dict):
@@ -638,7 +667,12 @@ class SourceFormulaIndex:
             return None
         core = m.group(1)
         suffix = m.group(2)
-        return re.sub(_SEP_CLASS, '.', core) + suffix
+        # Fold separators to '.' and strip leading zeros per component so that
+        # `(02)` / `(02.5)` normalise to `2` / `2.5` and match `\tag{2}` /
+        # `\tag{2.5}`.  Pure-digit components only, so int() is safe.
+        norm_core = re.sub(_SEP_CLASS, '.', core)
+        norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
+        return norm_core + suffix
 
 
 def _extract_summary_tags(md_file: str) -> List[FormulaTag]:
@@ -763,7 +797,8 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
 
     if len(configured_nums) == 0 and len(agnostic_nums) > 0:
         return (f"`formula` 配置 (type={formula.get('type')}, "
-                f"depth={formula.get('depth')}, scope={formula.get('scope', 2)}) "
+                f"depth={_DEFAULT_DEPTH_BY_TYPE.get(formula.get('type'), 3)}, "
+                f"scope={formula.get('scope', 2)}) "
                 f"在本章书源中抽不到任何公式编号，但 agnostic 探测抽到 "
                 f"{len(agnostic_nums)} 个编号；depth/scope 与书实际公式形态不符，"
                 f"请按书源真实编号重配 formula（例如单分量节级重排书应 "
@@ -1192,9 +1227,10 @@ class QLayer(VerifyLayer):
                     "verify_config.json 缺少 `formula` 配置 → Q 层已静默 no-op，"
                     "公式序标**未校验**，不可报\"公式校验通过\"。\n"
                     "  → 请先按书实际公式编号填写 `formula` 配置再跑 verify：\n"
-                    "      \"formula\": {\"type\": <风格码>, \"depth\": <编号段数>, "
-                    "\"scope\": 2, \"ignore\": []}\n"
-                    "    depth: C.N(如 2.6)→2；C.S.N / C.S-N(如 11.1-1)→3。\n"
+                    "      \"formula\": {\"type\": <风格码>, \"scope\": 2, "
+                    "\"ignore\": []}\n"
+                    "    type 已包含编号段数：C.N(如 2.6)→type 4；C.S.N / C.S-N"
+                    "(如 11.1-1)→type 3；单分量 (N)→type 1。\n"
                     "    scope 默认 2（章级编号，开启跨章守卫）；全局编号书用 1。\n"
                     "    不确定段数时，先扫该书 page_*.json 的 text[] 实测公式标签。",
                     file=sys.stderr,
@@ -1203,7 +1239,8 @@ class QLayer(VerifyLayer):
 
         formula = ctx.config.formula
         ftype = formula.get('type')
-        fdepth = formula.get('depth')
+        # `depth` is DERIVED from `type` via ORDINAL_DEPTH — it is NOT read from
+        # the config (any stale `depth` key is ignored on purpose).
         fignore = set(formula.get('ignore') or [])
         fkeep = formula.get('keep_cross_refs', True)
         scope = formula.get('scope', 2)
@@ -1214,7 +1251,7 @@ class QLayer(VerifyLayer):
         # Cross-chapter guard (first component == current chapter) is ON iff
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
-        ncomp = fdepth or _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
+        ncomp = _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
         patterns = build_formula_patterns(ncomp)
 
         # Pre-flight: validate the formula config against the actual book BEFORE

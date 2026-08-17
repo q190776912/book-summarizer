@@ -37,7 +37,7 @@ CH = 1
 START, END = 1, 8
 
 VERIFY_CONFIG = {
-    "ordinal": [{"type": 3, "name": ["uncat"], "depth": 3, "scope": 3}],
+    "ordinal": [{"type": 3, "name": ["uncat"], "scope": 3}],
     "strict": True,
     "language": "en",
 }

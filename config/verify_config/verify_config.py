@@ -142,14 +142,24 @@ class GroupConfig:
     whose label matches `name` share a counter; different groups NEVER merge; an
     item whose label matches no group falls into the `uncat` fallback group.
     """
-    type: int = ORDINAL_THREE_LEVEL          # ORDINAL_* style code (1..7)
+    type: int = ORDINAL_THREE_LEVEL          # ORDINAL_* style code (1..9)
     name: List[str] = field(default_factory=lambda: ["uncat"])  # label categories
-    depth: int = 3                           # numeric components of an item key
     scope: int = SCOPE_CHAPTER               # 1=book / 2=chapter / 3=section
 
     @property
     def is_uncat(self) -> bool:
         return "uncat" in self.name
+
+    @property
+    def depth(self) -> int:
+        """Numeric components of an item key (e.g. ``1.1-2`` -> 3).
+
+        DERIVED from `type` via the canonical `ORDINAL_DEPTH` map — `depth`
+        is NOT an independent config field.  `type` already encodes BOTH the
+        numbering depth AND the structural style, so a separate `depth` field
+        only invites the two to drift out of sync.  Treat `depth` as a read-only
+        projection of `type`; it is never serialized and is ignored on load."""
+        return ORDINAL_DEPTH.get(self.type, 3)
 
     def group_prefix_len(self) -> int:
         """Number of leading numeric components that form the counter's
@@ -310,11 +320,10 @@ class BookConfig:
     # None the whole Q-LAYER is a pure no-op (neutral `q_*` metadata, no
     # report, never contributes to FAIL), so the 16 legacy layers and already
     # finished books are completely untouched.  Map shape:
-    #   {"type": 3, "depth": 3, "scope": 2, "ignore": []}
-    #   type  : ORDINAL_* style code (1..8); selects the DEFAULT depth (from
-    #           ORDINAL_SECTION_TYPES) when `depth` is absent.
-    #   depth : numeric component count of a formula key (2 -> 1.17,
-    #           3 -> 11.1-1). Drives the derived source-extraction regex.
+    #   {"type": 3, "scope": 2, "ignore": []}
+    #   type  : ORDINAL_* style code (1..9); `depth` is DERIVED from `type`
+    #           via the canonical ORDINAL_DEPTH map, so it is NOT a separate
+    #           field (it can never desync from `type`).
     #   scope : 1=book / 2=chapter / 3=section — number reset window; the
     #           cross-chapter guard (first component == current chapter) is
     #           ON iff scope == 2.
@@ -441,13 +450,13 @@ class BookConfig:
                 nm = g.get('name') or ["uncat"]
                 if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
                     raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
-                dp = int(g.get('depth', ORDINAL_DEPTH.get(t, 3)))
-                if dp < 1:
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].depth={dp} 必须 >=1")
+                # `depth` is a DERIVED projection of `type` (GroupConfig.depth);
+                # it is intentionally NOT read from the config, so a stale or
+                # overridden `depth` can never desync from the authoritative type.
                 sc = int(g.get('scope', SCOPE_CHAPTER))
                 if sc not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
                     raise ConfigError(f"[CONFIG] ordinal[{i}].scope={sc} 非法（应 1/2/3）")
-                groups.append(GroupConfig(type=t, name=list(nm), depth=dp, scope=sc))
+                groups.append(GroupConfig(type=t, name=list(nm), scope=sc))
 
         rep = groups[0].type
 
@@ -642,7 +651,7 @@ class ConfigLoader:
             raise ConfigError(
                 f"[CONFIG] {self.verify_config_path} 未声明 ordinal 数组"
                 f"（应为 GroupConfig 数组，例如 "
-                f'[{{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}}]）。'
+                f'[{{"type": 3, "name": ["uncat"], "scope": 2}}]）。'
                 f" 旧版整型 ordinal 已废弃，请运行 "
                 f"python config/verify_config/make_config.py --force <book>/_extract 重新生成。"
             )
@@ -650,11 +659,7 @@ class ConfigLoader:
             if g.type not in ORDINAL_CODES:
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].type={g.type}"
-                    f" 非法（应 1..8）。")
-            if g.depth < 1:
-                raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].depth={g.depth}"
-                    f" 必须 >=1。")
+                    f" 非法（应 1..9）。")
             if g.scope not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].scope={g.scope}"

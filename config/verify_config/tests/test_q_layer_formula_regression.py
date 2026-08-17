@@ -109,7 +109,7 @@ class SectionHappyPathTest(unittest.TestCase):
         # Kreyszig shape: per-section single-component numbers (1)(2) in §3.1,
         # (1) in §3.2, with matching \tag; correct scope=3 config.
         ctx = _ctx(3, 1, 2, KREYSZIG_MD, KREYSZIG_EXT,
-                   formula={'type': 1, 'depth': 1, 'scope': 3, 'ignore': []})
+                   formula={'type': 1, 'scope': 3, 'ignore': []})
         res = QLayer().run(ctx)
         md = res.metadata
         self.assertTrue(md['q_checked'])
@@ -170,7 +170,7 @@ class MismatchMustFailTest(unittest.TestCase):
                 "3.1-2 Lemma. We set b = 2 (2).",
             ])
             ctx = _ctx(3, 1, 2, md, ext,
-                       formula={'type': 4, 'depth': 2, 'scope': 2, 'ignore': []})
+                       formula={'type': 4, 'scope': 2, 'ignore': []})
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
                 res = QLayer().run(ctx)
@@ -197,7 +197,7 @@ class AntiCheatTest(unittest.TestCase):
             with open(md, 'w', encoding='utf-8') as f:
                 f.write(md_text)
             ctx = _ctx(3, 1, 2, md, KREYSZIG_EXT,
-                       formula={'type': 1, 'depth': 1, 'scope': 3, 'ignore': []})
+                       formula={'type': 1, 'scope': 3, 'ignore': []})
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
                 res = QLayer().run(ctx)
@@ -212,7 +212,7 @@ class MakeConfigFormulaKeyTest(unittest.TestCase):
     def test_make_config_emits_formula_key(self):
         # Synthetic Kreyszig-shaped _extract (every section restarts at (1)).
         # Subprocess the fixed make_config.py; the generated verify_config.json
-        # must contain 'formula' with depth==1 / scope==3.
+        # must contain 'formula' with type==1 / scope==3 (depth derived from type, not stored).
         with tempfile.TemporaryDirectory() as d:
             ext = os.path.join(d, '_extract')
             os.makedirs(ext, exist_ok=True)
@@ -235,7 +235,8 @@ class MakeConfigFormulaKeyTest(unittest.TestCase):
                 cfg = json.load(f)
             self.assertIn('formula', cfg,
                           "make_config must emit the 'formula' key")
-            self.assertEqual(cfg['formula']['depth'], 1)
+            self.assertEqual(cfg['formula']['type'], 1)
+            self.assertNotIn('depth', cfg['formula'])
             self.assertEqual(cfg['formula']['scope'], 3)
 
 
@@ -308,8 +309,9 @@ class GlobalDetectionTest(unittest.TestCase):
                              msg=f"detect_formula failed: {r.stderr}")
             real = json.loads(r.stdout)
             self.assertIsNotNone(real, "detect_formula must not return None")
-            self.assertEqual(real['depth'], 2,
-                             "production detector must read all 40 pages")
+            self.assertEqual(real['type'], 4,
+                             "production detector must read all 40 pages (two-component -> type 4)")
+            self.assertNotIn('depth', real)
 
 
 @unittest.skipUnless(os.path.isdir(REAL_EXT_DIR),

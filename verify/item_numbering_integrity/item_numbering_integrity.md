@@ -27,10 +27,10 @@
 
 **单一配置文件**：`<book>/_extract/verify_config.json`（扁平，存放分组与抑制字段 `ordinal`（分组对象数组 `List[GroupConfig]`） / `language` / `strict` / `ignore`）。`<book>/verify_config.json` 仅作为向后兼容的回退位置。不存在 `b_numbering.json` 这种独立文件，也没有 `b_numbering` 子键——一份文件，一种 schema，编号约定与抑制集合共用同一真相源。分组由 `ordinal` 数组表达（多个具名 group = per-type，单个 uncat group = combined），无 `disable` / `separate_types` 字段；层不再被跳过，噪声一律经统一的 `ignore` 集合抑制（WARNING 门，非跳过）。
 
-缺省/非法 → 默认 `ordinal=[{type:3, name:["uncat"], depth:3, scope:3}]`(三级CN), `strict=True`。旧整型 ordinal / `separate_types` 写法被 `from_dict` 拒绝（报 `make_config --force` 提示）。
+缺省/非法 → 默认 `ordinal=[{type:3, name:["uncat"], scope:3}]`(三级CN), `strict=True`。旧整型 ordinal / `separate_types` 写法被 `from_dict` 拒绝（报 `make_config --force` 提示）。
 
 `BookConfig` 字段（经 `ConfigLoader` 读入，挂在 `ctx.config`）：
-- `ordinal`：**分组对象数组** `List[GroupConfig]`，每个元素 `{type, name, depth, scope}`（见 `config/verify_config/verify_config.py` 的 `GroupConfig`）。`type` 为编号风格码（`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)，`7`=Fraleigh）；数组首元素 `type` 即 `primary_type`。`name` 为该组标签词（如 `["Theorem"]`，兜底组 `["uncat"]`）；`depth` 为编号层级数（由 `ORDINAL_DEPTH[type]` 推导，如 `4.11-5` 在 `type=3` 下为 3 级）；`group_for_label(label)` 把标签映射到其 group，匹配不到的回落 uncat 组。
+- `ordinal`：**分组对象数组** `List[GroupConfig]`，每个元素 `{type, name, scope}`（见 `config/verify_config/verify_config.py` 的 `GroupConfig`）。`type` 为编号风格码（`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)，`7`=Fraleigh）；数组首元素 `type` 即 `primary_type`。`name` 为该组标签词（如 `["Theorem"]`，兜底组 `["uncat"]`）；`depth` 为编号层级数，由 `type` 经 `ORDINAL_DEPTH[type]` 派生（如 `4.11-5` 在 `type=3` 下为 3 级），不再作为独立配置字段；`group_for_label(label)` 把标签映射到其 group，匹配不到的回落 uncat 组。
 - `scope`（**per-group，非顶层字段**）：末级序号的重置/连续性边界（`1`=book 全书 | `2`=chapter 章内 | `3`=section 节内）。`GroupConfig.group_prefix_len()` 取 `sp={1:0,2:1,3:2}[scope]` 并钳到 `min(sp, depth-1)`；错配不会崩溃。
 - 分组粒度（per-type vs combined）：用多个具名 group（如 `Theorem`/`Lemma`/`Definition` 各一个）→ 每类独立计数器；单个 `uncat` group → 各类共享一个计数器。
 - `strict`：`True`（默认）→ md 内部缺口成为 BLOCKING（不允许遗漏）；`False` → 降级为 `b_gap_warnings`。
@@ -63,7 +63,7 @@
 ## 相关代码（`verify/item_numbering_integrity/script/item_numbering_integrity.py`）
 - `code = 'B'`，`order = 3`，`auto_fixable = False`。
 - **与 EXTRACT 解耦**：B 不再消费 `ctx.extraction_blocking`；提取侧查漏 + 完整性 + `ignored_hit` 全部由 B 自行计算（数据源为 EXTRACT 供水集 `ctx.items` / `ctx.entry_keys` / `ctx.all_keys`）。EXTRACT 现仅供水、不做事。
-- 编号配置由 `config/verify_config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层读 `ctx.config`，**不再各自读文件**（配置统一经 `ConfigLoader` 一次性加载）。分组由 `ordinal` 数组各 group 的 `type`/`depth`/`scope` 决定（见 `config/verify_config/verify_config.py` 的 `GroupConfig` / `ORDINAL_DEPTH`），JSON 里 `ordinal` 必填为数组。
+- 编号配置由 `config/verify_config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层读 `ctx.config`，**不再各自读文件**（配置统一经 `ConfigLoader` 一次性加载）。分组由 `ordinal` 数组各 group 的 `type`/`scope` 决定（`depth` 由 `type` 派生）（见 `config/verify_config/verify_config.py` 的 `GroupConfig` / `ORDINAL_DEPTH`），JSON 里 `ordinal` 必填为数组。
 - `ItemNumberingIntegrityLayer.run`（自包含，不依赖任何其他层）：
   1. 整章完整性（原 A 层）：`truly_missing = sorted(extracted - all_keys)`、`mentioned_only = sorted((extracted & all_keys) - entry_keys)`、`extra = sorted(all_keys - extracted)`，其中 `extracted = {it['key'] for it in ctx.items} - ignore_keys`；并算 `ignored_hit` stage1（噪声键 `extracted_raw & ignore_keys`）。
   2. 提取侧查漏（原 P2 的 Q+over-mark 逻辑）：`_merged_category_first_missing(ctx, all_keys, blocking)` + `_merged_ocr_overmark_guard(ctx, items, warnings)`（基于 raw `page_*.json` + `ctx.items` + md）。

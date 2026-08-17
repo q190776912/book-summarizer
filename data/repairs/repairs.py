@@ -9,8 +9,9 @@ Usage:
 - <mm_repair_dir>: directory containing repairs_part_*.json + manifest.json
 - <extract_dir>:   directory containing page_*.json (only needed for validation against manifest)
 
-Merges the three top-level maps (corrections / ok / to_structured) across all
-repairs_part_NN.json files. Pages are scoped to disjoint ranges by the fan-out
+Merges the top-level maps (corrections / ok / to_structured / deferred /
+unavailable) across all repairs_part_NN.json files. Pages are scoped to disjoint
+ranges by the fan-out
 tool, so collisions should not occur — but we detect and report any.
 
 Validation (if manifest.json present):
@@ -52,15 +53,19 @@ def load(p):
 class Repairs(JsonData):
     """The ``repairs.json`` document — a JSON subclass with a merge constructor.
 
-    Top-level maps: corrections / ok / to_structured / deferred. The first
-    three come from the merge path (``repairs_part_*.json``); ``deferred`` is
-    emitted by the text-compare path (``mm_repair_text_compare.py``) for
-    entries left unresolved for the visual agent.
+    Top-level maps: corrections / ok / to_structured / deferred / unavailable.
+    The first three come from the merge path (``repairs_part_*.json``);
+    ``deferred`` is emitted by the text-compare path (``mm_repair_text_compare.py``)
+    for entries left unresolved for the visual agent; ``unavailable`` holds
+    entries judged unrecoverable after multiple visual review rounds (pure OCR
+    noise / severe garble) — apply marks them ``mm_unavailable`` and lets the
+    gate pass without polluting content.
     """
     corrections: Dict[str, dict] = field(default_factory=dict)
     ok: Dict[str, list] = field(default_factory=dict)
     to_structured: Dict[str, dict] = field(default_factory=dict)
     deferred: Dict[str, list] = field(default_factory=dict)
+    unavailable: Dict[str, list] = field(default_factory=dict)
 
     # ---- constructor ----
     @classmethod
@@ -70,7 +75,7 @@ class Repairs(JsonData):
         if not parts:
             raise FileNotFoundError(f"MERGE: no repairs_part_*.json found in {mm_dir}")
 
-        merged = {"corrections": {}, "ok": {}, "to_structured": {}, "deferred": {}}
+        merged = {"corrections": {}, "ok": {}, "to_structured": {}, "deferred": {}, "unavailable": {}}
         collisions = []
         part_counts = {}
 
@@ -83,7 +88,7 @@ class Repairs(JsonData):
             dd = sum(len(v) for v in data.get("deferred", {}).values())
             part_counts[tag] = (c, o, t, dd)
 
-            for sec in ("corrections", "ok", "to_structured", "deferred"):
+            for sec in ("corrections", "ok", "to_structured", "deferred", "unavailable"):
                 src = data.get(sec, {})
                 dst = merged[sec]
                 for page, val in src.items():
@@ -91,7 +96,7 @@ class Repairs(JsonData):
                         dst[page] = val
                     else:
                         # collision handling
-                        if sec in ("ok", "deferred"):
+                        if sec in ("ok", "deferred", "unavailable"):
                             existing = set(dst[page])
                             incoming = set(val)
                             dup = existing & incoming
@@ -109,7 +114,7 @@ class Repairs(JsonData):
         if os.path.isfile(manifest_path):
             manifest = load(manifest_path)
             man_pages = manifest.get("pages", {})
-            for sec in ("corrections", "ok", "to_structured", "deferred"):
+            for sec in ("corrections", "ok", "to_structured", "deferred", "unavailable"):
                 for page, val in merged[sec].items():
                     mp = man_pages.get(page)
                     if mp is None:
@@ -122,7 +127,8 @@ class Repairs(JsonData):
                             warnings.append(f"[{sec}] page {page} key {k} not in manifest")
 
         inst = cls(corrections=merged["corrections"], ok=merged["ok"],
-                   to_structured=merged["to_structured"], deferred=merged["deferred"])
+                   to_structured=merged["to_structured"], deferred=merged["deferred"],
+                   unavailable=merged["unavailable"])
         return inst, collisions, warnings, part_counts
 
     # ---- export ----
@@ -132,6 +138,7 @@ class Repairs(JsonData):
             "ok": self.ok,
             "to_structured": self.to_structured,
             "deferred": self.deferred,
+            "unavailable": self.unavailable,
         }
 
     @classmethod
@@ -153,6 +160,7 @@ class Repairs(JsonData):
             ok=d.get("ok", {}) or {},
             to_structured=d.get("to_structured", {}) or {},
             deferred=d.get("deferred", {}) or {},
+            unavailable=d.get("unavailable", {}) or {},
         )
 
 

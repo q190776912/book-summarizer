@@ -59,6 +59,8 @@ def dump_range(book_dir, start, end):
         if formulas:
             flines = []
             for fo in formulas:
+                if fo.get("mm_unavailable"):
+                    continue
                 bbox = fo.get("bbox")
                 latex = fo.get("latex", "")
                 flines.append(f"    [F] bbox={bbox} :: {latex}")
@@ -68,6 +70,8 @@ def dump_range(book_dir, start, end):
         texts_sorted = sorted(texts, key=sort_key)
         lines.append("  --- text ---")
         for t in texts_sorted:
+            if t.get("mm_unavailable"):
+                continue
             txt = t.get("text", "")
             lines.append(f"    {txt}")
     return "\n".join(lines)

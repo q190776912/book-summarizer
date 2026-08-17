@@ -49,6 +49,7 @@ python flows/extract/mm_repair/script/mm_repair_text_compare.py "<pdf_path>" "<_
   - 实为公式（OCR 误当文本行）→ 在 `to_structured` 写结构化结果（见 Step 5 说明，apply 会转成 `formulas[]` 新条目）；
   - **公式 + 文本混合行** → 在 `to_structured` 用分段列表写出（一行可含**多个公式 + 多个文本**交错，例如 `("("` + `k=0,1,\dots,n` + `")"`）。
   - 实为文本（MFD 误把纯文本当公式）→ 在 `to_structured` 对该 `formula:<i>` 写文本串 / 分段，apply 会把公式项从 `formulas[]` 移回 `text[]`（见 Step 5 说明）。
+  - **🔴 经多轮视觉审读仍不可恢复 → 记 `unavailable`（不可读，跳过）**：纯 OCR 噪声（孤立 `@` / `&` / 游标字符 / 近空行）或严重乱码碎片，经多轮（含重派）视觉审读一致判为不可恢复 → 在 `unavailable` 段按页列出条目键（`{"unavailable": {"091": ["text:23"], ...}}`，**形态同 `ok` 的列表**，不是字典）。apply 会标 `mm_unavailable` 并放行（见 Step 5 + 出口），**下游 write-source / verify 跳过、不污染内容**。🔴 绝不可为凑 resolved 计数而强行编造修正值——不可恢复就是不可恢复，诚实标 `unavailable` 优于假修正。
 - 若不具备识图能力 → 跳过本步（deferred / 公式条目保持未解决，由 `MM_UNAVAILABLE` 或下游处理）。
 
 **Step 5 — 应用（写回 page JSON）**
@@ -64,7 +65,8 @@ python flows/extract/mm_repair/script/mm_repair_apply.py "<_extract_dir>"
     - text 方向：原 text 项被这些段整体替代 / 删除；formula 方向：原 formula 项被删除（纯文本）或保留（含公式段时更新 `latex`）。
   - 修正条目：`text`/`latex` 更新，原值存 `text_ocr`/`latex_ocr`，加 `mm_repaired: true`；
   - 确认 OK：加 `mm_reviewed: true`。
-  - **幂等**：只处理未 `mm_repaired`/`mm_reviewed` 的条目，重复跑安全。
+  - **`unavailable`（不可恢复，跳过，不污染内容）**：条目经多轮视觉审读仍判为不可恢复（纯 OCR 噪声 / 严重乱码碎片）→ 设 per-entry `mm_unavailable: true` + 页级 `data["MM_UNAVAILABLE"] = true` + manifest 该条目 `resolved = true`（闸门放行，满足出口「每页至少一标记」）。下游 `dump_chapter_ocr.py` 导出 OCR 时跳过（`if fo.get("mm_unavailable"): continue` / `if t.get("mm_unavailable"): continue`），writer agent 不会看到垃圾条目，内容不被污染。🔴 不可恢复必须诚实标 `unavailable`，**绝不强行编造修正值**（会污染书内容）。
+  - **幂等**：manifest 已 `resolved` 的条目（含 `mm_repaired` / `mm_reviewed` / `mm_unavailable`）一律跳过（apply 开头 `if e.get("resolved"): continue`），重复跑安全。
 - 回写后立即 `json.load` 复验（保持 schema 不变、UTF-8、JSON 合法）。
 
 **完整命令序列（5 步）**
@@ -99,6 +101,10 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
   1. **条目全部 resolved**：`_mm_repair/repairs.json` 中审计标出的条目**全部 resolved**（都有 `corrections` / `ok` / `to_structured` 处置），且 `manifest` 中**每个条目的 `resolved == true`**（统计 `manifest['pages'][p]['entries']` 全部 resolved，计数须 == 总条目数）；**且**
   2. **每页标记落盘**：`page_*.json` 条目里出现 `mm_repaired` / `mm_reviewed` 标记（修正已落盘），且**本书每一页** `page_*.json` 都至少含一个该类标记（或显式 `MM_UNAVAILABLE`）——任一页缺标记即视为未完成。
 - 无视觉能力且非文本类的书：记 `MM_UNAVAILABLE` **显式标注**（须在出口确认），表示该书/该章跳过修复，此时允许进入后续阶段。
+- **`MM_UNAVAILABLE` 两种来源（出口「每页至少一标记」都接受，闸门都放行）**：
+  1. **条目级 `unavailable`（本书有视觉能力、个别条目不可恢复）**：agent 在 `repairs.json` 的 `unavailable` 段逐条列出不可恢复条目 → apply 设 per-entry `mm_unavailable: true` + 页级 `MM_UNAVAILABLE: true` + 该条目 `resolved=True`。下游 `dump_chapter_ocr.py` 跳过这些条目，不污染内容（见 Step 4 / Step 5 说明）。
+  2. **整书 / 整章无视觉能力（Step 1）**：无识图能力且非文本类 → 整本书 / 章标 `MM_UNAVAILABLE`，全部 flagged 条目直接 `resolved=True`。
+  - 两者页级标记都是 `MM_UNAVAILABLE`，出口判定都满足；区别在**成因**（个别不可恢复 vs 全书无法修），不影响闸门放行。🔴 **凡标 `MM_UNAVAILABLE` 的页，writer 阶段都不得把这些条目当作真实内容写入 `.md`**——它们是噪声 / 不可读，跳过是设计意图。
 
 ### 🔴 如何验证 `apply` 已真正写回（防误判，必做）
 - **字段名只有 `mm_repaired` / `mm_reviewed`（及 `mm_converted`）；`page_*.json` 里根本不存在 `mm_status` 这个字段。** 不要再 grep `mm_status`——它会永远为 0。

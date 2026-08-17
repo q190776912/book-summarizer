@@ -22,12 +22,20 @@ repairs.json 格式:
                {"type":"formula","latex":"k = 0,1,\\dots,n"},
                {"type":"text","text":")"} ] },
      ...
+  },
+  "unavailable": {                        // 经多轮视觉审读仍不可恢复（纯 OCR 噪声 / 严重乱码）
+     "091": ["text:23", "formula:4"],     // 形态同 ok：按页归集的条目键列表
+     ...
   }
 }
 
 对 corrections: 把 text[].text / formulas[].latex 改为正确值，
   设 mm_repaired=true，原值存入 text_ocr / latex_ocr。
 对 ok: 设 mm_reviewed=true（值不变，避免下一轮重复送审）。
+对 unavailable: 条目经多轮视觉审读仍不可恢复（纯 OCR 噪声 / 严重乱码）→ 设 per-entry
+  mm_unavailable=true + 页级 data["MM_UNAVAILABLE"]=true + manifest 该条目 resolved=true
+  （闸门放行）。下游 dump_chapter_ocr.py 会跳过 mm_unavailable 条目，不污染内容。
+  🔴 不可恢复必须诚实标 unavailable，绝不强行编造修正值。
 对 to_structured: 把被 OCR 误判为文本的整行（或整行中的一段）公式，转成 formulas[]
   的新 item，设 mm_converted=true；随后**删除原 text 项**（不保留低置信原 OCR
   文本，不存 text_ocr）。
@@ -148,9 +156,13 @@ def apply(extract_dir, dry=False, repairs_path=None):
 
     manifest = mm_repair_manifest.MmRepairManifest.load(manifest_path).data
     rep = repairs.Repairs.load(repairs_path).to_dict()
-    corrections = rep.get("corrections", {})
-    ok = rep.get("ok", {})
-    to_structured = rep.get("to_structured", {})
+    # 归一化 part 文件的页码键为零填充 3 位（"71" -> "071"），与 manifest 键一致，
+    # 否则 <100 页的 corrections/ok/to_structured 会因键不匹配被静默丢弃（Bug 2026-08-17）。
+    _norm = lambda d: {f"{int(p):03d}": v for p, v in (d or {}).items()}
+    corrections = _norm(rep.get("corrections"))
+    ok = _norm(rep.get("ok"))
+    to_structured = _norm(rep.get("to_structured"))
+    unavailable = _norm(rep.get("unavailable"))
 
     applied = 0
     reviewed = 0
@@ -171,6 +183,7 @@ def apply(extract_dir, dry=False, repairs_path=None):
         corr = corrections.get(pstr, {})
         ok_set = set(ok.get(pstr, []))
         tf_map = to_structured.get(pstr, {})
+        unavail_set = set(unavailable.get(pstr, []))
         to_delete = []  # 本页待删除的 text 索引（整行转成单个公式，无文本段）
         text_replacements = {}  # idx -> [新 text 段 dict]，整行拆成多段时替代原项
         to_delete_formula = []  # 本页待删除的 formula 索引（整条误判、实际是纯文本）
@@ -322,6 +335,19 @@ def apply(extract_dir, dry=False, repairs_path=None):
                     to_delete_formula.append(idx)
                     changed = True
                 e["resolved"] = True
+
+            elif key in unavail_set:
+                # 条目经多轮视觉审读仍不可恢复（纯 OCR 噪声 / 严重乱码碎片）。
+                # reviewed-but-unrecoverable：resolved=True（闸门放行），
+                # 并标 mm_unavailable 让下游 write-source/verify 跳过、不污染内容。
+                if kind == "text" and idx < len(texts):
+                    texts[idx]["mm_unavailable"] = True
+                elif kind == "formula" and idx < len(formulas):
+                    formulas[idx]["mm_unavailable"] = True
+                e["resolved"] = True
+                e["mm_unavailable"] = True
+                data["MM_UNAVAILABLE"] = True
+                changed = True
 
         # 循环外用统一重建 text[]/formulas[]：先跳过被整体转换的项，再把拆分出的
         # 段按阅读顺序放回。单趟重建避免删除/插入导致的索引错位。

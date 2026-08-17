@@ -148,7 +148,7 @@ class TestRequireComplete(unittest.TestCase):
     # --- (d) file present + legal ordinal array -> no raise ---------------
     def test_valid_array_ordinal_3_no_raise(self):
         loader = _loader_with_config(
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}]})
+            {"ordinal": [{"type": 3, "scope": 2}]})
         loader.require_complete()  # must not raise
         self.assertEqual(loader.book.primary_type, 3)
         self.assertEqual(len(loader.book.ordinal), 1)
@@ -158,7 +158,7 @@ class TestRequireComplete(unittest.TestCase):
 
     # --- valid explicit four-level declaration -> no raise ----------------
     def test_valid_array_ordinal_4_with_section_hierarchy_no_raise(self):
-        cfg = {"ordinal": [{"type": 4, "depth": 2, "scope": 2}],
+        cfg = {"ordinal": [{"type": 4, "scope": 2}],
                "section_types": [1, 2, 3, 4],
                "section_depths": [1, 2, 3, 4]}
         loader = _loader_with_config(cfg)
@@ -198,7 +198,7 @@ class TestRequireComplete(unittest.TestCase):
         # R6 override: a config declaring groups with NO uncat group must be
         # accepted by both from_dict and require_complete. from_dict must NOT
         # auto-append an uncat; uncat_group() falls back to ordinal[0].
-        cfg = {"ordinal": [{"type": 3, "name": ["定理"], "depth": 3, "scope": 2}]}
+        cfg = {"ordinal": [{"type": 3, "name": ["定理"], "scope": 2}]}
         bc = BookConfig.from_dict(cfg)
         self.assertEqual([g.name for g in bc.ordinal], [["定理"]])
         self.assertEqual(bc.uncat_group().name, ["定理"])  # fallback to ordinal[0]
@@ -214,15 +214,15 @@ class TestRequireComplete(unittest.TestCase):
         # illegal value and does NOT raise. Each variant below is a legal
         # post-sanitization config -> no raise. (Now uses the v2 ordinal ARRAY.)
         bad_variants = [
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "scope": 2}],
              "section_types": [1, 2], "section_depths": [1, 9]},
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "scope": 2}],
              "section_types": [1, 2, 9], "section_depths": [1, 2, 3]},
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "scope": 2}],
              "section_types": [1, 2, 3], "section_depths": [1, 2]},
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "scope": 2}],
              "section_types": [1, 2], "section_depths": [1, 0]},
-            {"ordinal": [{"type": 3, "depth": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "scope": 2}],
              "section_types": [2, 2], "section_depths": [2, 2]},
         ]
         for bad in bad_variants:

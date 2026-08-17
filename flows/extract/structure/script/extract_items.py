@@ -232,7 +232,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
                         'text': text_preview, 'mstart': m.start()})
 
 # ---------------------------------------------------------------------------
-# TWO-LEVEL numbering scheme (e.g. 周民强《实变函数论》）
+# TWO-LEVEL numbering scheme (中文二级标签）
 #   · 定义 has its OWN per-chapter counter (定义1.1, 定义1.2, ...)
 #   · 定理/引理/推论/命题 SHARE one continuous counter (1.1, 1.2, ...)
 #   · 例 are renumbered PER SECTION (例1, 例2 ...) — not emitted here; example
@@ -286,7 +286,7 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     定义8.1 / 例1.2 / 表1.20 / 图3.6 — while the Chinese translation groups
     sections into chapters (ch1 = secs 1-7, ch2 = secs 8-11, ...). The first
     number is the SECTION, not the chapter, so the `c == chapter` filter of
-    the 周民强 two-level scheme must NOT apply; instead keys are restricted to
+    the 中文二级标签 two-level scheme must NOT apply; instead keys are restricted to
     the sections belonging to this chapter (read from chapter_map.json's
     "sections" field). Labels include 例/表/图 which the built-in two-level
     scheme drops.
@@ -638,7 +638,7 @@ if __name__ == '__main__':
     # so the extraction-side B-layer resets counters at the right boundary.
     _depth = ORDINAL_DEPTH.get(ns.ordinal, ORDINAL_THREE_LEVEL)
     cfg = BookConfig(ordinal=[GroupConfig(type=ns.ordinal, name=["uncat"],
-                                          depth=_depth, scope=_depth)])
+                                          scope=_depth)])
 
     if ns.lang == "en":
         if len(ns.pos) < 3:

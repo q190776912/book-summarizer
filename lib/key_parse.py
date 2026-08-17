@@ -54,7 +54,7 @@ from verify_config import (
 GM_SEP = SEP_TIGHT[:-1] + r'、]'
 
 # --- Fraleigh (ordinal=ORDINAL_FRALEIGH): section-based two-level ---
-# Unlike 周民强-type two-level (where first number == CHAPTER and label counters
+# Unlike 中文二级标签 two-level (where first number == CHAPTER and label counters
 # are independent/shared), Fraleigh numbers items per global SECTION, and the
 # Chinese translation groups sections into chapters (ch1 = secs 1-7, ch2 = secs
 # 8-11, ...). Item keys are 标签S.N where S is the SECTION number: 定义8.1,
@@ -74,7 +74,7 @@ FR_PROSE_RE = re.compile(
 # extractor canonicalizes everything to dash, but the .md may keep the book's
 # dot style.
 
-# --- two-level key parsing (e.g. 周民强《实变函数论》) ---
+# --- two-level key parsing (中文二级标签) ---
 # Bold entries:  **定义1.1**： / **定理1.1**：
 # NOTE: labels MUST be an alternation, not a char class. A char class
 # [定义定理...] matches a SINGLE cjk char, so `**定义1.1**` (label is 2 chars)

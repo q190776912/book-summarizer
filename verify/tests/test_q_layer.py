@@ -261,7 +261,7 @@ class RunTest(unittest.TestCase):
             self._write_pages(ext, ["By (3.1) we get A.",
                                     "And (3.2) gives B."])
             ctx = _ctx(3, 1, 2, md, ext,
-                       formula={'type': 3, 'depth': 2, 'scope': 2, 'ignore': []})
+                       formula={'type': 4, 'scope': 2, 'ignore': []})
             res = QLayer().run(ctx)
             md_res = res.metadata
             self.assertTrue(md_res['q_checked'])
@@ -285,7 +285,7 @@ class RunTest(unittest.TestCase):
             # S = {3.1, 3.2, 3.5}; 3.9 not in S, 3.2 & 3.5 missing in summary
             self._write_pages(ext, ["(3.1) A.", "(3.2) B.", "(3.5) C."])
             ctx = _ctx(3, 1, 3, md, ext,
-                       formula={'type': 3, 'depth': 2, 'scope': 2, 'ignore': []})
+                       formula={'type': 4, 'scope': 2, 'ignore': []})
             res = QLayer().run(ctx)
             md_res = res.metadata
             self.assertEqual([r['number'] for r in md_res['q_fabricated']],

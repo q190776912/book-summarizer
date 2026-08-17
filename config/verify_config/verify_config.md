@@ -10,7 +10,7 @@
 | `language` | `str` | `'cn'` / `'en'`（默认 `'cn'`）。 |
 | `strict` | `bool` | 默认 `true`。 |
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
-| `formula` | `object?` | **仅书含公式序标时存在**：`{type, depth, scope:2, ignore:[]}`（见 `config_setting` 流程 规则3）。 |
+| `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。 |
 | `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |
 | `section_types` / `section_depths` | `List[int]` | 多数由 `primary_type` 自动反推；仅四级子小节 `1.1.1.1` 需显式覆盖。 |
 
@@ -64,23 +64,25 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `type` | `int` (1–8) | 编号风格码，决定段数与结构（见下「类型表」）。 |
+| `type` | `int` (1–9) | 编号风格码，**同时编码段数（depth）与结构风格**（见下「类型表」）。`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不再作为独立字段。 |
 | `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。写 `["uncat"]` 表示兜底组。 |
-| `depth` | `int` | 编号阿拉伯数字段数（≥1），即一个条目键的数字分量数（如 `1.1-2` → 3）。 |
 | `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。 |
 
-### `type` 类型表（1–8）
+### `type` 类型表（1–9）
 
-| code | 名称 | 段数 | 说明 |
-|------|------|------|------|
-| 1 | single | 1 | 单级（仅章号）。 |
-| 2 | two_level | 2 | CN 两级 `N.M`（节优先，无章过滤）。 |
-| 3 | three_level | 3 | CN 三级 `N.M.K`（默认）。 |
-| 4 | en | 2 | EN 两级 `N.M`（章优先，富英文标签）。 |
-| 5 | roman | 3 | 三级 + 罗马章号（如 `I.2.3`）。 |
-| 6 | gm | 2 | Gelfand–Manin 风格：§2 标题 + 条目章内本地从 1 起号。 |
-| 7 | fraleigh | 2 | Fraleigh 风格：按节编号、无章号位。 |
-| 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题 `N.M.A`），如 Vakil。 |
+| code | 名称 | 段数(depth) | 编号样式 | 具体示例 | 代表书/风格 |
+|------|------|----------|---------|---------|-----------|
+| 1 | single | 1 | 单级（仅一个连续号，无章/节位） | `定义 1` / `Theorem 1` | 单级编号书 |
+| 2 | two_level | 2 | CN 两级 `N.M`（节优先；无章过滤，定理族共用一条连续号） | `定义 1.1` / `定理 2.3` / `引理 4.5`（章.号） | 中文二级标签 |
+| 3 | three_level | 3 | CN 三级 `N.M.K`（默认） | `定理 1.2.3` / `定义 3.2.1` / `引理 2.4.7`（章.节.号） | 多数中文教材（如 Kreyszig 中文版） |
+| 4 | en | 2 | EN 两级 `N.M`（章优先；富英文标签词） | `Theorem 6.1` / `Lemma 2.4` / `Proposition 3.7`（章.号） | 英文两级书（如 Strogatz） |
+| 5 | roman | 3 | 三级 + 罗马数字章号 | `Definition I.2.3` / `Theorem II.4.1` / `Lemma III.1.2`（章.节.号，章号为 I/II/III） | 罗马章号书 |
+| 6 | gm | 2 | 两级，章内本地从 1 起号（无章过滤，每章重置计数器） | `Definition 1.1` / `Theorem 1.2` / `Remark 1.5`（章.号，章内从 1 起） | Gelfand–Manin |
+| 7 | fraleigh | 2 | 两级，按节编号、无章号位 | `Theorem 2.1` / `Example 4.3` / `Lemma 7.2`（节.号） | Fraleigh |
+| 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题用字母位 `N.M.A`） | `Theorem 1.2.3` / `Exercise 1.2.A` / `Proposition 4.5.B`（章.节.号） | Vakil《Foundations of Algebraic Geometry》 |
+| 9 | en3 | 3 | EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | `Remark 1.1.1` / `Definition 2.3.4` / `Theorem 3.2.1`（章.节.号） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
+
+> `depth`（段数）一律由 `type` 经 `ORDINAL_DEPTH` 派生，上表「段数(depth)」列即为其唯一来源；配置里**不要**再写 `depth` 字段。
 
 ## 如何选定每个 group 的 `type`（判定树）
 
@@ -88,21 +90,21 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 
 读 TOC / 抽一页原文，看编号长什么样？
 
-- 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（周民强型）→ `{"type":2,"name":["uncat"],"depth":2,"scope":2}`
-- 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"type":3,"name":["uncat"],"depth":3,"scope":3}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
-- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":4,"name":["uncat"],"depth":2,"scope":2}`
-- 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"type":5,"name":["uncat"],"depth":3,"scope":3}`
-- Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"type":6,"name":["uncat"],"depth":2,"scope":2}`
-- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"type":7,"name":["uncat"],"depth":2,"scope":2}`
-- Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"depth":3,"scope":3}`
+- 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（中文二级标签）→ `{"type":2,"name":["uncat"],"scope":2}`
+- 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"type":3,"name":["uncat"],"scope":3}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
+- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":4,"name":["uncat"],"scope":2}`
+- 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"type":5,"name":["uncat"],"scope":3}`
+- Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"type":6,"name":["uncat"],"scope":2}`
+- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"type":7,"name":["uncat"],"scope":2}`
+- Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"scope":3}`
 - 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费 `book_structure.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
 
-> 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"depth":2,"scope":2},{"type":4,"name":["Theorem"],"depth":2,"scope":2},…,{"type":4,"name":["uncat"],"depth":2,"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
+> 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"scope":2},{"type":4,"name":["Theorem"],"scope":2},…,{"type":4,"name":["uncat"],"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
 
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈1–8、`depth`≥1、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type`∈1–9（`depth` 由 `type` 派生，不再单独校验）、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## JSON 示例
@@ -112,12 +114,12 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ```json
 {
   "ordinal": [
-    {"type": 3, "name": ["Definition", "Theorem", "Lemma", "Corollary", "Example"], "depth": 3, "scope": 3},
-    {"type": 3, "name": ["Problem"], "depth": 3, "scope": 3}
+    {"type": 3, "name": ["Definition", "Theorem", "Lemma", "Corollary", "Example"], "scope": 3},
+    {"type": 3, "name": ["Problem"], "scope": 3}
   ],
   "strict": true,
   "language": "en",
-  "formula": {"type": 1, "depth": 1, "scope": 3, "ignore": []}
+  "formula": {"type": 1, "scope": 3, "ignore": []}
 }
 ```
 
@@ -125,10 +127,10 @@ CN 三级（含公式序标，单组最简写法）：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}],
+  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "strict": true,
   "language": "cn",
-  "formula": {"type": 4, "depth": 2, "scope": 2, "ignore": []}
+  "formula": {"type": 4, "scope": 2, "ignore": []}
 }
 ```
 
@@ -136,7 +138,7 @@ EN 两级：
 
 ```json
 {
-  "ordinal": [{"type": 4, "name": ["uncat"], "depth": 2, "scope": 2}],
+  "ordinal": [{"type": 4, "name": ["uncat"], "scope": 2}],
   "strict": true,
   "language": "en"
 }
@@ -146,7 +148,7 @@ EN 两级：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}],
+  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "language": "cn",
   "figure": {"labels": ["图", "Fig"], "components": 2}
 }
@@ -156,7 +158,7 @@ EN 两级：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}],
+  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "language": "en",
   "figure": {"labels": ["Fig", "Figure"], "components": 1}
 }
@@ -166,7 +168,7 @@ EN 两级：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "depth": 3, "scope": 2}],
+  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "language": "cn",
   "figure": {"labels": []}
 }

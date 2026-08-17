@@ -32,7 +32,7 @@
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](formula_tag/formula_tag.md) |
 
 ## 步骤（有序）
-1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`depth=2`，`C.S.N`/`C.S-N`→`depth=3`，章级 `scope=2`，再写 `{"type":<码>,"depth":<段数>,"scope":2,"ignore":[]}`）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
+1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 4`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
 2. 批量校验：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过

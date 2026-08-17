@@ -52,16 +52,35 @@ def read_structure_items(ext_dir, ch):
         return []
     items = []
     for n in nodes:
-        # Canonicalize the structure key into the SAME CN label space that
-        # `keys_in_md` uses for .md labels (Definition -> 定义, etc.). The
-        # BookStructure model emits EN keys like `Definition1.1` (type+number,
-        # no space), while the .md side is canonicalized to `定义1.1`; without
-        # this normalization the two sets never intersect and every EN-book
-        # item is falsely reported as truly-missing. For CN books the structure
-        # key is already `定义1.1`, so this is a no-op (idempotent).
-        _num = re.search(r'\d+(?:\.\d+)*', (n.key or n.name or ''))
-        _number = _num.group(0) if _num else ''
-        _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
+        # Canonicalize the structure key into the SAME key space that
+        # `keys_in_md` emits for the .md, so the A-layer truly-missing / extra
+        # comparison intersects 1:1.
+        #
+        # * Three-level books (ORDINAL_THREE_LEVEL, e.g. Kreyszig) store item
+        #   keys as '1.1-1' (section-item, dash) and `keys_in_md` emits them
+        #   BARE ('1.1-1') — no label.  The legacy code applied
+        #   `TYPE_TO_LABEL + \d+(?:\.\d+)*`, which (a) prepended the label and
+        #   (b) only captured the dotted section path, dropping the dash item
+        #   component.  That produced '定义1.1' AND collapsed every item in a
+        #   section into one key, so NOTHING matched the bare md keys and the
+        #   whole chapter was falsely reported truly-missing + extra.  For any
+        #   key whose numeric path carries a dash ('N.S-N') we now emit the bare
+        #   dash form, normalized from any wildcard separator.
+        # * Two-level / EN / EN3 books keep the legacy label-prefixed, dotted
+        #   behavior ('定义1.1' / 'Remark1.1.1'), which already matches
+        #   `keys_in_md`'s output for those ordinals (their keys have no dash).
+        raw = (n.key or n.name or '')
+        m = re.search(r'\d+(?:[.\-－．]\d+)+', raw)
+        if not m:
+            m = re.search(r'\d+', raw)
+        num_raw = m.group(0) if m else ''
+        if '-' in num_raw:
+            # Three-level: emit bare dash form ('1.1-1'), no label.
+            _canon = _normalize_threelevel(num_raw)
+        else:
+            _num = re.search(r'\d+(?:\.\d+)*', num_raw)
+            _number = _num.group(0) if _num else ''
+            _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
         items.append({
             'key': _canon,
             'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
@@ -69,6 +88,16 @@ def read_structure_items(ext_dir, ch):
             'text': n.name,
         })
     return items
+
+
+def _normalize_threelevel(s):
+    """Normalize a three-level numeric path to bare dash form 'N.S-N',
+    regardless of the original separators (dots / dashes / fullwidth)."""
+    parts = re.split(r'[.\-－．]', s)
+    parts = [p for p in parts if p]
+    if len(parts) >= 3:
+        return f'{parts[0]}.{parts[1]}-{parts[2]}'
+    return s
 
 
 def md_keys_for_chapter(md_file, cfg, ch):

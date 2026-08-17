@@ -380,6 +380,9 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
     return items, [], []
 
 
+
+
+from item_dedup import dedup_items
 def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, cfg=None):
     # `cfg` is the BookConfig (grouping source of truth).  Dispatch on the
     # PRIMARY group's style code.  When omitted, fall back to a default
@@ -528,76 +531,12 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
 
     # ---- Dedup: prefer the EARLIEST GENUINE heading -------------------------
     # A single key can be mentioned on several pages: its REAL definition page
-    # (a genuine item heading) plus various references/usages (forward refs like
-    # "Example 1.5-3 in the next section", chapter-summary listings on the
-    # chapter-opening page, "this theorem states that…", "(below)", etc.).
-    # The page_start we emit must point at the definition page, because
-    # write-source fetches that page's text to summarise the item — a wrong
-    # anchor silently poisons the summary content (hard to detect later).
-    #
-    # The old rule ("first occurrence, with uncat → non-uncat override") let a
-    # reference that happened to inherit a label from a neighbour block override
-    # the genuine (uncat) definition. We now rank occurrences by GENUINENESS:
-    #   · genuine  = number at block head (or followed by its own type word /
-    #                paren title) AND not a reference context
-    #   · reference = number followed by a period (sentence fragment), "(below)",
-    #                "in the next section", "this theorem", reference verbs
-    #                (states/shows/proves/implies/follows that, we have, see,
-    #                 cf., below/above, as in, by <Capitalised>), …
-    # Among genuine occurrences pick the EARLIEST (definition page); if none is
-    # genuine, fall back to the earliest occurrence (no regression for keys whose
-    # only mention is a reference).
-    def _after_of(it):
-        key = it['key']
-        mstart = it.get('mstart', 0)
-        ko = 5 if mstart >= 5 else mstart   # offset of key start within text slice
-        return it['text'][ko + len(key):]
-
-    _REF_AFTER_NEG = re.compile(
-        r'^\.'                                              # 1. period right after number → sentence fragment
-        r'|\(below\)|\(above\)'                             # 2. (below)/(above)
-        r'|in the next|in the following|in §|in sec'          # 3. forward/backward section ref
-        r'|this\s+(?:theorem|lemma|space|definition|result|operator)\b'  # 4. "this X"
-        r'|\b(?:states?|shows?|proves?|implies?|follows?)\s+that'        # 5a. 3c verbs + that
-        r'|\bwe\s+have\b'                                   # 5b
-        r'|\bsee\s+(?:also\s+)?'                            # 5c
-        r'|cf\.|\b(?:below|above)\b'                        # 5d
-        r'|\bas\s+in\b'                                     # 5e
-        r'|\bby\s+(?-i:[A-Z])',                             # 5f. case-sensitive "by Banach"
-        re.IGNORECASE)
-    _TYPE_POS = re.compile(
-        r'^(?:Definition|Theorem|Lemma|Corollary|Proposition|Example)\b',
-        re.IGNORECASE)
-
-    def _is_genuine(it):
-        mstart = it.get('mstart', 0)
-        at_head = mstart <= 1
-        after = _after_of(it).lstrip()
-        if _REF_AFTER_NEG.search(after):
-            return False
-        positive = (at_head
-                    or bool(_TYPE_POS.match(after))
-                    or (after.startswith('(')
-                        and '(below)' not in after[:20]
-                        and '(above)' not in after[:20]))
-        return positive
-
-    seen = {}            # key -> chosen item
-    seen_genuine = {}    # key -> whether chosen item is genuine
-    for it in raw_matches:
-        k = it['key']
-        g = _is_genuine(it)
-        if k not in seen:
-            seen[k] = it
-            seen_genuine[k] = g
-        elif not seen_genuine[k] and g:
-            # upgrade: a later genuine definition displaces an earlier
-            # non-genuine (reference) occurrence
-            seen[k] = it
-            seen_genuine[k] = True
-        # if both genuine or both non-genuine, keep the earlier one (already set)
-
-    items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
+    # plus various references/usages.  We must NOT drop a *second* genuine
+    # heading that merely shares the same (label, number) with an earlier one —
+    # that happens when the source book prints the same number twice (a printing
+    # off-by-one).  The full rationale + the page/name-aware split lives in
+    # item_dedup.dedup_items (shared module).
+    items = dedup_items(raw_matches)
 
     # ---- Merge manual overrides (e.g. OCR-garbled items recovered by agent) ----
     if manual_overrides:

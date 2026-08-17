@@ -19,6 +19,7 @@ import os, sys
 
 import json, re
 from lib.regexlib import SEP_TIGHT
+from item_dedup import dedup_items
 
 # ---------------------------------------------------------------------------
 # ENGLISH-aware extraction (two-level English numbering)
@@ -121,9 +122,10 @@ def extract_items_en(extract_dir, start, end, want_examples=True):
                 snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
                 items.append({"key": key, "label": label,
                               "page": p, "text": snippet})
-    seen = {}
-    for it in items:
-        if it["key"] not in seen:
-            seen[it["key"]] = it
-    out = sorted(seen.values(), key=lambda x: (x["page"], x["key"]))
+    # Collapse reference mentions but KEEP two genuinely different items that
+    # share a (label, number) — e.g. a source book printing the same number
+    # twice (a printing off-by-one).  Genuine headings are already pre-filtered
+    # above (only block-start matches survive), so any same-key collision with a
+    # different heading text is a distinct item.
+    out = dedup_items(items)
     return out

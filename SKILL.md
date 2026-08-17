@@ -40,6 +40,23 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 > 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 内部门控见 [`extract`](flows/extract/extract.md) Step 4。
 
+## 🔒 流程强制顺序执行（flow_gate，死命令：上一步没做完不能进下一步）
+
+所有 flow（prep → extract → write_source → derive）的步骤**严格有序、机械不可跳步**。
+违规会被两层同时拦截：① `tools/flow_runner.py` 的顺序闸（flow 前置 + 同 flow 内顺序）；
+② 关键加载器自断言上游（`make_config` / `ConfigLoader` / `mm_repair_apply` /
+`build_structure` / `verify_chapter`）。机制、顺序、判据、标准工作流与**禁止清单**
+见 [`flows/_flow_gate.md`](flows/_flow_gate.md)（唯一权威）。要点：
+
+- `_extraction_done.json` 只能由 `mm_repair_apply.py` 在「条目全 resolved + 每页有
+  mm 标记」**真完成时**写出；历史书用 `flow_runner.py bootstrap` 依物理证据补写，
+  **禁止手 touch 冒充完成**。
+- `make_config.py` 缺 `_extraction_done.json` 时**硬退出、绝不写退化默认文件**；
+  生成的 `verify_config.json` 带 `_provenance` 戳，`ConfigLoader` 据此 + marker
+  双重识别，**手写 config 再也无法被下游消费**。
+- 推进步骤走 `python tools/flow_runner.py run <book_dir> <flow> <step>`；agent 步
+  做完用 `verify` 复核 + `mark` 落账。**禁止手填账本、禁止手写/手改 config 绕过护栏。**
+
 ## 退出条件
 
 **源语言 + 翻译版章数 == `chapter_map` 总章数，且两版均 `verify PASS + KaTeX OK`**。唯一退出信号是"已写章数 == 总章数"，不得提前停。

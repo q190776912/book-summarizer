@@ -166,7 +166,7 @@ def _is_three(scheme):
     return scheme in ('cn3_lf', 'cn3_nf', 'en3_lf', 'en3_nf')
 
 
-def scan_raw_items(ext, ch, start, end, primary_type=None):
+def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的 book_structure.json 契约格式一致
@@ -210,7 +210,11 @@ def scan_raw_items(ext, ch, start, end, primary_type=None):
                 if any(n is None for n in nums):
                     continue
                 first = nums[0]
-                if first != ch:
+                # Section-scoped EN books (chapter_first == False): the first
+                # numeric component is the SECTION, not the chapter, so a value
+                # != ch is a legitimate in-chapter item, NOT a cross-chapter
+                # forward reference. Only filter when chapter_first is True.
+                if chapter_first and first != ch:
                     continue
                 if len(nums) < 2:
                     continue
@@ -220,6 +224,13 @@ def scan_raw_items(ext, ch, start, end, primary_type=None):
                 # 两级数字前置且无标签 -> 视为章节号噪声，丢弃
                 if scheme in ('cn2_nf', 'en2_nf') and not has_label:
                     break
+                # No-label numeric sequences (figure/equation labels like "1.1.1")
+                # are always pure digits in print.  If OCR mapped a letter into a
+                # token (e.g. "i.i.0" -> "1.1.0"), it is a variable/formula
+                # fragment, not a label — drop it so it cannot surface as a
+                # phantom missing item (e.g. ch2's "1.1-0" from "i.i.0<iti<").
+                if not has_label and any(not t.isdigit() for t in raw_nums):
+                    continue
                 if _is_three(scheme):
                     if len(nums) < 3:
                         continue
@@ -556,7 +567,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
 
-    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type)
+    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first)
                  if it["label"] not in _EXER_LABELS_RAW]
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
@@ -735,7 +746,7 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         "contract_items": len(contract_items),
         "contract_sections": sorted(contract_sections),
         "ignore_audit": run_audit(ext, ch),  # ignore 条目审核：SUSPECT 提示 agent 复核
-        "raw_items_scanned": _count_raw_items(ext, ch, start, end),
+        "raw_items_scanned": _count_raw_items(ext, ch, start, end, cfg.chapter_first),
         "raw_sections_present": sorted(set(sec_detail.get("continuity", []) + sec_detail.get("tail", []))),
         "missing_sections": missing_sections,
         "missing_items": missing_items,
@@ -767,9 +778,9 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     return report
 
 
-def _count_raw_items(ext, ch, start, end):
+def _count_raw_items(ext, ch, start, end, chapter_first: bool = True):
     """轻量统计源侧（含练习过滤前）扫描到的原始条目数，仅用于报告，不影响回填。"""
-    return len(scan_raw_items(ext, ch, start, end))
+    return len(scan_raw_items(ext, ch, start, end, None, chapter_first))
 
 
 def main():

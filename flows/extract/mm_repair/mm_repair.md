@@ -40,6 +40,7 @@ python flows/extract/mm_repair/script/mm_repair_text_compare.py "<pdf_path>" "<_
   - 含白名单外字符（tofu）/ 差异过大 → 保持未解决（`deferred` 交模式 A）；
   - 公式条目无文本层 → 保持未解决，必须交模式 A，不可直接跳过。
   - ⚠️ 文本层损坏（tofu，如 Ross《A First Course in Probability》）风险：若 `corrections` 几乎全是乱码、绝大多数被 KEEP，说明文本层损坏，应放弃模式 B（当 `--force-scan` / `MM_UNAVAILABLE` 跳过），公式改由模式 A 处理（若有视觉）。
+  - 🔴 **模式 B 信任复核（强制，见规则5）**：模式 B 写回的 `corrections` 是**候选修正**，数字文本层本身可能抽花（本书实测 p553 / p565 / p233 等把文本层抽成乱序 / 错位 / 正文串入）。跑完 `--hybrid` 后，agent **必须逐条审阅 `repairs.json` 的 `corrections`**：任一存疑 / 不可信条目，**从 `corrections` 删除并保留 / 移入 `deferred`**，确保 `apply` 只写回可信修正；**不可信数据一律不写回，交模式 A 视觉识别**。
 - 非文本类 → 跳过本步。
 
 **Step 4 — 模式 A（仅当具备识图能力）**
@@ -85,6 +86,12 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 - **规则2 — 阈值**：`--text-thresh 0.80`（OCR `score<0.80` 才触发）、`--formula-conf 0.30`（`conf<0.30` 或 `latex` 含 `[MFR_ERR`/`[MFR_SKIPPED`/`.notdef`/替换字符 `�` 触发）、`--vpad-lines 0.5`。可按书调整。
 - **规则3 — 回写纪律**：确认后必须**写回 `page_*.json`**（保持 schema 不变、UTF-8、JSON 合法），不可只写进 md；回写后立即 `json.load` 复验。仅"写法差异含义相同"不视为修正，无需回写。
 - **规则4 — 职责边界**：MM Repair 只改 `page_*.json` 结构化数据，不动 `.md`；公式 / 文字的语义级"理解后重写"若发生在写作阶段则属另一阶段，与本节无关。
+- **规则5 — 模式 B「可信才用」死规则（🔴 不可违背）**：模式 B 的 `corrections` 来自 PDF 数字文本层，**不等于已验证正确**，文本层本身可抽花（数字文本层 ≠ 印刷页真值）。agent 必须严格遵守以下四条，优先级高于"尽快修完"：
+  1. **仅可信才写回（apply）**：`corrections` 仅当数字文本层值与上下文语义一致、无乱码 / 无错位 / 无孤立字符堆砌、且与 OCR 能对应上时，才允许 `apply` 写回 `page_*.json`；
+  2. **不可信一律不写回**：任何判定为不可信的 `corrections` 都**不得 `apply`**——宁可该条目暂时漏修，也绝不可用不可信值覆盖原始 OCR；
+  3. **不可信交模式 A**：凡是不可信条目，必须保留 / 移入 `deferred`，后续交给**模式 A 视觉识别**读真实印刷页重新修正，**绝不允许**用模式 B 的不可信值替代；
+  4. **存疑默认不可信**：判定存疑时**默认走模式 A**；"可信"需 agent 显式确认，"不可信"是默认态。
+  - 🔴 **严禁**为追求 resolved 计数而把不可信 `corrections` 批量 `apply`。模式 B 是"辅助候选"，不是"权威结论"；信任权永远在 agent 手里，不可信数据一律走模式 A。
 
 ## 出口条件
 - 🔴 **出口 = `apply` 已写回 `page_*.json`，不是 `repairs.json` 里有 resolved 条目，也不是 `manifest.status == "applied"`。** `page_*.json` 条目真正带上 `mm_repaired`/`mm_reviewed` 标记**才是唯一可靠信号**。`mm_repair_apply.py` 跑完会**无条件**把 `manifest.status` 设为 `"applied"`（与未 resolved 条目数无关），故 **`manifest.status == "applied"` 绝不能当完成判据**——会出现"已 applied 但仍有大量未修条目"的假绿（stochastic 实测：status=applied 但 2842 条目仅 979 resolved）。仅 `repairs.json` 含 resolved（由 `audit` + `text_compare` 产出）而未跑 `apply` 属**未完成**，config / structure / write-source 一律严禁启动。

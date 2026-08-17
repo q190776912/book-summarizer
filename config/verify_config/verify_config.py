@@ -98,7 +98,15 @@ SECTION_ROLE_CHAPTER       = 1
 SECTION_ROLE_SECTION       = 2
 SECTION_ROLE_SUBSECTION    = 3
 SECTION_ROLE_SUBSUBSECTION = 4
-SECTION_ROLE_CODES = (1, 2, 3, 4)
+SECTION_ROLE_SUBSUBSUB     = 5
+SECTION_ROLE_SUBSUBSUBSUB  = 6
+# A book may nest its sections ARBITRARILY deep (20.5, 20.5.1, 20.5.1.2, ...);
+# the role code is merely a stable per-level identifier, so there is NO
+# semantic cap.  We allow up to 6 components (chapter + 5 nested levels),
+# which covers any real mathematics text; extend the tuple if a deeper book
+# appears.  (Previously capped at 4, which wrongly rejected 4-/5-level
+# subsection books — see _detect_section_hierarchy / scan_skeleton.)
+SECTION_ROLE_CODES = tuple(range(1, 7))
 
 # Default section-types (role codes) per ordinal code. BACK-COMPAT fallback
 # used only when a verify_config.json does not explicitly declare
@@ -276,6 +284,15 @@ class BookConfig:
     ordinal: List[GroupConfig] = field(default_factory=lambda: [GroupConfig()])
     language: str = 'cn'
     strict: bool = True
+    # Whether the FIRST numeric component of a two/three-level EN item key is the
+    # CHAPTER (True, the ORDINAL_EN / ORDINAL_EN3 default: "Theorem 6.1" = ch6
+    # item1) or the SECTION (False, section-scoped books where the chapter is
+    # implicit and "Theorem 3.1" = §3 item1).  When False, _extract_items /
+    # scan_raw_items do NOT discard items whose first number != chapter, because
+    # that first number is a valid section of the current chapter, not a
+    # cross-chapter reference.  The B-layer already groups two-level items by
+    # their section prefix, so it stays correct either way.
+    chapter_first: bool = True
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
@@ -472,6 +489,7 @@ class BookConfig:
             ordinal=groups,
             language=language,
             strict=bool(data.get('strict', True)),
+            chapter_first=bool(data.get('chapter_first', True)),
             ignore=ignore,
             manual=manual,
             section_types=st,
@@ -563,6 +581,23 @@ class ConfigLoader:
         self.verify_config_has_ordinal = (
             isinstance(data.get('ordinal'), list) and len(data.get('ordinal')) > 0
         )
+        # 🔒 上游闸（防"agent 手搓 config 当地基"事故）：verify_config.json 只应来自
+        # make_config.py 在 MM Repair 完成后生成的版本。若 _extraction_done.json 缺失，
+        # 说明 MM Repair 未完成或本文件是手工产物，一律拒绝加载/消费。
+        # 历史已合规完成之书用 `flow_runner.py bootstrap <book_dir>` 依据物理证据
+        # 补写 _extraction_done.json 后即通过（且建议重新 make_config 以打 _provenance 戳）。
+        if hit_path is not None:
+            marker = os.path.join(self.extract_dir, '_extraction_done.json')
+            if not os.path.exists(marker):
+                raise ConfigError(
+                    f"[CONFIG] BLOCKED: {self.extract_dir} 缺 _extraction_done.json"
+                    f"（MM Repair 未完成标记）。verify_config.json 不能被加载/消费——"
+                    f"它只应来自 make_config.py 在 MM Repair 完成后生成的版本。\n"
+                    f"  先完成 MM Repair（模式 A+B 写回 page_*.json，apply 真完成写出"
+                    f" _extraction_done.json），或对该书运行\n"
+                    f"    python tools/flow_runner.py bootstrap <book_dir>\n"
+                    f"  依据物理证据补写完成标记后再跑 verify。严禁手写/手改配置绕过。"
+                )
         return BookConfig.from_dict(data)
 
     def require_complete(self, allow_absent: bool = True) -> None:

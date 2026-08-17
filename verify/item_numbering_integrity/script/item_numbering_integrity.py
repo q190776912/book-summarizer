@@ -789,7 +789,10 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # --- A-LAYER 完整性（原独立 A 层，现并入 B）：truly_missing / mentioned_only / extra ---
         # 数据来自 EXTRACT 供给的 ctx.items（书真相集）/ all_keys / entry_keys；
         # B 是查漏的唯一权威，EXTRACT 只供水、不做事。
-        extracted_raw = {it['key'] for it in items}
+        # Figures/Tables (uncat) are referenced in prose only per writing-rules,
+        # not as labeled `**...**` entries, so they must not count as
+        # truly-missing items. (Definition/Theorem/Example/etc. are kept.)
+        extracted_raw = {it['key'] for it in items if it.get('label') != 'uncat'}
         ignored_hit = sorted(extracted_raw & ignore_keys, key=sortkey)   # stage1：噪声键
         extracted = extracted_raw - ignore_keys                          # 剔噪书集
         truly_missing = sorted(extracted - all_keys)

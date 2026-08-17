@@ -324,20 +324,40 @@ def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_override
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
+    # Fraleigh-style items are numbered per GLOBAL section: "定义8.1" (CN
+    # translation) or "Definition 1.1" / "1.1 Definition" (EN original). Both
+    # label-first and number-first orientations occur in the EN text, so we
+    # match a bilingual label set in both directions.
+    FR_LABELS = (r'定义|定理|引理|推论|命题|例|表|图|'
+                 r'Definition|Theorem|Lemma|Proposition|Corollary|'
+                 r'Example|Remark|Note|Table|Figure')
+    # label-first:  Label sec<sep>num   (CN 定义8.1 / EN Definition 1.1)
     fr_re = re.compile(
-        r'(定义|定理|引理|推论|命题|例|表|图)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
+        r'(' + FR_LABELS + r')\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)', re.IGNORECASE)
+    # number-first: sec<sep>num Label   (EN 1.1 Definition)
+    fr_re_nf = re.compile(
+        r'(?<!\d)(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)\s*(' + FR_LABELS + r')',
+        re.IGNORECASE)
+
+    def _emit(sec, num, label, p, txt, m):
+        if sec > 80 or num > 120:
+            return None
+        if sections is not None and sec not in sections:
+            return None
+        key = f"{label}{sec}.{num}"
+        text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
+        return {'key': key, 'page': p, 'label': label, 'text': text_preview}
+
     raw = []
     for p, y, txt in all_blocks:
         for m in fr_re.finditer(txt):
-            sec = int(m.group(2)); num = int(m.group(3))
-            if sec > 80 or num > 120:
-                continue
-            if sections is not None and sec not in sections:
-                continue
-            label = m.group(1)
-            key = f"{label}{sec}.{num}"
-            text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
-            raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+            it = _emit(int(m.group(2)), int(m.group(3)), m.group(1), p, txt, m)
+            if it:
+                raw.append(it)
+        for m in fr_re_nf.finditer(txt):
+            it = _emit(int(m.group(1)), int(m.group(2)), m.group(3), p, txt, m)
+            if it:
+                raw.append(it)
 
     seen = {}
     for it in raw:

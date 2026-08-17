@@ -41,7 +41,7 @@
           修复前不要继续推进后续步骤。
        1. current_max_page = max(现有 _extract/page_*.json 的页码)
        2. if not chapter_map_ready and current_max_page >= 5:
-            从目录页读章名与书页码 → 写 chapter_map.json（见子流程 [`extract/chapter_map`](chapter_map/chapter_map.md)）；chapter_map_ready = True
+            从目录页读章名与 PDF 页码 → 写 chapter_map.json（见子流程 [`extract/chapter_map`](chapter_map/chapter_map.md)）；chapter_map_ready = True
        3. 若 current_max_page 自上次 MM audit 以来增长（建议新增 ≥1 稳定批次，如 50 页；或后台提取已结束）：
             对"新增稳定落盘区间"跑 MM Repair 完整链路（见子流程 [`extract/mm_repair`](mm_repair/mm_repair.md)）
    ```
@@ -125,6 +125,28 @@ $proc = Start-Process -WindowStyle Hidden -PassThru `
 
 ## 出口条件
 - 出口：全书页面提取 100% 且每页过 MM Repair，config + figure_detection + structure 子流程均已跑完，产出 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一）。
+
+## 🔒 阶段门控（flow_gate 强制顺序，死命令）
+
+本 flow 的 Step 1→6 是**硬有序**，且作为 `flows/_flow_gate.md` 定义的 `extract`
+flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_flow_gate.md)）：
+
+- **顺序铁律**：`extract_text → chapter_map → mm_repair → config → figure_detection →
+  structure` 依次进行；任一步未完成，下一步被 flow_runner 顺序闸 + 下游加载器双拦截。
+- 🔴 **`_extraction_done.json` 是 MM Repair 真完成的唯一标记**：只能由
+  `mm_repair_apply.py` 在「条目全 resolved + 每页有 mm 标记」时写出。本 flow 的
+  Step 4（config）/ Step 5（figure）/ Step 6（structure）都依赖它——`make_config.py`
+  缺它硬拒、`build_structure.py` 缺它硬拒、`ConfigLoader` 缺它拒绝加载 config。
+- ❌ **禁止清单（本 flow 特别相关）**：
+  - ❌ 在 `_extraction_done.json` 不存在时跑 `make_config.py` / `build_structure.py`
+    （会硬拒；你不应试图绕过）。
+  - ❌ 手写 / 手改 `verify_config.json` 充当 config（无 `_provenance` 戳，下游必拒）——
+    这是 Fraleigh 事故的真实根因，绝不再犯。
+  - ❌ 提前手 touch `_extraction_done.json` 冒充 MM Repair 完成。
+  - ❌ 把"文本 100% 落盘 / Pipeline finished / 后台进程结束"当作"MM Repair 完成"。
+- 推进步骤走 `python tools/flow_runner.py run <book_dir> extract <step>`；agent 步
+  （mm_repair 视觉）做完用 `verify` 复核 + `mark` 落账。历史书一次性回填用
+  `python tools/flow_runner.py bootstrap <book_dir>`（依物理证据，绝不伪造）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/extract/pipeline/script/extract_pipeline`：后台**文本**流水线驱动（自动断点续跑，纯文本提取）。参数：`<pdf> [--start N] [--end N] [--force] [--deskew …]`；`--end` 省略时取 PDF 自动识别总页（全本），`--start` 默认 1；每批 50 页；自动续跑；一批失败即停。图检测不在本脚本内。

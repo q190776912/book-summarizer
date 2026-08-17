@@ -126,6 +126,16 @@ ENTRY_RE_EN_C = re.compile(
 PROSE_RE_EN_C = re.compile(
     r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
+# Single-level English entries (e.g. `**Example 1**`, `**Remark 2**`) where the
+# item carries ONE numeric component only (no section/item split).  This is the
+# ORDINAL_EN counterpart of ENTRY_RE_EN_C for books that number some entry kinds
+# chapter-wide with a single digit (Karlin & Taylor numbers its Examples 1, 2,
+# … within the chapter).  The negative lookahead rejects a genuine two-level
+# `**Label N.N**` (already captured by ENTRY_RE_EN_C) so it is NOT also emitted
+# as a spurious single-level key `Label N`.
+ENTRY_RE_EN_SINGLE_C = re.compile(
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
+    re.IGNORECASE)
 
 # EN3 (ORDINAL_EN3 / type 9): English three-level, LABEL-FIRST dots (Label C.S.N),
 # e.g. Lasota & Mackey《Chaos, Fractals, and Noise》.  Items are numbered three
@@ -250,6 +260,9 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
             elif t == ORDINAL_EN:
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
+                    entries.add(key); allk.add(key)
+                for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")

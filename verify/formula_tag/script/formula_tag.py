@@ -236,11 +236,22 @@ class SourceFormulaIndex:
     def __init__(self, extract_dir: str, patterns: List[str],
                  chapter_prefix: bool = True,
                  ignore: Optional[Set[str]] = None,
-                 ncomp: Optional[int] = None) -> None:
+                 ncomp: Optional[int] = None,
+                 keep_cross_refs: bool = True) -> None:
         self.extract_dir = extract_dir
         self.patterns = [re.compile(p) for p in (patterns or [])]
         self.chapter_prefix = chapter_prefix
         self.ignore = set(ignore or set())
+        # keep_cross_refs (default True, backward-compatible): when True, a
+        # parenthesised `(C.N)` is ALWAYS kept in S even in math-free prose
+        # (treated as a possible cross-reference the summary might reproduce,
+        # so a summary `\tag{C.N}` is never falsely FABRICATED).  When False
+        # (section-numbered books that never reproduce cross-chapter formulas),
+        # parenthesised `(C.N)` inside a math-free prose block is filtered out,
+        # so stray cross-references ("By (3.2) …") no longer pollute S and
+        # produce false q-miss rows.  Real numbered display formulas (in a
+        # math-bearing block) are still kept either way.
+        self.keep_cross_refs = keep_cross_refs
         # ncomp (depth) enables the Bug #18 source-noise gate in _scan_text:
         # only multi-component books (ncomp>=2) need it, because their bare
         # `N.N` pattern otherwise matches section headings / cross-references /
@@ -476,7 +487,8 @@ class SourceFormulaIndex:
         for pat in self.patterns:
             for m in pat.finditer(txt):
                 span = m.group(0)
-                if need_gate and not self._is_strong_signal(span) and not has_math:
+                if need_gate and not has_math and (
+                        not self.keep_cross_refs or not self._is_strong_signal(span)):
                     continue
                 raw = m.group(1)
                 # Root fix (2026-08-16): a figure sub-caption label such as
@@ -1193,6 +1205,7 @@ class QLayer(VerifyLayer):
         ftype = formula.get('type')
         fdepth = formula.get('depth')
         fignore = set(formula.get('ignore') or [])
+        fkeep = formula.get('keep_cross_refs', True)
         scope = formula.get('scope', 2)
         # Per-section formula numbering (Kreyszig: every section restarts at
         # (1)).  FABRICATED/INCONSISTENT are checked section-locally; the
@@ -1241,7 +1254,8 @@ class QLayer(VerifyLayer):
                 section_scoped = False
             else:
                 tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
-                src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore)
+                src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore,
+                                          keep_cross_refs=fkeep)
                 built = src.build_sectioned(ctx.ch, ctx.start, ctx.end,
                                             md_sections, ncomp=ncomp)
                 src_sec = built['_sectioned']
@@ -1271,7 +1285,7 @@ class QLayer(VerifyLayer):
 
         tags = _extract_summary_tags(ctx.md_file)
         src = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix, fignore,
-                                 ncomp=ncomp)
+                                 ncomp=ncomp, keep_cross_refs=fkeep)
         src.build(ctx.ch, ctx.start, ctx.end)
 
         # RESERVED: letter / Roman-led formula numbering (e.g. (A.3)/(I.2)).

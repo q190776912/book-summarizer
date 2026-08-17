@@ -73,7 +73,7 @@ import repairs
 import mm_repair_manifest
 from page_json import PageJson
 
-import sys, os, json, argparse
+import sys, os, json, argparse, glob, time
 sys.stdout.reconfigure(encoding="utf-8")
 
 REPAIR_DIRNAME = "_mm_repair"
@@ -175,8 +175,13 @@ def apply(extract_dir, dry=False, repairs_path=None):
         text_replacements = {}  # idx -> [新 text 段 dict]，整行拆成多段时替代原项
         to_delete_formula = []  # 本页待删除的 formula 索引（整条误判、实际是纯文本）
         text_insertions = []  # 公式→文本 转换产生的新 text 项（按阅读顺序插回）
+        formula_insertions = []  # text→公式 转换产生的新 formula 项（按 (y,x) 插入，loop 外统一落盘）
 
         for e in page_info.get("entries", []):
+            # 幂等护栏：manifest 已 resolved 的条目（含 to_structured 插入/删除后的索引偏移）
+            # 一律跳过，杜绝重跑时把相邻元素当原条目二次转换/写错位置。
+            if e.get("resolved"):
+                continue
             key = e["key"]
             kind = e["type"]
             idx = e["index"]
@@ -252,7 +257,9 @@ def apply(extract_dir, dry=False, repairs_path=None):
                             "latex": s.get("latex", ""),
                             "mm_converted": True,
                         }
-                        insert_formula_by_position(formulas, new_f)
+                        # 关键：仅【收集】，loop 外统一插入。杜绝 loop 内即时 insert 导致
+                        # 同页后续 formula corrections 的 formulas[idx] 索引漂移（Bug B index-drift）。
+                        formula_insertions.append(new_f)
                         converted += 1
                         log.append(f"  page {pno:03d} {key}: segment formula "
                                    f"(latex {len(new_f['latex'])} chars, bbox {b})")
@@ -333,9 +340,15 @@ def apply(extract_dir, dry=False, repairs_path=None):
                 insert_text_by_position(new_texts, nt)
             data["text"] = new_texts
             texts = data["text"]
-        if to_delete_formula:
-            data["formulas"] = [f for i, f in enumerate(formulas)
-                                if i not in to_delete_formula]
+        if formula_insertions or to_delete_formula:
+            # 先按【原始】索引删公式 → 再按 (y,x) 位置插新公式（顺序关键，否则索引错位）。
+            # 删除用原始索引（在插入前计算），插入用 bbox 绝对位置，与删除互不干扰，
+            # 保证最终阅读顺序与「插入后删除」等价（根除 Bug B）。
+            new_formulas = [f for i, f in enumerate(formulas)
+                            if i not in to_delete_formula]
+            for nf in formula_insertions:
+                insert_formula_by_position(new_formulas, nf)
+            data["formulas"] = new_formulas
             formulas = data["formulas"]
 
         if changed and not dry:
@@ -363,13 +376,76 @@ def apply(extract_dir, dry=False, repairs_path=None):
     return 0
 
 
+def _maybe_write_extraction_done(extract_dir):
+    """仅在 MM Repair 真完成时写出 _extraction_done.json。
+
+    真完成 = manifest 全部条目 resolved 且每页 page_*.json 至少含一个
+    mm_repaired/mm_reviewed/mm_converted 标记（或整页 MM_UNAVAILABLE）。
+    任一不满足则告警且不写，杜绝「手 touch 假绿 / apply 已跑但大量未修」被当作完成。
+    """
+    mpath = os.path.join(extract_dir, "_mm_repair", "manifest.json")
+    if not os.path.exists(mpath):
+        print("[mm_repair_apply] 无 manifest，跳过 _extraction_done.json 写入。")
+        return
+    try:
+        m = json.load(open(mpath, encoding="utf-8"))
+    except Exception as e:
+        print(f"[mm_repair_apply] manifest 读取失败: {e}")
+        return
+    entries = [e for pg in m.get("pages", {}).values() for e in pg.get("entries", [])]
+    total = len(entries)
+    resolved = sum(1 for e in entries if e.get("resolved"))
+    if total and resolved < total:
+        print(f"[mm_repair_apply] ⚠️ MM Repair 未真完成（manifest {resolved}/{total} resolved），"
+              f"不写 _extraction_done.json（避免假绿）。请继续模式 A 视觉审读后重跑 apply。")
+        return
+    # 每页标记核对：只对 manifest 中实际出现过条目（被 flag）的页面要求 mm 标记。
+    # 未被 flag 的页面没有任何待修条目，自然不需要 mm 标记。
+    manifest_pages = set()
+    for pg in m.get("pages", {}).values():
+        for e in pg.get("entries", []):
+            manifest_pages.add(e.get("page", 0))
+    pages = glob.glob(os.path.join(extract_dir, "page_*.json"))
+    for pf in pages:
+        try:
+            data = json.load(open(pf, encoding="utf-8"))
+        except Exception:
+            print(f"[mm_repair_apply] 页 {os.path.basename(pf)} 读取失败，不写 marker。")
+            return
+        pno = data.get("page", 0)
+        if pno not in manifest_pages:
+            continue
+        texts = data.get("text", []) + data.get("formulas", [])
+        ok = any(isinstance(t, dict) and (t.get("mm_repaired") or t.get("mm_reviewed")
+                                          or t.get("mm_converted")) for t in texts)
+        if not ok and not data.get("MM_UNAVAILABLE"):
+            print(f"[mm_repair_apply] ⚠️ 页 {os.path.basename(pf)} 仍无 mm 标记，"
+                  f"MM Repair 未真完成，不写 _extraction_done.json。")
+            return
+    marker = os.path.join(extract_dir, "_extraction_done.json")
+    if os.path.exists(marker):
+        return
+    json.dump({
+        "generated_by": "mm_repair_apply.py",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "resolved": resolved,
+        "total": total,
+    }, open(marker, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    print(f"[mm_repair_apply] ✅ MM Repair 真完成，已写出 _extraction_done.json"
+          f" ({resolved}/{total} resolved)。")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Apply multimodal repairs to page_*.json")
     ap.add_argument("extract_dir")
     ap.add_argument("--dry", action="store_true", help="preview only, no writes")
     ap.add_argument("--repairs", default=None, help="path to repairs.json (default: <mm_dir>/repairs.json)")
     args = ap.parse_args()
-    sys.exit(apply(args.extract_dir, dry=args.dry, repairs_path=args.repairs))
+    rc = apply(args.extract_dir, dry=args.dry, repairs_path=args.repairs)
+    # 非 dry 且 apply 成功 → 仅在真完成时写出 _extraction_done.json
+    if not args.dry and rc == 0:
+        _maybe_write_extraction_done(args.extract_dir)
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

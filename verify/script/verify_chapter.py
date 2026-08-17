@@ -145,6 +145,16 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     ``require_complete(allow_absent=True)`` warn+default safety net — that is a
     deliberate carve-out, not a verify path.)
     """
+    # 🔒 上游闸补充：verify 依赖 book_structure.json 作为编号项基准。缺失说明
+    # extract 阶段 structure 子流程未跑完（或跳步），禁止校验——否则 data_provider
+    # 无基准、编号项查漏失效。这是"上一步没做完不能进下一步"在 verify 端的落地。
+    bs = os.path.join(ext, "book_structure.json")
+    if not os.path.exists(bs):
+        raise ConfigError(
+            f"[verify] BLOCKED: 缺 {bs}（structure 子流程未产出 book_structure.json）。"
+            f"须先完成 extract 阶段 structure 子流程（build_structure + 完整性闸门）"
+            f"再跑 verify。严禁跳步。"
+        )
     loader = ConfigLoader(ext, book_dir or os.path.dirname(ext) or ext,
                           extra_ignore=extra_ignore)
     loader.require_complete(allow_absent=False)

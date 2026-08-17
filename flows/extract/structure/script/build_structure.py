@@ -286,8 +286,15 @@ def _extract_items(ext, ch, start, end, book, manual=None):
         kept = []
         for it in items:
             lab, _, num = it["key"].partition(" ")
-            chp = num.split(".")[0]
-            if chp.isdigit() and int(chp) != ch:
+            parts = num.split(".")
+            # Chapter-scoped EN (book.chapter_first == True, the ORDINAL_EN /
+            # ORDINAL_EN3 default): the first numeric component IS the chapter,
+            # so drop cross-chapter forward references (first != ch).
+            # Section-scoped EN books (book.chapter_first == False — first
+            # component is the SECTION, no chapter component; e.g. "Theorem 3.1"
+            # = §3 item 1) MUST keep these, so the filter is disabled. Single-
+            # number keys are never filtered (they have no chapter/section slot).
+            if book.chapter_first and len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) != ch:
                 continue
             it = dict(it)
             it["key"] = f"{_canon_label(lab)}{num}"
@@ -311,9 +318,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     ordinal = book.primary_type
     language = book.language
     mode = scan_skeleton._mode_for_ordinal(ordinal, language)
+    section_depths = getattr(book, 'section_depths', None) or None
 
     # 1) skeleton 原始行
-    rows = scan_skeleton.scan(ext, ch, start, end, mode)
+    rows = scan_skeleton.scan(ext, ch, start, end, mode, section_depths=section_depths)
     sec_rows = [r for r in rows if r[1] == "SEC"]
     ex_rows = [r for r in rows if r[1] == "EXER"]
 
@@ -356,6 +364,15 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         _note_sec(_section_of_key(it["key"], ordinal), it["page"])
     for p, kind, num, title in ex_rows:
         _note_sec(_section_of_exer(num), p)
+
+    # 剔除「条目号派生、但 skeleton 并未检出」的幽灵小节（如 EN 两级下
+    # "Theorem 20.7" 派生的 §20.7，而 §20.7 并非真小节）。skeleton 扫描现已
+    # 深度无关且可靠，凡它没检出的派生小节号必是幽灵；这些条目稍后会按页码
+    # 就近归并到最近的真小节（_place），不会丢失。此项取代原先仅靠小结
+    # markdown 校验的 Bug#20 守卫——不再依赖尚未写出的小结即可剔除幽灵。
+    derived_sec_firstpage = {
+        n: pg for n, pg in derived_sec_firstpage.items() if n in sec_pages
+    }
 
     all_sec_nums = list(sec_pages.keys()) + [n for n in derived_sec_firstpage if n not in sec_pages]
     # 章节排序：按（skeleton 页 或 派生最小页）
@@ -458,6 +475,17 @@ def main():
         return 2
     ext = args[0]
     want = [int(x) for x in args[1:]]
+
+    # 🔒 上游闸：structure 依赖已修复的 page_*.json 与 config；MM Repair 未完成
+    # （缺 _extraction_done.json）则禁止生成结构契约，否则会基于未修复页抽项，
+    # 进而污染 write-source 全部章节（这正是"上一步没做完不能进下一步"的硬纪律）。
+    if not os.path.exists(os.path.join(ext, "_extraction_done.json")):
+        print("[build_structure] BLOCKED: 缺 _extraction_done.json，MM Repair 未完成。")
+        print("  须先完成 MM Repair（模式 A+B 写回 page_*.json，apply 真完成写出")
+        print("  _extraction_done.json）后再生成 book_structure.json。")
+        print("  严禁跳步。可先对该书运行 `python tools/flow_runner.py bootstrap <book_dir>`")
+        print("  依据物理证据补写完成标记。")
+        return 2
 
     cfg_path = os.path.join(ext, "verify_config.json")
     try:

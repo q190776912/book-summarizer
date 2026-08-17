@@ -5,7 +5,7 @@
 
 ## 生成脚本
 - `chapter_map.py`
-  （由 extract 父流程轮询调用，或人工从 OCR 目录页读章名 + 书页码填入模板）。
+  （由 extract 父流程轮询调用，或人工从 OCR 目录页读章名 + PDF 页码填入模板）。
 - 类与构造函数：`ChapterMap`（+ `Chapter`）—— `from chapter_map import ChapterMap`；
   `ChapterMap.default()` / `ChapterMap.load(path)` / `ChapterMap(chapters=...).dump(path)`。
 - 章节映射脚本：`chapter_map.py`（同目录；亦可由 `cli.py` 的 `write-chapter-map` 子命令调用）。
@@ -24,13 +24,13 @@
 ```
 - `ch`：章号（整数）。
 - `name`：章名。
-- `start` / `end`：**原书印刷页码**起止（非 PDF 文件页码）。
+- `start` / `end`：**PDF 文件页码**（1-based，与 `page_%03d.json` 文件名序号一致；即 `scan_skeleton.scan` 直接 `range(start, end+1)` 读取的页），**不是**原书印刷页码。
 
 ## 关键规则（🔴）
 - **规则1 — 尽早建、且只建一次**：目录页一提取到（`current_max_page >= 5`）立即建；
   全书 `chapter_map` 只生成一份，后续轮询不再重建（除非用户明确要改章节划分）。
 - 判定"某章可写"的硬标准：`info.end <= current_max_page`（该章末页已落盘）。
-- 书页码与原书印刷一致；若原书页码与 PDF 页偏移，须在 `chapter_map` 中正确映射。
+- 🔴 **chapter_map 一律以 PDF 页号存储，禁止存印刷页号**：`scan_skeleton` / `build_structure` 直接拿 `start`/`end` 当 `page_%03d.json` 序号去读，存印刷页号会导致整章错 15 个 PDF 页（本书实测前 15 页为封面/前言/目录，PDF 页 = 印刷页 + 15，双锚点确认）。**若从 TOC 读到的章节边界是印刷页号，必须加上前页偏移换算成 PDF 页号后再写入**（`_meta.pdf_offset` 仅作人读参考，但 `start`/`end` 本身必须是 PDF 页号）。
 
 ## 详细流程
 - 子流程文档：`../../flows/extract/chapter_map/chapter_map.md`

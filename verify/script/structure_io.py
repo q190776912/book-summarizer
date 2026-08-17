@@ -9,6 +9,7 @@ exercise / chapter / section 节点被排除，返回非 exercise 的编号项�
 import os
 import sys
 import json
+import re
 from pathlib import Path
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
@@ -51,8 +52,18 @@ def read_structure_items(ext_dir, ch):
         return []
     items = []
     for n in nodes:
+        # Canonicalize the structure key into the SAME CN label space that
+        # `keys_in_md` uses for .md labels (Definition -> 定义, etc.). The
+        # BookStructure model emits EN keys like `Definition1.1` (type+number,
+        # no space), while the .md side is canonicalized to `定义1.1`; without
+        # this normalization the two sets never intersect and every EN-book
+        # item is falsely reported as truly-missing. For CN books the structure
+        # key is already `定义1.1`, so this is a no-op (idempotent).
+        _num = re.search(r'\d+(?:\.\d+)*', (n.key or n.name or ''))
+        _number = _num.group(0) if _num else ''
+        _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
         items.append({
-            'key': n.key,
+            'key': _canon,
             'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
             'page': n.page_start,
             'text': n.name,
@@ -72,7 +83,16 @@ def md_keys_for_chapter(md_file, cfg, ch):
             md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ch))
     else:
         entry_keys, all_keys = keys_in_md(md_file, groups=cfg.ordinal)
-    if cfg.primary_type in (ORDINAL_EN, ORDINAL_EN3):
+    # Chapter-scoping of md keys: only valid when the first number of a key
+    # IS the chapter (chapter_first == True).  For chapter_first == False
+    # books (e.g. Karlin & Taylor, where `Theorem 3.1` = §3 item 1 and `Example 2`
+    # = chapter-2 example 2 — neither carries a chapter digit), the .md file is
+    # already chapter-scoped, so applying `_first_num(k) == ch` would wrongly
+    # drop every two-level key (first number == section) and every single-level
+    # example whose item number ≠ chapter.  Skip the filter in that case.  This
+    # mirrors the correct handling in check_structure_completeness.scan_raw_items
+    # (the `if chapter_first and first != ch` guard).
+    if cfg.primary_type in (ORDINAL_EN, ORDINAL_EN3) and cfg.chapter_first:
         entry_keys = {k for k in entry_keys if _first_num(k) == ch}
         all_keys = {k for k in all_keys if _first_num(k) == ch}
     return entry_keys, all_keys

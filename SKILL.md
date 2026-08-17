@@ -38,7 +38,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 | 2 | [`write-source`](flows/write-source/write-source.md) | 按骨架契约写源语言初稿 + 嵌图，末尾（步骤 3）批量校验至 PASS | 源语言优先（write-source 规则1）；拆章（write-source 规则3）；写源期间**禁逐章 verify（write-source 规则2）** |
 | 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS | 单向修复（derive-translate 规则1）；中英 1:1 同构 |
 
-> 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、`_mm_repair/manifest.json` 的 `status == "applied"`。`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 内部门控见 [`extract`](flows/extract/extract.md) Step 4。
+> 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 内部门控见 [`extract`](flows/extract/extract.md) Step 4。
 
 ## 退出条件
 

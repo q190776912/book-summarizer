@@ -87,23 +87,25 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 - **规则4 — 职责边界**：MM Repair 只改 `page_*.json` 结构化数据，不动 `.md`；公式 / 文字的语义级"理解后重写"若发生在写作阶段则属另一阶段，与本节无关。
 
 ## 出口条件
-- 🔴 **出口 = `apply` 已写回 `page_*.json`，不是 `repairs.json` 里有 resolved 条目。** `mm_repair_apply.py` 执行后，`page_*.json` 条目才真正带 `mm_repaired`/`mm_reviewed` 标记、`manifest.status == "applied"`；只有此刻 MM Repair 才算完成。仅 `repairs.json` 含 resolved（由 `audit` + `text_compare` 产出）而未跑 `apply` 属**未完成**，config / structure / write-source 一律严禁启动。
-- **完成判据（三者必须同时满足）**：
-  1. `_mm_repair/repairs.json` 中审计标出的条目**全部 resolved**（都有 `corrections` / `ok` / `to_structured` 处置）；**且**
-  2. **已执行 `mm_repair_apply.py`**：`_mm_repair/manifest.json` 的 `status == "applied"`；**且**
-  3. `page_*.json` 条目里出现 `mm_repaired` / `mm_reviewed` 标记（修正已落盘，统计应 > 0）。
+- 🔴 **出口 = `apply` 已写回 `page_*.json`，不是 `repairs.json` 里有 resolved 条目，也不是 `manifest.status == "applied"`。** `page_*.json` 条目真正带上 `mm_repaired`/`mm_reviewed` 标记**才是唯一可靠信号**。`mm_repair_apply.py` 跑完会**无条件**把 `manifest.status` 设为 `"applied"`（与未 resolved 条目数无关），故 **`manifest.status == "applied"` 绝不能当完成判据**——会出现"已 applied 但仍有大量未修条目"的假绿（stochastic 实测：status=applied 但 2842 条目仅 979 resolved）。仅 `repairs.json` 含 resolved（由 `audit` + `text_compare` 产出）而未跑 `apply` 属**未完成**，config / structure / write-source 一律严禁启动。
+- **完成判据（两者必须同时满足，且都只看 page_*.json 与 manifest 条目级，绝不依赖 `manifest.status`）**：
+  1. **条目全部 resolved**：`_mm_repair/repairs.json` 中审计标出的条目**全部 resolved**（都有 `corrections` / `ok` / `to_structured` 处置），且 `manifest` 中**每个条目的 `resolved == true`**（统计 `manifest['pages'][p]['entries']` 全部 resolved，计数须 == 总条目数）；**且**
+  2. **每页标记落盘**：`page_*.json` 条目里出现 `mm_repaired` / `mm_reviewed` 标记（修正已落盘），且**本书每一页** `page_*.json` 都至少含一个该类标记（或显式 `MM_UNAVAILABLE`）——任一页缺标记即视为未完成。
 - 无视觉能力且非文本类的书：记 `MM_UNAVAILABLE` **显式标注**（须在出口确认），表示该书/该章跳过修复，此时允许进入后续阶段。
 
 ### 🔴 如何验证 `apply` 已真正写回（防误判，必做）
-- **字段名只有 `mm_repaired` / `mm_reviewed`（及 `mm_converted`）；`page_*.json` 里根本不存在 `mm_status` 这个字段。** 不要再 grep `mm_status`——它会永远为 0，导致误判"什么都没持久化"并据此做出错误决策（如误以为修复全废、或误以为已修完）。
-- **验证命令（任选其一）**：
+- **字段名只有 `mm_repaired` / `mm_reviewed`（及 `mm_converted`）；`page_*.json` 里根本不存在 `mm_status` 这个字段。** 不要再 grep `mm_status`——它会永远为 0。
+- 🔴 **`manifest.status` 也是假信号，不可信**：`mm_repair_apply.py` 跑完即把 `status` 设为 `"applied"`，与未 resolved 条目数无关。stochastic 实测：`status=='applied'` 但 2842 条目仅 resolved 979、1863 未 resolved。所以**验证只看 page_*.json 标记 + manifest 条目级 resolved 计数，绝不单看 status**。
+- **验证命令（任选其一，都只看真实落盘）**：
   ```bash
-  # 统计全书 page_*.json 中已写回的标记数量（应 > 0；grep 出 :0 的说明该页尚未修）
+  # (A) 统计全书 page_*.json 中已写回的标记数量（列出仍为 :0 的页 = 未修完）
   grep -rc '"mm_repaired": true\|"mm_reviewed": true' <_extract>/page_*.json | grep -v ':0'
-  # 或直接检查 manifest 状态（须打印 applied）
-  python -c "import json; print(json.load(open('<_extract>/_mm_repair/manifest.json')).get('status'))"
+  # (B) 条目级 resolved 计数（须 == 总条目数才真完成；status 字段忽略）
+  python -c "import json; m=json.load(open('<_extract>/_mm_repair/manifest.json')); e=[x for p in m['pages'].values() for x in p['entries']]; print('resolved', sum(1 for x in e if x.get('resolved')), '/', len(e))"
   ```
-- **反例（本次踩坑）**：只跑 `audit` + `text_compare` → 产出 `repairs.json`（含 856 条 resolved）但**从未执行 `apply`** → `page_*.json` 无标记、`manifest.status != "applied"` → 属**未完成**。此状态下"所有条目 resolved"只是 `repairs.json` 层面的，不是 `page_*.json` 层面的，严禁据此进入 config / structure / write-source。
+- **反例（本次踩坑，两类）**：
+  - **类1（未跑 apply）**：只跑 `audit` + `text_compare` → 产出 `repairs.json`（含 856 条 resolved）但**从未执行 `apply`** → `page_*.json` 无标记 → 属**未完成**。
+  - **类2（apply 假绿）**：跑过 `apply` 但只 resolve 了部分条目（如 979/2842）→ `manifest.status == "applied"` 为真，但 `page_*.json` 仍有大量缺标记 → 仍属**未完成**。两类都严禁据此进入 config / structure / write-source。
 
 ## 相关代码（路径相对 skill 根目录）
 - `script/mm_repair_audit.py`：扫描低置信条目 + 裁图拼版（纯 CPU）。

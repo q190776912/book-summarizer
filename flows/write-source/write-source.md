@@ -5,7 +5,7 @@
 ## 目的
 依据已修复的 `page_*.json`，按原书结构逐条写出**源语言**章节总结（英文书 = 英文 `ChapterN_*.md`；中文书 = 中文 `第N章_*.md`）。本阶段产出源语言初稿 + 嵌图，并在末尾（步骤 3）统一批量校验所有总结文件。
 ## 前置
-- 该章 `page_*.json` 已落盘且过 MM Repair。
+- 🔴 **写源硬闸（不可绕过）**：该章页码区间对应的 `page_*.json` **必须已经过 `mm_repair_apply` 写回**（条目含 `mm_repaired`/`mm_reviewed` 标记、`_mm_repair/manifest.json` 的 `status == "applied"`），该章无未 resolved 的待修条目，否则**严禁写任何章节**。"`_mm_repair/repairs.json` 有 resolved 条目" ≠ "apply 已写回"——前者只是 agent 视觉补全的**中间产物**，后者才是出口。启动 write-source 前**必须先用** [`extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) 的「如何验证 apply 已写回」命令确认写回真实发生。
 - 已知该书的源语言（英文书源语言为英文版，中文书源语言为中文版）。
 - **全书 `book_structure.json` 已通过 structure 第 4 步闸门**（结构契约前置，SSOT 见 `flows/extract/structure/structure.md`）：用于**辅助确认总结结构**——节数 / 顺序 / 编号项 `key` / 印刷标题（`name`）/ 页码区间（`page_start..page_end`）；⚠️ 其 `name` 仅含带序标的**纯印刷标题，不含任何条目正文**。
 
@@ -23,6 +23,7 @@
    未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。校验层语义 / `--fix` 范围 / 字节契约键见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
 
 ## 本阶段规则（🔴 内联 + 核心原则）
+- **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动 write-source 前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 `manifest.status != "applied"` 的章节，一律不得动笔。** 宁可先补完 MM Repair（含模式 A 视觉审读），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
 - **规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
 - **规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 已嵌图后、由步骤 3 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
 - **规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。

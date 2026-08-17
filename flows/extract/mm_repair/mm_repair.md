@@ -81,13 +81,29 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 ```
 
 ## 本阶段规则（🔴 内联）
-- **规则1 — MM Repair 门（必须跑）**：提取 100% 完结也必须跑：无新页可轮询时不能跳过本步，须对全书跑完整链路。
+- **规则1 — MM Repair 门（必须跑，且必须 `apply` 写回）**：提取 100% 完结也必须跑：无新页可轮询时不能跳过本步，须对全书跑**完整链路（audit → 模式 B/A → Step 5 `apply` 写回 `page_*.json` → 出口验证）**。🔴 只跑到 `audit` + `text_compare` 产出 `repairs.json` 而**未执行 `apply` 写回**，视为**未完成**，严禁流入 config / structure / write-source。
 - **规则2 — 阈值**：`--text-thresh 0.80`（OCR `score<0.80` 才触发）、`--formula-conf 0.30`（`conf<0.30` 或 `latex` 含 `[MFR_ERR`/`[MFR_SKIPPED`/`.notdef`/替换字符 `�` 触发）、`--vpad-lines 0.5`。可按书调整。
 - **规则3 — 回写纪律**：确认后必须**写回 `page_*.json`**（保持 schema 不变、UTF-8、JSON 合法），不可只写进 md；回写后立即 `json.load` 复验。仅"写法差异含义相同"不视为修正，无需回写。
 - **规则4 — 职责边界**：MM Repair 只改 `page_*.json` 结构化数据，不动 `.md`；公式 / 文字的语义级"理解后重写"若发生在写作阶段则属另一阶段，与本节无关。
 
 ## 出口条件
-- 出口：`_mm_repair/` 存在且所有条目 resolved（或已记 `MM_UNAVAILABLE` 表示无视觉且非文本类跳过）。
+- 🔴 **出口 = `apply` 已写回 `page_*.json`，不是 `repairs.json` 里有 resolved 条目。** `mm_repair_apply.py` 执行后，`page_*.json` 条目才真正带 `mm_repaired`/`mm_reviewed` 标记、`manifest.status == "applied"`；只有此刻 MM Repair 才算完成。仅 `repairs.json` 含 resolved（由 `audit` + `text_compare` 产出）而未跑 `apply` 属**未完成**，config / structure / write-source 一律严禁启动。
+- **完成判据（三者必须同时满足）**：
+  1. `_mm_repair/repairs.json` 中审计标出的条目**全部 resolved**（都有 `corrections` / `ok` / `to_structured` 处置）；**且**
+  2. **已执行 `mm_repair_apply.py`**：`_mm_repair/manifest.json` 的 `status == "applied"`；**且**
+  3. `page_*.json` 条目里出现 `mm_repaired` / `mm_reviewed` 标记（修正已落盘，统计应 > 0）。
+- 无视觉能力且非文本类的书：记 `MM_UNAVAILABLE` **显式标注**（须在出口确认），表示该书/该章跳过修复，此时允许进入后续阶段。
+
+### 🔴 如何验证 `apply` 已真正写回（防误判，必做）
+- **字段名只有 `mm_repaired` / `mm_reviewed`（及 `mm_converted`）；`page_*.json` 里根本不存在 `mm_status` 这个字段。** 不要再 grep `mm_status`——它会永远为 0，导致误判"什么都没持久化"并据此做出错误决策（如误以为修复全废、或误以为已修完）。
+- **验证命令（任选其一）**：
+  ```bash
+  # 统计全书 page_*.json 中已写回的标记数量（应 > 0；grep 出 :0 的说明该页尚未修）
+  grep -rc '"mm_repaired": true\|"mm_reviewed": true' <_extract>/page_*.json | grep -v ':0'
+  # 或直接检查 manifest 状态（须打印 applied）
+  python -c "import json; print(json.load(open('<_extract>/_mm_repair/manifest.json')).get('status'))"
+  ```
+- **反例（本次踩坑）**：只跑 `audit` + `text_compare` → 产出 `repairs.json`（含 856 条 resolved）但**从未执行 `apply`** → `page_*.json` 无标记、`manifest.status != "applied"` → 属**未完成**。此状态下"所有条目 resolved"只是 `repairs.json` 层面的，不是 `page_*.json` 层面的，严禁据此进入 config / structure / write-source。
 
 ## 相关代码（路径相对 skill 根目录）
 - `script/mm_repair_audit.py`：扫描低置信条目 + 裁图拼版（纯 CPU）。

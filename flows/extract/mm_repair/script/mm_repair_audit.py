@@ -143,9 +143,8 @@ def render_page_crops(doc, pno, dpi, src_dpi, entries, out_dir, page_prefix,
     return crops
 
 
-def make_sheet(page_crops, out_path, font):
+def make_sheet(page_crops, out_path, font, thumb_w=420):
     cols = 3
-    thumb_w = 420
     pad = 14
     header_h = 30
     cells = []
@@ -183,7 +182,7 @@ def make_sheet(page_crops, out_path, font):
 
 
 def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
-          vpad_lines=0.5):
+          vpad_lines=0.5, thumb_w=420):
     mm_dir = os.path.join(extract_dir, REPAIR_DIRNAME)
     os.makedirs(mm_dir, exist_ok=True)
     font = load_font(20)
@@ -270,7 +269,7 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
             entries.append(rec)
 
         sheet_path = os.path.join(mm_dir, f"{page_prefix}_sheet.png")
-        make_sheet(page_crops, sheet_path, font)
+        make_sheet(page_crops, sheet_path, font, thumb_w=thumb_w)
 
         pages_out[f"{pno:03d}"] = {
             "sheet": f"{page_prefix}_sheet.png",
@@ -318,13 +317,15 @@ def main():
     ap.add_argument("--vpad-lines", type=float, default=0.5,
                     help="纵向 padding = 平均行高 × 此值，加在被标区域上下两侧，"
                          "用于覆盖小倾斜导致的裁切不全（默认 0.5 = 上下各半行）")
+    ap.add_argument("--thumb-w", type=int, default=420,
+                    help="每页拼版 sheet 中每个裁图的缩略图宽度（默认 420，hard cases 可设 700）")
     args = ap.parse_args()
 
     if not os.path.isfile(args.pdf_path):
         print(f"ERROR: PDF not found: {args.pdf_path}")
         sys.exit(1)
     audit(args.pdf_path, args.extract_dir, args.text_thresh,
-          args.formula_conf, args.src_dpi, args.dpi, args.vpad_lines)
+          args.formula_conf, args.src_dpi, args.dpi, args.vpad_lines, args.thumb_w)
 
 
 if __name__ == "__main__":

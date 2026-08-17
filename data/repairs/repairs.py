@@ -175,7 +175,7 @@ def main() -> int:
     print(f"MERGE: {len(part_counts)} part files merged -> {out}")
     print(f"  corrections={tot_c}  ok={tot_o}  to_structured={tot_t}  total={tot_c+tot_o+tot_t}")
     for tag in sorted(part_counts):
-        c, o, t = part_counts[tag]
+        c, o, t, dd = part_counts[tag]
         print(f"    {tag}: corrections={c} ok={o} to_structured={t} deferred={dd}")
     if collisions:
         print("  COLLISIONS (resolve before apply):")

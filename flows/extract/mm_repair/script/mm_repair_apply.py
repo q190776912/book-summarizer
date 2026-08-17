@@ -341,7 +341,13 @@ def apply(extract_dir, dry=False, repairs_path=None):
         if changed and not dry:
             PageJson(data=data).dump(pf)
 
-    manifest["status"] = "applied"
+    # 仅当 manifest 所有条目均已 resolved 才标 applied；否则标 partial，杜绝假绿
+    _all_resolved = all(
+        e.get("resolved")
+        for _p in manifest.get("pages", {}).values()
+        for e in _p.get("entries", [])
+    )
+    manifest["status"] = "applied" if _all_resolved else "partial"
     manifest["applied"] = applied
     manifest["reviewed"] = reviewed
     manifest["converted"] = converted

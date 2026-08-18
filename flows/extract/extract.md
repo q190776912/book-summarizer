@@ -87,7 +87,7 @@ bash launch_pipeline.sh "D:/study/book/<书名>/<书名>.pdf" --force         # 
 
 **形态 B — 直接 `python`（手动设 PATH）**
 ```bash
-D:/anaconda3/envs/pdfextract/python.exe flows/extract/pipeline/script/extract_pipeline \
+D:/anaconda3/envs/pdfextract/python.exe flows/extract/pipeline/script/extract_pipeline.py \
     "D:/study/book/<书名>/<书名>.pdf"
 # 等价于：python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|off|force]
 ```
@@ -106,7 +106,7 @@ if (-not (Test-Path -LiteralPath "D:\study\book\<书名>\<书名>.pdf")) {
 # 3) 后台静默启动（仅传 PDF，范围默认全本；要限定段可加 "--start"/"--end" 元素）
 $proc = Start-Process -WindowStyle Hidden -PassThru `
     -FilePath "D:\anaconda3\envs\pdfextract\python.exe" `
-    -ArgumentList @("flows/extract/pipeline/script/extract_pipeline",
+    -ArgumentList @("flows/extract/pipeline/script/extract_pipeline.py",
                     "D:\study\book\<书名>\<书名>.pdf")
 # 取 PID 便于跟踪：$proc.Id
 ```
@@ -149,7 +149,7 @@ flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_f
   `python tools/flow_runner.py bootstrap <book_dir>`（依物理证据，绝不伪造）。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/extract/pipeline/script/extract_pipeline`：后台**文本**流水线驱动（自动断点续跑，纯文本提取）。参数：`<pdf> [--start N] [--end N] [--force] [--deskew …]`；`--end` 省略时取 PDF 自动识别总页（全本），`--start` 默认 1；每批 50 页；自动续跑；一批失败即停。图检测不在本脚本内。
+- `flows/extract/pipeline/script/extract_pipeline.py`：后台**文本**流水线驱动（自动断点续跑，纯文本提取）。参数：`<pdf> [--start N] [--end N] [--force] [--deskew …]`；`--end` 省略时取 PDF 自动识别总页（全本），`--start` 默认 1；每批 50 页；自动续跑；一批失败即停。图检测不在本脚本内。
 - `launch_pipeline.sh`：bash 启动器（空格路径安全）。
 - `../../data/chapter_map/chapter_map.py`（数据结构见 [data/chapter_map/chapter_map.md](../../data/chapter_map/chapter_map.md)）：chapter_map 模板工具。
 - `flows/extract/structure/script/build_structure`：统一结构骨架生成（structure 子流程，Step 6），生成全书单一的 `book_structure.json` 书对象。

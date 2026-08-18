@@ -57,7 +57,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 - 出口：1..END 内所有页 `page_*.json` 均已落盘（**无缺口**），`extract_pipeline.log` 末尾 `Pipeline finished.`。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/extract/pipeline/script/extract_pipeline`：主程序（断点续跑 + 分批提取，文本 only）。
+- `flows/extract/pipeline/script/extract_pipeline.py`：主程序（断点续跑 + 分批提取，文本 only）。
 - `flows/extract/pipeline/script/extract_book`：底层引擎（`init_models` + `process_batch` 三阶段 MFD→MFR→OCR）。Phase 1 的 MFD 用 `yolo_v8_ft.pt`（数学公式检测，只出公式框），文本另由 PaddleOCR 识别；权重路径硬编码于 `D:\study\model\PDF-Extract-Kit`。
 - `../../../data/page_json/page_json.py`：`page_*.json` 数据结构（`PageJson`）。
 

@@ -1,7 +1,13 @@
 import json, glob, os, sys
+from pathlib import Path
 
 # boot: inject skill config/verify_config into sys.path
-SKILL = r"C:/Users/ye190/.workbuddy/skills/book-summarizer"
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        SKILL = str(_c)
+        break
+else:
+    SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(SKILL, "config", "verify_config"))
 from verify_config import GroupConfig, ORDINAL_DEPTH
 

@@ -43,8 +43,7 @@ FIX_KEYS = {'h', 'h_stmt', 'h_ul', 'h_mbq', 'c', 'g', 'i', 'j', 'k', 'l', 'm', '
 # Allowed result-dict keys = the exact legacy contract mirrored by DEFAULT_RESULT.
 ALLOWED = set(DEFAULT_RESULT.keys())
 
-FIXTURE_DIR = os.path.join(
-    'C:/Users/ye190/.agents/skills/book-summarizer', 'verify', 'tests', 'fixtures')
+FIXTURE_DIR = os.path.join(_ROOT, 'verify', 'tests', 'fixtures')
 FIXTURE_PATH = os.path.join(FIXTURE_DIR, 'sample.md')
 
 # Minimal valid markdown. Kept trivial on purpose: one heading, one paragraph,

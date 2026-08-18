@@ -88,7 +88,7 @@ python flows/script/embed_figures "<book_dir>" --chapter 3
 python flows/script/embed_figures "<book_dir>" --dry-run
 
 # 手动补图（命名环节 remediation，回写 figure_index.json）
-"<python>" "C:/Users/ye190/.workbuddy/skills/book-summarizer/config/figure_manual_chN/apply_manual_figures.py" "<extract>" <ch> --pdf "<pdf>"
+"<python>" "<skill_root>/config/figure_manual_chN/apply_manual_figures.py" "<extract>" <ch> --pdf "<pdf>"
 ```
 > 检测 / 命名（`extract_figures` / `assign_figures`）属 extract 阶段的 `figure_detection` 子流程，命令见 `flows/script/extract_figures` / `flows/script/assign_figures`。
 

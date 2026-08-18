@@ -65,7 +65,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 
 | 阶段 | 脚本 |
 |------|------|
-| 提取（文本） | `flows/extract/pipeline/script/extract_pipeline` · `launch_pipeline.sh` |
+| 提取（文本） | `flows/extract/pipeline/script/extract_pipeline.py` · `launch_pipeline.sh` |
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/extract_figures` · `…/assign_figures.py` |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |

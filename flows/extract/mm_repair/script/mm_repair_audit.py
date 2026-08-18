@@ -2,7 +2,7 @@
 """mm_repair_audit.py — 扫描 page_*.json 的低置信条目，渲染裁图 + 拼版。
 
 本脚本**不需要视觉能力**：它只做扫描、裁图、生成拼版，供支持看图的模型
-（WorkBuddy agent）后续读取并补全。若当前模型不支持看图，整步跳过即可。
+后续读取并补全。若当前模型不支持看图，整步跳过即可。
 
 用法:
     python mm_repair_audit.py <pdf_path> <extract_dir>

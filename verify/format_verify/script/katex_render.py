@@ -22,35 +22,29 @@ import subprocess
 
 def _find_node():
     import shutil as _s
-    cands = [
-        r'C:\Users\ye190\.workbuddy\binaries\node\versions\22.22.2\node.exe',
-        r'C:\Users\ye190\.workbuddy\binaries\node\versions\22.22.2\node',
-    ]
-    p = _s.which('node')
-    if p:
-        cands.insert(0, p)
-    for c in cands:
-        if os.path.exists(c):
-            return c
-    return None
+    return _s.which('node')
 
 
 def _find_node_modules():
-    here = os.path.dirname(os.path.abspath(__file__))
-    cands = [
-        # canonical: skill ROOT node_modules (self-contained, preferred)
-        os.path.normpath(os.path.join(_ROOT, 'node_modules')),
-        # legacy fallback: skill-local node_modules beside the katex tooling
-        os.path.normpath(os.path.join(here, 'node_modules')),
-        # managed node workspace (global fallback)
-        r'C:\Users\ye190\.workbuddy\binaries\node\workspace\node_modules',
-        os.path.normpath(os.path.join(here, '..', '..', '..', 'binaries', 'node',
-                                       'workspace', 'node_modules')),
-    ]
-    for c in cands:
-        if os.path.isdir(c):
-            return c
-    return None
+    # canonical: skill ROOT node_modules only (self-contained, preferred)
+    cand = os.path.normpath(os.path.join(_ROOT, 'node_modules'))
+    return cand if os.path.isdir(cand) else None
+
+
+def _install_katex():
+    """npm install katex into skill ROOT node_modules. Returns True on success."""
+    import shutil as _s
+    npm = _s.which('npm')
+    if not npm:
+        return False
+    try:
+        r = subprocess.run([npm, 'install', 'katex', '--no-save', '--no-audit',
+                            '--no-fund'],
+                           cwd=_ROOT, capture_output=True, text=True,
+                           encoding='utf-8', timeout=600)
+    except Exception:
+        return False
+    return r.returncode == 0 and _find_node_modules() is not None
 
 
 def run_render_check(md_file):
@@ -74,9 +68,13 @@ def run_render_check(md_file):
                 'checked (heuristic-only fallback)']
     nm = _find_node_modules()
     if not nm:
-        return ['[render] katex node_modules missing — run: npm install katex '
-                'in bin/node/workspace — genuine LaTeX syntax errors NOT '
-                'checked (heuristic-only fallback)']
+        if _install_katex():
+            nm = _find_node_modules()
+        else:
+            return ['[render] katex node_modules missing at skill root and '
+                    'auto-install failed — run: npm install katex --no-save '
+                    '--no-audit --no-fund in the skill root — genuine LaTeX '
+                    'syntax errors NOT checked (heuristic-only fallback)']
     env = dict(os.environ)
     env['NODE_PATH'] = nm
     try:

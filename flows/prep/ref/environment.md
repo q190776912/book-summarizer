@@ -30,7 +30,7 @@ All absolute paths used by the extraction scripts. Adjust only if you relocate t
 | DocLayout-YOLO weight (`doclayout_yolo_ft.pt`) | `D:\study\model\PDF-Extract-Kit\models\Layout\YOLO\doclayout_yolo_ft.pt`（图片提取 `flows/script/extract_figures` 用；从 ModelScope `opendatalab/pdf-extract-kit-1.0` 拉，HF 此环境不可达） |
 | Summary folder (per book) | `D:\study\book\<书名>\` — the markdown chapter files live here. |
 | Extracted JSON (per-page) | `D:\study\book\<书名>\_extract\page_*.json` — directly in `_extract\` |
-| Skill scripts directory | `C:\Users\ye190\.workbuddy\skills\book-summarizer\` |
+| Skill scripts directory | `C:\Users\ye190\.agents\skills\book-summarizer\`（含 `flows/` · `verify/` · `config/` · `tools/`；路径自举：各脚本经 `lib/boot.py` 向上定位 `SKILL.md` 所在根，无需手改硬编码） |
 
 ## ⚠️ Critical: torch and paddle MUST share the same CUDA minor version
 

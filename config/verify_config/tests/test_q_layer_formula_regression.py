@@ -72,7 +72,26 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 KREYSZIG_MD = os.path.join(FIXTURE_DIR, 'kreyszig_ch3.md')
 KREYSZIG_EXT = os.path.join(FIXTURE_DIR, 'kreyszig_ch3_ext')
 MAKE_CONFIG_PY = os.path.join(_ROOT, 'config/verify_config/make_config.py')
-REAL_EXT_DIR = r'D:/study/book/基础/泛函分析导论及应用/_extract'
+CORPUS_ROOT = r'D:/study/book'
+
+
+def _find_real_kreyszig_ext():
+    """Discover the real Kreyszig corpus (_extract with page_*.json whose path
+    contains the Kreyszig book name), or None when absent — no hard-coded
+    machine paths."""
+    if not os.path.isdir(CORPUS_ROOT):
+        return None
+    for root, dirs, files in os.walk(CORPUS_ROOT):
+        if os.path.basename(root) != '_extract':
+            continue
+        if not any(f.startswith('page_') and f.endswith('.json') for f in files):
+            continue
+        if '泛函分析' in root or 'Kreyszig' in root or 'kreyszig' in root:
+            return root
+    return None
+
+
+REAL_EXT_DIR = _find_real_kreyszig_ext()
 
 # Inline copies of make_config's formula-shape regexes, so the global-detection
 # test can run its own sampled-vs-full detectors WITHOUT importing make_config

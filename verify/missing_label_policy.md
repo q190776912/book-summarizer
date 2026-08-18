@@ -56,7 +56,7 @@ B 层本就是"查漏"层。下列两项为 B 层查漏能力的子集（整类�
 
 ## 4. 序列缺口兜底（已在 B 层 `recover_missing_items`）
 
-- `flows/extract/script/b_layer` 的序列连续性检查：某节抽取到 `…-1,2,3,5,6,7` 而缺 `-4` 时，先重扫页面；重扫无果 → 仍判 `blocking`（"still missing after auto-recovery"）。
+- `verify/script/check_structure_completeness.py`（提取侧 B 层 `_run_b_layer`）的序列连续性检查：某节抽取到 `…-1,2,3,5,6,7` 而缺 `-4` 时，先重扫页面；重扫无果 → 仍判 `blocking`（"still missing after auto-recovery"）。
 - 这正是 4.9-4 被吞时的实际触发点；用 §2 Step 2 的 `manual_overrides` 登记后即解除。
 - **（与 B 层 MD 侧检测的关系）** 提取侧的此 `blocking` 属辅助检测，最终受 B 层 `item_numbering_integrity.py` 的「MD 存在性过滤」约束：若被报缺的编号实际已正确写在 `.md` 中（OCR 漏检、agent 已写出），该 `blocking` 会被抑制、不阻断——故「OCR 漏检但 .md 已写对」不会误报。权威的缺号判定见 [`item_numbering_integrity/item_numbering_integrity.md`](item_numbering_integrity/item_numbering_integrity.md)（MD 侧首项检验 + 连续性）。
 - 整类首项缺失（§3.1）与序列缺口（本节）是**互补**双保险：前者抓"整类首条连序列都不存在"的情形，后者抓"序列中间断号"。

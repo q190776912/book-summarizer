@@ -74,12 +74,28 @@ VERIFY_CLI = os.path.join(_ROOT, "verify/script/verify_chapter.py")
 SCAN_CLI = os.path.join(_ROOT, "flows/extract/structure/script/scan_skeleton.py")
 MAKE_CLI = os.path.join(_ROOT, "config/verify_config/make_config.py")
 
-# Real corpus book (read-only use; generated files cleaned up afterwards).
-REAL_HAS_CFG = r"D:\study\book\基础\泛函分析导论及应用\_extract"      # v2 ordinal array, type=3
-
-# A real NO_CFG book is discovered at runtime (the corpus changes); we do not
-# hard-code one because a book that used to lack config may gain one.
+# Real corpus books are discovered at runtime (the corpus changes); we do not
+# hard-code paths. CORPUS_ROOT is the only machine-specific anchor.
 CORPUS_ROOT = r"D:\study\book"
+
+
+def _find_real_has_cfg_book():
+    """Return the _extract path of a real book that already has
+    verify_config.json, or None if none found."""
+    if not os.path.isdir(CORPUS_ROOT):
+        return None
+    for root, dirs, files in os.walk(CORPUS_ROOT):
+        if os.path.basename(root) != "_extract":
+            continue
+        if "verify_config.json" not in files:
+            continue
+        return root
+    return None
+
+
+# A real book with a v2 ordinal array config (used read-only; tests skip when
+# the corpus is absent or no configured book exists).
+REAL_HAS_CFG = _find_real_has_cfg_book()
 
 
 def _find_real_no_cfg_book():
@@ -320,6 +336,8 @@ class TestScanSkeletonEntry(unittest.TestCase):
         # primary_type and exit 0.
         # scan_skeleton no longer writes any file, so this only verifies the
         # config gate exit code and leaves the corpus untouched.
+        if not REAL_HAS_CFG:
+            self.skipTest("no configured real book found under %s" % CORPUS_ROOT)
         rc, out, err = _run([SCAN_CLI, REAL_HAS_CFG, "1"])
         self.assertEqual(rc, 0,
                          "scan_skeleton on configured real book must exit 0. "
@@ -373,6 +391,8 @@ class TestMakeConfig(unittest.TestCase):
     def test_make_config_existing_config_skips_exit_0(self):
         # Real book that already has verify_config.json (v2 array form):
         # non --force -> skip, exit 0 (read-only, corpus untouched).
+        if not REAL_HAS_CFG:
+            self.skipTest("no configured real book found under %s" % CORPUS_ROOT)
         rc, out, err = _run([MAKE_CLI, REAL_HAS_CFG])
         self.assertEqual(rc, 0,
                          "make_config on existing-config book (no --force) must "

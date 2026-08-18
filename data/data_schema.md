@@ -1,7 +1,7 @@
 # 中间产物 JSON 索引（`.`）
 
 `.` 下每个中间产物 JSON **独占一个目录**：内含 `<json_name>.md`（数据结构说明）
-与 `<json_name>.py`（模型类，继承 `lib/json_data.py` 基类）。脚本分两类：
+与 `<json_name>.py`（模型类，继承 `data/lib/json_data.py` 基类）。脚本分两类：
 
 - **构造器**（产生该 JSON）：就在对应目录的 `<json_name>.py`，CLI 直接写盘。
 - **流程 / 校验脚本**（消费或校验该 JSON，不产新 JSON）：留在对应 `../flows` 阶段或
@@ -28,7 +28,7 @@
 
 ## 基类
 
-`lib/json_data.py` 定义 `JsonData`：提供 `to_dict()` / `dump()` / `load()` /
+`data/lib/json_data.py` 定义 `JsonData`：提供 `to_dict()` / `dump()` / `load()` /
 `from_dict()` 通用序列化契约。每个 JSON 模型类继承它，并各自实现构造函数
 （`default` / `from_dict` / `build` / `merge` / `from_markdown` 等）与字段。
 

@@ -26,7 +26,7 @@ import os, sys
 
 import os, json, datetime
 
-SKILL = r"C:\Users\ye190\.workbuddy\skills\book-summarizer"
+SKILL = _ROOT
 P1 = os.path.join(SKILL, "validate_report.json")
 P2 = os.path.join(SKILL, "validate_report_phase2.json")
 OUT = os.path.join(SKILL, "validation_summary.md")

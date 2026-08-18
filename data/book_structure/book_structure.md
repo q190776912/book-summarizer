@@ -66,7 +66,7 @@
 - 属性 `name`（`root.name`）、`chapters`（`root.sub_sec`）。
 - `find_chapter(ch)` / `chapter_items(ch, include_exercise=False)`：便捷查询。
 
-> 注意：本模型类**未继承** `lib/json_data.py`（`data/data_schema.md` 描述的 `JsonData` 基类当前未实现），序列化契约以本模块 `to_dict()/from_dict()/dump()/load()` 为准。其字段与方法签名与 `JsonData` 约定（`to_dict/dump/load/from_dict`）一致，后续若实现基类可直接挂接。
+> 注意：本模型类**未继承** `data/lib/json_data.py`（`data/data_schema.md` 描述的 `JsonData` 基类当前未实现），序列化契约以本模块 `to_dict()/from_dict()/dump()/load()` 为准。其字段与方法签名与 `JsonData` 约定（`to_dict/dump/load/from_dict`）一致，后续若实现基类可直接挂接。
 
 ## 5. 消费者（只读，不裸操作 json）
 

@@ -24,7 +24,7 @@
 ```powershell
 python flows/extract/structure/script/build_structure <extract_dir>
 # 不传 <ch> 即扫全部章；也可指定章：build_structure.py <extract_dir> 1 2 3
-# 编号模式（三级/两级/en/vakil/gm/roman/fraleigh）由 <extract_dir>/verify_config.json
+# 编号模式（三级/两级/en/vakil/gm/roman）由 <extract_dir>/verify_config.json
 # 的 ordinal 自动判定，无需 --scheme
 ```
 产出全书单一的 `book_structure.json`（书对象，`sub_sec` 内按章顺序嵌套全部章节），这是后续查漏对比的**基线契约**，也是 write-source 的写作契约 + verify 的编号项基准。
@@ -115,7 +115,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 
 ## 本阶段规则（🔴 内联）
 - **JSON 是契约，不是参考**：
-  - 有几个 `section` 就必须写几节 `## §N.M`（原书小节**带序标**时），顺序照抄，一个不能少、不能颠倒；原书小节**无序号标**时写 `## § <标题>`（数字留空，仅保留 `§`，详见 `docs/writing-rules.md`「小节序标必须尊重原书」），并须在 `verify_config.json` 的 `section_types` 里把该层级写为 `0`（如 `"section_types": [0]`，对应 `type 0` / `depth 0`）；
+  - 有几个 `section` 就必须写几节 `## §N.M`（原书小节**带序标**时），顺序照抄，一个不能少、不能颠倒；原书小节**无序号标**时写 `## § <标题>`（数字留空，仅保留 `§`，详见 `docs/writing-rules.md`「小节序标必须尊重原书」），并须在 `verify_config.json` 的 `section_types` 里把**章层级与小节层级都写为 `0`**（如 Silverman `"section_types": [0, 0]`，第一个 `0`=章层级、第二个 `0`=小节层级，对应 `type 0` / `depth 0`；单层级无序号标书才用 `[0]`）；
   - 每个非 `exercise` 节点都必须在总结里落地；`exercise` 按习题收录规则处理（穿插习题原位保留，章末整块习题省略），故不强制落地；
   - 节点 `name` 的印刷标题必须写进条目标签，不得丢弃；
   - JSON 里没有的编号，不许出现在总结里（无中生有）。

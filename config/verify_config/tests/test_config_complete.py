@@ -368,7 +368,7 @@ class TestMakeConfig(unittest.TestCase):
             gen = json.load(f)
         self.assertIsInstance(gen["ordinal"], list)
         self.assertEqual(len(gen["ordinal"]), 1)
-        self.assertIn(gen["ordinal"][0]["type"], (1, 2, 3, 4, 5, 6, 7))
+        self.assertIn(gen["ordinal"][0]["type"], (1, 2, 3, 4, 5, 6, 8, 9))
 
     def test_make_config_existing_config_skips_exit_0(self):
         # Real book that already has verify_config.json (v2 array form):

@@ -12,11 +12,11 @@ Config schema (see config/config_schema.md §配置字段说明):
     (定理/定义/练习/Example/...) that share ONE merged counter.  This replaces
     the old single-integer `ordinal` + `separate_types` (SEP_COMBINED/
     SEP_PER_TYPE) switch: different groups NEVER merge, an unmatched label
-    falls into the `uncat` fallback group.  Group fields: `type` (ORDINAL_* 1..7),
+    falls into the `uncat` fallback group.  Group fields: `type` (ORDINAL_* 1..6 / 8 / 9),
     `name` (label categories), `depth` (numeric components), `scope` (1 book /
     2 chapter / 3 section — the counter reset boundary).  Values for `type`:
         1 single | 2 two_level(CN) | 3 three_level(CN, default)
-        4 en (EN two-level) | 5 roman | 6 gm | 7 fraleigh
+        4 en (EN two-level) | 5 roman | 6 gm
   * `language` (cn/en) is an orthogonal axis, defaulted from `ordinal`.
   * `ignore` is ONE unified list merging the old `known_gaps` + `ignore_keys`
     + `ignore_fig` semantics (the user chose a single suppression set).
@@ -52,7 +52,7 @@ SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 # --- ordinal style codes (single integer selector) -------------------------
 # ONE integer encodes BOTH the numbering depth and the structural style.
 # This ABSORBS the old `levels` (depth 1/2/3) and the old `scheme` family
-# (single / two_level / three_level / en / gm / roman / fraleigh) into a
+# (single / two_level / three_level / en / gm / roman) into a
 # single field.  `language` (cn/en) is an orthogonal axis.
 ORDINAL_SINGLE = 1
 ORDINAL_TWO_LEVEL = 2      # CN two-level (N.M, section-first); no chapter filter
@@ -60,7 +60,6 @@ ORDINAL_THREE_LEVEL = 3    # CN three-level (N.M.K) — default
 ORDINAL_EN = 4             # EN two-level (N.M, chapter-first; rich EN labels)
 ORDINAL_ROMAN = 5          # three-level with ROMAN chapter (e.g. I.2.3)
 ORDINAL_GM = 6             # two-level, bare per-section ordinals (no chapter)
-ORDINAL_FRALEIGH = 7       # two-level, section-based numbering (no chapter)
 ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
 ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.g. Lasota & Mackey
                           #   《Chaos, Fractals, and Noise》. 条目形如 `Remark 1.1.1` /
@@ -68,17 +67,17 @@ ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.
                           #   (CN 三级虚线键 `C.S-N`) 不同：要求显式英文标签词，因此天然
                           #   排除 `FIGURE 1.1.1` / `(1.1.1)` 等图号/公式号（避免键碰撞）。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 5: 'roman', 6: 'gm', 7: 'fraleigh', 8: 'vakil', 9: 'en3',
+    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3, 9: 3}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 7: 'fraleigh', 9: None}
+ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 7: 'en', 8: 'en', 9: 'en'}
+ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en'}
 # Default figure-label prefixes (used when verify_config.json has no
 # `figure.labels`). Mirrors lib.figure_io.FIGURE_LABELS_DEFAULT — duplicated on
 # purpose to keep verify_config.py import-clean (no figure-module import).
@@ -86,29 +85,44 @@ FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
-    'en': 4, 'roman': 5, 'gm': 6, 'fraleigh': 7,
+    'en': 4, 'roman': 5, 'gm': 6,
 }
 
-# --- section role codes (1..4) for the nested section hierarchy ------------
-# Each level in the D-layer section hierarchy carries a ROLE. These codes are
-# stable identifiers stored in `section_types`; the matching numeric component
-# count per level (e.g. role 3 = subsection carried by a 3-component number
-# C.S.K) is DERIVED via the SECTION_TYPE_DEPTH map — it is NOT a stored field.
-SECTION_ROLE_CHAPTER       = 1
-SECTION_ROLE_SECTION       = 2
-SECTION_ROLE_SUBSECTION    = 3
-SECTION_ROLE_SUBSUBSECTION = 4
-# SECTION_ROLE_UNNUMBERED: a section level that carries NO ordinal in the
-# original book (e.g. Silverman's chapters are continuous prose; the only
-# anchors are theorems/lemmas).  It corresponds to `type 0` / `depth 0` and is
-# expressed in verify_config.json as a `0` in the `section_types` array.  The
-# `## §` heading for such a level is written `## § <title>` (no number) and the
-# gate matches it by POSITION, never fabricating a number.
+# --- section role codes = ORDINAL-DEPTH codes for the nested `## §` hierarchy -
+# The code stored in `section_types` is NOT a "chapter/section/subsection"
+# role name — it is the NUMBER OF NUMERIC COMPONENTS (ordinal depth) carried by
+# that heading level's `## §` token:
+#     type 1 -> a 1-component ordinal  `## §N`          (一级序标)
+#     type 2 -> a 2-component ordinal  `## §N.M`        (二级序标)
+#     type 3 -> a 3-component ordinal  `## §N.M.K`      (三级序标)
+#     type 4 -> a 4-component ordinal  `## §N.M.K.L`    (四级序标)
+#     type 0 -> UNNUMBERED `## § <标题>` (no ordinal at all)
+# The names CHAPTER/SECTION/SUBSECTION below are just the TYPICAL meaning these
+# depths take in a standard (normally-nested) book — they are NOT enforced
+# semantics.  A book may legitimately declare e.g. `section_types: [1, 1, 1]`
+# (every heading level uses a bare 1-component ordinal) or `section_types: [0]`
+# (the only `## §` level is unnumbered).  The matching numeric component count
+# per level is DERIVED via the SECTION_TYPE_DEPTH map — it is NOT a stored field.
+SECTION_ROLE_CHAPTER       = 1   # 一级序标 `## §N`      (标准书里通常是章前缀)
+SECTION_ROLE_SECTION       = 2   # 二级序标 `## §N.M`    (标准书里通常是节)
+SECTION_ROLE_SUBSECTION    = 3   # 三级序标 `## §N.M.K`  (标准书里通常是小节)
+SECTION_ROLE_SUBSUBSECTION = 4   # 四级序标 `## §N.M.K.L`
+# SECTION_ROLE_UNNUMBERED: a section-hierarchy LEVEL that carries NO ordinal in
+# the original book.  It corresponds to `type 0` / `depth 0` (0 `## §`
+# components) and is written as a `0` in the `section_types` array.  A `0`
+# appears at WHICHEVER level(s) are unnumbered — it is NOT restricted to the
+# in-file `## §` tier.  Silverman is `[0, 0]`: element 0 = the CHAPTER (the
+# file `# 第N章`, no `## §` number) and element 1 = its `## § <标题>`
+# subsections, BOTH unnumbered.  The `## §` gate matches an unnumbered level by
+# POSITION (never fabricating a number).  `section_types` is a PER-LEVEL list
+# ordered chapter → deepest; its LENGTH must equal the number of hierarchy
+# levels, so a single-level book is `[0]` while a chapter+subsection book is
+# `[0, 0]` (two levels — never collapse them into one).
 SECTION_ROLE_UNNUMBERED = 0
-# SECTION_ROLE_CODES spans 0..4: role 0 = unnumbered, 1..4 = chapter/section/
-# subsection/sub-subsection.  No real book nests deeper than a 4-component
-# heading (`## §5.4.2.1`).  Raise this cap AND extend SECTION_TYPE_DEPTH together
-# if a deeper book appears.
+# SECTION_ROLE_CODES spans 0..4: role 0 = unnumbered, 1..4 = 1/2/3/4-component
+# ordinal depths.  No real book nests deeper than a 4-component heading
+# (`## §5.4.2.1`).  Raise this cap AND extend SECTION_TYPE_DEPTH together if a
+# deeper book appears.
 SECTION_ROLE_CODES = tuple(range(0, 5))
 
 # --- role code -> nesting depth (number of `## §...` components) -----------
@@ -143,7 +157,7 @@ SECTION_TYPE_DEPTH = {
 # verifies the chapter prefix ([1]).
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
-    5: [1, 2, 3], 6: [1, 2], 7: [1, 2], 8: [1, 2, 3],
+    5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
     9: [1, 2],
 }
 
@@ -322,6 +336,12 @@ class BookConfig:
     # cross-chapter reference.  The B-layer already groups two-level items by
     # their section prefix, so it stays correct either way.
     chapter_first: bool = True
+    # Section-scoped EN extraction flag: when True, the extractor ALSO captures
+    # NUMBER-FIRST headings ("26.4 Lemma", "24.2 Corollary") and numbered
+    # graphics ("Table 1.20", "Figure 3.6") as items — needed only for
+    # section-based books whose source prints these (e.g. Fraleigh).  Normal
+    # chapter-first EN books keep their exact prior behavior (False).
+    section_scoped: bool = False
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
@@ -489,9 +509,12 @@ class BookConfig:
             raise ConfigError(
                 "[CONFIG] ordinal 必须是 GroupConfig 数组，字符串格式已废弃。")
         if not isinstance(raw, list) or not raw:
-            # No ordinal / empty array -> default single uncat group (let
-            # require_complete() decide whether to hard-fail or use the default).
-            groups = [GroupConfig()]
+            # No ordinal / empty array -> a single UNNUMBERED uncat group.
+            # NOTE: deliberately type 0 (unnumbered), NOT the legacy default
+            # type 3 — per the "no default type" rule, an absent ordinal must
+            # not be silently upgraded to a fabricated three-level scheme.
+            # require_complete() still decides whether to hard-fail.
+            groups = [GroupConfig(type=0)]
         else:
             groups = []
             for i, g in enumerate(raw):
@@ -521,10 +544,20 @@ class BookConfig:
         # A stale `section_depths` key in verify_config.json is ignored silently.
         st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(rep, [1])
         st = [int(x) for x in st if int(x) in SECTION_ROLE_CODES] or [1]
-        # Level 1 is ALWAYS the chapter (role 1) OR an unnumbered section
-        # (role 0, e.g. Silverman — the chapter IS the file, within-file
-        # `## § <title>` headings are the unnumbered sections).  Coerce
-        # defensively so a hand-written config can never start at role 2+.
+        # `section_types` is a PER-LEVEL list, ordered from the CHAPTER level
+        # (element 0) down to the deepest `## §` level.  Each element is the
+        # number of ordinal components that level carries in the `## §`
+        # numbering (1 = `## §N`, 2 = `## §N.M`, 3 = `## §N.M.K`, …) or 0 when
+        # that level is UNNUMBERED.  This matches `make_config._detect_section_
+        # hierarchy`, which always prepends the chapter prefix (role 1) for a
+        # standard book.  Examples: Kreyszig `[1, 2]` = chapter-prefix (1 comp)
+        # + section (`## §1.1`, 2 comp); Silverman `[0, 0]` = chapter IS the
+        # file (`# 第N章`, no `## §` number) AND its `## § <标题>` subsections
+        # are also unnumbered.  The LENGTH of `section_types` must equal the
+        # number of section hierarchy levels (chapter INCLUSIVE) — so a
+        # chapter + unnumbered-subsection book is `[0, 0]`, NOT `[0]` (which
+        # would describe a single level with no subsections).  Coerce
+        # defensively so a hand-written config can never start at role 2+;
         # require_complete() also enforces this as a backstop.
         if st[0] not in (0, 1):
             st[0] = 1
@@ -553,6 +586,7 @@ class BookConfig:
             language=language,
             strict=bool(data.get('strict', True)),
             chapter_first=bool(data.get('chapter_first', True)),
+            section_scoped=bool(data.get('section_scoped', False)),
             ignore=ignore,
             manual=manual,
             section_types=st,
@@ -698,7 +732,7 @@ class ConfigLoader:
                 "请先创建 <book>/_extract/verify_config.json（至少含 ordinal）。"
             )
 
-        # --- ordinal array present & every group legal (1..7) ---
+        # --- ordinal array present & every group legal (1..6 / 8 / 9) ---
         # `from_dict` already rejects the old int/str/levels formats and appends a
         # default uncat group, so `verify_config_has_ordinal` (== "ordinal is a
         # non-empty list") is the reliable "was it declared" signal.

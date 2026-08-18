@@ -30,7 +30,7 @@
 缺省/非法 → 默认 `ordinal=[{type:3, name:["uncat"], scope:3}]`(三级CN), `strict=True`。旧整型 ordinal / `separate_types` 写法被 `from_dict` 拒绝（报 `make_config --force` 提示）。
 
 `BookConfig` 字段（经 `ConfigLoader` 读入，挂在 `ctx.config`）：
-- `ordinal`：**分组对象数组** `List[GroupConfig]`，每个元素 `{type, name, scope}`（见 `config/verify_config/verify_config.py` 的 `GroupConfig`）。`type` 为编号风格码（`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)，`7`=Fraleigh）；数组首元素 `type` 即 `primary_type`。`name` 为该组标签词（如 `["Theorem"]`，兜底组 `["uncat"]`）；`depth` 为编号层级数，由 `type` 经 `ORDINAL_DEPTH[type]` 派生（如 `4.11-5` 在 `type=3` 下为 3 级），不再作为独立配置字段；`group_for_label(label)` 把标签映射到其 group，匹配不到的回落 uncat 组。
+- `ordinal`：**分组对象数组** `List[GroupConfig]`，每个元素 `{type, name, scope}`（见 `config/verify_config/verify_config.py` 的 `GroupConfig`）。`type` 为编号风格码（`1`=单级，`2`=两级CN(章.号)，`3`=三级CN(章.节-号, 默认)，`4`=英文两级，`5`=罗马三级，`6`=GM(按节裸序号)；节基 EN 两级书如 Fraleigh 已并入 `4` 并设 `chapter_first:false` + `section_scoped:true`）。数组首元素 `type` 即 `primary_type`。`name` 为该组标签词（如 `["Theorem"]`，兜底组 `["uncat"]`）；`depth` 为编号层级数，由 `type` 经 `ORDINAL_DEPTH[type]` 派生（如 `4.11-5` 在 `type=3` 下为 3 级），不再作为独立配置字段；`group_for_label(label)` 把标签映射到其 group，匹配不到的回落 uncat 组。
 - `scope`（**per-group，非顶层字段**）：末级序号的重置/连续性边界（`1`=book 全书 | `2`=chapter 章内 | `3`=section 节内）。`GroupConfig.group_prefix_len()` 取 `sp={1:0,2:1,3:2}[scope]` 并钳到 `min(sp, depth-1)`；错配不会崩溃。
 - 分组粒度（per-type vs combined）：用多个具名 group（如 `Theorem`/`Lemma`/`Definition` 各一个）→ 每类独立计数器；单个 `uncat` group → 各类共享一个计数器。
 - `strict`：`True`（默认）→ md 内部缺口成为 BLOCKING（不允许遗漏）；`False` → 降级为 `b_gap_warnings`。

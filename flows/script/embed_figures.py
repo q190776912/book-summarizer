@@ -300,26 +300,93 @@ def indent_inblock(lines):
 
 
 def fix_continuity(lines):
+    """Post-scan: turn a truly blank line that sits INSIDE a blockquote into a
+    `> ` line so renderers don't split the block into several boxes.
+
+    Robust, context-based, idempotent. The old implementation toggled a `seg`
+    flag via HEAD_RE (start of a `> **证明/例**` block) and TERM_RE (end of such
+    a block). When TERM_RE failed to fire at the real block boundary (e.g. a
+    block ending in a `<img>` line or a `> $$` math block), `seg` stayed True
+    past the block and a bare blank line that was actually BETWEEN two
+    top-level items got converted to `> `, creating an "orphan `>`" that the
+    H-layer of verify_chapter.py flags as "Structural-in-blockquote".
+
+    The new logic makes a per-line CONTEXT decision that is the EXACT INVERSE
+    of `verify_chapter.py`'s `check_h_structural_blockquote` orphan rule. For
+    each truly blank line (`ln.strip() == ""`):
+      1. Walk backwards (skipping truly-empty lines) to the nearest non-empty
+         line `prev`; record `prev_bq = prev.lstrip().startswith(">")`.
+      2. Walk forwards (skipping truly-empty lines) to the nearest non-empty
+         line `nxt`; record `next_bq = nxt.lstrip().startswith(">")`.
+      3. Convert the blank to `"> "` ONLY when `(prev_bq OR next_bq)` is True —
+         i.e. the blank is adjacent (on at least one side) to blockquote
+         content, so it belongs to / continues a block.
+      4. NEVER convert a blank that is adjacent (on either side) to a horizontal
+         rule `---`. The F-layer Separator check requires a *real* blank line
+         immediately before AND after every `---`; a `> ` line does not count, so
+         converting it would regress verify. A `---`-adjacent blank is by
+         definition outside any blockquote, so leaving it blank is always correct.
+      5. NEVER create a run of 2+ consecutive `> ` lines: the F-layer
+         "BQ-empty-lines" check allows at most ONE empty `>` line between
+         blockquote content. If the previously emitted line is already a bare
+         `>`, leave the current blank as-is (the gap still renders as a single
+         `>` line). This prevents converting 2+ consecutive in-block blanks into
+         a forbidden `> ` / `> ` run.
+      6. Otherwise (both sides are non-`>` top-level content, and neither side is
+         `---`) leave it blank.
+
+    The orphan check flags a bare `>` line only when `not (prev_bq or
+    next_bq)`. By converting only when `prev_bq or next_bq`, the resulting `>
+    ` line can NEVER be an orphan, so re-running the embedder on an
+    already-embedded book cannot regress verify.
+
+    A line that is already a bare `>` (i.e. `ln.strip() == ">"`) is NEVER
+    touched — only truly empty (`ln.strip() == ""`) lines are acted on.
+
+    Pure: list in -> (list, int) out. No I/O.
+    """
     n = len(lines)
     out = []
-    seg = False
     conv = 0
     for i in range(n):
         ln = lines[i]
-        if HEAD_RE.match(ln):
-            seg = True
+        # Only act on a truly empty line. Never touch non-blank lines, and
+        # never touch an already-bare `>` line (ln.strip() == ">").
+        if ln.strip() != "":
             out.append(ln)
-        elif TERM_RE.match(ln) and not ln.lstrip().startswith(">"):
-            seg = False
+            continue
+        # Walk backwards (skipping truly-empty lines) to nearest non-empty line.
+        prev_bq = False
+        prev_is_hr = False
+        for k in range(i - 1, -1, -1):
+            if lines[k].strip() != "":
+                prev_bq = lines[k].lstrip().startswith(">")
+                prev_is_hr = lines[k].strip() == "---"
+                break
+        # Walk forwards (skipping truly-empty lines) to nearest non-empty line.
+        next_bq = False
+        next_is_hr = False
+        for k in range(i + 1, n):
+            if lines[k].strip() != "":
+                next_bq = lines[k].lstrip().startswith(">")
+                next_is_hr = lines[k].strip() == "---"
+                break
+        # Do NOT convert a blank that sits next to a horizontal rule `---`.
+        # The F-layer requires a *real* blank line immediately before AND after
+        # every `---` separator; a `> ` line does not satisfy that, so converting
+        # it would regress verify (F-layer Separator check). Such a `---`-adjacent
+        # blank is by definition NOT inside a blockquote, so leaving it blank is
+        # always correct.
+        if prev_is_hr or next_is_hr:
             out.append(ln)
-        elif seg and lines[i].strip() == "":
-            j = i + 1
-            while j < n and lines[j].strip() == "":
-                j += 1
-            if j >= n or HEAD_RE.match(lines[j]) or (TERM_RE.match(lines[j]) and not lines[j].lstrip().startswith(">")):
+            continue
+        if prev_bq or next_bq:
+            # The F-layer "BQ-empty-lines" check allows at most ONE consecutive
+            # empty `>` line between blockquote content. Never create a run of 2+
+            # consecutive `> ` lines: if the previously emitted line is already a
+            # bare `>`, leave this blank instead (the gap stays a single `>`).
+            if out and out[-1].strip() == ">":
                 out.append(ln)
-                if j < n and HEAD_RE.match(lines[j]):
-                    seg = False
             else:
                 out.append("> ")
                 conv += 1

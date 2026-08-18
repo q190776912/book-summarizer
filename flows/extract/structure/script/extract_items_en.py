@@ -70,8 +70,29 @@ EN_LAB_RE = re.compile(
     re.IGNORECASE,
 )
 
-def extract_items_en(extract_dir, start, end, want_examples=True):
+# Section-scoped EN books (e.g. Fraleigh): the FIRST number is the SECTION, not
+# the chapter, and the source additionally prints NUMBER-FIRST headings
+# ("26.4 Lemma", "24.2 Corollary") alongside label-first ones, plus numbered
+# graphics ("Table 1.20", "Figure 3.6"). The shared EN extractor handles these
+# ONLY when `section_scoped=True`, so normal chapter-first EN books (Silverman,
+# stochastic-processes, ...) keep their exact prior behavior untouched.
+SECTION_LABELS = EN_LABELS + ["Table", "Figure", "表", "图"]
+EN_LAB_RE_NF = re.compile(
+    r'(' + EN_OCR_NUM + r')\s*' + SEP_TIGHT + r'\s*(' + EN_OCR_NUM + r')\s+'
+    r'(?:\([^)]*\)\s+)?\b(' + '|'.join(SECTION_LABELS) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False):
     items = []
+    # Section-scoped books also accept numbered graphics (Table/Figure) as items.
+    lab_labels = SECTION_LABELS if section_scoped else EN_LABELS
+    lab_re = re.compile(
+        r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
+        r'(' + EN_OCR_NUM + r')(?:\s*' + SEP_TIGHT + r'\s*(' + EN_OCR_NUM + r'))?',
+        re.IGNORECASE,
+    )
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
@@ -82,7 +103,7 @@ def extract_items_en(extract_dir, start, end, want_examples=True):
             txt = t.get("text", "")
             if not txt:
                 continue
-            for m in EN_LAB_RE.finditer(txt):
+            for m in lab_re.finditer(txt):
                 label = m.group(1)
                 if label == "Example" and not want_examples:
                     continue
@@ -122,6 +143,24 @@ def extract_items_en(extract_dir, start, end, want_examples=True):
                 snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
                 items.append({"key": key, "label": label,
                               "page": p, "text": snippet})
+            # Section-scoped EN source also prints NUMBER-FIRST headings
+            # ("26.4 Lemma", "24.2 Corollary") — always two-level, so no
+            # single-level prose ambiguity to guard against.
+            if section_scoped:
+                for m in EN_LAB_RE_NF.finditer(txt):
+                    label = m.group(3)
+                    if label == "Example" and not want_examples:
+                        continue
+                    if txt[:m.start()].strip():
+                        continue
+                    n1 = _ocr_int(m.group(1))
+                    n2 = _ocr_int(m.group(2))
+                    if n1 is None or n2 is None:
+                        continue
+                    key = f"{label} {n1}.{n2}"
+                    snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+                    items.append({"key": key, "label": label,
+                                  "page": p, "text": snippet})
     # Collapse reference mentions but KEEP two genuinely different items that
     # share a (label, number) — e.g. a source book printing the same number
     # twice (a printing off-by-one).  Genuine headings are already pre-filtered

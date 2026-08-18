@@ -193,7 +193,8 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_role(4), SECTION_ROLE_SUBSUBSECTION)
 
     def test_section_role_codes_constant(self):
-        self.assertEqual(SECTION_ROLE_CODES, (1, 2, 3, 4))
+        # role 0 = 无序号标层级（SECTION_ROLE_UNNUMBERED），故范围 0..4。
+        self.assertEqual(SECTION_ROLE_CODES, (0, 1, 2, 3, 4))
 
     def test_ordinal_section_types_backcompat_table(self):
         # The exact reverse-inference table mandated by the change.
@@ -203,7 +204,10 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(ORDINAL_SECTION_TYPES[4], [1, 2])
         self.assertEqual(ORDINAL_SECTION_TYPES[5], [1, 2, 3])
         self.assertEqual(ORDINAL_SECTION_TYPES[6], [1, 2])
-        self.assertEqual(ORDINAL_SECTION_TYPES[7], [1, 2])
+        # 原 type 7 (fraleigh, 节基 EN 两级) 已并入 type 4（chapter_first:false），
+        # 不再单列；补覆盖 type 8 (vakil EN 三级) / 9 (en3)。
+        self.assertEqual(ORDINAL_SECTION_TYPES[8], [1, 2, 3])
+        self.assertEqual(ORDINAL_SECTION_TYPES[9], [1, 2])
 
 # ==========================================================================
 # 2) primitive helpers

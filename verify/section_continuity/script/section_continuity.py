@@ -21,7 +21,7 @@ section_continuity.py — D-LAYER (order 1): section-continuity + missing-tail-s
 
 Self-contained implementation. Scans the RAW _extract JSON directly and cross-checks against the written .md, INDEPENDENTLY of extract_items' output.
 
-The D-layer now supports an ARBITRARY nested section hierarchy (1–4 levels: chapter / section / subsection / sub-subsection) driven by ``BookConfig.section_types`` / ``section_depths``. For every detected numbering token it projects a prefix at every hierarchy level, then partitions missing sections into continuity (interior hole) vs tail (beyond last written) buckets PER LEVEL. The legacy two-level behaviour is preserved: ordinals 2/4/6/7 verify chapter + section only; ordinals 3/5 additionally verify the subsection (1.1.1) level for the first time (the old D_MD_NESTED_SEC_RE was dead code).
+The D-layer now supports an ARBITRARY nested section hierarchy (1–4 levels: chapter / section / subsection / sub-subsection) driven by ``BookConfig.section_types`` / ``section_depths``. For every detected numbering token it projects a prefix at every hierarchy level, then partitions missing sections into continuity (interior hole) vs tail (beyond last written) buckets PER LEVEL. The legacy two-level behaviour is preserved: ordinals 2/4/6 verify chapter + section only; ordinals 3/5 additionally verify the subsection (1.1.1) level for the first time (the old D_MD_NESTED_SEC_RE was dead code).
 
 For ordinal=ORDINAL_GM / ORDINAL_ROMAN it uses check_d_layer_gm, which reuses the extractor's heading scan — `scan_gm_blocks` is a decoupled copy of `extract_items_gm.scan_gm_blocks` (single source of truth there; keep both in sync).
 """

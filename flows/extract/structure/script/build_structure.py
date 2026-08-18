@@ -23,7 +23,7 @@
 
 设计要点（与 verify/data_provider 对齐）
 --------------------------------------
-  · 编号模式（three-level / two-level / en / vakil / gm / roman / fraleigh）
+  · 编号模式（three-level / two-level / en / vakil / gm / roman）
     由 `<extract_dir>/verify_config.json` 的 `ordinal` 自动判定，与 verify/data_provider
     同一套分派逻辑。**build_structure 是抽取器的唯一调用方**（verify 读 JSON，不再重跑抽取器）。
   · **条目权威来自抽取器**（带类型）：skeleton 的 ITEM 行对 dash 编号书
@@ -82,7 +82,7 @@ from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
-from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
+from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                            ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
@@ -125,17 +125,23 @@ _STRIP_LABEL = re.compile(
 _STRIP_LABEL_CN = re.compile(r'^(定义|定理|引理|推论|命题|例|评注|注)')
 
 
-def _section_of_key(key, ordinal):
+def _section_of_key(key, ordinal, chapter_first=True):
     """从带类型的条目 key 推导其所属『章节号』（用于挂到 section 节点）。
 
     返回 "C.S"（字符串）或 None（交由页码归并）。
+
+    ``chapter_first``：EN 两级编号下，key 首数究竟是章还是节。
+      * True（默认，ORDINAL_EN / ORDINAL_EN3）："Definition 6.1" = 第 6 章第 1 条，
+        段号取 "C.S" = "6.1"。
+      * False（节基书，如 Fraleigh："Definition 8.1" = §8 第 1 条，首数即『节号』）：
+        段号取 "S" = "8"。
 
     注（Bug #20）：EN 两级编号下，key 形如 "Example 2.7" 会被派生为章节号 "2.7"。
     真实存在的小节（§2.1–§2.6）由条目与小结共同确立；而 Example 2.7/2.8/2.9 这类
     「仅示例、无对应小结标题」的派生号属于幽灵小节，由 ``build_chapter`` 借助章节
     小结 markdown 的二级标题（``## §N.M``）统一剔除，而非在此短路返回 None——因为
     短路会让所有 EN 条目失去派生小节能力，致使 scan_skeleton 两级模式本就漏扫的
-    真实小节（如 §2.1–§2.6）也一并丢失（回归）。故此处按通用规则返回 "C.S"。
+    真实小节（如 §2.1–§2.6）也一并丢失（回归）。故此处按通用规则返回段号。
     """
     if ordinal == ORDINAL_TWO_LEVEL:
         # 中文两级：key 形如 "定义1.1"（标签自有计数器），无章节分量 -> 页码归并
@@ -143,11 +149,12 @@ def _section_of_key(key, ordinal):
     k = _STRIP_LABEL.sub("", key)
     k = _STRIP_LABEL_CN.sub("", k)
     nums = re.findall(r"\d+", k)
-    if ordinal == ORDINAL_FRALEIGH:
-        # 节基两级：key 形如 "定义8.1"，首数字即『节号』
-        return nums[0] if nums else None
     if len(nums) >= 2:
-        return f"{nums[0]}.{nums[1]}"
+        if chapter_first:
+            # 章基两级：首数是章，段号 "C.S"
+            return f"{nums[0]}.{nums[1]}"
+        # 节基两级（如 Fraleigh）：首数是节，段号取 "S"
+        return nums[0]
     if len(nums) == 1:
         return nums[0]
     return None
@@ -159,6 +166,66 @@ def _section_of_exer(num):
     if len(nums) >= 2:
         return f"{nums[0]}.{nums[1]}"
     return None
+
+
+def _find_title_page(ext, title, start, end):
+    """无序号标小节：在章节 OCR 区间 [start, end] 内查找标题文本首次出现的页码。
+
+    标题在 OCR 中常与正文粘连（"Title. Body..."），故同时用「整块包含」与
+    「首个 '. ' 前缀相等」两种匹配；找不到返回 None（调用方回退到 start）。
+    """
+    t_norm = (title or "").strip().lower()
+    if not t_norm:
+        return None
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, "page_%03d.json" % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        for b in d.get("text", []):
+            if not isinstance(b, dict):
+                continue
+            s = (b.get("text") or "").strip().lower()
+            if not s:
+                continue
+            head = s.split(". ")[0].strip()
+            if t_norm == head or t_norm in s:
+                return p
+    return None
+
+
+def _recognized_sections(ext, ch, start, end):
+    """无序号标书（section_types 含 0）：读取「agent 校验识别」步骤产物
+    ``_recognized_sections.json`` 中本章的小节标题清单，返回 ``[(title, page), ...]``
+    （按文档顺序），``page`` 为该标题在 OCR 中首次出现的页（用于排序与条目归并）。
+
+    该清单由识别步骤（agent/LLM 读原书确认「真实无序号标」后给出权威小节列表）
+    产出，是**唯一可靠**的无序号标小节来源——OCR 正则靠「≥2 段数字」判节，对
+    无数字标题完全失明且易编造假小节（违反保真），故此处直接消费识别产物，
+    不再走 scan_skeleton 的深度检测。文件缺失或本章无条目时返回 []。
+    """
+    fp = os.path.join(ext, "_recognized_sections.json")
+    if not os.path.exists(fp):
+        return []
+    try:
+        data = json.load(open(fp, encoding="utf-8"))
+    except Exception:
+        return []
+    titles = data.get(str(ch)) or data.get(ch) or []
+    out = []
+    n = len(titles)
+    for i, t in enumerate(titles):
+        pg = _find_title_page(ext, t, start, end)
+        if pg is None:
+            # OCR 漏识的标题（如被 PaddleOCR 吞掉的小节标题）：按文档索引在
+            # [start, end] 线性插值保序，避免错排到章首（否则会破坏小节顺序
+            # 与条目页码归并）。插值仅影响页排序，不编造内容。
+            pg = start if n <= 1 else round(start + (end - start) * i / (n - 1))
+        out.append((t, pg))
+    return out
 
 
 def _real_subsections_from_markdown(ext, ch):
@@ -280,7 +347,8 @@ def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
     if primary in (ORDINAL_EN, ORDINAL_EN3):
         if primary == ORDINAL_EN:
-            items = extract_items_en(ext, start, end, want_examples=True)
+            items = extract_items_en(ext, start, end, want_examples=True,
+                                     section_scoped=book.section_scoped)
         else:
             items = extract_items_en3(ext, ch, start, end, want_examples=True)
         kept = []
@@ -306,7 +374,7 @@ def _extract_items(ext, ch, start, end, book, manual=None):
     if primary == ORDINAL_VAKIL:
         items, _, _ = extract_items_vakil(ext, ch, start, end, manual_overrides=manual)
         return items
-    # three_level / two_level / fraleigh 全部走 extract_items（内部按 ordinal 选路）
+    # three_level / two_level 全部走 extract_items（内部按 ordinal 选路）
     items, _, _ = extract_items(ext, ch, start, end, manual_overrides=manual, cfg=book)
     return items
 
@@ -351,6 +419,18 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         if title and not sec_titles.get(num):
             sec_titles[num] = title
 
+    # 无序号标层（section_types 含 0）：注入「agent 校验识别」步骤产出的权威
+    # 小节清单（key 用 "U{n}" 区分于编号小节）。OCR 无数字段，scan_skeleton
+    # 的深度检测对无序号标标题完全失明且易编造假小节（违反保真），故此处
+    # 直接消费识别产物 _recognized_sections.json，不再走 OCR 正则。
+    if getattr(book, "sections_unnumbered", False):
+        for _i, (_ut, _up) in enumerate(
+                _recognized_sections(ext, ch, start, end), 1):
+            _uk = "U%d" % _i
+            sec_pages.setdefault(_uk, _up)
+            if _ut and not sec_titles.get(_uk):
+                sec_titles[_uk] = _ut
+
     # 派生章节号收集（用于补齐 skeleton 缺失的章节）
     derived_sec_firstpage = {}
     def _note_sec(num, page):
@@ -361,7 +441,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 derived_sec_firstpage[num] = page
 
     for it in items:
-        _note_sec(_section_of_key(it["key"], ordinal), it["page"])
+        _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first), it["page"])
     for p, kind, num, title in ex_rows:
         _note_sec(_section_of_exer(num), p)
 
@@ -397,7 +477,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for n in all_sec_nums:
         title = sec_titles.get(n, "")
         page = sec_pages.get(n, derived_sec_firstpage.get(n, start))
-        node = _node(n, "section", (f"{n} {title}".strip() if title else n), page)
+        # 无序号标小节（"U{n}" 合成键）name 用纯标题，不拼数字前缀
+        if n.startswith("U"):
+            name = title or n
+        else:
+            name = (f"{n} {title}".strip() if title else n)
+        node = _node(n, "section", name, page)
         node["sub_sec"] = []
         sec_nodes[n] = node
 
@@ -419,7 +504,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             chapter_bucket.append(node)
 
     for it in items:
-        sec_key = _section_of_key(it["key"], ordinal)
+        sec_key = _section_of_key(it["key"], ordinal, book.chapter_first)
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])

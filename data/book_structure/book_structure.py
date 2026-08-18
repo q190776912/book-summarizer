@@ -33,17 +33,24 @@ _CONTAINER_TYPES = ("chapter", "section")
 class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目）。避免脚本裸操作 json。"""
 
-    __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec")
+    __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
+                 "consolidated")
 
     def __init__(self, key: Any = ROOT_KEY, type: Any = ROOT_TYPE, name: str = "",
                  page_start: int = 0, page_end: int = 0,
-                 sub_sec: Optional[List["StructureNode"]] = None):
+                 sub_sec: Optional[List["StructureNode"]] = None,
+                 consolidated: bool = False):
         self.key = key
         self.type = type
         self.name = name
         self.page_start = page_start
         self.page_end = page_end
         self.sub_sec: List["StructureNode"] = sub_sec if sub_sec is not None else []
+        # True only for exercise nodes that belong to a consolidated
+        # "Exercises/练习" block — these are omitted from the summary and must
+        # NOT be verified.  Preserved (interleaved) exercises stay False and
+        # ARE verified when the caller opts in via include_exercise=True.
+        self.consolidated = consolidated
 
     # ---- 序列化 ----------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -53,6 +60,7 @@ class StructureNode:
             "name": self.name,
             "page_start": self.page_start,
             "page_end": self.page_end,
+            "consolidated": self.consolidated,
             "sub_sec": [c.to_dict() for c in self.sub_sec],
         }
 
@@ -67,6 +75,7 @@ class StructureNode:
             page_start=d.get("page_start", 0),
             page_end=d.get("page_end", 0),
             sub_sec=[cls.from_dict(x) for x in d.get("sub_sec", []) or []],
+            consolidated=bool(d.get("consolidated", False)),
         )
 
     # ---- 类型判定 --------------------------------------------------------
@@ -79,11 +88,20 @@ class StructureNode:
 
     # ---- 遍历 / 查询 -----------------------------------------------------
     def iter_items(self, include_exercise: bool = False):
-        """深度优先遍历，yield 非容器的编号项节点（默认排除 exercise）。"""
+        """深度优先遍历，yield 非容器的编号项节点。
+
+        校验（verify）口径：集中习题块的练习节点（consolidated=True）恒不产出；
+        被保留的练习节点（consolidated=False）仅在 include_exercise=True 时产出、
+        纳入编号项校验。默认 include_exercise=False → 排除全部练习（保持旧行为，
+        待 extract 打 consolidated 标记后由 read_structure_items 切到 True）。
+        """
         for child in self.sub_sec:
             if child.is_container():
                 yield from child.iter_items(include_exercise=include_exercise)
-            elif include_exercise or not child.is_exercise():
+            elif child.is_exercise():
+                if include_exercise and not child.consolidated:
+                    yield child
+            else:
                 yield child
 
     def find_chapter(self, ch: Any) -> Optional["StructureNode"]:

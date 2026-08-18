@@ -163,7 +163,7 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
 
 # Map an integer `ordinal` (config) to scan_skeleton's parsing mode.
 # Returns one of 'three-level' (default western 3-level), 'two-level'
-# (western/EN/GM/Fraleigh 2-level), or 'cn' (Chinese 3-level).
+# (western/EN/GM 2-level), or 'cn' (Chinese 3-level).
 def _mode_for_ordinal(ordinal, language=None):
     o = int(ordinal)
     depth = ORDINAL_DEPTH.get(o, ORDINAL_THREE_LEVEL)

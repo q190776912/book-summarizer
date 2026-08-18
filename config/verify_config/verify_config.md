@@ -12,7 +12,7 @@
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。 |
 | `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |
-| `section_types` | `List[int]` | 各层级**角色码**（章=1 / 节=2 / 小节=3 / 子小节=4 / **无序号标=0**）；深度由角色码经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。原书小节**无序号标**的书（如 Silverman）在 `section_types` 里把对应层级写为 `0`（如 `[0]`，对应 `type 0` / `depth 0`），verify 缺节闸门即按「位置/数量」比对、绝不编造 `## §N`。 |
+| `section_types` | `List[int]` | **逐层级**列表，从**章层级（元素 0）**排到最深的 `## §` 层级；每个元素 = 该层级 `## §` 标题携带的数字段数（ordinal depth），**不是**"章/节/小节"角色名：`1`=一级序标 `## §N`、`2`=二级序标 `## §N.M`、`3`=三级序标 `## §N.M.K`、`4`=四级序标 `## §N.M.K.L`，`0`=**无序号标**（该层级 `## §` 无数字）。深度由段数经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。**列表长度必须等于章节层级总数（章计入）**——单层级书是 `[0]`、章+无序号标小节的书是 `[0, 0]`（两个层级，**不能合并成一个**）。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`，标准书会 prepend 章前缀 `1`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。「章=1/节=2」只是**标准书**（章/节/小节正常嵌套）下这些段数的*典型称呼*，并非硬语义——一本书完全可以 `section_types: [1, 1, 1]`（所有层级都用一级序标），或 `section_types: [0, 0]`（章是文件 `# 第N章` 且无 `## §` 数字、章下 `## § <标题>` 小节也无序号标，如 Silverman）。缺节闸门对含 `0` 的层级按「位置/数量」比对、绝不编造 `## §N`。 |
 
 `figure.components`（可选，默认 2）控制图号**段数**，解决不同编号体例：
 - `1` = **全局整数序列**（如 Kreyszig "Fig. 1" / "Fig. 23" … 全书连续编号到 ~270）。**此类书必须声明 `"components": 1`**，否则 "Fig. 23" 因只有 1 段被正则 `{1,2}` 判为非图号，全部图沦为未命名。
@@ -78,7 +78,6 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | 4 | en | 2 | EN 两级 `N.M`（章优先；富英文标签词） | `Theorem 6.1` / `Lemma 2.4` / `Proposition 3.7`（章.号） | 英文两级书（如 Strogatz） |
 | 5 | roman | 3 | 三级 + 罗马数字章号 | `Definition I.2.3` / `Theorem II.4.1` / `Lemma III.1.2`（章.节.号，章号为 I/II/III） | 罗马章号书 |
 | 6 | gm | 2 | 两级，章内本地从 1 起号（无章过滤，每章重置计数器） | `Definition 1.1` / `Theorem 1.2` / `Remark 1.5`（章.号，章内从 1 起） | Gelfand–Manin |
-| 7 | fraleigh | 2 | 两级，按节编号、无章号位 | `Theorem 2.1` / `Example 4.3` / `Lemma 7.2`（节.号） | Fraleigh |
 | 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题用字母位 `N.M.A`） | `Theorem 1.2.3` / `Exercise 1.2.A` / `Proposition 4.5.B`（章.节.号） | Vakil《Foundations of Algebraic Geometry》 |
 | 9 | en3 | 3 | EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | `Remark 1.1.1` / `Definition 2.3.4` / `Theorem 3.2.1`（章.节.号） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
 
@@ -95,7 +94,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 - 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":4,"name":["uncat"],"scope":2}`
 - 罗马数字章号 I.2.3 / II.1.1 …（章号是 I/II/III…）→ `{"type":5,"name":["uncat"],"scope":3}`
 - Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"type":6,"name":["uncat"],"scope":2}`
-- Fraleigh 风格 按节编号、无章号位（fraleigh，两级）→ `{"type":7,"name":["uncat"],"scope":2}`
+- 节基 EN 两级（如 Fraleigh：按节编号、首数是节号、无章号位）→ **并入 type 4**，并设 `"chapter_first": false` + `"section_scoped": true`：`{"ordinal":[{"type":4,"name":[...合并后的文本标签...],"scope":2}],"chapter_first":false,"section_scoped":true,"language":"en"}`。`chapter_first:false` 让抽取/结构/校验把 key 首数当作「节」而非「章」；`section_scoped:true` 让抽取器额外捕获「数字在前」标题（`26.4 Lemma`）与编号图表（`Table 1.20` / `Figure 3.6`）。
 - Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"scope":3}`
 - 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费 `book_structure.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
 
@@ -104,8 +103,20 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈1–9（`depth` 由 `type` 派生，不再单独校验）、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type`∈{1,2,3,4,5,6,8,9}（`depth` 由 `type` 派生，不再单独校验；type 7 已并入 type 4 + `chapter_first:false`）、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
+
+## 顶层字段：`chapter_first` / `section_scoped`
+
+这两个字段**只在 EN 两级（type 4）书需要区分「章基 / 节基」时**才出现；其余书保持默认即可。
+
+- **`chapter_first`（bool，默认 True）**：EN 两级编号下，条目 key 的首个数字究竟是**章**还是**节**。
+  - `true`（默认，如 Strogatz / Koopman）：`"Theorem 6.1"` = 第 6 章第 1 条，段号取 `"6.1"`。
+  - `false`（节基书，如 Fraleigh）：`"Theorem 8.1"` = §8 第 1 条，首数即「节号」，段号取 `"8"`。
+  - 影响抽取（`extract_items_en` 的跨章前向引用过滤）、结构（`build_structure._section_of_key` 派生段号）、校验（`check_structure_completeness` 的 canon 解析）。
+- **`section_scoped`（bool，默认 False）**：节基 EN 书（即 `chapter_first:false` 的 type 4）开启；让抽取器额外捕获**数字在前**标题（`26.4 Lemma`、`24.2 Corollary`）与**编号图表**（`Table 1.20` / `Figure 3.6`），因为它们只在这种来源里成批出现。章基 EN 书保持 `false`（其来源不这么印，开启也不会多抓，但为明确语义不默认开）。
+
+> `make_config.py` 在扫到 `chapter_map.json` 声明 `"chapter_first": false` 的 type-4 书时，会自动写出这两个字段（collapse 文本标签为单组合并计数器）。
 
 ## JSON 示例
 

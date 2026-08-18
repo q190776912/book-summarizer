@@ -22,7 +22,7 @@
        公式配置（type/depth/scope）。单分量 ≫ 多分量 → type1/depth1（scope 由
        是否「全书数值回落」判定：回落→scope3 节级重排，否则→scope1 全书）；多分量
        多 → type4/depth2/scope2；都抽不到返回 None（不写 formula 键）。
-  3. 写出 {"ordinal": [<组>, ...], "language": <en if 候选 in (4,5,6,7) else cn>}：
+  3. 写出 {"ordinal": [<组>, ...], "language": <en if 候选 in (4,5,6,8,9) else cn>}：
      - 在同一遍整书扫描中，按 LABEL_FORMS 收集『作为编号标题出现』的全部条目类型
        标签词（含 Remark/评注/注、Exercise/习题/练习/问题/Problem、Axiom/公理 等，
        不再刻意排除），**并按下文规则分组**：
@@ -79,28 +79,45 @@ sys.stdout.reconfigure(encoding='utf-8')
 from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
 
 # --- section hierarchy (D-layer) -------------------------------------------
-# `section_types` (role codes) MUST NOT be inferred from the ordinal type
-# alone — it describes how many NESTED SECTION levels the book's markdown /
-# source actually has (## §N / ## §N.M / ## §N.M.K), which is ORTHOGONAL to
-# the item-numbering depth.  Each role's nesting depth is FIXED and resolved
-# via SECTION_TYPE_DEPTH in verify_config.py — it is NOT a separate stored
-# `section_depths` field (that would drift out of sync and wrongly equate
-# `depth == role_code`).  A type-3 book can legitimately be either:
+# `section_types` (ORDINAL-DEPTH codes, NOT "chapter/section" role names) MUST
+# NOT be inferred from the ordinal type alone — it is a PER-LEVEL list ordered
+# from the CHAPTER level (element 0) down to the deepest `## §` level; its k-th
+# element is the number of numeric components that level's `## §` token carries
+# (1 -> `## §N`, 2 -> `## §N.M`, 3 -> `## §N.M.K`, 0 -> that level is
+# UNNUMBERED — e.g. `## § <标题>`, OR the chapter is the file `# 第N章` with no
+# `## §` number).  This is ORTHOGONAL to the item-numbering depth.  Each code's
+# depth is FIXED and resolved via SECTION_TYPE_DEPTH in verify_config.py — it is
+# NOT a separate stored `section_depths` field.  The LIST LENGTH must equal the
+# number of section hierarchy levels (chapter INCLUSIVE): a chapter + unnumbered
+# subsection book is `[0, 0]` (two levels), NOT `[0]` (which would describe a
+# single level with no subsections).  A type-3 book can legitimately be either:
 #   * a genuine 3-level-section book  (md has `#### §1.1.1`; items like
 #     `1.1.2 定义`)                                  -> section_types = [1, 2, 3]
 #   * a Kreyszig-shaped book (md only `## §1.3`; items like `1.3-4 Theorem`,
 #     deepest component IS the item counter, NOT a subsection)
 #                                                          -> section_types = [1, 2]
-# The only reliable way to tell them apart is to scan the raw OCR: does the
-# deepest level k (= item depth) contain any k-component numbered line that is a
-# GENUINE section header (a number followed by a non-label TITLE) rather than a
-# LABELED ITEM?  See `_detect_section_hierarchy` for the implementation.
+# ⚠️ make_config always PREPENDS the chapter prefix `1` (it assumes the chapter
+# is represented by a `## §` number), so it CANNOT emit `[0, 0]` for an
+# unnumbered-chapter book whose chapter is the file (`# 第N章`, no `## §`
+# number) — those books (e.g. Silverman) require a hand-written `[0, 0]`
+# override.  `_detect_section_hierarchy` is for NUMBERED books only.  The only
+# reliable way to tell a genuine 3-level-section book from a Kreyszig-shaped one
+# is to scan the raw OCR: does the deepest level k (= item depth) contain any
+# k-component numbered line that is a GENUINE section header (a number followed
+# by a non-label TITLE) rather than a LABELED ITEM?  See
+# `_detect_section_hierarchy` for the implementation.
 _SEP_RE = re.compile(r'[.\-–·/．－〜]')
 # Capture ONLY the leading number (optionally prefaced by OCR-glued §/8).  The
 # trailing title is inspected separately via `rest` so a label keyword's first
 # letter is never stripped off (the old `\s+\S` suffix ate the 'T' of 'Theorem'
 # and turned labeled items into phantom section headers).
-_SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
+# 🔴 节标题分隔符只接受「点族」(`.`/`．`/`·`/`–`/`－`/`〜`)，**刻意排除分数斜杠
+# `/` 与 ASCII 连字符 `-`**——二者是数学表达式/范围运算符，不是章节号分隔符。
+# 否则 `1/1 and 2/1.`、`3-2i`、`1-6i— 37` 这类 OCR 数学/页码碎片会被误判为
+# 「二级序标节标题」，凭空给 `section_types` 加层级（Silverman 实测中了 3 个，
+# 导致 make_config 误生成 [1,2] 覆盖正确的手写 [0]）。OCR 点号变体（en-dash /
+# fullwidth-hyphen / fullwidth-dot / middle-dot / wave-dash）保留为合法分隔符。
+_SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.–·．－〜]\d+)*)')
 _LABEL_KW_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
@@ -130,6 +147,10 @@ def _section_header_depth(txt, max_depth=4):
     if not m:
         return None
     comps = [x for x in _SEP_RE.split(m.group(1)) if x]
+    # 🔴 防御：每个序标段必须是纯数字（挡掉 `6i`、`2x` 这类带字母的数学碎片，
+    # 即便它们绕过了上面的分隔符限制）。
+    if not comps or not all(c.isdigit() for c in comps):
+        return None
     if len(comps) < 2 or len(comps) > max_depth:
         return None
     rest = txt[m.end():].lstrip()
@@ -208,25 +229,55 @@ CN_TWO_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+(?!\.\d)
 CN_THREE_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+\.\d+')
 
 # --- entry-type label vocabulary (detected as numbered headings) -----------
-# The FULL set of theorem-ish / remark / exercise labels that can appear as
-# NUMBERED HEADINGS in a math book.  make_config scans the whole book and
-# detects which of these actually occur; it then GROUPS them by whether they
-# share ONE ascending counter (see `_group_headings_by_counter`) — labels that
-# ascend together go in ONE group's `name`, labels with an independent counter
-# get their OWN group.  This is what the `ordinal` ARRAY is FOR: it is NOT a
-# fixed "main types vs others" split.  Order = stable output order within a
-# group.  `form_by_lower` maps a matched (possibly OCR-lowercased) surface
-# form back to the canonical spelling written into `name`.
+# The set of theorem-ish / remark labels that can appear as NUMBERED HEADINGS
+# in a math book.  make_config scans the whole book and detects which of these
+# actually occur; it then GROUPS them by whether they share ONE ascending
+# counter (see `_group_headings_by_counter`) — labels that ascend together go
+# in ONE group's `name`, labels with an independent counter get their OWN
+# group.  This is what the `ordinal` ARRAY is FOR: it is NOT a fixed "main
+# types vs others" split.  Order = stable output order within a group.
+# `form_by_lower` maps a matched (possibly OCR-lowercased) surface form back
+# to the canonical spelling written into `name`.
+#
+# ⚠️ Exercise / 习题 / 练习 / 问题 / Problem are EXCLUDED from LABEL_FORMS
+# here — but for a NARROWER reason than "exercises are never verified".  Per
+# docs/writing-rules.md §习题（练习）收录规则 (corrected), the rule is:
+#   有标题归拢即省（集中习题块 → 不写、不校验）；无标题穿插即留（被保留的练习 → 写、且应校验）。
+# So *preserved* (interleaved) exercises DO need a verified ordinal group; only
+# the consolidated-block exercises must be skipped.
+#
+# The reason Exercise is kept OUT of LABEL_FORMS is purely to kill the
+# "无中生有" bug: in books like Fraleigh the ONLY "Exercise N" surface forms in
+# the OCR are BODY CROSS-REFERENCES ("see Exercise 51", "According to Exercise
+# 12 of Section 1") — NEVER real exercise headings.  Scanning "Label N" here
+# would therefore fabricate a spurious "Exercise" group out of cross-references
+# (this was the original bug in Fraleigh's config).  The genuine FIRST-LEVEL
+# exercise counter (bare "1." "2." "3." with no label prefix) is detected
+# separately by `_detect_exercise_counter`, which fires ONLY for PRESERVED
+# exercises that sit outside a consolidated "Exercises/练习" zone — so it
+# correctly returns False for Fraleigh (all exercises there are consolidated
+# blocks), while still letting a book with genuine preserved exercises get a
+# type:1 group.
+#
+# NOTE on `uncat`: it is the CATCH-ALL fallback for any numbered item whose type
+# is not in TYPE_TO_LABEL (`TYPE_TO_LABEL.get(n.type, 'uncat')` in
+# structure_io.py) — NOT "reserved for two-level figures/tables".  Any unmatched
+# first-level family legitimately becomes the uncat group, so it is perfectly
+# fine for an unmatched exercise counter to surface as uncat instead of a named
+# group; we only PREFER a named exercise group when `_detect_exercise_counter`
+# can establish one.
 LABEL_FORMS = [
     ("Definition",  ["Definition", "定义"]),
     ("Theorem",     ["Theorem", "定理"]),
     ("Lemma",       ["Lemma", "引理"]),
     ("Corollary",   ["Corollary", "推论"]),
     ("Proposition", ["Proposition", "命题"]),
+    ("Conjecture",  ["Conjecture", "猜想"]),
+    ("Algorithm",   ["Algorithm", "算法"]),
     ("Example",     ["Example", "例", "例题", "例子"]),
     ("Remark",      ["Remark", "评注", "注", "注记", "附注", "Note", "Commentary"]),
-    ("Exercise",    ["Exercise", "习题", "练习", "问题", "Problem"]),
     ("Axiom",       ["Axiom", "公理"]),
+    ("Question",    ["Question", "问题"]),
 ]
 
 
@@ -310,6 +361,16 @@ def _parse_comps(numstr):
     except ValueError:
         return None
 
+# Heading-position guard for label detection (see `_detect_ordinal_from_pages`).
+# A numbered label is treated as a REAL heading only if it sits at (or very
+# near) the START of its text block, or the block is short enough that the
+# match is its dominant content.  Body cross-references ("… by Theorem 3.2 …")
+# live mid-prose and are rejected.  This is the concrete mechanism behind the
+# rule "only add to verify_config what the book actually uses as a heading —
+# never fabricate a label from a body cross-reference or a copied vocabulary".
+HEADING_LEAD_MAX = 3     # max non-label chars allowed before the match
+HEADING_SHORT_MAX = 80   # blocks at/under this length are scanned whole
+
 # ---- formula detection (full-book, whole-book aggregation) ----------------
 # Reuse q_layer.norm's "（）→()" ASCII-normalisation idea: a standalone formula
 # number may appear in either full-width or half-width parens, so we match both.
@@ -318,6 +379,47 @@ def _parse_comps(numstr):
 from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
                            F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
                            SEP_SPLIT_RE)
+
+# --- formula detection confidence gate ------------------------------------
+# The loose `(N)` / `（N）` text scan matches MANY non-formula contexts in a
+# number-theory / algorithms book: algorithm step numbers ("(1) Set = 1"),
+# proof statement references ("verify (1) and (2)"), table row labels
+# ("(18) = 39"), square-and-multiply values ("(71)² ="), and OCR garbage
+# ("(512823440)").  Those are NOT formula sequence labels, so we only emit a
+# formula config when the matched "(N)" numbers form a genuinely ascending
+# formula numbering (a meaningful count + a coherent consecutive run).  When
+# the evidence is weak we return None and let manual review add the scheme —
+# we must NEVER fabricate a formula config (the user's "no-default / must
+# match" rule applies to `formula` exactly as it does to `ordinal`).
+_FORMULA_MIN_COUNT = 30   # need this many right-aligned "(N)" to be a scheme
+_FORMULA_MIN_RUN = 5      # and a consecutive run of at least this length
+
+
+def _formula_single_confident(nums):
+    """True iff `nums` (right-aligned / standalone "(N)" values) looks like a
+    genuine formula numbering: enough of them, and they ascend together in a
+    long consecutive run (formula numbers are 1,2,3,…; incidental
+    parenthesised numbers are scattered and non-consecutive)."""
+    if len(nums) < _FORMULA_MIN_COUNT:
+        return False
+    uniq = sorted(set(nums))
+    longest = cur = 1
+    for i in range(1, len(uniq)):
+        if uniq[i] == uniq[i - 1] + 1:
+            cur += 1
+        else:
+            longest = max(longest, cur)
+            cur = 1
+    longest = max(longest, cur)
+    return longest >= _FORMULA_MIN_RUN
+
+
+def _formula_tail_clean(tail):
+    """A genuine formula number is right-aligned at the END of an equation
+    line, so the text after `(N)` is only whitespace / punctuation.  Prose
+    like "verify (1) and (2)", "(1) Set = 1", "(18) = 39" leave content after
+    the paren and are NOT formula numbers."""
+    return re.fullmatch(r"[\s\.\,\;\)\]\}\:\'\"\u3002\uff0c\uff1b]*", tail) is not None
 
 
 def detect_formula(extract_dir):
@@ -357,32 +459,49 @@ def detect_formula(extract_dir):
         for text in texts:
             if not text:
                 continue
-            for m in _F_SINGLE_RE.finditer(text):
-                single_count += 1
-                try:
-                    single_nums.append(int(m.group(1)))
-                except ValueError:
-                    pass
+            # Only count "(N)" that is a genuine formula number: the LAST paren
+            # in the block whose tail is whitespace/punctuation only (a
+            # right-aligned equation number).  Prose-embedded "(N)" — algorithm
+            # steps, proof statement refs, table row labels, OCR noise — leave
+            # content after the paren and are excluded (see _formula_tail_clean).
+            matches = list(_F_SINGLE_RE.finditer(text))
+            if matches:
+                last = matches[-1]
+                if _formula_tail_clean(text[last.end():]):
+                    single_count += 1
+                    try:
+                        single_nums.append(int(last.group(1)))
+                    except ValueError:
+                        pass
             dotted_count += len(_F_DOT_RE.findall(text))
             dotted_count += len(_F_EQ_RE.findall(text))
             dotted_count += len(_F_CN_EQ_RE.findall(text))
 
     if single_count > dotted_count and single_count > 0:
-        # Single-component book.  Decide scope by whether the numeric sequence
-        # "falls back" (resets to a smaller number) somewhere in the book:
-        #   reset seen  -> per-section numbering  -> scope 3
-        #   monotonic   -> book-wide numbering      -> scope 1
-        scope = 1
-        seen_max = 0
-        for n in single_nums:
-            if n < seen_max:
-                scope = 3
-                break
-            seen_max = max(seen_max, n)
-        return {"type": 1, "scope": scope, "ignore": []}
+        # Single-component candidate.  Require CONFIDENT evidence of a genuine
+        # formula numbering — otherwise these are incidental parenthesised
+        # numbers (algorithm steps, proof statement refs, table row labels,
+        # OCR noise), NOT formula sequence labels.  e.g. Silverman's source has
+        # ~90 such "(N)" hits but ZERO real formula numbers -> we return None.
+        if _formula_single_confident(single_nums):
+            # Single-component book.  Decide scope by whether the numeric
+            # sequence "falls back" (resets to a smaller number) somewhere in
+            # the book: reset seen -> per-section (scope 3); monotonic ->
+            # book-wide (scope 1).
+            scope = 1
+            seen_max = 0
+            for n in single_nums:
+                if n < seen_max:
+                    scope = 3
+                    break
+                seen_max = max(seen_max, n)
+            return {"type": 1, "scope": scope, "ignore": []}
     if dotted_count > single_count and dotted_count > 0:
-        # Two-component book -> chapter-level numbering (scope 2).
-        return {"type": 4, "scope": 2, "ignore": []}
+        # Two-component candidate (e.g. "(C.N)", "Eq. C.N", "式（C.N）").
+        # Require a comparable minimum count so a handful of incidental dotted
+        # numbers don't fabricate a type-4 formula scheme.
+        if dotted_count >= _FORMULA_MIN_COUNT:
+            return {"type": 4, "scope": 2, "ignore": []}
     return None
 
 
@@ -554,6 +673,99 @@ def _shares_main_counter(cand_comps, main_comps):
     return True
 
 
+
+
+def _group_single_level(headings):
+    """Group headings of a SINGLE-LEVEL (type 1) book.
+
+    Single-level books (e.g. Silverman's ``Theorem 1``, ``Lemma 2``) reset
+    their counter per chapter, so the page scan has NO chapter window to tell
+    which labels share ONE ascending counter vs run independent sequences (the
+    window logic in ``_shares_main_counter`` needs >=2 components).  We
+    therefore apply the domain convention valid for essentially every
+    single-level math book:
+
+      * STATEMENT labels (Theorem / Lemma / Proposition / Corollary /
+        Conjecture / Claim / Fact / Axiom / Algorithm) share ONE ascending
+        counter -> the single PRIMARY group.  This is exactly the user's
+        "合并升序" for a single-level book.
+      * EXPOSITORY labels that always re-start at 1 (Example / Question /
+        Problem / Exercise / Remark / Note) each get their OWN group.
+
+    Only labels ACTUALLY detected in the book are emitted (no fabrication).
+    """
+    STATEMENT = {"Theorem", "Lemma", "Proposition", "Corollary", "Conjecture",
+                 "Claim", "Fact", "Axiom", "Algorithm"}
+    from collections import defaultdict
+    by_canon = defaultdict(set)
+    for ci, form, comps in headings:
+        canon = _FORM_CANON.get(form.lower())
+        if canon:
+            by_canon[canon].add(form)
+    if not by_canon:
+        return [["uncat"]]
+    primary = []
+    independents = []
+    for canon, forms in by_canon.items():
+        sorted_forms = sorted(forms, key=str.lower)
+        if canon in STATEMENT:
+            primary.extend(sorted_forms)
+        else:
+            independents.append(sorted_forms)
+    groups = []
+    if primary:
+        groups.append(primary)
+    groups.extend(independents)
+    return groups or [["uncat"]]
+
+
+def _ordinal_from_chapter_map(extract_dir):
+    """Return ``(ordinal_code, chapter_first)`` declared in chapter_map.json
+    when it is consistent across every chapter, else None.
+
+    chapter_map.json is the structural source of truth authored from the book's
+    own sectioning.  For a section-based two-level book (e.g. Fraleigh) every
+    chapter entry carries ``"ordinal": 4`` and ``"chapter_first": false`` — the
+    first numeric component of an item key is the SECTION, not the chapter
+    (``"Theorem 8.1"`` = §8 item 1).  The page-text scan in
+    `_detect_ordinal_from_pages` CANNOT tell a section-based two-level scheme
+    (type 4 + chapter_first=False) apart from a plain chapter-based EN two-level
+    (type 4 + chapter_first=True) — both look like "Label N.M" — so the scan
+    always votes 4 and cannot know chapter_first.  We therefore trust
+    chapter_map's declaration for ``chapter_first`` when present and consistent.
+
+    For the scan-ambiguous ORDINAL *codes* (6=gm, 8=vakil, 9=en3) we additionally
+    adopt the declared code over the scan's guess.  A book whose chapters disagree
+    on the ordinal (or carry none) returns None and falls back to the scan vote.
+    """
+    cm_path = os.path.join(extract_dir, 'chapter_map.json')
+    if not os.path.exists(cm_path):
+        return None
+    try:
+        with open(cm_path, encoding='utf-8-sig') as f:
+            cm = json.load(f)
+    except Exception:
+        return None
+    chs = cm.get('chapters', []) if isinstance(cm, dict) else cm
+    if not isinstance(chs, list):
+        return None
+    codes = set()
+    cf_set = set()
+    for e in chs:
+        if isinstance(e, dict) and e.get('ordinal') is not None:
+            try:
+                codes.add(int(e['ordinal']))
+            except (TypeError, ValueError):
+                pass
+            cf_set.add(bool(e.get('chapter_first', True)))
+    if len(codes) == 1:
+        chapter_first = True
+        if len(cf_set) == 1:
+            chapter_first = cf_set.pop()
+        return codes.pop(), chapter_first
+    return None
+
+
 def _detect_ordinal_from_pages(extract_dir):
     """Full-scan EVERY page_*.json and (a) vote on the numbering FAMILY and
     (b) detect which entry-type labels appear as numbered headings, then GROUP
@@ -595,53 +807,85 @@ def _detect_ordinal_from_pages(extract_dir):
                 data = json.load(f)
         except Exception:
             continue
-        text = ' '.join(b.get('text', '') for b in data.get('text', []))
-        if not text:
-            continue
-        counts['cn_three'] += len(CN_THREE_RE.findall(text))
-        counts['en_three'] += len(EN_THREE_RE.findall(text))
-        counts['en'] += len(EN_TWO_RE.findall(text))
-        counts['cn_two'] += len(CN_TWO_RE.findall(text))
-        for ci, rx, form_by_lower in label_res:
-            for m in rx.finditer(text):
-                # label-first: groups 1=label, 2=num ; number-first: 3=num, 4=label
-                if m.group(1) is not None:
-                    lab_txt, numstr = m.group(1), m.group(2)
-                else:
-                    numstr, lab_txt = m.group(3), m.group(4)
-                prefix = text[:m.start()]
-                tail = text[m.end():]
-                # skip cross-references ('见 定义 1.5-3') and prose ('定理 2.1 的证明')
-                if _is_crossref_prefix(prefix) or not _is_header_boundary(tail):
-                    continue
-                form = form_by_lower.get(lab_txt.lower(), lab_txt)
-                comps = _parse_comps(numstr)
-                if not comps:
-                    continue
-                headings.append((ci, form, comps))
-                if form[0].isascii() and form[0].isalpha():
-                    seen_en = True
-                else:
-                    seen_cn = True
+        # Scan PER BLOCK (not the whole page joined into one string) so we can
+        # tell whether a "Label N.M" sits at a block boundary — the strongest
+        # signal that it is a real heading rather than a mid-prose reference.
+        blocks = [b.get('text', '') for b in data.get('text', [])
+                  if isinstance(b, dict)]
+        for block in blocks:
+            if not block:
+                continue
+            counts['cn_three'] += len(CN_THREE_RE.findall(block))
+            counts['en_three'] += len(EN_THREE_RE.findall(block))
+            counts['en'] += len(EN_TWO_RE.findall(block))
+            counts['cn_two'] += len(CN_TWO_RE.findall(block))
+            stripped = block.lstrip()
+            lead = len(block) - len(stripped)   # leading whitespace before match
+            for ci, rx, form_by_lower in label_res:
+                for m in rx.finditer(block):
+                    # Only accept a heading that is at (or near) the block start,
+                    # OR in a short block where the match dominates the content.
+                    # Anything deeper in a long block is body prose / a
+                    # cross-reference and must NOT seed a config label.
+                    if (m.start() - lead > HEADING_LEAD_MAX
+                            and len(stripped) > HEADING_SHORT_MAX):
+                        continue
+                    # label-first: groups 1=label, 2=num ; number-first: 3=num, 4=label
+                    if m.group(1) is not None:
+                        lab_txt, numstr = m.group(1), m.group(2)
+                    else:
+                        numstr, lab_txt = m.group(3), m.group(4)
+                    prefix = block[:m.start()]
+                    tail = block[m.end():]
+                    # skip cross-references ('见 定义 1.5-3') and prose ('定理 2.1 的证明')
+                    if _is_crossref_prefix(prefix) or not _is_header_boundary(tail):
+                        continue
+                    form = form_by_lower.get(lab_txt.lower(), lab_txt)
+                    comps = _parse_comps(numstr)
+                    if not comps:
+                        continue
+                    headings.append((ci, form, comps))
+                    if form[0].isascii() and form[0].isalpha():
+                        seen_en = True
+                    else:
+                        seen_cn = True
 
-    # family vote
-    if counts['cn_three'] > 0:
+    # family vote — derived from the ACTUAL detected headings (position-guarded,
+    # cross-ref-filtered), which is far more robust than the raw regex counts
+    # (those also catch body cross-references).  Specificity-first:
+    # three-level > two-level > single-level.  A PURE single-level book (every
+    # detected entry is "Label N", e.g. Silverman) must NOT fall through to the
+    # default type 3 — it votes type 1 here.
+    n_single = sum(1 for h in headings if len(h[2]) == 1)
+    n_two = sum(1 for h in headings if len(h[2]) == 2)
+    n_three = sum(1 for h in headings if len(h[2]) >= 3)
+    if n_three > 0 and n_three >= n_two and n_three >= n_single:
         family = 3
-    elif counts['en_three'] > 0 and counts['en_three'] >= counts['en']:
-        # English three-level (Kreyszig, "Definition 1.5-3") -> type 3.
-        # Require three-level to DOMINATE two-level: in a genuine EN-three book
-        # every three-level item also yields a two-level prefix match, so
-        # en_three ~= en; a predominantly EN-two-level book (e.g. Koopman,
-        # "Definition 1.1") has en >> en_three, so it must NOT be flipped to
-        # type 3 (which would make the CN three-level extractor misinterpret the
-        # book's N.N.N subsections as fake N.N-N items).
-        family = 3
-    elif counts['en'] > 0:
-        family = 4
-    elif counts['cn_two'] > 0:
-        family = 2
+    elif n_two > 0 and n_two >= n_single:
+        # CN two-level (type 2) vs EN two-level (type 4)
+        family = 2 if (seen_cn and not seen_en) else 4
+    elif n_single > 0:
+        family = 1
     else:
-        family = 3  # default three_level
+        # No position-guarded headings were detected.  Per the strict
+        # "no-default" rule there is NO fallback to the raw regex counts
+        # (those also catch cross-references / prose mentions) and NO default
+        # type.  The book simply has no detectable ordinal numbering — signal
+        # this with family=None so the caller omits the ordinal group entirely
+        # instead of fabricating a `{"type": 3}` uncat entry.
+        family = None
+    # Prefer a per-chapter `ordinal` declared in chapter_map.json for the
+    # scan-ambiguous ORDINAL codes (6=gm, 8=vakil, 9=en3).  The page scan can
+    # only ever vote {1,2,3,4,5}; gm/vakil/en3 carry numbering shapes the scan
+    # cannot distinguish from plain two/three-level, so we adopt chapter_map's
+    # declared code when present and consistent.  (A section-based two-level
+    # book like Fraleigh is plain type 4 on both axes — the scan already votes
+    # 4 — but we still pull its `chapter_first` flag from chapter_map below.)
+    cm = _ordinal_from_chapter_map(extract_dir)
+    cm_ord = cm[0] if cm else None
+    cm_chapter_first = cm[1] if cm else True
+    if cm_ord is not None and cm_ord in (6, 8, 9):
+        family = cm_ord
     # language: derive from the ACTUAL label forms seen
     if seen_en:
         lang = 'en'
@@ -657,12 +901,89 @@ def _detect_ordinal_from_pages(extract_dir):
     # 'Axiom' mentions but ZERO real Axiom headings; keeping the 1-component
     # noise would fabricate an 'Axiom' group.  Single-component headings are
     # kept only for depth-1 (single global counter) books.
+    if family is None:
+        # No detectable ordinal numbering — return empty groups; the caller
+        # will omit the ordinal key rather than fabricate an `uncat` group.
+        return None, [], lang, cm_chapter_first
     depth = ORDINAL_DEPTH.get(family, 3)
     if depth >= 2:
         headings = [h for h in headings if len(h[2]) >= 2]
-    # group by shared counter
-    groups = _group_headings_by_counter(headings, depth)
-    return family, groups, lang
+    # group by shared counter.  Single-level (type 1) books reset their
+    # counter per chapter, so the page scan has NO chapter window to separate
+    # shared vs independent counters (the window logic in _shares_main_counter
+    # needs >=2 components) — use the domain convention (_group_single_level).
+    if family == 1:
+        groups = _group_single_level(headings)
+    else:
+        groups = _group_headings_by_counter(headings, depth)
+    return family, groups, lang, cm_chapter_first
+
+
+def _detect_exercise_counter(extract_dir):
+    """Detect a PRESERVED (interleaved) first-level exercise counter.
+
+    Exercises come in two flavors per writing-rules §习题（练习）收录规则:
+      * consolidated blocks — a dedicated "Exercises"/"练习"/"Problems" header
+        followed by bare "1." "2." "3." ordinals. OMITTED from the summary,
+        must NOT be verified (their nodes carry `consolidated:true`).
+      * preserved exercises — bare "N. <text>" ordinals appearing inline among
+        definitions/theorems with NO such header. Kept in the summary AND
+        SHOULD be verified.
+
+    This returns True ONLY when it finds a run of >=3 consecutive bare
+    first-level ordinals that is NOT inside a consolidated-exercise zone (i.e.
+    not on/near a page that carries an "Exercises/练习" header).  That
+    correctly returns False for Fraleigh (every exercise ordinal there lives on
+    a consolidated-block page) while still letting books with genuine preserved
+    exercises get a type:1 group.
+
+    It deliberately does NOT scan "Exercise N" / "N Exercise" surface forms,
+    because those are overwhelmingly body cross-references, not headings.
+    """
+    EXER_HEAD_RE = re.compile(
+        r'\b(?:Exercises?|Problems?|习题|练习|问题)\b', re.IGNORECASE)
+    # bare "N. <text>" — a number, a dot, then an alphabetic / Han start.
+    BARE_RE = re.compile(r'(?:^|(?<=[)\]}\s])|[\s])(\d+)\.\s*[A-Za-z一-鿿]')
+    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    # Pass 1: mark consolidated-exercise zone pages (header page +/- 2).
+    zone = set()
+    for pg in pages:
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
+        for b in data.get('text', []):
+            if isinstance(b, dict) and b.get('text', '') and EXER_HEAD_RE.search(b['text']):
+                zone.update(range(pno - 2, pno + 3))
+                break
+    # Pass 2: look for bare consecutive ordinal runs on NON-zone pages.
+    for pg in pages:
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
+        if pno in zone:
+            continue
+        for b in data.get('text', []):
+            if not isinstance(b, dict):
+                continue
+            text = b.get('text', '')
+            if not text:
+                continue
+            nums = [int(x) for x in BARE_RE.findall(text)]
+            run = 1
+            for i in range(1, len(nums)):
+                if nums[i] == nums[i - 1] + 1:
+                    run += 1
+                    if run >= 3:
+                        return True
+                else:
+                    run = 1
+    return False
 
 
 def detect_ordinal(extract_dir):
@@ -670,7 +991,7 @@ def detect_ordinal(extract_dir):
     is_roman, _ = _chapter_keys_are_roman(extract_dir)
     if is_roman:
         return 5
-    family, _, _ = _detect_ordinal_from_pages(extract_dir)
+    family, _, _, _ = _detect_ordinal_from_pages(extract_dir)
     return family
 
 
@@ -678,7 +999,7 @@ def detect_labels(extract_dir):
     """Flat list of ALL entry-type label forms detected as numbered headings
     (across every counter group).  Empty => caller falls back to ``["uncat"]``.
     """
-    _, groups, _ = _detect_ordinal_from_pages(extract_dir)
+    _, groups, _, _ = _detect_ordinal_from_pages(extract_dir)
     out = []
     for g in groups:
         out.extend(g)
@@ -725,13 +1046,16 @@ def main():
     # AND the book's language (derived from which label forms were seen).
     # Labels that ascend together share ONE group; labels with an independent
     # counter get their OWN group — that is what the `ordinal` ARRAY is for.
-    family, groups, lang = _detect_ordinal_from_pages(extract_dir)
+    family, groups, lang, cm_chapter_first = _detect_ordinal_from_pages(extract_dir)
     ordinal = family
     # Language: prefer the form-derived language (an EN three-level book like
     # Kreyszig is type 3 but EN); fall back to the type->language default when
-    # no label form was detected.
-    language = lang if lang else ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
-    depth = ORDINAL_DEPTH.get(ordinal, 3)
+    # no label form was detected.  When no ordinal family was matched at all
+    # (ordinal is None) there is no type to derive a language from -> default cn.
+    language = (lang if lang
+                else (ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
+                      if ordinal is not None else 'cn'))
+    depth = ORDINAL_DEPTH.get(ordinal, 3) if ordinal is not None else 3
     # best-effort formula detection (full-book, whole-book aggregation; only
     # when the whole extraction is done — see detect_formula's phase guard).
     formula_cfg = detect_formula(extract_dir)
@@ -742,29 +1066,88 @@ def main():
     #       1 = book-wide, 2 = chapter-wide reset, 3 = section-wide reset.
     #   Three-level numbering (type 3 / 5) resets the per-item counter PER
     #   SECTION (1.5-1, 1.5-2 … then 1.6-1), so it MUST use scope=3.  Two-level
-    #   numbering (type 2 / 4 / 6 / 7) resets PER CHAPTER, so scope=2.
+    #   numbering (type 2 / 4 / 6) resets PER CHAPTER, so scope=2.
     # Every group shares the book's detected `type`/`depth`/`scope`; only `name`
     # differs (which labels share THIS counter). Different groups NEVER merge.
     # (An earlier version hard-coded scope=2 for every book, which silently
     # broke three-level books like Kreyszig — item_numbering_integrity then
     # expected the item counter to continue across sections instead of
     # restarting at 1, producing false "missing item" gaps.)
-    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2}
-    scope = SCOPE_BY_TYPE.get(ordinal, 2)
+    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2}
     ordinal_arr = []
-    for name in groups:
+    if ordinal is not None:
+        # Only build ordinal groups when a numbering family was actually
+        # matched.  There is deliberately NO fallback `uncat` group here: if no
+        # ordinal numbering was detected we emit an EMPTY array (the caller
+        # omits the key) rather than fabricating a default `{"type": 3}` entry.
+        scope = SCOPE_BY_TYPE.get(ordinal, 2)
+        for name in groups:
+            ordinal_arr.append({
+                "type": ordinal,
+                "name": name if name else ["uncat"],
+                "scope": scope,
+            })
+    # A section-based EN two-level book (type 4 + chapter_first=False, e.g.
+    # Fraleigh) numbers its TEXT items (Definition / Example / Theorem / Lemma /
+    # Corollary) in ONE shared per-section counter.  Proof from the real OCR
+    # (Fraleigh §1): 1.3 Example, 1.4 Definition, 1.5 Example, …, 1.13 Theorem,
+    # 1.14 Definition, 1.15 Theorem, 1.17 Definition, 1.19 Example — a single
+    # continuous 1.3→… sequence spanning those TEXT labels.  The label-centric
+    # scan cannot see this (it puts each label into its own independent counter
+    # group), which would make item_numbering_integrity falsely report hundreds
+    # of "missing item" gaps (every number owned by a different label).  For a
+    # section-based book we therefore COLLAPSE the *detected text labels* into
+    # ONE group so the shared counter is verified as a single continuous
+    # sequence.  (A normal chapter-based type-4 book keeps its per-label groups.)
+    #
+    # ⚠️ Tables / Figures are DELIBERATELY NOT folded into this group.  They DO
+    # appear in the same source counter (Table 1.20, Figure 7.1 …), BUT per the
+    # verifier's design (item_numbering_integrity.py:792-795) Figures/Tables are
+    # `uncat` and `uncat` is excluded from truly_missing — they are graphics
+    # embedded as images, NOT text entries in the written .md, so their positions
+    # (1.20, 1.22, 1.23 …) are simply absent from the .md.  Folding them into the
+    # text group would NOT fill those holes (no "Table 1.20" text exists in the
+    # .md) and would wrongly pull graphics into numbering verification.  The
+    # resulting sparse slots must instead be registered as confirmed-sparse via
+    # config `known_gaps`, never by pretending they belong to the text counter.
+    # (The English book Fraleigh has no Chinese 图/表 labels at all — those were
+    # erroneously copied from CN-book handling and must never be added here.)
+    if ordinal == 4 and not cm_chapter_first and len(ordinal_arr) > 1:
+        merged = []
+        for g in ordinal_arr:
+            for nm in g["name"]:
+                if nm not in merged:
+                    merged.append(nm)
+        ordinal_arr = [{"type": ordinal, "name": merged, "scope": scope}]
+    # Preserved (interleaved) exercise counter — detected separately from the
+    # label-centric scan, because preserved exercises have NO "Exercise N" label
+    # prefix (and LABEL_FORMS is deliberately free of Exercise to avoid
+    # cross-reference fabrication).  `_detect_exercise_counter` only fires for
+    # preserved exercises OUTSIDE a consolidated "Exercises/练习" zone, so it
+    # returns False for Fraleigh (all exercises there are consolidated blocks).
+    # Writing-rules §习题: preserved exercises ARE verified items, so when a
+    # genuine preserved counter exists we declare a type:1 (first-level) group
+    # labelled with the exercise words.
+    if _detect_exercise_counter(extract_dir):
         ordinal_arr.append({
-            "type": ordinal,
-            "name": name if name else ["uncat"],
-            "scope": scope,
+            "type": 1,
+            "name": ["练习", "习题", "Exercise", "Problem"],
+            "scope": 3,
         })
-    if not ordinal_arr:
-        ordinal_arr = [{"type": ordinal, "name": ["uncat"], "scope": scope}]
     config = {
         "ordinal": ordinal_arr,
         "strict": True,
         "language": language,
     }
+    # chapter_first: is the FIRST numeric component of an item key the CHAPTER
+    # (True, the ORDINAL_EN / ORDINAL_EN3 default) or the SECTION (False, a
+    # section-based book whose source prints "Theorem 8.1" = §8 item 1)?  Pulled
+    # from chapter_map.json; defaults True when absent.  section_scoped: when
+    # the book is section-based EN, the extractor ALSO captures NUMBER-FIRST
+    # headings ("26.4 Lemma") and numbered graphics ("Table 1.20") — needed for
+    # such sources; a normal chapter-based EN book keeps its prior behavior.
+    config["chapter_first"] = bool(cm_chapter_first)
+    config["section_scoped"] = bool(ordinal == 4 and not cm_chapter_first)
     if formula_cfg is not None:
         config["formula"] = formula_cfg
     # 🔒 证明戳：声明本文件由 make_config 在 MM Repair 完成后生成。下游

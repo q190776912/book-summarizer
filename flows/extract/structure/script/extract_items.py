@@ -24,7 +24,7 @@ import json, re, os, sys
 
 from extract_items_en import extract_items_en
 from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
-from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH, ORDINAL_THREE_LEVEL,
+from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
                         ORDINAL_DEPTH, BookConfig, GroupConfig)
 
 # ---------------------------------------------------------------------------
@@ -278,110 +278,6 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
     # re-scan here (the three-level re-scan logic is N.S-N specific).
     return items, [], []
 
-
-def extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides=None):
-    """Fraleigh-style section-based two-level extractor.
-
-    Fraleigh《抽象代数基础教程》: items are numbered per GLOBAL section —
-    定义8.1 / 例1.2 / 表1.20 / 图3.6 — while the Chinese translation groups
-    sections into chapters (ch1 = secs 1-7, ch2 = secs 8-11, ...). The first
-    number is the SECTION, not the chapter, so the `c == chapter` filter of
-    the 中文二级标签 two-level scheme must NOT apply; instead keys are restricted to
-    the sections belonging to this chapter (read from chapter_map.json's
-    "sections" field). Labels include 例/表/图 which the built-in two-level
-    scheme drops.
-
-    chapter_map.json format: {"chapters": [{"num": N, "pdf_start": S,
-    "pdf_end": E, "ordinal": 7, "sections": [8, 9, 10, 11], ...}]}
-    """
-    import json as _json
-
-    sections = None
-    cm_path = os.path.join(extract_dir, 'chapter_map.json')
-    if os.path.exists(cm_path):
-        try:
-            cm = chapter_map.load_chapter_map_raw(cm_path)
-            chs = cm.get('chapters', []) if isinstance(cm, dict) else cm
-            for e in chs:
-                if e.get('num') == chapter and e.get('sections'):
-                    sections = {int(s) for s in e['sections']}
-                    break
-        except Exception:
-            sections = None
-
-    all_blocks = []
-    for p in range(start_page, end_page + 1):
-        fpath = os.path.join(extract_dir, f"page_{p:03d}.json")
-        if not os.path.exists(fpath):
-            continue
-        f = PageJson.load(fpath).data
-        for t in f.get("text", []):
-            txt = t.get("text", "").strip()
-            if not txt:
-                continue
-            poly = t.get("poly", [])
-            y = poly[1] if poly and len(poly) >= 8 else 0
-            all_blocks.append((p, y, txt))
-    all_blocks.sort(key=lambda x: (x[0], x[1]))
-
-    # Fraleigh-style items are numbered per GLOBAL section: "定义8.1" (CN
-    # translation) or "Definition 1.1" / "1.1 Definition" (EN original). Both
-    # label-first and number-first orientations occur in the EN text, so we
-    # match a bilingual label set in both directions.
-    FR_LABELS = (r'定义|定理|引理|推论|命题|例|表|图|'
-                 r'Definition|Theorem|Lemma|Proposition|Corollary|'
-                 r'Example|Remark|Note|Table|Figure')
-    # label-first:  Label sec<sep>num   (CN 定义8.1 / EN Definition 1.1)
-    fr_re = re.compile(
-        r'(' + FR_LABELS + r')\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)', re.IGNORECASE)
-    # number-first: sec<sep>num Label   (EN 1.1 Definition)
-    fr_re_nf = re.compile(
-        r'(?<!\d)(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)\s*(' + FR_LABELS + r')',
-        re.IGNORECASE)
-
-    def _emit(sec, num, label, p, txt, m):
-        if sec > 80 or num > 120:
-            return None
-        if sections is not None and sec not in sections:
-            return None
-        key = f"{label}{sec}.{num}"
-        text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
-        return {'key': key, 'page': p, 'label': label, 'text': text_preview}
-
-    raw = []
-    for p, y, txt in all_blocks:
-        for m in fr_re.finditer(txt):
-            it = _emit(int(m.group(2)), int(m.group(3)), m.group(1), p, txt, m)
-            if it:
-                raw.append(it)
-        for m in fr_re_nf.finditer(txt):
-            it = _emit(int(m.group(1)), int(m.group(2)), m.group(3), p, txt, m)
-            if it:
-                raw.append(it)
-
-    seen = {}
-    for it in raw:
-        if it['key'] not in seen:
-            seen[it['key']] = it
-    items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
-
-    if manual_overrides:
-        existing = {it['key']: idx for idx, it in enumerate(items)}
-        for mo in manual_overrides:
-            if mo['key'] in existing:
-                items[existing[mo['key']]] = {'key': mo['key'], 'page': mo['page'],
-                                              'label': mo['label'], 'text': mo['text'],
-                                              'agent_recovered': True}
-            else:
-                items.append({'key': mo['key'], 'page': mo['page'],
-                              'label': mo['label'], 'text': mo['text'],
-                              'agent_recovered': True})
-        items.sort(key=lambda x: (x['page'], x['key']))
-    return items, [], []
-
-
-
-
 from item_dedup import dedup_items
 def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, cfg=None):
     # `cfg` is the BookConfig (grouping source of truth).  Dispatch on the
@@ -390,8 +286,6 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     if cfg is None:
         cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL)])
     primary = cfg.primary_type
-    if primary == ORDINAL_FRALEIGH:
-        return extract_items_fr(extract_dir, chapter, start_page, end_page, manual_overrides)
     if primary == ORDINAL_TWO_LEVEL:
         items, warnings, blocking = extract_items_two_level(extract_dir, chapter, start_page, end_page)
         if manual_overrides:
@@ -567,7 +461,7 @@ if __name__ == '__main__':
     ap.add_argument("--lang", choices=["cn", "en"], default="cn")
     ap.add_argument("--ordinal", dest="ordinal", type=int, default=ORDINAL_THREE_LEVEL,
                         help="integer style code: 1 single | 2 two_level(CN) | "
-                             "3 three_level(CN, default) | 4 en | 5 roman | 6 gm | 7 fraleigh")
+                             "3 three_level(CN, default) | 4 en | 5 roman | 6 gm")
     ap.add_argument("--manual", default=None, help="path to manual_overrides json (CN only)")
     ap.add_argument("--examples", action="store_true", help="include Example items (EN only)")
     ap.add_argument("--verbose", action="store_true")

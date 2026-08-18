@@ -41,7 +41,7 @@ from lib.regexlib import (
     SEP_TIGHT, SEP_SPLIT_RE, KEY_RE, ENTRY_RE, ROMAN_KEY_RE,
 )
 from verify_config import (
-    ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM, ORDINAL_FRALEIGH,
+    ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -52,21 +52,6 @@ from verify_config import (
 # GM separator stays in lockstep with the rest of the pipeline's policy
 # (single source of truth in lib.regexlib).
 GM_SEP = SEP_TIGHT[:-1] + r'、]'
-
-# --- Fraleigh (ordinal=ORDINAL_FRALEIGH): section-based two-level ---
-# Unlike 中文二级标签 two-level (where first number == CHAPTER and label counters
-# are independent/shared), Fraleigh numbers items per global SECTION, and the
-# Chinese translation groups sections into chapters (ch1 = secs 1-7, ch2 = secs
-# 8-11, ...). Item keys are 标签S.N where S is the SECTION number: 定义8.1,
-# 例1.2, 表1.20, 图3.6, 定理8.5. Labels include 例/表/图 (extractor emits them).
-FR_COMBINED_LABELS = '|'.join(
-    ['定义', '定理', '引理', '推论', '命题', '例', '表', '图',
-     'Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
-     'Example', 'Table', 'Figure'])
-FR_ENTRY_RE = re.compile(
-    r'\*\*(' + FR_COMBINED_LABELS + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)[^\n*]*\*+')
-FR_PROSE_RE = re.compile(
-    r'(' + FR_COMBINED_LABELS + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 # --- three-level (default) key parsing ---
 # KEY_RE / ENTRY_RE are imported from lib.regexlib (label-FREE, built from
@@ -272,12 +257,6 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN3_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
-            elif t == ORDINAL_FRALEIGH:
-                for m in FR_ENTRY_RE.finditer(line):
-                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
-                    entries.add(key); allk.add(key)
-                for m in FR_PROSE_RE.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"

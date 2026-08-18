@@ -97,8 +97,14 @@ BARE_ITEM_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s*$')
 DETACHED_3 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 
-# md 中的节标题（兼容 `## §1.2` 与 `## 1.2`）
-SEC_HEADING_RE = re.compile(r'^##\s*§?\s*(\d+(?:\.\d+)?)')
+# md 中的节标题（兼容 `## §1.2` / `## 1.2`（两级）与 `### §1.2.3`（三级）、
+# `#### §1.2.3.4`（四级，子节规范写法，头部 # 数 = 嵌套层级）。
+# 注意：契约（book_structure.json）的小节号支持任意层级（如 18.3.1 / 16.3.4.1），
+# 故此处用 `(?:\.\d+)*` 而非 `(?:\.\d+)?`，且头部取 `#{2,4}` 而非 `##`，
+# 否则三级小节号会被截断为两级、或三级 `###`/四级 `####` 标题根本不被扫描，
+# 导致 p-layer-missing-sec 把真实存在的小节误报为缺失（回归：commit 5390e5d
+# 把契约源切到 book_structure.json 后未同步放宽此正则）。
+SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*(\d+(?:\.\d+)*)')
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
@@ -131,7 +137,7 @@ def check_bare_items(lines, ordinal):
     out = []
     n = len(lines)
     # ordinal == 3 (three_level) uses the 3-component bare-item detector;
-    # every other style (single / two_level / en / roman / gm / fraleigh) uses
+    # every other style (single / two_level / en / roman / gm) uses
     # the 2-component detector.
     bare = BARE_ITEM_3 if ordinal == 3 else BARE_ITEM_2
     detached = DETACHED_3 if ordinal == 3 else DETACHED_2
@@ -154,6 +160,44 @@ def check_bare_items(lines, ordinal):
 # 习题专属节（如 "1.11 Exercises" / "3.9 习题" / "Problems"）——按习题收录规则可省略，
 # 不计入「骨架必写节」契约（详见 verify/verbose_gates/verbose_gates.md 习题收录规则）
 EXER_SEC_TITLE_RE = re.compile(r'(练习|习题|[Ee]xercises?|[Pp]roblems?)\b')
+
+
+# 标题归一化（无序号标小节按标题匹配用）：去 LaTeX/标点/空白，保留字母数字与
+# CJK，转小写。使 "Primes of the Form $N^2 + 1$" 与 "Primes of the Form N2 1" 可比对。
+_LATEX_RE = re.compile(r'\$[^$]*\$')
+_NONWORD_RE = re.compile(r'[^0-9a-zA-Z一-鿿]+')
+
+
+def _norm_title(t):
+    t = _LATEX_RE.sub(' ', t or '')
+    t = _NONWORD_RE.sub(' ', t)
+    return re.sub(r'\s+', ' ', t).strip().lower()
+
+
+def _md_section_titles(md_lines):
+    """提取 md 中 `## §` 小节的标题文本（跳过可选数字前缀）。"""
+    titles = []
+    for ln in md_lines:
+        m = SEC_HEADING_RE_OPT.match(ln)
+        if not m:
+            continue
+        rest = ln[m.end():].strip()
+        rest = re.sub(r'^\d+(?:\.\d+)*\s*', '', rest).strip()  # 去残留数字前缀
+        if rest:
+            titles.append(rest)
+    return titles
+
+
+def _title_present(title, md_titles):
+    """契约小节标题是否在 md 小节标题集合中（归一化相等或互含，容错微调）。"""
+    tn = _norm_title(title)
+    if not tn:
+        return True
+    for mt in md_titles:
+        mn = _norm_title(mt)
+        if tn == mn or tn in mn or mn in tn:
+            return True
+    return False
 
 
 def _iter_nodes(node):
@@ -202,21 +246,21 @@ def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
         return []
 
     if unnumbered:
-        # 无编号小节（section_types 含 role 0，对应 `type 0` / `depth 0`）：原书
-        # 小节无序号标（如 Silverman），尊重原书。闸门不依赖 md 标题里的数字，
-        # 改为「按位置」比对结构契约小节——仅校验契约要求的每一节在 md 中按出现
-        # 顺序位置对齐地存在（md 的 `## §` 编号可选，见 SEC_HEADING_RE_OPT）。
-        # 保持与标准书一致的**非对称**语义：只报「契约要求但 md 缺失」的节，不报
-        # 「md 多出契约未记的节」——因为原书 subsection 可能多于稀疏契约（契约由
-        # 抽取器生成、本身稀疏），且真实 md 忠实于原书，多出的 `## §` 是合理的
-        # 小节，不应阻断闸门。
-        md_secs = [ln for ln in md_lines if SEC_HEADING_RE_OPT.match(ln)]
+        # 无编号小节（section_types 含 role 0）：原书小节无数字序标（如 Silverman）。
+        # 闸门按**标题**匹配（顺序无关、容忍 writer 微调），契约要求的每节须在 md
+        # 有对应 `## §` 标题。
+        # 🔴 不用「位置对齐」：writer 可能调整小节顺序/合并，位置 1:1 比对会产生
+        # 假阳（Ch1 markdown 含 Number Shapes 等但位置与契约不完全一致，位置检查
+        # 会误报缺失）。标题匹配才正确反映「该小节是否被写进 md」。
+        # 仍保持非对称语义：只报「契约要求但 md 缺失」的节，不报「md 多出契约未记
+        # 的节」（原书 subsection 可能多于稀疏契约，多出的 `## §` 是合理的）。
+        md_sec_titles = _md_section_titles(md_lines)
         out = []
-        for idx, (s, title) in enumerate(required):
-            if idx >= len(md_secs):
+        for (s, title) in required:
+            if not _title_present(title, md_sec_titles):
                 out.append(
-                    f"  x Ch{ch} §{s}: 结构契约要求此节（位置 {idx+1}），"
-                    f"但 md 仅 {len(md_secs)} 个 `## §` 标题（缺 {len(required)-len(md_secs)} 节）")
+                    f"  x Ch{ch} §{s}: 结构契约要求小节「{title}」，"
+                    f"但 md 无对应 `## §` 标题（可能漏写/合并）")
         return out
 
     # 标准书（带序标）：md `## §N` 的数字必须与契约编号逐一对齐

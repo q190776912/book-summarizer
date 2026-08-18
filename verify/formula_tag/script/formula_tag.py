@@ -129,7 +129,7 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 try:
     from verify_config import ORDINAL_DEPTH as _DEFAULT_DEPTH_BY_TYPE
 except Exception:  # pragma: no cover — boot normally injects config/verify_config
-    _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 7: 2, 8: 3, 9: 3}
+    _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
 
 # Heading regex used to assign a book-source formula its enclosing section.
 # Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ...".

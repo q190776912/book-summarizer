@@ -45,7 +45,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_EN, ORDINAL_EN3, ORDINAL_FRALEIGH, ORDINAL_GM, ORDINAL_ROMAN,
+    ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
 )
 
 # manual_overrides_chN：手写恢复条目（OCR 完全吃掉标题时，agent 凭书补写并登记）。
@@ -281,7 +281,7 @@ def _canon_key(primary_type, key):
     if primary_type == ORDINAL_THREE_LEVEL:
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', key)
         return tuple(int(x) for x in m.groups()) if m else None
-    if primary_type in (ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH):
+    if primary_type in (ORDINAL_TWO_LEVEL,):
         s = _LABEL_RE.sub('', key).strip()
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)$', s)
         return (int(m.group(1)), int(m.group(2))) if m else None
@@ -299,7 +299,7 @@ def _composite_key(primary_type, label, canon):
     条目、集合差把真实漏项静默吞掉（假绿）。故此类方案用 ``(label_lower, canon)``
     复合键，label 区分类型；无标签方案（纯数字三级等）仍用 canon 本身。
     """
-    if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL, ORDINAL_FRALEIGH,
+    if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
                         ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3):
         return (str(label).lower(), canon)
     return canon

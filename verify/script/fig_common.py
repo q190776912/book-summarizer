@@ -25,12 +25,12 @@ from lib.figure_io import load_figure_index, load_fig_labels, load_fig_label_re,
 
 def fig_cap_re(out_dir=None):
     """Compiled regex that finds figure caption labels (图 X.X / Figure X.X / …)
-    in OCR text. The prefix list is BOOK-SPECIFIC (verify_config.json
-    `figure.labels`); `out_dir=None` uses the default prefix set. This makes the
-    E-layer honor each book's OWN figure numbering instead of a hardcoded 图."""
-    # Honor BOTH the book's figure.labels AND figure.components (1=global int,
-    # 2=chapter.figure, 3=chapter.section.figure). out_dir=None -> default prefixes
-    # with the historical 2-component default.
+    in OCR text. The prefix list is BOOK-SPECIFIC (the `ordinal` Figure group's
+    `name`); `out_dir=None` uses the default prefix set. This makes the E-layer
+    honor each book's OWN figure numbering instead of a hardcoded 图."""
+    # Honor BOTH the book's Figure group `name` AND its `type` (-> depth =
+    # component count: 1=global int, 2=chapter.figure, 3=chapter.section.figure).
+    # out_dir=None -> default prefixes with the historical 2-component default.
     if out_dir:
         return load_fig_label_re(out_dir)
     labels = list(FIGURE_LABELS_DEFAULT)

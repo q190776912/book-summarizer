@@ -50,9 +50,9 @@
    - **视觉审读是瓶颈**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行。
 
 4. **MM Repair 完成后 → 跑 config 子流程（生成书级配置）**
-   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读 + 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `figure.labels`）。`formula` map 与乱码文本依赖模式 A 校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
+   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读 + 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A 校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
    - `_extraction_done.json` 是本阶段收尾**由主 Agent 在 MM Repair 完成后**写出的完成标记（不是后台文本流水线发出的中间信号）；它的存在应等价于「MM Repair 完成」，若它早于模式 A 写出则属误用（参见 Kreyszig 书 `_extraction_done.json` 的 `sample_pending` 反例）。
-   - 🔴 **图检测之前必须完成此步**：图检测严格读 `figure.labels`，未配置则退化默认前缀，自定义图号书（Scheme / Illustration 等）会漏识。
+   - 🔴 **图检测之前必须完成此步**：图检测严格读 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`），缺 Figure 组则退化默认前缀，自定义图号书（Scheme / Illustration 等）会漏识。
 
 5. **config 完成后 → 跑 figure_detection 子流程（图检测 + 分配）**
    - 运行 **figure_detection 子流程** [`extract/figure_detection`](figure_detection/figure_detection.md)：全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配，产出 `figure_detect.json` + `figure_index.json` + `figure/` 裁剪图。书若无图可跳过本步。

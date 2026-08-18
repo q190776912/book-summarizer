@@ -42,7 +42,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 手动图在**每次 assignment 重跑时都会被保留**（`assign_figures.py` 不删 `source="manual"` 的条目/文件）。
 
 ### 工作流衔接（上游 figure_detection 子流程）
-图检测 / 命名由 extract 阶段的独立子流程 `figure_detection` 负责，待 `figure.labels` 配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即本子流程的**输入契约**。本子流程不重复描述检测 / 命名细节，只消费其产物并嵌图。本书确实无图时，`figure_index.json` 保持缺失，本子流程也随之跳过。
+图检测 / 命名由 extract 阶段的独立子流程 `figure_detection` 负责，待 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`）配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即本子流程的**输入契约**。本子流程不重复描述检测 / 命名细节，只消费其产物并嵌图。本书确实无图时，`figure_index.json` 保持缺失，本子流程也随之跳过。
 
 若某章 E 层报"图 X.X.X missing"（真漏检 / 漏命名），重跑或手动补图的处置见下方「手动补图」。
 
@@ -69,7 +69,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - 本步是校验的**前置依赖**：先嵌图，再跑 `verify_chapter.py`（其图片嵌入检查、块引用连续性检查、figure 层(E) 归属校验）。
 
 ## 上游环境前提 / 已知边界（检测 + 命名阶段）
-本子流程只做嵌图，不涉及图检测 / 命名的运行环境。检测阶段的权重、加载器、OpenCV/PIL 路径陷阱、`--conf`、跨页不合并、只取 `figure` 类、caption 序标跟随 `figure.labels` 等**环境前提与已知边界**由 extract 阶段的 `figure_detection` 子流程承载（属上游文档范畴，本文件不重复）。本子流程只需确认输入契约 `figure_index.json` + `figure/*.png` 已就绪。
+本子流程只做嵌图，不涉及图检测 / 命名的运行环境。检测阶段的权重、加载器、OpenCV/PIL 路径陷阱、`--conf`、跨页不合并、只取 `figure` 类、caption 序标跟随 `ordinal` Figure 组（`name` 前缀 / `type` 段数）等**环境前提与已知边界**由 extract 阶段的 `figure_detection` 子流程承载（属上游文档范畴，本文件不重复）。本子流程只需确认输入契约 `figure_index.json` + `figure/*.png` 已就绪。
 
 ## 出口条件
 - 出口：本章（或全书）被引用图已嵌入、flex 格式合规；`figure_index.json` 已落地且本章 E 层可 PASS（或本书确实无图、`figure_index.json` 缺失）。

@@ -24,17 +24,48 @@ FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]
 _NEVER_RE = re.compile(r"[^\s\S]")
 
 
-def load_fig_labels(out_dir):
-    """Return the book's figure-label prefixes (list of keywords) from
-    <out_dir>/verify_config.json -> figure.labels. Also checks the book root
-    (parent dir).
+# Mirrors config/verify_config/verify_config.py::ORDINAL_DEPTH so figure_io
+# stays import-clean (no config-module import). A figure group's `type`
+# encodes its numbering depth (= number of numeric components = the former
+# `figure.components`).  🔴 `components` IS `depth`.
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
 
-    🔴 Two DISTINCT fallbacks — do NOT conflate:
-      * `figure` block / `labels` key **absent**  -> FIGURE_LABELS_DEFAULT
-        (backward compatible; the book simply never declared a figure style).
-      * `figure.labels` present but **explicitly empty `[]`** -> `[]`
-        (the "no figure ordinal label" MARKER: the book genuinely has no
-        figure numbers, so return a true zero-match set, NOT the default).
+# Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
+# is matched separately (it carries no ASCII letters).
+_FIG_KW = ("fig", "figure")
+
+
+def _is_fig_kw(name):
+    """True iff `name` is a figure-label keyword (Fig / Figure / 图)."""
+    s = str(name)
+    if "图" in s:
+        return True
+    return re.sub(r"[^a-z]", "", s.lower()) in _FIG_KW
+
+
+def _figure_group(data):
+    """Return the `ordinal` group whose `name` contains a figure-label keyword,
+    or None.  Figures are NO LONGER a separate `figure` config block — they live
+    in `ordinal` like any other counter, and their `type` (-> ORDINAL_DEPTH)
+    carries the component count (= `depth` = former `figure.components`)."""
+    for g in data.get("ordinal", []):
+        if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+            return g
+    return None
+
+
+def load_fig_labels(out_dir):
+    """Return the book's figure-label prefixes (list of keywords).
+
+    🔴 Figure labels/depth now live in `ordinal`, NOT a separate `figure` block.
+    Derivation order:
+      1. The `ordinal` group whose `name` contains a figure keyword
+         (Fig / Figure / 图) — only its figure-keyword names are returned, so a
+         merged text+figure group (e.g. Fraleigh's) is filtered and the text
+         labels are NOT mistaken for figure prefixes.
+      2. Legacy `figure.labels` block (transitional; the explicit empty-array
+         `[]` "no figure ordinal label" MARKER is honored -> []).
+      3. `FIGURE_LABELS_DEFAULT`.
     """
     candidates = [os.path.join(out_dir, "verify_config.json"),
                   os.path.join(os.path.dirname(os.path.abspath(out_dir)), "verify_config.json")]
@@ -43,6 +74,12 @@ def load_fig_labels(out_dir):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                fg = _figure_group(data)
+                if fg is not None:
+                    fig_only = [str(nm) for nm in fg.get("name", []) if _is_fig_kw(nm)]
+                    if fig_only:
+                        return fig_only
+                # transitional: explicit legacy block (may be the [] marker)
                 fig = data.get("figure")
                 if isinstance(fig, dict) and "labels" in fig and isinstance(fig["labels"], list):
                     return [str(x) for x in fig["labels"]]  # explicit, may be []
@@ -81,11 +118,13 @@ def load_fig_components(out_dir):
       2 = chapter.figure            (e.g. "Fig. 3.1", "图 3.1")   ← DEFAULT / historical
       3 = chapter.section.figure    (e.g. "Fig. 3.1.2", "图 3.1.2")
 
-    Read from ``verify_config.json -> figure.components`` (int 1–3). Defaults to 2,
-    which reproduces the historical behavior (2–3 component numbers) so NO existing
-    book regresses. A book whose figures are numbered by a single global integer
-    (Kreyszig, many older texts) MUST declare ``"components": 1`` or every figure
-    caption "Fig. 23" is mis-read as a non-label and left unnamed.
+    🔴 DERIVED from the `ordinal` figure group's `type` (-> ORDINAL_DEPTH):
+    `components` IS the ordinal `depth`, NOT a separate `figure.components` key.
+    Falls back to the legacy `figure.components` block (transitional) and then
+    to the historical default 2, so no existing book regresses.  A book whose
+    figures are numbered by a single global integer (Kreyszig) declares its
+    figure group with `type: 1` (depth 1); without it "Fig. 23" would be
+    mis-read as a non-label and left unnamed.
     """
     candidates = [os.path.join(out_dir, "verify_config.json"),
                   os.path.join(os.path.dirname(os.path.abspath(out_dir)), "verify_config.json")]
@@ -94,6 +133,12 @@ def load_fig_components(out_dir):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                fg = _figure_group(data)
+                if fg is not None:
+                    t = fg.get("type")
+                    if isinstance(t, int) and t in ORDINAL_DEPTH:
+                        return ORDINAL_DEPTH[t]
+                # transitional: legacy block
                 fig = data.get("figure")
                 if isinstance(fig, dict) and isinstance(fig.get("components"), int):
                     return max(1, min(3, fig["components"]))

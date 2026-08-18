@@ -11,15 +11,15 @@
 | `strict` | `bool` | 默认 `true`。 |
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。 |
-| `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |
+| （无 `figure` 字段） | — | 🔴 **图序标不再单独成块**，而是 `ordinal` 里的一个 **Figure 组**：`{"type": <components>, "name": ["图","Figure","Fig",…], "scope": <components>}`。`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号**段数（components）**：`1`=全局整数 / `2`=章.图 / `3`=章.节.图。图号前缀词写进该组 `name`（Figure/图/Fig/Scheme/Illustration…），由 `lib.figure_io.load_fig_labels` 读取；`components`（=depth）由 `load_fig_components` 从组的 `type` 派生。🔴 **无图序标**的书"不在 `ordinal` 里放任何 Figure 组"即可（figure_io 回落 `FIGURE_LABELS_DEFAULT`）；若需显式**零匹配**（禁止任何图号前缀），保留过渡 `{"figure": {"labels": []}}` 由 figure_io 识别为标记号（见下）。 |
 | `section_types` | `List[int]` | **逐层级**列表，从**章层级（元素 0）**排到最深的 `## §` 层级；每个元素 = 该层级 `## §` 标题携带的数字段数（ordinal depth），**不是**"章/节/小节"角色名：`1`=一级序标 `## §N`、`2`=二级序标 `## §N.M`、`3`=三级序标 `## §N.M.K`、`4`=四级序标 `## §N.M.K.L`，`0`=**无序号标**（该层级 `## §` 无数字）。深度由段数经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。**列表长度必须等于章节层级总数（章计入）**——单层级书是 `[0]`、章+无序号标小节的书是 `[0, 0]`（两个层级，**不能合并成一个**）。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`，标准书会 prepend 章前缀 `1`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。「章=1/节=2」只是**标准书**（章/节/小节正常嵌套）下这些段数的*典型称呼*，并非硬语义——一本书完全可以 `section_types: [1, 1, 1]`（所有层级都用一级序标），或 `section_types: [0, 0]`（章是文件 `# 第N章` 且无 `## §` 数字、章下 `## § <标题>` 小节也无序号标，如 Silverman）。缺节闸门对含 `0` 的层级按「位置/数量」比对、绝不编造 `## §N`。 |
 
-`figure.components`（可选，默认 2）控制图号**段数**，解决不同编号体例：
-- `1` = **全局整数序列**（如 Kreyszig "Fig. 1" / "Fig. 23" … 全书连续编号到 ~270）。**此类书必须声明 `"components": 1`**，否则 "Fig. 23" 因只有 1 段被正则 `{1,2}` 判为非图号，全部图沦为未命名。
-- `2` = 章.图（"Fig. 3.1"），**历史默认行为**，不声明即此值，已有书不回归。
-- `3` = 章.节.图（"Fig. 3.1.2"），更严格。
+🔴 **图号段数（`components`）现在 = Figure 组的 `depth`**，由该组的 `type` 经 `ORDINAL_DEPTH` 派生（`type:1`→段数1、`type:2`→2、`type:3`→3），**不再写独立的 `components` 字段**。三种体例：
+- `1` = **全局整数序列**（如 Kreyszig "Fig. 1" / "Fig. 23" … 全书连续编号到 ~270）。此类书 Figure 组用 `{"type":1,...}`，否则 "Fig. 23" 因只有 1 段被正则判为非图号，全部图沦为未命名。
+- `2` = 章.图（"Fig. 3.1"），**历史默认行为**（Figure 组 `type:2`）。
+- `3` = 章.节.图（"Fig. 3.1.2"），更严格（Figure 组 `type:3`）。
 
-`lib/figure_io.build_fig_label_re(labels, components)` 据此生成对应段数的捕获组；`load_fig_label_re(out_dir)` 一次性读取 `labels`+`components`。OCR 鲁棒性：`fig_label_alt` 对含 `i` 的前缀额外生成 `[il]` 变体，容忍 "Fig."→"Flg."（i 误读为 l）这类扫描噪声。
+`lib/figure_io.build_fig_label_re(labels, components)` 据此生成对应段数的捕获组；`load_fig_label_re(out_dir)` 从 `ordinal` 的 Figure 组一次性读取 `labels`(name) + `components`(depth)。OCR 鲁棒性：`fig_label_alt` 对含 `i` 的前缀额外生成 `[il]` 变体，容忍 "Fig."→"Flg."（i 误读为 l）这类扫描噪声。
 
 ## `ordinal` 数组：分组语义（核心）
 
@@ -108,15 +108,15 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 
 ## 顶层字段：`chapter_first` / `section_scoped`
 
-这两个字段**只在 EN 两级（type 4）书需要区分「章基 / 节基」时**才出现；其余书保持默认即可。
+这两个字段**只在「节基」（`chapter_first:false`）书需要区分「章基 / 节基」时**才出现；其余书保持默认即可。**与 `ordinal` type 代码无关**——任何 type 只要节基都会启用。
 
-- **`chapter_first`（bool，默认 True）**：EN 两级编号下，条目 key 的首个数字究竟是**章**还是**节**。
+- **`chapter_first`（bool，默认 True）**：条目 key 的首个数字究竟是**章**还是**节**（不限于 EN 两级；节基 EN 书如此，但节基语义本身跨 type 成立）。
   - `true`（默认，如 Strogatz / Koopman）：`"Theorem 6.1"` = 第 6 章第 1 条，段号取 `"6.1"`。
   - `false`（节基书，如 Fraleigh）：`"Theorem 8.1"` = §8 第 1 条，首数即「节号」，段号取 `"8"`。
   - 影响抽取（`extract_items_en` 的跨章前向引用过滤）、结构（`build_structure._section_of_key` 派生段号）、校验（`check_structure_completeness` 的 canon 解析）。
-- **`section_scoped`（bool，默认 False）**：节基 EN 书（即 `chapter_first:false` 的 type 4）开启；让抽取器额外捕获**数字在前**标题（`26.4 Lemma`、`24.2 Corollary`）与**编号图表**（`Table 1.20` / `Figure 3.6`），因为它们只在这种来源里成批出现。章基 EN 书保持 `false`（其来源不这么印，开启也不会多抓，但为明确语义不默认开）。
+- **`section_scoped`（bool，默认 False）**：节基书（`chapter_first:false`，**不限 type**）开启；让抽取器额外捕获**数字在前**标题（`26.4 Lemma`、`24.2 Corollary`）与**编号图表**（`Table 1.20` / `Figure 3.6`），因为节基来源把文本条目与图表共享同一个 per-section 计数器。章基书保持 `false`（其来源不这么印，开启也不会多抓，但为明确语义不默认开）。
 
-> `make_config.py` 在扫到 `chapter_map.json` 声明 `"chapter_first": false` 的 type-4 书时，会自动写出这两个字段（collapse 文本标签为单组合并计数器）。
+> `make_config.py` 在 `chapter_map.json` 声明 `"chapter_first": false` 的节基书（任何 type）时，会自动写出这两个字段，并把全部 label（含 Table/Figure）collapse 为单组合并计数器。
 
 ## JSON 示例
 
@@ -155,37 +155,42 @@ EN 两级：
 }
 ```
 
-指定图序标体例（本书图号用 "Fig." / "图"）：
+指定图序标体例（本书图号用 "图" / "Fig"，章.图体例 → Figure 组 `type:2`）：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
-  "language": "cn",
-  "figure": {"labels": ["图", "Fig"], "components": 2}
+  "ordinal": [
+    {"type": 3, "name": ["uncat"], "scope": 2},
+    {"type": 2, "name": ["图", "Fig"], "scope": 2}
+  ],
+  "language": "cn"
 }
 ```
 
-全局整数图号书（如 Kreyszig，图号 "Fig. 1" … "Fig. 270" 连续）：
+全局整数图号书（如 Kreyszig，图号 "Fig. 1" … "Fig. 270" 连续 → Figure 组 `type:1`；主类共用一条节内计数器、`Problem` 独立成组）：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
+  "ordinal": [
+    {"type": 3, "name": ["Definition", "Theorem", "Lemma", "Corollary", "Example"], "scope": 3},
+    {"type": 3, "name": ["Problem"], "scope": 3},
+    {"type": 1, "name": ["Fig", "Figure"], "scope": 1}
+  ],
   "language": "en",
-  "figure": {"labels": ["Fig", "Figure"], "components": 1}
+  "formula": {"type": 1, "scope": 3, "ignore": []}
 }
 ```
 
-无图序标（🔴 显式标记号，禁止回落默认）：
+无图序标（不在 `ordinal` 放任何 Figure 组即可；figure_io 回落默认前缀 `["图","Figure","Fig"]`）：
 
 ```json
 {
   "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
-  "language": "cn",
-  "figure": {"labels": []}
+  "language": "cn"
 }
 ```
 
-> 空数组 `[]` 是"本书确实没有任何图号前缀"的**标记号**：下游（`extract_figures` / `assign_figures` / E 层 `fig_cap_re`）据此返回真正的零匹配，而**不会**回落到默认 `["图","Figure","Fig"]` 去误匹配正文里碰巧出现的 `Figure`/`图` 等词。与"`figure` 字段缺失→回落默认"语义严格区分。
+> 🔴 若需**显式零匹配**（严格禁止任何图号前缀、不回落默认），保留过渡写法 `{"figure": {"labels": []}}`——`lib.figure_io.load_fig_labels` 仍识别空数组 `[]` 为"无图序标"标记号，返回真正的零匹配集。普通"无图书"直接不放 Figure 组即可，无需此标记。
 
 ## 附录：小节标题 `§` 的 OCR 漏识诊断（D 层）
 

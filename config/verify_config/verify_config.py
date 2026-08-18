@@ -78,10 +78,6 @@ ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
 ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en'}
-# Default figure-label prefixes (used when verify_config.json has no
-# `figure.labels`). Mirrors lib.figure_io.FIGURE_LABELS_DEFAULT — duplicated on
-# purpose to keep verify_config.py import-clean (no figure-module import).
-FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -372,14 +368,11 @@ class BookConfig:
     #           comparison (neither flagged FABRICATED nor MISSING).
     formula: Optional[dict] = None
 
-    # --- figure sequential-label convention (book-specific) ---------------
-    # Opt-in `figure` map in verify_config.json: {"labels": ["图", "Figure",
-    # "Fig"]} lists the prefix keywords that precede a figure's sequential
-    # number. Drives extract_figures.parse_fig_label + assign_figures.gather_refs
-    # so each book's OWN Figure/图/Fig. convention is honored (NOT a hardcoded
-    # list). The figure scripts read verify_config.json directly; this field
-    # just surfaces it for ConfigLoader-based consumers.
-    figure: Optional[dict] = None
+    # 🔴 Figure labels/depth now live in `ordinal` (the Figure group's `type`
+    # encodes the component count = `depth` = former `figure.components`).  No
+    # separate `figure` block.  figure_io derives labels/components from that
+    # group; see lib/figure_io.py.  (A book with no figures simply has no
+    # Figure group in `ordinal`.)
 
     # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
@@ -429,17 +422,8 @@ class BookConfig:
     def family(self) -> str:
         return self.structure or ('en' if self.language == 'en' else 'cn')
 
-    @property
-    def figure_labels(self) -> List[str]:
-        """Book-specific figure-label prefixes (verify_config.json `figure.labels`).
-        Honors each book's OWN Figure / 图 / Fig. convention; defaults ONLY when
-        the `figure` block or `labels` key is absent. An explicit empty
-        `{"labels": []}` is the "no figure ordinal label" marker and returns `[]`
-        (zero-match), NOT the default — so a label-less book is not mis-matched."""
-        fig = self.figure
-        if isinstance(fig, dict) and "labels" in fig and isinstance(fig.get("labels"), list):
-            return [str(x) for x in fig["labels"]]
-        return list(FIGURE_LABELS_DEFAULT)
+    # figure_labels removed: figure prefixes are now derived from the `ordinal`
+    # Figure group via lib.figure_io.load_fig_labels (no BookConfig field needed).
 
     # --- nested section-hierarchy helpers (D-layer) --------------------------
     # NOTE: `max_level` / `section_depth` / `section_role` are ORTHOGONAL to the
@@ -592,8 +576,8 @@ class BookConfig:
             section_types=st,
             # --- Q-LAYER (formula sequence-label) opt-in: single `formula` map ---
             formula=dict(data['formula']) if data.get('formula') else None,
-            # --- figure sequential-label convention (book-specific) ----------
-            figure=dict(data['figure']) if data.get('figure') else None,
+            # (figure labels/components now derived from the `ordinal` Figure
+            # group via lib.figure_io — no `figure` field on BookConfig.)
         )
 
 

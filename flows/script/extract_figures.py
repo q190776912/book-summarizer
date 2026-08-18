@@ -174,18 +174,20 @@ def caption_text_for_bbox(ocr_items, bbox):
 
 
 # Figure-label prefixes are BOOK-SPECIFIC — each book declares its OWN
-# convention in verify_config.json `figure.labels` (see config/config_schema.md).
-# The detection reads it through lib.figure_io.load_fig_labels / build_fig_label_re
-# so it honors the book's actual Figure / 图 / Fig. numbering, NOT a hardcoded list.
+# convention in the `ordinal` Figure group (name = prefix list, type -> depth =
+# component count); see config/verify_config/verify_config.md.  The detection
+# reads it through lib.figure_io.load_fig_labels / build_fig_label_re so it
+# honors the book's actual Figure / 图 / Fig. numbering, NOT a hardcoded list.
 
 
 def parse_fig_label(text, labels=None, components=2):
     """Extract the sequential number after a figure-label prefix in `text`.
 
-    The prefix list is BOOK-SPECIFIC (verify_config.json `figure.labels`); when
-    `labels` is None the default prefix set is used. `components` (1–3) controls
-    how many number segments a label may have — see lib.figure_io.build_fig_label_re
-    and ``figure.components`` in verify_config.json. Returns the number string
+    The prefix list is BOOK-SPECIFIC (the `ordinal` Figure group's `name`; derived
+    via lib.figure_io.load_fig_labels); when `labels` is None the default prefix
+    set is used. `components` (1–3) controls how many number segments a label may
+    have — derived from the Figure group's `type` (-> ORDINAL_DEPTH = `depth`),
+    see lib.figure_io.build_fig_label_re. Returns the number string
     (e.g. "5.1") or None.
 
     A label is recognized only when it precedes a *sequential* number of the

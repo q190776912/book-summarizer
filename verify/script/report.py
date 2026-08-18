@@ -141,7 +141,7 @@ def print_result(r):
         print("\nE-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
     else:
         # Language-aware figure prefix: honor the book's own figure labels
-        # (verify_config.json `figure.labels`) instead of a hardcoded 图.
+        # (the `ordinal` Figure group's `name`) instead of a hardcoded 图.
         try:
             from lib.figure_io import load_fig_labels
             _fig_labels = load_fig_labels(r.get('extract_dir', ''))

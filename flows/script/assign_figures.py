@@ -98,14 +98,14 @@ def gather_refs(out_dir, start, end):
     OCR pages, with its (page, cy) position. Returns list of (label, page, cy).
 
     Which caption PREFIX counts as a figure label is BOOK-SPECIFIC — read from
-    verify_config.json `figure.labels` (see config/config_schema.md), NOT a
-    hardcoded 图/figure/fig list — so a book that numbers figures "Fig." or in
-    another language is honored.
+    the `ordinal` Figure group's `name` (see config/verify_config/verify_config.md),
+    NOT a hardcoded 图/figure/fig list — so a book that numbers figures "Fig." or
+    in another language is honored.
 
     OCR often splits a caption like "图 6.1.1" across several text items, so we
     reconstruct each page's text in reading order (sorted by y) and regex-find
     the figure label on the joined string — this yields the full label
-    (1/2/3 component per ``figure.components``) instead of a partial fragment,
+    (1/2/3 component per Figure group `type` -> depth) instead of a partial fragment,
     and we map the match back to its line's y."""
     pat = load_fig_label_re(out_dir)
     refs = []

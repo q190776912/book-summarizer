@@ -15,7 +15,7 @@
 
 ## 规则
 ### 完整性 COMPLETENESS（原 E）
-- 用 `fig_cap_re`（每本书 `figure.labels` 前缀）扫 `page_*.json` 的 OCR 文本，抽本章图注号集合；与索引 `extracted` 求差。
+- 用 `fig_cap_re`（每本书 `ordinal` 的 Figure 组 `name` 前缀、段数取该组 `type` 经 `ORDINAL_DEPTH` 派生的 `depth`）扫 `page_*.json` 的 OCR 文本，抽本章图注号集合；与索引 `extracted` 求差。
 - **MISSING FIGURE（阻断 FAIL）**：章内 OCR 引用了「图 X.X.X」但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` → 重跑 `extract_figures.py`/`assign_figures.py` 刷新或手动补图。
 - **EXTRA（仅 WARN）**：裁剪图 `label` 在本章 OCR 找不到对应图注，疑似误配对。
 

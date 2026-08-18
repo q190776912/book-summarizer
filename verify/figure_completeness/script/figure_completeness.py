@@ -201,7 +201,7 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
         if e.get('label'):
             extracted.add(normfig(e['label']))
     caption = set()
-    cap_re = fig_cap_re(ext)  # book-specific prefix + component set (verify_config.json figure.labels / figure.components)
+    cap_re = fig_cap_re(ext)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
     components = load_fig_components(ext)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
     for p in range(start, end + 1):
         fp = os.path.join(ext, f'page_{p:03d}.json')

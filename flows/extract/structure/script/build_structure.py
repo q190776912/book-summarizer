@@ -100,6 +100,13 @@ _LABEL_TO_TYPE = {
     "推论": "corollary", "Corollary": "corollary",
     "命题": "proposition", "Proposition": "proposition",
     "例": "example", "Example": "example",
+    # Section-scoped EN books (Fraleigh-style) number Tables / Figures in the
+    # SAME shared per-section counter as the text items, so they must be typed
+    # as their own nodes (not "uncat") — otherwise group_for_label() sends them
+    # to the uncat group and the text counter still sees false "missing item"
+    # gaps at the graphic slots (1.20 / 1.21 …).  Coupled with the make_config
+    # collapse branch that folds "Table"/"Figure" into the merged ordinal name.
+    "Table": "table", "Figure": "figure",
     "评注": "remark", "Remark": "remark",
     "注": "remark",
     "断言": "proposition", "Assertion": "proposition",  # 近似归入命题

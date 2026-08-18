@@ -78,6 +78,27 @@ import glob
 sys.stdout.reconfigure(encoding='utf-8')
 from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
 
+
+def _is_fig_kw(name):
+    """True iff `name` is a figure-label keyword (Fig / Figure / 图).
+
+    Mirrors lib.figure_io._is_fig_kw so make_config and the runtime figure
+    pipeline agree on which `ordinal` group is the Figure group."""
+    s = str(name)
+    if "图" in s:
+        return True
+    low = "".join(ch for ch in s.lower() if ch.isalpha())
+    return low in ("fig", "figure")
+
+
+def _load_old_ordinal(cfg_path):
+    """Return the `ordinal` array from an existing verify_config.json, or []."""
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("ordinal", []) or []
+    except Exception:
+        return []
+
 # --- section hierarchy (D-layer) -------------------------------------------
 # `section_types` (ORDINAL-DEPTH codes, NOT "chapter/section" role names) MUST
 # NOT be inferred from the ordinal type alone — it is a PER-LEVEL list ordered
@@ -1087,38 +1108,45 @@ def main():
                 "name": name if name else ["uncat"],
                 "scope": scope,
             })
-    # A section-based EN two-level book (type 4 + chapter_first=False, e.g.
-    # Fraleigh) numbers its TEXT items (Definition / Example / Theorem / Lemma /
-    # Corollary) in ONE shared per-section counter.  Proof from the real OCR
-    # (Fraleigh §1): 1.3 Example, 1.4 Definition, 1.5 Example, …, 1.13 Theorem,
-    # 1.14 Definition, 1.15 Theorem, 1.17 Definition, 1.19 Example — a single
-    # continuous 1.3→… sequence spanning those TEXT labels.  The label-centric
-    # scan cannot see this (it puts each label into its own independent counter
-    # group), which would make item_numbering_integrity falsely report hundreds
-    # of "missing item" gaps (every number owned by a different label).  For a
-    # section-based book we therefore COLLAPSE the *detected text labels* into
-    # ONE group so the shared counter is verified as a single continuous
-    # sequence.  (A normal chapter-based type-4 book keeps its per-label groups.)
-    #
-    # ⚠️ Tables / Figures are DELIBERATELY NOT folded into this group.  They DO
-    # appear in the same source counter (Table 1.20, Figure 7.1 …), BUT per the
-    # verifier's design (item_numbering_integrity.py:792-795) Figures/Tables are
-    # `uncat` and `uncat` is excluded from truly_missing — they are graphics
-    # embedded as images, NOT text entries in the written .md, so their positions
-    # (1.20, 1.22, 1.23 …) are simply absent from the .md.  Folding them into the
-    # text group would NOT fill those holes (no "Table 1.20" text exists in the
-    # .md) and would wrongly pull graphics into numbering verification.  The
-    # resulting sparse slots must instead be registered as confirmed-sparse via
-    # config `known_gaps`, never by pretending they belong to the text counter.
-    # (The English book Fraleigh has no Chinese 图/表 labels at all — those were
-    # erroneously copied from CN-book handling and must never be added here.)
-    if ordinal == 4 and not cm_chapter_first and len(ordinal_arr) > 1:
-        merged = []
-        for g in ordinal_arr:
-            for nm in g["name"]:
-                if nm not in merged:
-                    merged.append(nm)
-        ordinal_arr = [{"type": ordinal, "name": merged, "scope": scope}]
+    # 🔴 Section-scoped books (chapter_first == False) — the source prints
+    # "Theorem 8.1" = §8 item 1, NOT "Theorem 1.5" = ch.1 item 5 — number ALL
+    # their entries (text items Definition/Example/Theorem/Lemma/Corollary AND
+    # graphic slots Table/Figure) in ONE shared per-section counter.  This is
+    # NOT type-4-specific: ANY book whose first numbering component is the
+    # SECTION (regardless of its `ordinal` type code) shares this behaviour.
+    # Proof from the real OCR (Fraleigh §1): 1.3 Example, 1.4 Definition,
+    # 1.5 Example, …, 1.13 Theorem, 1.15 Theorem, 1.19 Example, 1.20 Table,
+    # 1.22 Figure — one continuous 1.3→…→1.N sequence spanning every label.
+    # The label-centric scan cannot see this (it puts each label into its own
+    # independent counter group), which would make item_numbering_integrity
+    # falsely report hundreds of "missing item" gaps (every number owned by a
+    # different label).  For a section-scoped book we therefore COLLAPSE the
+    # detected labels into ONE group AND fold "Table"/"Figure" into that group's
+    # `name`, so the B-layer verifies the full counter (text + graphic slots)
+    # as a single continuous sequence.
+    #   · Table is preserved in the written .md (a verified text entry), so it
+    #     legitimately belongs to the ordinal counter.
+    #   · Figure is verified via the embedding flow, so it too belongs here.
+    #   · Applies to EVERY section-scoped type, not only type 4.
+    # ⚠️ Coupling: this only works if the STRUCTURE types these nodes as
+    # "Table"/"Figure" (not "uncat"), so `group_for_label` maps them into this
+    # merged group.  build_structure must assign those types (see
+    # flows/extract/structure/script/extract_items_en.py SECTION_LABELS).
+    if not cm_chapter_first and ordinal_arr:
+        # Collapse multiple detected label groups into one shared counter.
+        if len(ordinal_arr) > 1:
+            merged = []
+            for g in ordinal_arr:
+                for nm in g["name"]:
+                    if nm not in merged:
+                        merged.append(nm)
+            ordinal_arr = [{"type": ordinal, "name": merged, "scope": scope}]
+        # Fold the shared-counter graphic labels (see comment above).  Applies
+        # to the single surviving group whether or not a collapse happened.
+        sole = ordinal_arr[0]
+        for extra in ("Table", "Figure"):
+            if extra not in sole["name"]:
+                sole["name"].append(extra)
     # Preserved (interleaved) exercise counter — detected separately from the
     # label-centric scan, because preserved exercises have NO "Exercise N" label
     # prefix (and LABEL_FORMS is deliberately free of Exercise to avoid
@@ -1134,6 +1162,18 @@ def main():
             "name": ["练习", "习题", "Exercise", "Problem"],
             "scope": 3,
         })
+    # 🔴 Figure convention now lives INSIDE `ordinal` (no separate `figure`
+    # block). make_config only regenerates text-label groups, so a `--force`
+    # regeneration would otherwise DROP a pre-existing Figure group and silently
+    # lose the book's figure prefix / component convention.  Carry any dedicated
+    # Figure group over from the old config — UNLESS a figure keyword is already
+    # present (section-scoped books already have "Figure" folded into their
+    # merged text group above, so we must not append a second one).
+    if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        for g in _load_old_ordinal(cfg_path):
+            if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+                ordinal_arr.append(g)
+                break
     config = {
         "ordinal": ordinal_arr,
         "strict": True,
@@ -1147,7 +1187,7 @@ def main():
     # headings ("26.4 Lemma") and numbered graphics ("Table 1.20") — needed for
     # such sources; a normal chapter-based EN book keeps its prior behavior.
     config["chapter_first"] = bool(cm_chapter_first)
-    config["section_scoped"] = bool(ordinal == 4 and not cm_chapter_first)
+    config["section_scoped"] = bool(not cm_chapter_first)
     if formula_cfg is not None:
         config["formula"] = formula_cfg
     # 🔒 证明戳：声明本文件由 make_config 在 MM Repair 完成后生成。下游

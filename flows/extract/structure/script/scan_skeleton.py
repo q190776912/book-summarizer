@@ -89,6 +89,14 @@ SEC_2 = re.compile(r'^(\d{1,2})\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$')
 ITEM_2 = re.compile(r'^(\d{1,2})\.(\d{1,3})\.\s*(.{0,90})')
 EXER_2 = re.compile(r'^(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
+# Chapter-LOCAL sections (Karlin-style: "§1" resets per chapter, printed in
+# source as "1. Review of Basic…") are NOT scanned from the OCR here — the
+# source "N. Title" form is ambiguous with numbered PROBLEMS and REFERENCES, so
+# a greedy detector would fabricate dozens of false sections.  The authoritative
+# section list for such books is the md `## §N` transcription, handled in
+# build_structure (md-derived) + the D-layer (source cross-check).  See
+# lib.regexlib.SEC_LOCAL for the (intersection-gated) source matcher.
+
 # Chinese-scheme section headings — patterns shared from lib/regexlib.py
 from lib.regexlib import SEC_CN, SECBARE_CN, SECGLUE_CN
 ITEM_CN = re.compile(

@@ -116,6 +116,20 @@ SECGLUE_CN = re.compile(
     r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
     r'[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 
+# Chapter-LOCAL single-number section header (Karlin-style: sections RESET per
+# chapter and are printed as ``"1. Review of Basic…"`` / ``"2: Two Simple
+# Examples…"`` — a bare NUMBER followed by a TITLE, NOT a global ``C.S``).
+# IMPORTANT: in the source, ``"N. Title"`` is AMBIGUOUS with numbered PROBLEMS
+# (``"6. Show that the sums…"``) and REFERENCES (``"1. W. Feller…"``), so this
+# regex is NEVER used as a standalone section detector.  It is only consumed by
+# the D-layer chapter-local source rescan, which intersects the detected ``N``
+# against the md ``## §N`` set (the authoritative section list) — so a problem /
+# reference numbered line can never masquerade as a section.  The heading TITLE
+# must start with a letter / Han char and must NOT be an item label (so
+# ``"1. Definition"`` — a number-first item — is left to the item detector).
+_SEC_LOCAL_SEP = r'[.\uFF1A\u2236:]'
+SEC_LOCAL = re.compile(r'^(\d{1,2})' + _SEC_LOCAL_SEP + r'\s*([A-Za-z\u4e00-\u9fff].{2,72})$')
+
 # Blockquote head line (verify.g_layer / format_verify).
 G_HEAD = re.compile(r'^\s*>+\s*\*?(?:\*{0,2})(?:证明|证|例)')
 

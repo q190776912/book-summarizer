@@ -292,13 +292,16 @@ def process_file(path, fix):
     for i, line in enumerate(lines):
         s = line.strip()
         if s == '$$' and not line.lstrip().startswith('>'):
-            # Check if previous non-blank line starts with > or is > $$
-            prev_nonblank = None
-            for j in range(i - 1, -1, -1):
-                if lines[j].strip():
-                    prev_nonblank = j
-                    break
-            if prev_nonblank is not None and lines[prev_nonblank].strip().startswith('> '):
+            # Only treat as escaped if the IMMEDIATELY preceding line is a
+            # blockquote line (`>` / `> `). A blank line (or any non-`>` line)
+            # between the `>` block and the `$$` means the blockquote has
+            # already CLOSED — the `$$` is a standalone equation, NOT escaped,
+            # and must stay plain (else it becomes an unlabeled blockquote).
+            # (Root-cause fix: the old logic scanned for the previous
+            # non-blank `>` line across a blank gap and wrongly quoted
+            # gap-separated standalone display math.)
+            prev = lines[i - 1] if i > 0 else None
+            if prev is not None and prev.lstrip().startswith('>'):
                 # Found escaped display math — locate the full block
                 end = i + 1
                 while end < len(lines) and lines[end].strip() != '$$':

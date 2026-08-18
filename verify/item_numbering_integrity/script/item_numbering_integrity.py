@@ -519,6 +519,26 @@ def _md_gap_blocking(ctx):
         # 用于跨类型顺序错乱检测：例如 2.6-8 这种 Example 掉到 2.6-11 这种 Lemma 之后）。
         section_order[gk].append(num)
 
+    # --- route-A: .md 自身引用的 Table/Figure 编号，序列查缺时跳过 -------------
+    # Fraleigh 把表/图编入连续章节序号，但 .md 把它们写成正文（如 "Table 1.20
+    # defines..."）或加粗条头（**Figure 39.2**），并非定理/例类加粗条目。合并
+    # 序列查缺会把表/图号误判为缺失条目。此处直接扫描 .md 文本，凡显式出现
+    # "Table/Figure CH.N"（含复数/大小写）的编号，emit 时跳过——它们不是真实缺项。
+    # 不依赖（可能不完整的）结构契约，纯从 .md 自身引用判定，书确实编号的
+    # 定理/例等不受影响。
+    md_uncat = set()
+    # 匹配 "Table/Figure CH.N" 及其列表形式（"Tables 32.7 and 32.8" /
+    # "Figures 3.9, 3.10" 等），整段内提取所有 CH.N 编号一并排除。
+    # 缩写 "Fig." / "Fig" / "Figs." 一并纳入（Fraleigh 正文用 "Fig. 47.4"）。
+    for m in re.finditer(
+            r'(?i)(?:tables?|figs?\.?|figures?)\s*\d+\.\d+'
+            r'(?:(?:\s*(?:,|and|&|，)\s*)\d+\.\d+)*', txt):
+        for nm in re.finditer(r'(\d+)\.(\d+)', m.group(0)):
+            try:
+                md_uncat.add(((int(nm.group(1)),), int(nm.group(2))))
+            except ValueError:
+                pass
+
     ignore = ctx.ignore
     # Normalize known_gaps separators (dot <-> dash) so user-written dot form
     # matches the dash-form emit tokens.
@@ -559,6 +579,17 @@ def _md_gap_blocking(ctx):
         size = len(nums)
 
         def emit(n):
+            # route-A: .md 自身以 "Table/Figure CH.N" 引用的编号（Fraleigh 编入
+            # 连续序号但写成正文/加粗条头）不是缺失条目，直接跳过，不报缺号。
+            if prefix_str:
+                try:
+                    pref_tuple = tuple(int(x) for x in prefix_str.split('.'))
+                except ValueError:
+                    pref_tuple = None
+            else:
+                pref_tuple = ()
+            if pref_tuple is not None and (pref_tuple, n) in md_uncat:
+                return
             # Human-readable token used for known_gaps / ignore matching, e.g.
             # "Theorem 12.3".  Both the raw token (original label language) and
             # the EN-normalized token are accepted, so a known_gaps entry

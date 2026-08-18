@@ -32,7 +32,7 @@ import json
 from verify.script.base import VerifyLayer, LayerResult
 from key_parse import GM_SEC_RE, GM_ENTRY_RE
 from verify.script.gm_scan import scan_gm_blocks, _load_sections
-from lib.regexlib import SEP_TIGHT
+from lib.regexlib import SEP_TIGHT, SEC_LOCAL
 from verify_config import (
     ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,
 )
@@ -206,6 +206,66 @@ def _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, 
     }
 
 
+def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
+    """Chapter-local section check (Karlin-style: sections reset per chapter,
+    written as ``## §N`` in the md and ``"N. Title"`` in the source).
+
+    The md ``## §N`` headers are the AUTHORITATIVE section list.  The source
+    ``"N. Title"`` form is ambiguous with numbered PROBLEMS and REFERENCES, so
+    we do NOT scan the source for arbitrary section headers (that would
+    fabricate dozens of false sections).  Instead we only CONFIRM that each md
+    section ``N`` has a corresponding ``"N. Title"`` line in the source
+    (cross-check).  Sections carry no labeled item, so the general
+    "header AND labeled item" requirement is relaxed to "header present".
+
+    Result: the D-layer now genuinely processes the book's real (chapter-local)
+    sections instead of vacuously passing on an empty contract.  Deletion of a
+    ``## §N`` from the md is surfaced by ``build_structure`` (which re-derives
+    the contract from the md) rather than by source scanning here, because a
+    reliable source-only section detection is impossible when problems /
+    references share the ``"N. Title"`` surface form.
+    """
+    max_level = len(list(cfg.section_depths)) or 2
+    with open(md_file, encoding='utf-8') as f:
+        md_text = f.read()
+    md_sec_local = {}  # local N (int) -> raw token string
+    for line in md_text.split('\n'):
+        m = D_MD_SEC_RE.match(line.strip())
+        if not m:
+            continue
+        c = _split_num(m.group(1))
+        if c:
+            md_sec_local[c[0]] = m.group(1)
+    local_nums = set(md_sec_local.keys())
+
+    raw_sec_header = {L: set() for L in range(1, max_level + 1)}
+    raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, f'page_{p:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            with open(fp, encoding='utf-8') as f:
+                data = page_json.PageJson.load(fp).data
+        except Exception:
+            continue
+        for t in data.get('text', []):
+            txt = t.get('text', '').strip()
+            if not txt:
+                continue
+            m = SEC_LOCAL.match(txt)
+            if m and int(m.group(1)) in local_nums:
+                raw_sec_header[2].add((int(m.group(1)),))
+    raw_labeled_item[2] = set(raw_sec_header[2])  # sections have no labeled item
+
+    md_sections = {L: set() for L in range(1, max_level + 1)}
+    md_sections[1] = {(ch,)}                 # chapter level
+    md_sections[2] = {(n,) for n in local_nums}
+    raw_sec_header[1] = {(ch,)}
+    raw_labeled_item[1] = {(ch,)}
+    return _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)
+
+
 def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_LEVEL):
     """Common (CN/EN) section-continuity check supporting an arbitrary nesting
     depth (1–4) from ``cfg.section_depths``.
@@ -218,6 +278,12 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
         cfg = BookConfig(ordinal=ordinal)
     if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
         return check_d_layer_gm(ch, start, end, md_file, ext)
+    # Chapter-local sections (Karlin-style `## §N`, reset per chapter) route to
+    # the dedicated branch: the md `## §N` headers are the authoritative list and
+    # the source `N. Title` form is ambiguous with problems/references, so we do
+    # NOT scan the source for arbitrary section headers.
+    if getattr(cfg, 'chapter_local_sections', False):
+        return _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg)
     # Resolve the verified hierarchy. Real configs come via ConfigLoader ->
     # from_dict (section_types populated; depth DERIVED via SECTION_TYPE_DEPTH);
     # fall back to the ordinal default so a directly-constructed BookConfig

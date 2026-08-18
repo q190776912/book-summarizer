@@ -188,6 +188,17 @@ def _md_section_titles(md_lines):
     return titles
 
 
+def _md_section_count(md_lines):
+    """统计 md 中 `## §` 小节标题的数量（含空标题小节，如 Silverman 后段章节
+    大量「## §」后直接跟定理的空标题小节）。用于「无编号小节」书的**数量**比对——
+    标题子串匹配对双语互译标题不可行（见 check_missing_sections unnumbered 分支）。"""
+    n = 0
+    for ln in md_lines:
+        if SEC_HEADING_RE_OPT.match(ln):
+            n += 1
+    return n
+
+
 def _title_present(title, md_titles):
     """契约小节标题是否在 md 小节标题集合中（归一化相等或互含，容错微调）。"""
     tn = _norm_title(title)
@@ -247,21 +258,21 @@ def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
 
     if unnumbered:
         # 无编号小节（section_types 含 role 0）：原书小节无数字序标（如 Silverman）。
-        # 闸门按**标题**匹配（顺序无关、容忍 writer 微调），契约要求的每节须在 md
-        # 有对应 `## §` 标题。
-        # 🔴 不用「位置对齐」：writer 可能调整小节顺序/合并，位置 1:1 比对会产生
-        # 假阳（Ch1 markdown 含 Number Shapes 等但位置与契约不完全一致，位置检查
-        # 会误报缺失）。标题匹配才正确反映「该小节是否被写进 md」。
-        # 仍保持非对称语义：只报「契约要求但 md 缺失」的节，不报「md 多出契约未记
-        # 的节」（原书 subsection 可能多于稀疏契约，多出的 `## §` 是合理的）。
-        md_sec_titles = _md_section_titles(md_lines)
-        out = []
-        for (s, title) in required:
-            if not _title_present(title, md_sec_titles):
-                out.append(
-                    f"  x Ch{ch} §{s}: 结构契约要求小节「{title}」，"
-                    f"但 md 无对应 `## §` 标题（可能漏写/合并）")
-        return out
+        # 🔴 改用「数量」比对，不再按标题匹配：双语书（EN+CN）的 `## §` 标题是
+        # 「互译」而非子串关系（EN "Solving ax+by=gcd(a,b) by the Euclidean
+        # Algorithm" vs CN "用欧几里得算法 (Euclidean Algorithm) 解 ax+by=gcd(a,b)"），
+        # 标题子串互含对双语根本不成立，按标题匹配必致一语言整批假阳缺节。
+        # 数量比对是语言无关的：本书 EN/CN 各章 `## §` 数量逐章对齐（已核验全 47
+        # 章一致），契约小节数 = EN md `## §` 数，故 EN/CN 校验同过。
+        # 保持非对称语义：md 小节数 ≥ 契约数即通过（多出小节不报，原书 subsection
+        # 可能多于稀疏契约）；仅当 md 小节数 < 契约数（漏写/合并）才报缺节。
+        contract_count = len(sections)
+        md_count = _md_section_count(md_lines)
+        if md_count < contract_count:
+            out = [f"  x Ch{ch}: 结构契约要求 {contract_count} 个 `## §` 小节，"
+                   f"但 md 仅 {md_count} 个（可能漏写/合并小节）"]
+            return out
+        return []
 
     # 标准书（带序标）：md `## §N` 的数字必须与契约编号逐一对齐
     present = set()

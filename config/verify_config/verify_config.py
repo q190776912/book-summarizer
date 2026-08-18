@@ -338,6 +338,18 @@ class BookConfig:
     # section-based books whose source prints these (e.g. Fraleigh).  Normal
     # chapter-first EN books keep their exact prior behavior (False).
     section_scoped: bool = False
+    # Chapter-LOCAL section numbering (e.g. Karlin: sections are ``§1, §2, §3``
+    # that RESET every chapter, NOT global ``§C.S``).  The whole structure /
+    # verify tooling assumes globally-prefixed ``§C.S`` section numbers, so a
+    # chapter-local ``§N`` header is invisible to both build_structure's
+    # scan_skeleton and the D-layer source rescan — producing a vacuous
+    # section-continuity PASS.  When True, scan_skeleton accepts a bare
+    # single-number heading (``1. Review of…`` / ``2: Two Simple…``) and
+    # normalizes it to ``C.N``; the D-layer likewise normalizes md ``§N`` and
+    # source ``N.`` to ``C.N`` before comparing.  Default False — only books
+    # that genuinely use chapter-local sections opt in; ``§C.S`` books are
+    # completely unaffected.
+    chapter_local_sections: bool = False
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
@@ -571,6 +583,7 @@ class BookConfig:
             strict=bool(data.get('strict', True)),
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
+            chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             ignore=ignore,
             manual=manual,
             section_types=st,

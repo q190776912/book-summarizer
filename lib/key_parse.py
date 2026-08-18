@@ -42,7 +42,7 @@ from lib.regexlib import (
 )
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
-    ORDINAL_EN3, ORDINAL_THREE_LEVEL, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
+    ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
 
@@ -257,6 +257,22 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN3_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
+            elif t == ORDINAL_SINGLE:
+                # Single-level EN book (e.g. Silverman "A Friendly Introduction to
+                # Number Theory" 4th ed — ordinal type 1): items carry ONE
+                # numeric component ("Theorem 1", "Lemma 1"); there is no
+                # section/item split.  Previously this ordinal fell through to
+                # the three-level `else` branch (ENTRY_RE / KEY_RE expecting a
+                # "C.S-N" form), so NOTHING was extracted from the md and every
+                # contract item surfaced as falsely truly-missing.  Reuse the
+                # single-number EN regex (ENTRY_RE_EN_SINGLE_C, already applied by
+                # the ORDINAL_EN branch for chapter-wide single-digit entries);
+                # COMBINED_LABEL_KINDS makes it match both EN ("Theorem 2") and
+                # CN ("定理2") bold heads, canonicalized to the Chinese key
+                # ("定理2") that read_structure_items emits, so EN+CN both match.
+                for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}"
+                    entries.add(key); allk.add(key)
             elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"

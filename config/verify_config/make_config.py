@@ -1170,9 +1170,28 @@ def main():
     # present (section-scoped books already have "Figure" folded into their
     # merged text group above, so we must not append a second one).
     if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        # 🔴 FIX (user-reported): the carried-over Figure group must inherit the
+        # book's detected numbering `type`/`scope`, NOT the legacy `type` copied
+        # verbatim from the old config.  A figure's component count equals the
+        # book's item-numbering depth (Strogatz figures are `Figure 1.1.1` = 3
+        # components, same as its type-3 items), so the Figure group must carry
+        # the same `type`/`scope` as every other ordinal group.  Copying the old
+        # `type: 2` into a type-3 book made figure_io parse `Figure 1.1.1` as a
+        # 2-component label (components=2), silently dropping the section
+        # component — a real config bug.  We preserve only the figure *prefix*
+        # (`name`) from the old config and re-derive `type`/`scope` from `ordinal`.
+        # When no numbering family was detected (ordinal is None) we keep the
+        # legacy group verbatim as a safe fallback rather than fabricating one.
         for g in _load_old_ordinal(cfg_path):
             if any(_is_fig_kw(nm) for nm in g.get("name", [])):
-                ordinal_arr.append(g)
+                if ordinal is not None:
+                    ordinal_arr.append({
+                        "type": ordinal,
+                        "name": g.get("name") or ["Figure"],
+                        "scope": SCOPE_BY_TYPE.get(ordinal, 2),
+                    })
+                else:
+                    ordinal_arr.append(g)
                 break
     config = {
         "ordinal": ordinal_arr,

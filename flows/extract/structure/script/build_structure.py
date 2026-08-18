@@ -83,7 +83,7 @@ from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
-                           ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
+                           ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label
@@ -132,8 +132,14 @@ _STRIP_LABEL = re.compile(
 _STRIP_LABEL_CN = re.compile(r'^(定义|定理|引理|推论|命题|例|评注|注)')
 
 
-def _section_of_key(key, ordinal, chapter_first=True):
+def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False):
     """从带类型的条目 key 推导其所属『章节号』（用于挂到 section 节点）。
+
+    ``chapter_local``：章内局部编号书（如 Karlin，节 `§N` 每章重置）。此类书
+    条目编号（``Theorem 1.5`` 的末位 5）是「章内条目序标」而非「节号」，与
+    `§N` 节号无对应关系，按数字派生节号必然错位。故直接返回 None，让条目走
+    ``_place`` 的页码就近归节（忠实还原条目在哪一节页面上），而非错挂到某个
+    数字巧合的节。
 
     返回 "C.S"（字符串）或 None（交由页码归并）。
 
@@ -152,6 +158,9 @@ def _section_of_key(key, ordinal, chapter_first=True):
     """
     if ordinal == ORDINAL_TWO_LEVEL:
         # 中文两级：key 形如 "定义1.1"（标签自有计数器），无章节分量 -> 页码归并
+        return None
+    if chapter_local:
+        # 章内局部书：条目序标与节号解耦，不派生节号（见函数 docstring）。
         return None
     k = _STRIP_LABEL.sub("", key)
     k = _STRIP_LABEL_CN.sub("", k)
@@ -202,6 +211,57 @@ def _find_title_page(ext, title, start, end):
             if t_norm == head or t_norm in s:
                 return p
     return None
+
+
+def _chapter_local_sections_from_markdown(ext, ch):
+    """Chapter-local books (Karlin-style: sections reset per chapter, written as
+    ``## §N`` in the md) — return the authoritative section list
+    ``[(local_num_str, title), ...]`` parsed from the chapter's md
+    ``## §N Title`` headers.  Source ``"N. Title"`` is ambiguous with numbered
+    PROBLEMS and REFERENCES, so the md transcription (faithful to the book) is
+    the single source of truth for the section contract (the D-layer later
+    cross-checks these against the source)."""
+    book_dir = os.path.dirname(ext.rstrip("/")) or ext
+    cands = []
+    for pat in (f"Chapter{ch}_*.md", f"chapter{ch}_*.md", f"第{ch}章_*.md"):
+        cands.extend(glob.glob(os.path.join(book_dir, pat)))
+    out = []
+    if not cands:
+        return out
+    sec_re = re.compile(r'^#{2}\s*§\s*(\d+)\s*(.*)$')
+    for path in cands:
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                for line in fh:
+                    m = sec_re.match(line.rstrip("\n"))
+                    if m:
+                        out.append((m.group(1), m.group(2).strip()))
+        except OSError:
+            continue
+    return out
+
+
+def _find_chapter_local_section_page(ext, ch, n, start, end):
+    """First source page where chapter-local section `n` appears as a "N. Title"
+    heading (Karlin-style).  Gives chapter-local sections a real page so items
+    place to the correct section by page proximity.  Returns ``start`` if not
+    found; the first occurrence (not later running-header repeats) is the real
+    heading, so the early return is correct."""
+    from lib.regexlib import SEC_LOCAL
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, f"page_{p:03d}.json")
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        for b in data.get("text", []):
+            txt = (b.get("text") or "").strip()
+            m = SEC_LOCAL.match(txt)
+            if m and int(m.group(1)) == n:
+                return p
+    return start
 
 
 def _recognized_sections(ext, ch, start, end):
@@ -352,6 +412,17 @@ def _chapter_title(cm, ch):
 # ---------------------------------------------------------------------------
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
+    if primary == ORDINAL_SINGLE:
+        # Single-level EN book (e.g. Silverman's "A Friendly Introduction to
+        # Number Theory" 4th ed — ordinal type 1): items are ONE numeric
+        # component ("Theorem 1", "Lemma 1"), no section/item split. Without an
+        # explicit branch this ordinal fell through to the Chinese three/two-level
+        # `extract_items` path, producing garbled keys like "定理1". Route to the
+        # EN extractor in single mode so it never fabricates a false second
+        # component ("Assertion 1.7"). No chapter-scoped filter is needed
+        # (single number has no chapter component).
+        return extract_items_en(ext, start, end, want_examples=True,
+                                section_scoped=book.section_scoped, single=True)
     if primary in (ORDINAL_EN, ORDINAL_EN3):
         if primary == ORDINAL_EN:
             items = extract_items_en(ext, start, end, want_examples=True,
@@ -396,9 +467,20 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     section_depths = getattr(book, 'section_depths', None) or None
 
     # 1) skeleton 原始行
-    rows = scan_skeleton.scan(ext, ch, start, end, mode, section_depths=section_depths)
-    sec_rows = [r for r in rows if r[1] == "SEC"]
+    rows = scan_skeleton.scan(ext, ch, start, end, mode,
+                              section_depths=section_depths)
     ex_rows = [r for r in rows if r[1] == "EXER"]
+    if getattr(book, 'chapter_local_sections', False):
+        # Chapter-local sections (Karlin-style "§1" that RESET per chapter) are
+        # authoritative from the md `## §N` transcription — the source "N. Title"
+        # form is ambiguous with numbered PROBLEMS and REFERENCES, so scanning
+        # the OCR for them fabricates false sections.  We take the section list
+        # from the faithfully-written md and resolve each section's source page
+        # for item page-proximity placement.
+        md_secs = _chapter_local_sections_from_markdown(ext, ch)
+        sec_rows = [("md", "SEC", n, title) for (n, title) in md_secs]
+    else:
+        sec_rows = [r for r in rows if r[1] == "SEC"]
 
     # 2) skeleton SEC 去重（优先非空标题，保留最佳标题）
     sec_best = {}
@@ -421,10 +503,21 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 4) 章节骨架：skeleton SEC ∪ 条目/练习派生章节号
     sec_pages = {}   # num -> 最佳候选页（skeleton）
     sec_titles = {}  # num -> 标题
-    for p, kind, num, title in dedup_sec:
-        sec_pages.setdefault(num, p)
-        if title and not sec_titles.get(num):
-            sec_titles[num] = title
+    if not getattr(book, "sections_unnumbered", False):
+        # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
+        # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
+        # 「agent 校验识别」产物 _recognized_sections.json 的权威小节清单注入。
+        for p, kind, num, title in dedup_sec:
+            if num not in sec_pages:
+                if getattr(book, 'chapter_local_sections', False):
+                    # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
+                    # 首现页作为真实页码，供条目按页就近归节。
+                    pg = _find_chapter_local_section_page(ext, ch, int(num), start, end)
+                else:
+                    pg = p
+                sec_pages[num] = pg
+            if title and not sec_titles.get(num):
+                sec_titles[num] = title
 
     # 无序号标层（section_types 含 0）：注入「agent 校验识别」步骤产出的权威
     # 小节清单（key 用 "U{n}" 区分于编号小节）。OCR 无数字段，scan_skeleton
@@ -435,7 +528,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 _recognized_sections(ext, ch, start, end), 1):
             _uk = "U%d" % _i
             sec_pages.setdefault(_uk, _up)
-            if _ut and not sec_titles.get(_uk):
+            # 保留空标题（unnumbered 书常有「## §」无标题小节，如 Silverman 后段章
+            # 节）。空标题在 P 层 _title_present("") 被判定为「恒存在」，不会误报
+            # 缺节；若回退到 "U{n}" 键名，则会因 "u1" 不在 md 标题中而假阳缺节。
+            if not sec_titles.get(_uk):
                 sec_titles[_uk] = _ut
 
     # 派生章节号收集（用于补齐 skeleton 缺失的章节）
@@ -448,7 +544,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 derived_sec_firstpage[num] = page
 
     for it in items:
-        _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first), it["page"])
+        _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first,
+                                  chapter_local=getattr(book, 'chapter_local_sections', False)),
+                  it["page"])
     for p, kind, num, title in ex_rows:
         _note_sec(_section_of_exer(num), p)
 
@@ -484,9 +582,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for n in all_sec_nums:
         title = sec_titles.get(n, "")
         page = sec_pages.get(n, derived_sec_firstpage.get(n, start))
-        # 无序号标小节（"U{n}" 合成键）name 用纯标题，不拼数字前缀
+        # 无序号标小节（"U{n}" 合成键）name 用纯标题，不拼数字前缀；
+        # 标题为空时 name 也保持空（P 层对空标题判「恒存在」，避免假阳缺节）。
         if n.startswith("U"):
-            name = title or n
+            name = title
         else:
             name = (f"{n} {title}".strip() if title else n)
         node = _node(n, "section", name, page)
@@ -511,7 +610,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             chapter_bucket.append(node)
 
     for it in items:
-        sec_key = _section_of_key(it["key"], ordinal, book.chapter_first)
+        sec_key = _section_of_key(it["key"], ordinal, book.chapter_first,
+                                  chapter_local=getattr(book, 'chapter_local_sections', False))
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])

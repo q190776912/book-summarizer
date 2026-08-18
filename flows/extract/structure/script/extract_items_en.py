@@ -26,8 +26,16 @@ from item_dedup import dedup_items
 # For English textbooks with two-level numbering (Theorem 1.1, Definition 1.1,
 # Example 1.25, ...). Returns items shaped like the CN path: {key, label, page, text}.
 # ---------------------------------------------------------------------------
+# NOTE: "Assertion" is intentionally EXCLUDED. It is semantically a Proposition
+# claim and is never a tracked ordinal group in any verify_config (the config
+# groups are Theorem/Algorithm/Lemma/Conjecture/Proposition/Example/Question/
+# Figure). Treating it as a contract item fabricates phantom "Assertion N"
+# entries that can never match the md's "Assertion N" / "断言 N" (which the
+# config does not require) — surfacing as false truly-missing. Per the user's
+# ignore_ch7.json intent, Assertion items are non-blocking noise, so they must
+# not enter the contract at all.
 EN_LABELS = ["Definition", "Theorem", "Lemma", "Proposition", "Corollary", "Example",
-             "Assertion", "Conjecture", "Remark"]
+             "Conjecture", "Remark"]
 # Extended to ALSO capture single-number EN headings ("Theorem 1", used per
 # chapter by Silverman's "A Friendly Introduction to Number Theory" 4th ed).
 # The second numeric component is optional; single-number keys become
@@ -84,15 +92,53 @@ EN_LAB_RE_NF = re.compile(
 )
 
 
-def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False):
+def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False,
+                     single=False):
+    """Extract English item headings from OCR pages.
+
+    ``single``: when True (single-level EN books, e.g. Silverman's "A Friendly
+    Introduction to Number Theory" 4th ed — ORDINAL_SINGLE / type 1), items carry
+    ONE numeric component ("Theorem 1", "Lemma 1"). The regex then MUST NOT
+    capture a second component: OCR line-merge noise ("Assertion 1. The number..."
+    glued to a later "7") would otherwise fabricate "Assertion 1.7". With
+    ``single=False`` (default; two-level EN books like Kreyszig) the optional
+    second component is kept ("Theorem 1.1").
+    """
     items = []
     # Section-scoped books also accept numbered graphics (Table/Figure) as items.
     lab_labels = SECTION_LABELS if section_scoped else EN_LABELS
-    lab_re = re.compile(
-        r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
-        r'(' + EN_OCR_NUM + r')(?:\s*' + SEP_TIGHT + r'\s*(' + EN_OCR_NUM + r'))?',
-        re.IGNORECASE,
-    )
+    if single:
+        lab_re = re.compile(
+            r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
+            r'(' + EN_OCR_NUM + r')',
+            re.IGNORECASE,
+        )
+    else:
+        lab_re = re.compile(
+            r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
+            # 🔴 TIGHT second component (NO whitespace between SEP_TIGHT and the
+            # digit).  Two-level EN numbering is ALWAYS printed tight
+            # ("Theorem 1.1", "Lemma 2.3") with no space after the separator.
+            # Allowing a trailing `\s*` here is catastrophic: a single-number
+            # heading like "Example 2. Queueing" / "Example 3. Some Genetic"
+            # ends with a SENTENCE period followed by a space and the TITLE
+            # word.  EN_OCR_NUM includes OCR-0/5-confusable letters
+            # (Q/O/o/D->0, S/s->5, ...), so the greedy `[\d...]+` then swallows
+            # the title word's first letters as a phantom sub-number:
+            #   "Example 2. Queueing" -> "Example 2.0"  (Q->0)
+            #   "Example 3. Some"      -> "Example 3.50" (S->5,o->0)
+            #   "Example 1. Suppose"   -> "Example 1.5"  (S->5)
+            #   "Example 1. Our"       -> "Example 1.0"  (O->0)
+            # Those fabricated keys never match the md's "例2"/"例3"/"例1",
+            # surfacing as false TRULY-MISSING (A-layer M failures).  Requiring
+            # the digit to be TIGHT against the separator kills the capture for
+            # sentence-period+title (space present) while keeping every genuine
+            # "1.1" intact.  (The leading `\s*` is kept so "Theorem 1.1" with a
+            # separator that may follow the first number without a space still
+            # matches — it does; the trailing one is what enabled the bug.)
+            r'(' + EN_OCR_NUM + r')(?:\s*' + SEP_TIGHT + r'(' + EN_OCR_NUM + r'))?',
+            re.IGNORECASE,
+        )
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
@@ -120,7 +166,10 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 n1 = _ocr_int(m.group(2))
                 if n1 is None:
                     continue
-                if m.group(3) is not None:
+                # single-mode regex has only 2 groups (label + number); the
+                # optional second component (group 3) exists ONLY in two-level
+                # mode. Guard every group(3) access with `not single`.
+                if (not single) and m.group(3) is not None:
                     n2 = _ocr_int(m.group(3))
                     if n2 is None:
                         continue
@@ -135,8 +184,9 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # heading, and would otherwise pollute the contract (the B-layer
                 # then flags a phantom 0..N gap).  Single-level headings that
                 # start the next word with an uppercase letter (e.g. "Theorem 1
-                # Let...") are kept.
-                if m.group(3) is None:
+                # Let...") are kept.  Applies only to single-component keys
+                # (single mode, or a two-level key whose n2 half was absent).
+                if single or m.group(3) is None:
                     after = txt[m.end():].lstrip()
                     if after and after[0].isascii() and after[0].islower():
                         continue

@@ -75,6 +75,11 @@ Definitions, theorems, propositions, corollaries, lemmas, axioms, and remarks MU
 - Correct (example): `> **例3a（事故易发性）**：` / `> **Example 3a**:`.
 - The ONLY `###` headings allowed are genuine **subsection dividers** under a `##` section, and they MUST carry the `§` prefix (e.g. `## §3.2 节名`, `### §4.8.1 小节名`).
 - If a source file already uses the bold-inline style, match that exactly — do not introduce `###` headings for items.
+- 🔴 **小节序标必须尊重原书（SSOT）**：小节标题的编号形态**以原书为准**，本技能不强制任何固定小节编号格式——原书怎么写就怎么写。
+  - 原书小节**带序标**（如 `§3.2`、`3.1.4`）→ 写 `## §3.2 节名`（数字 + 标题，中英统一）。
+  - 原书小节**无序标**（如 Silverman《A Friendly Introduction to Number Theory》每章小节只有描述性标题、无数字编号）→ **不要编造序标**，只写 `## § <描述性标题>`（保留 `§` 符号、数字留空）。描述性标题忠实于原书小节名；原书若该小节连标题都没有则只写 `## §`。
+  - 配套配置：此类书须在 `_extract/verify_config.json` 显式写 `"section_numbers": false`（默认 `true` 表示原书带序标）。`section_numbers: false` 时，verify 的缺节闸门按「位置/数量」比对结构契约（只查契约要求的节是否都在 md 里、不计 md 多出的小节），**不强求加回原书没有的序标**。这与其他带序标书（默认 `true`、按数字逐一对齐）零回归。
+  - ⚠️ 禁止为「统一风格」给原书无序号的小节硬加 `## §N` 数字编号——等同「为通过校验而改被校验对象」，明确禁止。
 - **gm 体例书例外（条目即小节标题，如 Gelfand-Manin《Methods of Homological Algebra》）**：这类书把条目印成小节标题、每节内从 1 起号（`1. Main Definitions`、`3. Proposition.`）。总结文件中这些**条目小节标题用 `### N. Title`**（不加粗、不加冒号、照原书标题文字原样，含句号），`## §N.` 节标题照旧。**`###` 子节标题下方不得紧接 `---` 分隔线**——标题本身就是条目分隔，其下直接接内容/子点；`---` 只允许在条目与条目之间（上一个条目内容与下一个 `###` 标题之间）。禁止写成 `**N. Title**` 内联加粗，也禁止拼造「节.条」编号。gm scheme 的 verify 工具（`GM_ENTRY_RE`）同时识别 `### N. Title` 与旧 `**N. Title**` 两种形式，机器键均为 `标签I.S-N`。条目内的结构性标签（Definition/Proposition/…）仍在 `###` 标题内，陈述顶层、证明/例进块引用的规则不变。
 
 **⚠️ 结构性标签（定义/定理/引理/推论/命题/断言/公理）必须顶层，禁止进块引用**：这些「条目陈述」一律独立成行、写在块引用 `>` 之外。只有 **证明（思路/梗概/概要）** 与 **例/Example** 才用 `>` 包裹。把一个结构性标签写成 `> **引理X**` 是格式错误——它会把该条目吞进上一个 `> **证明**` 块引用，破坏章节结构。
@@ -313,7 +318,7 @@ Common patterns (after correction):
 ### 英文标注原则（仅中文版需要）
 
 中文版必须在每个章文件内首次出现重要概念时标注英文，**格式为 `中文 (English)`**。包括：
-- 节标题：`## §N.1 节名 (English Section Title)`
+- 节标题：`## §N.1 节名 (English Section Title)`（原书小节带序标时）；原书小节**无**序标时写 `## § 节名 (English Section Title)`（数字留空，仅保留 `§`，详见上方「小节序标必须尊重原书」规则）
 - 定义/定理标签：`**定义N.S-N（名称 (English name))**`
 - 裸编号项：`**N.S-N 中文名 (English name)**`
 - 正文关键术语：该章内首次出现时括号标注。不同章之间独立

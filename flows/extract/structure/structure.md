@@ -115,12 +115,12 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 
 ## 本阶段规则（🔴 内联）
 - **JSON 是契约，不是参考**：
-  - 有几个 `section` 就必须写几节 `## §N.M`，顺序照抄，一个不能少、不能颠倒；
+  - 有几个 `section` 就必须写几节 `## §N.M`（原书小节**带序标**时），顺序照抄，一个不能少、不能颠倒；原书小节**无序号标**时写 `## § <标题>`（数字留空，仅保留 `§`，详见 `docs/writing-rules.md`「小节序标必须尊重原书」），并须在 `verify_config.json` 设 `"section_numbers": false`；
   - 每个非 `exercise` 节点都必须在总结里落地；`exercise` 按习题收录规则处理（穿插习题原位保留，章末整块习题省略），故不强制落地；
   - 节点 `name` 的印刷标题必须写进条目标签，不得丢弃；
   - JSON 里没有的编号，不许出现在总结里（无中生有）。
 - **不能只靠抽取器的裸键**：它不含节标题 / 练习 / 印刷标题；只拿它写作必然漏节、乱序、丢标题。统一消费本 JSON。
-- **写完后自查**：`section` 数应等于总结 `## §` 数；非 exercise 节点 `key` 集合应与总结编号一致。
+- **写完后自查**：非 exercise 的 `section` 数应等于总结 `## §` 标题数（`section_numbers: false` 时按位置/数量对齐，允许 md 小节多于契约未记的小节）；非 exercise 节点 `key` 集合应与总结编号一致。
 
 ## 出口条件
 - 出口：全书单一的 `book_structure.json` 已生成（书对象，`sub_sec` 内按章顺序嵌套全部章节），作为 write-source 的写作契约与 verify 的编号项基准采用。

@@ -13,6 +13,8 @@
   2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见 `book_structure.json` 书对象，由 `build_structure` 生成，SSOT 见 `flows/extract/structure/structure.md`）。
+     - `section_numbers: true`（默认，原书小节带序标）：md `## §N` 的数字须**逐一对齐**契约 `sub_sec` 编号（`present` 集合包含契约每个非习题节号）。
+     - `section_numbers: false`（原书小节**无序号标**，如 Silverman）：md 小节写 `## § <标题>`（数字留空），闸门**不依赖数字**，改为按「位置/数量」比对——只查契约要求的每一节是否都在 md 中（按 `## §` 出现顺序位置对齐），**不报 md 多出契约未记的小节**（原书 subsection 可能多于稀疏契约，且 md 忠实于原书，多出的 `## §` 是合理的、不阻断）。仅当 md 的 `## §` 数**少于**契约必写节数时才报「缺节」。
   5. `p_extra_item`：编造条目（md 出现骨架 ITEM 清单没有的编号条目）。
   6. `p_verbose`：顶层纯散文段（不含 `**` 标签条目/例/练习/注记的忠实内容、且**不含公式**）>450 字/段（`VERBOSE_PARA_CHARS`）且段数 ≥6（`VERBOSE_PARA_GATE`）即 FAIL。
   7. `p_proof_verbose`：单个 `> **证明/解答**` 块 >700 字且未分条枚举，且此类块 ≥2（`VERBOSE_PROOF_GATE`）即 FAIL。

@@ -340,6 +340,19 @@ class BookConfig:
     # just surfaces it for ConfigLoader-based consumers.
     figure: Optional[dict] = None
 
+    # --- subsection ordinal convention (respect the ORIGINAL book) ----------
+    # True  (default): the original book numbers its subsections (§1, §2, …),
+    #                  so md MUST write `## §N` and the gate matches sections
+    #                  by their NUMBER against the structure contract.
+    # False         : the original book's subsections carry NO ordinal (Silverman
+    #                 4th ed. — chapters are continuous prose, the only anchors
+    #                 are theorems/lemmas). md writes `## § <title>` WITHOUT a
+    #                 number; the gate matches sections by POSITION/ORDER against
+    #                 the contract (numbers are irrelevant, and would be a
+    #                 fabrication if we added them). This is per-book so other
+    #                 books that DO number their subsections are untouched.
+    section_numbers: bool = True
+
     # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
     def primary_group(self) -> 'GroupConfig':
@@ -507,6 +520,8 @@ class BookConfig:
             formula=dict(data['formula']) if data.get('formula') else None,
             # --- figure sequential-label convention (book-specific) ----------
             figure=dict(data['figure']) if data.get('figure') else None,
+            # --- subsection ordinal convention (respect the ORIGINAL book) ----
+            section_numbers=bool(data.get('section_numbers', True)),
         )
 
 

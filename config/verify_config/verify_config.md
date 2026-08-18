@@ -9,6 +9,7 @@
 | `ordinal` | `List[GroupConfig]` | 必填。**分组选择器**：数组里每个对象 = 一组**共用同一条计数器**的条目标签（见下方「分组语义」核心节）。数组首元素 `type` 即 `primary_type`，自动反推编号模式与小节层级。 |
 | `language` | `str` | `'cn'` / `'en'`（默认 `'cn'`）。 |
 | `strict` | `bool` | 默认 `true`。 |
+| `section_numbers` | `bool` | 默认 `true`。**小节序标体例开关**（尊重原书）：`true` = 原书小节带序标（如 `§3.2`），总结写 `## §N.M`、verify 缺节闸门按数字逐一对齐 `book_structure.json` 契约；`false` = 原书小节**无序号标**（如 Silverman），总结写 `## § <标题>`（数字留空、仅保留 `§`），verify 缺节闸门改为按「位置/数量」比对（只查契约要求的节是否都在、不计 md 多出的小节），不强求加回原书没有的序标。per-book 开关，仅改本书行为。 |
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。 |
 | `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |

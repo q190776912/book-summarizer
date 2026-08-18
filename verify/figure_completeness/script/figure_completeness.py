@@ -40,7 +40,7 @@ import os, json, re
 
 from page_json import PageJson
 from verify.script.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
-from lib.figure_io import load_fig_components
+from lib.figure_io import load_fig_components, fig_label_from_match
 
 
 # --- attribution (figure -> owning item block) ---------------------------------
@@ -214,7 +214,7 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
             if not txt:
                 continue
             for m in cap_re.finditer(txt):
-                num = m.group(1)
+                num = fig_label_from_match(m)
                 if components == 1:
                     # global integer figure numbering (e.g. Kreyszig "Fig. 2");
                     # no chapter prefix, so compare on the bare number directly.

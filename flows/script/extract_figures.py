@@ -57,7 +57,7 @@ _boot.setup()
 import figure_detect
 from figure_detect import FigureDetect
 from page_json import PageJson
-from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT
+from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT, fig_label_from_match
 
 
 import os, sys
@@ -202,7 +202,7 @@ def parse_fig_label(text, labels=None, components=2):
     if labels is None:
         labels = FIGURE_LABELS_DEFAULT
     m = build_fig_label_re(labels, components).search(text)
-    return m.group(1) if m else None
+    return fig_label_from_match(m)
 
 
 def load_chapter_map(out_dir):
@@ -221,7 +221,8 @@ def load_chapter_map(out_dir):
                 def _se(ch):
                     return (ch.get("start") or ch.get("start_page"),
                             ch.get("end") or ch.get("end_page"))
-                return {(ch.get("num") or ch.get("ch")): {"start": _se(ch)[0], "end": _se(ch)[1]}
+                return {(ch.get("num") if ch.get("num") is not None else ch.get("ch")):
+                        {"start": _se(ch)[0], "end": _se(ch)[1]}
                         for ch in chapters}
             return {int(k): v for k, v in raw.items()}
         except Exception:
@@ -234,6 +235,8 @@ def chapter_for_page(pno, chap_map):
     if not chap_map:
         return 0
     for ch, info in chap_map.items():
+        if ch is None:
+            continue
         s = info.get("start")
         e = info.get("end")
         if s and e and s <= pno <= e:

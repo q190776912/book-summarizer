@@ -133,7 +133,9 @@ def extract(extract_dir, ch, start, end):
             cur_sec = num
             continue
 
-        # 字母子节 "X. TITLE" —— 记作 SUB（P 层 p_missing_sec 只认数字 SEC）
+        # 字母子节 "X. TITLE" —— 记作 SUB。原书用纯字母标号（如
+        # "A. JOINT DISTRIBUTION FUNCTIONS"），父节靠位置确定；summary
+        # 只写 "§A"，不投影父节号（尊重原书：不给小节编造 "N.A" 复合编号）。
         m = LETSUB.match(txt)
         if m and len(txt) < 75:
             title = m.group(2).strip()
@@ -142,8 +144,11 @@ def extract(extract_dir, ch, start, end):
             second = words[0].lower() if words else ''
             if second in SENTENCE_WORDS:
                 continue
-            num = '%s.%s' % (cur_sec or '?', m.group(1))
-            raw_secs.append((num, title, p, 'SUB'))
+            letter = m.group(1)              # 纯字母标号 A/B/C…
+            num = letter                     # 不拼父节号 → "A" 而非 "1.A"
+            # 同章不同父节都可能以 A 起头（1.A / 2.A …），按 (父节,字母)
+            # 去重，避免纯字母 key 跨父节碰撞丢小节。
+            raw_secs.append((num, title, p, 'SUB', cur_sec or ''))
             continue
 
         # 编号陈述 "Theorem 1.1."
@@ -182,8 +187,11 @@ def extract(extract_dir, ch, start, end):
 
     # ---- 清理 + 去重 ----
     sections = []
-    seen_sec_num = set()
-    for num, title, p, kind in raw_secs:
+    seen_sec_num = set()      # SEC 去重（数字节号全局唯一）
+    seen_subsec = set()       # SUB 去重（按 (父节,字母)，纯字母 key 跨父节会撞）
+    for entry in raw_secs:
+        num, title, p, kind = entry[:4]
+        parent = entry[4] if len(entry) > 4 else ''
         if kind == 'SEC':
             nt = norm(title)
             if chapter_title and (nt == norm(chapter_title)
@@ -200,9 +208,10 @@ def extract(extract_dir, ch, start, end):
             seen_sec_num.add(num)
             sections.append((num, title, p, 'SEC'))
         else:  # SUB
-            if num in seen_sec_num:
+            key = (parent, num)
+            if key in seen_subsec:
                 continue
-            seen_sec_num.add(num)
+            seen_subsec.add(key)
             sections.append((num, title, p, 'SUB'))
 
     return {'sections': sections, 'statements': statements}

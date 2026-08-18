@@ -149,10 +149,15 @@ def load_fig_components(out_dir):
 
 def build_fig_label_re(labels, components=2):
     r"""Compiled regex that finds a figure caption label (图 X.X / Figure X.X / …)
-    in text and captures its sequential number (group 1). Driven by BOOK-SPECIFIC
+    in text and captures its sequential number. Driven by BOOK-SPECIFIC
     `labels` AND `components`, so each book's OWN figure numbering is honored.
     Returns a never-matching regex when `labels` is empty (explicit no-figure-labels
     marker).
+
+    Supports both prefix-style captions ("Figure 12.15") and suffix-style
+    captions ("12.15 Figure") — the latter is used by Fraleigh's *A First
+    Course in Abstract Algebra*.  The number is in group 1 for prefix matches
+    and group 2 for suffix matches; use ``fig_label_from_match`` to retrieve it.
 
     `components` controls how many number segments a label may have:
       1 -> ``([0-9]+)``                       (global integer, e.g. "Fig. 23")
@@ -168,7 +173,20 @@ def build_fig_label_re(labels, components=2):
         num = r"([0-9]+(?:(?:\.|-)[0-9]+){1,2})"
     else:  # 3
         num = r"([0-9]+(?:(?:\.|-)[0-9]+){2,3})"
-    return re.compile(rf"(?:{fig_label_alt(labels)})\s*{num}", re.IGNORECASE)
+    alt = fig_label_alt(labels)
+    # prefix: "Figure 12.15"; suffix: "12.15 Figure"
+    return re.compile(rf"(?:{alt})\s*{num}|{num}\s*(?:{alt})", re.IGNORECASE)
+
+
+def fig_label_from_match(m):
+    """Return the captured figure-number string from a match produced by
+    ``build_fig_label_re``.  The regex has two capture groups (prefix and
+    suffix styles), only one of which participates in a given match."""
+    if not m:
+        return None
+    if m.group(1) is not None:
+        return m.group(1)
+    return m.group(2)
 
 
 def load_fig_label_re(out_dir):

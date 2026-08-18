@@ -174,6 +174,36 @@ def parse_ref(cap):
     return None
 
 
+def parse_fig_self_ref(cap, fig_labels):
+    """Fraleigh-style figures: the caption IS the figure's own number, e.g.
+    '0.15Figure' or 'Figure 0.15'. The figure is a numbered *item* in the
+    chapter (not a supplement to some other item), so instead of anchoring to
+    an item number we anchor to the md reference of that figure itself.
+    Returns the bare figure number (str, e.g. '0.15') or None.
+
+    Only fires when the caption actually carries a figure-label word, so it
+    never mis-extracts stray numbers from captions like 'see 3.5 above'.
+    """
+    if not cap:
+        return None
+    lab = fig_label_alt(fig_labels)
+    if not lab:
+        return None
+    # Wrap lab in a non-capturing group: fig_label_alt returns a bare '|'
+    # alternation (e.g. 'Figure\\.?|F[il]gure\\.?'), and concatenating it as
+    # '{lab}\\s*(num)' would let the bare 'Figure\\.?' alternative match a
+    # standalone "Figure" (inside '0.15Figure') and short-circuit before the
+    # number is captured -> return None. Grouping fixes the precedence.
+    lg = f"(?:{lab})"
+    m = re.search(rf"{lg}\s*(\d+(?:\.\d+)*)", cap, re.IGNORECASE)
+    if m and m.group(1):
+        return m.group(1)
+    m = re.search(rf"(\d+(?:\.\d+)*)\s*{lg}", cap, re.IGNORECASE)
+    if m and m.group(1):
+        return m.group(1)
+    return None
+
+
 def read_lines(p):
     return open(p, "r", encoding='utf-8').read().splitlines()
 
@@ -541,6 +571,16 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
                         cands += [f"**{k} {num}", f"**{k}{num}", f"**{num} {k}"]
                     cands += [f"**{kind_en} {num}", f"**{kind_en}{num}", f"**{num} {kind_en}"]
                 idx, anchor_used = find_first_match(lines, cands)
+            # Fraleigh-style fallback: caption is the figure's OWN number
+            # (e.g. '0.15Figure'); anchor to the md reference of that figure
+            # ('**0.15 Figure**' item entry or 'Figure 0.15' prose reference).
+            if idx is None:
+                fnum = parse_fig_self_ref(f.get("caption", ""), fig_labels)
+                if fnum:
+                    cands = [f"**{fnum} Figure", f"Figure {fnum}", f"Fig. {fnum}"]
+                    idx, anchor_used = find_first_match(lines, cands)
+                    if idx is not None:
+                        is_proof = False
             if idx is None and fname in overrides:
                 ov = overrides[fname]
                 mc = ov.get("anchors", [])

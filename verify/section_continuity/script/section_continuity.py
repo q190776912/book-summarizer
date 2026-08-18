@@ -49,6 +49,25 @@ _SEP_RE = re.compile(r'[.\-–·/．－〜]')
 # old fixed 2-component D_MD_SEC_RE + the dead D_MD_NESTED_SEC_RE.
 D_MD_SEC_RE = re.compile(r'^#{2,6}\s*§\s*(\d+(?:' + SEP_TIGHT + r'\d+)*)')
 
+# Letter-labeled subsection headers (`### §A`, optionally the (now-wrong)
+# `### §1.A` projection during transition). Karlin-style: pure letter label,
+# parent `## §N` determined by position. Captures the bare letter.
+D_MD_SUBSEC_LETTER_RE = re.compile(r'^#{3,6}\s*§\s*(?:\d+\.)?([A-Z])\b')
+
+# Raw (OCR) letter-labeled subsection header: "A. TITLE" (Karlin-style). The
+# title must read like a SECTION HEADER (mostly UPPERCASE) so we don't mistake
+# sentences / problems that also begin with "A." for subsections.
+D_LETTER_SEC_LOCAL = re.compile(r'^([A-Z])\.\s+([A-Za-z].{1,60})$')
+
+# Sentence-start words following the letter indicate a normal sentence, not a
+# subsection header (mirrors extract_items_kt.SENTENCE_WORDS).
+_D_SUBSEC_SENTENCE_WORDS = {
+    'we', 'the', 'to', 'of', 'is', 'are', 'was', 'were', 'this', 'that',
+    'these', 'those', 'following', 'prepared', 'prove', 'let', 'suppose',
+    'consider', 'now', 'note', 'see', 'if', 'when', 'then', 'a', 'an', 'it',
+    'in', 'on', 'for', 'by',
+}
+
 # --- raw (OCR) section-header features (1..N components) ---------------------
 # A: "§6.6" / "86.6" (OCR glues § -> 8).  B: "6.6 样条函数" (number then title).
 # C: "§ 6.6" short block (kept for the brief header lines < 60 chars).
@@ -210,36 +229,44 @@ def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
     """Chapter-local section check (Karlin-style: sections reset per chapter,
     written as ``## §N`` in the md and ``"N. Title"`` in the source).
 
-    The md ``## §N`` headers are the AUTHORITATIVE section list.  The source
-    ``"N. Title"`` form is ambiguous with numbered PROBLEMS and REFERENCES, so
-    we do NOT scan the source for arbitrary section headers (that would
-    fabricate dozens of false sections).  Instead we only CONFIRM that each md
-    section ``N`` has a corresponding ``"N. Title"`` line in the source
-    (cross-check).  Sections carry no labeled item, so the general
-    "header AND labeled item" requirement is relaxed to "header present".
+    The md ``## §N`` headers are the AUTHORITATIVE section list.  Letter-labeled
+    subsections (``### §A`` in the md, ``"A. Title"`` in the source — Karlin &
+    Taylor) form a THIRD level: the parent ``## §N`` is determined by position,
+    and the summary writes only ``§A`` (never a fabricated ``§N.A`` composite).
+    Both the digit sections and the letter subsections are checked for
+    continuity against the source (cross-check), exactly as the standard
+    two-level chapter-local contract.
 
-    Result: the D-layer now genuinely processes the book's real (chapter-local)
-    sections instead of vacuously passing on an empty contract.  Deletion of a
-    ``## §N`` from the md is surfaced by ``build_structure`` (which re-derives
-    the contract from the md) rather than by source scanning here, because a
-    reliable source-only section detection is impossible when problems /
-    references share the ``"N. Title"`` surface form.
+    The letter level is only engaged when the book declares role 5 in
+    ``section_types`` (``max_level >= 3``); books without it are untouched, so
+    this extension is strictly additive.
     """
     max_level = len(list(cfg.section_depths)) or 2
+    has_letter = max_level >= 3
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
-    md_sec_local = {}  # local N (int) -> raw token string
+    md_sec_local = {}          # local N (int) -> raw token string
+    md_subsec_letter = set()   # (parent_sec_int, letter) tuples
+    cur_sec = None
     for line in md_text.split('\n'):
-        m = D_MD_SEC_RE.match(line.strip())
-        if not m:
+        s = line.strip()
+        m = D_MD_SEC_RE.match(s)
+        if m:
+            c = _split_num(m.group(1))
+            if c:
+                md_sec_local[c[0]] = m.group(1)
+                cur_sec = c[0]
             continue
-        c = _split_num(m.group(1))
-        if c:
-            md_sec_local[c[0]] = m.group(1)
+        if has_letter:
+            lm = D_MD_SUBSEC_LETTER_RE.match(s)
+            if lm and cur_sec is not None:
+                md_subsec_letter.add((cur_sec, lm.group(1)))
     local_nums = set(md_sec_local.keys())
 
     raw_sec_header = {L: set() for L in range(1, max_level + 1)}
     raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
+    src_subsec_letter = set()
+    cur_src_sec = None
     for p in range(start, end + 1):
         fp = os.path.join(ext, f'page_{p:03d}.json')
         if not os.path.exists(fp):
@@ -256,11 +283,32 @@ def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
             m = SEC_LOCAL.match(txt)
             if m and int(m.group(1)) in local_nums:
                 raw_sec_header[2].add((int(m.group(1)),))
+                cur_src_sec = int(m.group(1))
+                continue
+            if has_letter:
+                lm = D_LETTER_SEC_LOCAL.match(txt)
+                if lm and len(txt) < 75:
+                    # Only treat as a subsection header when the title reads
+                    # like a SECTION HEADER (mostly UPPERCASE) — avoids matching
+                    # sentences / problems that also begin with "A.".
+                    if not lm.group(2).isupper():
+                        continue
+                    words = txt.split()
+                    second = words[1].lower() if len(words) > 1 else ''
+                    if second in _D_SUBSEC_SENTENCE_WORDS:
+                        continue
+                    if cur_src_sec is not None:
+                        src_subsec_letter.add((cur_src_sec, lm.group(1)))
     raw_labeled_item[2] = set(raw_sec_header[2])  # sections have no labeled item
+    if has_letter:
+        raw_sec_header[3] = set(src_subsec_letter)
+        raw_labeled_item[3] = set(src_subsec_letter)
 
     md_sections = {L: set() for L in range(1, max_level + 1)}
     md_sections[1] = {(ch,)}                 # chapter level
     md_sections[2] = {(n,) for n in local_nums}
+    if has_letter:
+        md_sections[3] = set(md_subsec_letter)   # (parent_sec, letter)
     raw_sec_header[1] = {(ch,)}
     raw_labeled_item[1] = {(ch,)}
     return _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)

@@ -84,9 +84,10 @@ from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                            ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
+                           ORDINAL_THREE_LEVEL,
                            ConfigLoader, ConfigError, BookConfig)
 import chapter_map
-from key_parse import _canon_label
+from key_parse import _canon_label, normkey
 from data.book_structure.book_structure import BookStructure, StructureNode
 
 
@@ -406,6 +407,32 @@ def _chapter_title(cm, ch):
     return ""
 
 
+def _exercise_region_start(ext, ch, start, end):
+    """Return the page where 'EXERCISES FOR CHAPTER <ch>' begins, else None.
+
+    Used to exclude exercise-region pages from the ITEM contract so that
+    exercise problems (e.g. Strogatz `3.1.1`) are not mistaken for chapter
+    items (examples/theorems).  Case-insensitive, space-optional to survive
+    OCR like `EXERCISESFORCHAPTER3`.
+    """
+    head = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
+    pat = str(ch)
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, 'page_%03d.json' % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding='utf-8'))
+        except Exception:
+            continue
+        txt = " ".join(b.get('text', '') if isinstance(b, dict) else str(b)
+                       for b in d.get('text', []))
+        m = head.search(txt)
+        if m and m.group(1) == pat:
+            return p
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
 # 生成 book_structure.json 后，verify 与 write-source 均消费该 JSON，不再重跑抽取器。
@@ -444,6 +471,34 @@ def _extract_items(ext, ch, start, end, book, manual=None):
                 continue
             it = dict(it)
             it["key"] = f"{_canon_label(lab)}{num}"
+            kept.append(it)
+        return kept
+    if primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en":
+        # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The
+        # generic three-level extractor is CN-oriented and captures unlabeled
+        # exercise numbers (`3.1.1`) as items; route to the label-first EN3
+        # extractor, which requires an Example/Definition label and so naturally
+        # excludes exercises.
+        # KEY FORMAT (root-cause fix, 2026-08-19): the book's primary_type is
+        # ORDINAL_THREE_LEVEL (NOT ORDINAL_EN3), so the completeness checker's
+        # _canon_key parses its keys as pure-numeric `C.S-N` tuples — a label
+        # word is NOT allowed.  Embedding the CN canon label (`例`) into the key
+        # (as the true ORDINAL_EN3 branch does) makes
+        # _canon_key(THREE_LEVEL, "例2.2.1") return None, silently dropping the
+        # item from the contract (contract_items=0 -> everything "missing", fake
+        # block).  The item TYPE is carried by the node `type` field (derived
+        # from `it["label"]` via _type_of), so we keep the key bare-numeric and
+        # let the checker's _composite_key re-attach the type.  normkey:
+        # "2.2.1" -> "2.2-1" (matches scan_raw_items' three-level raw keys).
+        items = extract_items_en3(ext, ch, start, end, want_examples=True)
+        kept = []
+        for it in items:
+            _lab, _, num = it["key"].partition(" ")
+            parts = num.split(".")
+            if book.chapter_first and len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) != ch:
+                continue
+            it = dict(it)
+            it["key"] = normkey(num)
             kept.append(it)
         return kept
     if primary in (ORDINAL_GM, ORDINAL_ROMAN):
@@ -495,10 +550,15 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         seen.add(num)
         dedup_sec.append(sec_best[num])
 
-    # 3) 抽取器条目（权威 ITEM，排除练习类）
+    # 3) 抽取器条目（权威 ITEM，排除练习类 + 练习区页）
+    #    习题块（"EXERCISES FOR CHAPTER N" 起至章末）内的页码一律不从抽取器
+    #    进入 ITEM 合同，否则习题题号（如 Strogatz `3.1.1`）会被误判为
+    #    Example/Definition 条目，造成重复键、错类型、乱序。
     raw_items = _extract_items(ext, ch, start, end, book, manual=manual)
+    ex_start = _exercise_region_start(ext, ch, start, end)
     items = [it for it in raw_items
-             if (it.get("label") or "").strip() not in _EXERCISE_LABELS]
+             if (it.get("label") or "").strip() not in _EXERCISE_LABELS
+             and (ex_start is None or it.get("page", 0) < ex_start)]
 
     # 4) 章节骨架：skeleton SEC ∪ 条目/练习派生章节号
     sec_pages = {}   # num -> 最佳候选页（skeleton）

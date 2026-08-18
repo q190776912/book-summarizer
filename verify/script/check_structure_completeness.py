@@ -166,7 +166,7 @@ def _is_three(scheme):
     return scheme in ('cn3_lf', 'cn3_nf', 'en3_lf', 'en3_nf')
 
 
-def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True):
+def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的 book_structure.json 契约格式一致
@@ -178,9 +178,20 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
     `1.1.1b`）是「无标签的三段数字」。因此禁用数字前置的三段裸号方案
     `en3_nf` / `cn3_nf`（它们会误吞图版面 `1.1.1b` 为 `1.1-18` 伪项），
     仅保留标签前置方案。这与 extract_items_en3 的「要求标签词」一致。
+
+    （2026-08-19 root-cause fix）`primary_type == ORDINAL_THREE_LEVEL` 但
+    `language == "en"` 的「英文三级标签前置」书（Strogatz《Nonlinear Dynamics
+    and Chaos》、Lasota & Mackey 等）走的是与 ORDINAL_EN3 **完全相同**的编号体例
+    （条目恒带 `Example/Definition/...` 标签词，图号/公式号是无标签裸 `C.S.N`），
+    只是 config 里 ordinal 写成了默认三级 `3` 而非 `9`。`build_structure` 已对
+    此情形路由 `extract_items_en3`（标签前置），但本函数原先只在
+    `primary_type == ORDINAL_EN3` 时禁用 `en3_nf`/`cn3_nf`，导致此类书被数字前置
+    裸号方案 `en3_nf` 误吞 59+ 个图号/公式号/习题号为伪「缺项」，闸门永 FAIL。
+    故此处一并把 `THREE_LEVEL + language=="en"` 纳入「禁用数字前置三段裸号」范围，
+    与 build_structure 的分派对齐（单一真相源）。
     """
     patterns = _PATTERNS
-    if primary_type == ORDINAL_EN3:
+    if primary_type == ORDINAL_EN3 or (primary_type == ORDINAL_THREE_LEVEL and language == "en"):
         # EN3 书条目恒带显式标签词（`Label C.S.N`），且编号按类型独立成序
         # （Definition 2.1.1 与 Remark 2.1.1 并存）。禁用「数字前置三段裸号」方案
         # en3_nf / cn3_nf（会误吞图版面 `1.1.1b`→`1.1-18` 伪项），仅保留标签前置
@@ -567,7 +578,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
 
-    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first)
+    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language)
                  if it["label"] not in _EXER_LABELS_RAW]
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。

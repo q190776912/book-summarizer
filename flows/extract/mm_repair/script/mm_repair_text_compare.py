@@ -278,14 +278,16 @@ def run(pdf_path, extract_dir, src_dpi, expand_pt, force_text=False, force_scan=
             action, corrected, reason = decide(t.get("text", ""), digital)
             if action == "fix":
                 corr[key] = corrected
-                e["resolved"] = True
+                # 🔴 不再在此设 resolved：否则 apply 的幂等护栏(line 196)会跳过该条目，
+                # 导致 corrections 写入 repairs.json 却永不写回 page_*.json（悬空 fix 假绿）。
+                # resolved 只由 mm_repair_apply.py 在真正写回后设置。
                 stats["fixed"] += 1
                 print(f"  page {pno:03d} {key}: FIX  OCR={t.get('text','')!r} "
                       f"→ DIGITAL={corrected!r}")
             elif reason in ("agree", "empty"):
-                # 数字文本与 OCR 一致 / 区域无文本层 → 确认 OCR 可用，标 resolved
+                # 数字文本与 OCR 一致 / 区域无文本层 → 确认 OCR 可用。
+                # 🔴 不设 resolved（同 fix 分支原因）：resolved 只由 apply 在写回 mm_reviewed 后设置。
                 ok.append(key)
-                e["resolved"] = True
                 stats["kept"] += 1
                 print(f"  page {pno:03d} {key}: KEEP({reason}) OCR={t.get('text','')!r}")
             else:  # reason == "untrusted"：数字文本层在此区域不可信（tofu）
@@ -297,9 +299,9 @@ def run(pdf_path, extract_dir, src_dpi, expand_pt, force_text=False, force_scan=
                     print(f"  page {pno:03d} {key}: DEFER(untrusted) → 留给模式 A "
                           f"OCR={t.get('text','')!r}")
                 else:
-                    # 纯模式 B（无后续视觉补偿）：保守信任 OCR，记 ok
+                    # 纯模式 B（无后续视觉补偿）：保守信任 OCR，记 ok。
+                    # 🔴 不设 resolved（同 fix 分支原因）。
                     ok.append(key)
-                    e["resolved"] = True
                     stats["kept"] += 1
                     print(f"  page {pno:03d} {key}: KEEP(untrusted) 信任 OCR="
                           f"{t.get('text','')!r}")

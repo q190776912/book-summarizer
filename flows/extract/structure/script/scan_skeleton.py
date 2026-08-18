@@ -104,6 +104,16 @@ ITEM_CN = re.compile(
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
 EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 
+# Exercise-region heading + numeric exercise detection.
+# Many EN textbooks (e.g. Strogatz) number exercises `3.1.1` (DOT) with NO label
+# word, so they are missed by EXER_3 (which requires a letter suffix `3.1.A.`) and
+# by ITEM_3's trailing-dot requirement.  We detect the "EXERCISES FOR CHAPTER N"
+# heading (case-insensitive, space-optional so it survives OCR like
+# `EXERCISESFORCHAPTER3`) and, once inside that region, treat bare `C.S.N` numbers
+# as exercises (EXER) rather than items.
+EXER_HEADING = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
+EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
+
 # ---------------------------------------------------------------------------
 # Universal, DEPTH-AGNOSTIC section-header detection.
 #
@@ -200,6 +210,9 @@ def lines_of(page_json):
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None):
     rows = []
+    # Exercise-region state: once "EXERCISES FOR CHAPTER N" is seen, all
+    # subsequent bare `C.S.N` numbers (three-level mode) are exercises.
+    in_exercise = False
     # Depth-agnostic section detection (config-driven).  When the book declares
     # `section_depths`, we use the universal detector for SEC rows (it catches
     # genuine section headers at ANY declared depth, including mixed depth like
@@ -223,6 +236,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None):
         for ln in lines_of(d):
             ln = ln.rstrip('$').strip()
             if not ln:
+                continue
+            # Exercise-region detection (case-insensitive, space-optional so it
+            # survives OCR like `EXERCISESFORCHAPTER3`).  Once seen, the chapter
+            # is in its exercise block through to the end.
+            if not in_exercise and EXER_HEADING.search(ln):
+                in_exercise = True
                 continue
             # --- universal, depth-agnostic section detection ---
             if depths_set is not None:
@@ -276,6 +295,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None):
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'EXER', '%s.%s' % m.group(1, 2), '习题 %s.%s' % m.group(1, 2)))
             else:
+                if in_exercise:
+                    m = EXER_3N.match(ln)
+                    if m and int(m.group(1)) == ch:
+                        rows.append((p, 'EXER', '%s.%s.%s' % m.group(1, 2, 3),
+                                     ln[m.end():].strip()[:90]))
+                        continue
                 m = SEC_3.match(ln)
                 if not use_universal_sec and m and int(m.group(1)) == ch and not m.group(3).endswith('.'):
                     rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), m.group(3).strip()))

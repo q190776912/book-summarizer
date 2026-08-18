@@ -89,9 +89,11 @@ _LEGACY_ORDINAL_STR = {
 # role name — it is the NUMBER OF NUMERIC COMPONENTS (ordinal depth) carried by
 # that heading level's `## §` token:
 #     type 1 -> a 1-component ordinal  `## §N`          (一级序标)
-#     type 2 -> a 2-component ordinal  `## §N.M`        (二级序标)
+#     type 2 -> a 2-component ordinal  `## §N.M`        (二级序标，两段均数字)
 #     type 3 -> a 3-component ordinal  `## §N.M.K`      (三级序标)
 #     type 4 -> a 4-component ordinal  `## §N.M.K.L`    (四级序标)
+#     type 5 -> LETTER-LABELED subsec  `### §A`         (纯字母标号 A/B/C…；原书印
+#            "A. TITLE"，父节靠位置确定，summary 只写 "§A"，不投影父节数字)
 #     type 0 -> UNNUMBERED `## § <标题>` (no ordinal at all)
 # The names CHAPTER/SECTION/SUBSECTION below are just the TYPICAL meaning these
 # depths take in a standard (normally-nested) book — they are NOT enforced
@@ -103,6 +105,16 @@ SECTION_ROLE_CHAPTER       = 1   # 一级序标 `## §N`      (标准书里通�
 SECTION_ROLE_SECTION       = 2   # 二级序标 `## §N.M`    (标准书里通常是节)
 SECTION_ROLE_SUBSECTION    = 3   # 三级序标 `## §N.M.K`  (标准书里通常是小节)
 SECTION_ROLE_SUBSUBSECTION = 4   # 四级序标 `## §N.M.K.L`
+SECTION_ROLE_LETTERSUB    = 5   # 字母标号子节 `### §A`（纯字母标号 A/B/C…，父节位置确定）
+# SECTION_ROLE_LETTERSUB: 字母标号子节（如 Karlin & Taylor 原书
+#   `A. JOINT DISTRIBUTION FUNCTIONS`，md 中写作 `### §A`，其中 `A` 是字母标号、
+#   父节（最近的 `## §N`）靠位置确定，**不**把父节数字投影进标题）。它**不是**
+#   `## §N.M` 双数字二级序标（type 2）——第二分量是「字母」而非「数字」，因此
+#   永不可能被通用的数字 `_project` / `_split_num` 机制匹配（`int('A')` 会抛错）。
+#   字母子节一律由**专用字母感知正则**在 chapter-local D 层分支与 build_structure
+#   中识别，绝不走通用数字扫描。此处登记的 depth（1）仅用于 `max_level` 计数
+#   （字母子节是「章→数字节→字母子节」的第 3 级），不被数字 `_project` 路径消费。
+#   仅 chapter-local 书（Karlin 式，原书印 `A. Title` 子节）声明；其它书不出现。
 # SECTION_ROLE_UNNUMBERED: a section-hierarchy LEVEL that carries NO ordinal in
 # the original book.  It corresponds to `type 0` / `depth 0` (0 `## §`
 # components) and is written as a `0` in the `section_types` array.  A `0`
@@ -115,11 +127,12 @@ SECTION_ROLE_SUBSUBSECTION = 4   # 四级序标 `## §N.M.K.L`
 # levels, so a single-level book is `[0]` while a chapter+subsection book is
 # `[0, 0]` (two levels — never collapse them into one).
 SECTION_ROLE_UNNUMBERED = 0
-# SECTION_ROLE_CODES spans 0..4: role 0 = unnumbered, 1..4 = 1/2/3/4-component
-# ordinal depths.  No real book nests deeper than a 4-component heading
+# SECTION_ROLE_CODES spans 0..5: role 0 = unnumbered, 1..4 = 1/2/3/4-component
+# ordinal depths, 5 = letter-labeled subsection (Karlin-style `A. Title` written
+# `### §A` in the md).  No real book nests deeper than a 4-component heading
 # (`## §5.4.2.1`).  Raise this cap AND extend SECTION_TYPE_DEPTH together if a
 # deeper book appears.
-SECTION_ROLE_CODES = tuple(range(0, 5))
+SECTION_ROLE_CODES = tuple(range(0, 6))
 
 # --- role code -> nesting depth (number of `## §...` components) -----------
 # Each role has a FIXED segmentation => FIXED depth.  Depth is NOT inferred
@@ -133,6 +146,7 @@ SECTION_TYPE_DEPTH = {
     SECTION_ROLE_SECTION:       2,  # ## §N.M
     SECTION_ROLE_SUBSECTION:    3,  # ## §N.M.K
     SECTION_ROLE_SUBSUBSECTION: 4,  # ## §N.M.K.L
+    SECTION_ROLE_LETTERSUB:     1,  # ### §A（纯字母标号；父节由位置确定，不进数字 _project）
 }
 
 # Default section-types (role codes) per ordinal code. BACK-COMPAT fallback

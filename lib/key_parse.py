@@ -108,6 +108,18 @@ PROSE_RE_EN = re.compile(
 ENTRY_RE_EN_C = re.compile(
     r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
+# Number-FIRST English entries (Fraleigh《A First Course in Abstract Algebra》
+# prints "0.12 Definition", "0.20 Example" — number before label). The label-FIRST
+# regexes above never match these, so an entire number-first English book extracts
+# ZERO md items and every contract item surfaces as falsely "truly missing".
+# Mirror of ENTRY_RE_EN_C with the number/label swapped; emits the SAME canonical
+# key (`定义0.12`) so the md side and the OCR truth set (extract_items_en's
+# EN_LAB_RE_NF) compare apples-to-apples. "Figure"/"Table" are NOT in
+# COMBINED_LABEL_KINDS, so `**0.15 Figure**` is correctly excluded (figures are an
+# E-layer concern, not B-layer items).
+ENTRY_RE_EN_NF_C = re.compile(
+    r'\*\*(\d+)' + SEP_TIGHT + r'(\d+)\s*(' + '|'.join(COMBINED_LABEL_KINDS) + r')',
+    re.IGNORECASE)
 PROSE_RE_EN_C = re.compile(
     r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
@@ -248,6 +260,9 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     entries.add(key); allk.add(key)
                 for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}"
+                    entries.add(key); allk.add(key)
+                for m in ENTRY_RE_EN_NF_C.finditer(line):
+                    key = f"{_canon_label(m.group(3))}{m.group(1)}.{m.group(2)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")

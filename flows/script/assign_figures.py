@@ -89,7 +89,7 @@ def load_figure_detect(out_dir):
         return None
 
 
-from lib.figure_io import load_figure_index
+from lib.figure_io import load_figure_index, fig_label_from_match
 from figure_index import merge_index  # figure_index.json instantiation lives with its model
 
 
@@ -135,7 +135,7 @@ def gather_refs(out_dir, start, end):
                 if a <= s < b:
                     y = yy
                     break
-            refs.append((m.group(1), pno, y))
+            refs.append((fig_label_from_match(m), pno, y))
     return refs
 
 
@@ -294,7 +294,8 @@ def run_book(pdf_path, out_dir):
                 def _se(ch):
                     return (ch.get("start") or ch.get("start_page"),
                             ch.get("end") or ch.get("end_page"))
-                chap_map = {(ch.get("num") or ch.get("ch")): {"start": _se(ch)[0], "end": _se(ch)[1]}
+                chap_map = {(ch.get("num") if ch.get("num") is not None else ch.get("ch")):
+                            {"start": _se(ch)[0], "end": _se(ch)[1]}
                             for ch in chapters}
             else:
                 chap_map = {int(k): v for k, v in raw.items()}

@@ -6,7 +6,7 @@
 ----
 1. 单一真源：``FLOW_ORDER`` 定义每个 flow 的有序步骤；``FLOW_PREREQS`` 定义
    flow 之间的主干先后（prep → extract → write_source → derive）。
-2. 证明账本（ledger）：``<book_dir>/.flow_gate.json`` 记录每步完成情况
+2. 证明账本（ledger）：``<book_dir>/_extract/.flow_gate.json`` 记录每步完成情况
    （done / ts / iso / evidence）。**仅 flow_runner 在证据复核通过后写 done**，
    禁止任何脚本/agent 手填账本。
 3. 顺序闸：
@@ -33,7 +33,7 @@ import json
 import os
 import time
 
-GATE_FILE = ".flow_gate.json"
+GATE_FILE = os.path.join("_extract", ".flow_gate.json")
 
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {

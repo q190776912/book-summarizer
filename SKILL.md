@@ -83,7 +83,7 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - `flows/extract/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure`，合并产出 `book_structure.json` 书对象）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
 - `flows/extract/mm_repair/script`
 - `flows/script`
-- `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；生产期格式化 CLI 工具集中于此处；其中格式修复类由 verify 的 H/G 等层在 `--fix` 兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）
+- `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；生产期格式化 CLI 工具集中于此处；其中格式修复类由 verify 的 H/G 等层在 `--fix` 兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）🔴 **`tools/` 只放通用、可跨书复用的工具**；特定书/章节的处理脚本（如硬编码某书路径的 `_diag_ch5.py` / `_dump_contract.py`）必须放进对应书的 `_extract/`，**不得留在本目录**。
 - `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；每个校验层一个 `<语义名>/` 子包，位于 `verify/<语义名>/`，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
 > ⚠️ **共享基础件定位（消除"extract 依赖 verify"错觉）**：`verify_config`（位于 `config/verify_config/`）与 `key_parse`（位于 `lib/key_parse.py`，已从 `verify/script/` 迁出）属跨流程**共用基础件**——extract、config 工具与 verify 均依赖，并非 verify 私有；extract 反向 import 它们属正常基础件复用，不构成流程耦合。`verify/script/gm_scan.py` 与 `verify/script/ordinal.py` 中的 `scan_gm_blocks` / `int_to_roman` 等是从 `flows/extract/structure/script/extract_items_gm.py` **解耦复制**的纯函数副本，单一真源仍在 `extract_items_gm.py`，修改须同步两处。
 

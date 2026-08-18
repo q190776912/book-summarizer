@@ -158,9 +158,12 @@ class TestRequireComplete(unittest.TestCase):
 
     # --- valid explicit four-level declaration -> no raise ----------------
     def test_valid_array_ordinal_4_with_section_hierarchy_no_raise(self):
+        # `section_depths` is NOT a config field — depth is DERIVED from each
+        # `section_types` role code via SECTION_TYPE_DEPTH.  Declaring only
+        # `section_types` must be accepted, and the derived `section_depths`
+        # property must equal [1, 2, 3, 4].
         cfg = {"ordinal": [{"type": 4, "scope": 2}],
-               "section_types": [1, 2, 3, 4],
-               "section_depths": [1, 2, 3, 4]}
+               "section_types": [1, 2, 3, 4]}
         loader = _loader_with_config(cfg)
         loader.require_complete()  # must not raise
         self.assertEqual(loader.book.primary_type, 4)
@@ -208,22 +211,24 @@ class TestRequireComplete(unittest.TestCase):
 
     # --- KNOWN GAP: illegal section config is NOT a hard error (spec ⑥) ----
     def test_illegal_section_config_is_not_hard_error(self):
-        # Task spec case ⑥ & docs require illegal section_types/section_depths
-        # -> ConfigError. ACTUAL: from_dict SANITIZES (length mismatch / d<1 /
-        # invalid role / depths[0]!=1), so require_complete never sees an
-        # illegal value and does NOT raise. Each variant below is a legal
-        # post-sanitization config -> no raise. (Now uses the v2 ordinal ARRAY.)
+        # Task spec case ⑥ & older docs required illegal section_types ->
+        # ConfigError. ACTUAL: from_dict SANITIZES section_types (drops roles
+        # outside SECTION_ROLE_CODES, coerces the first level to the chapter
+        # role 1), so require_complete never sees an illegal value and does NOT
+        # raise.  `section_depths` is NOT a config field (depth is derived from
+        # each role via SECTION_TYPE_DEPTH); a stale `section_depths` key is
+        # ignored.  Each variant below is sanitized to a legal config -> no raise.
         bad_variants = [
             {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2], "section_depths": [1, 9]},
+             "section_types": [1, 2]},                       # valid after sanitize
             {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2, 9], "section_depths": [1, 2, 3]},
+             "section_types": [1, 2, 9]},                    # role 9 dropped -> [1, 2]
             {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2, 3], "section_depths": [1, 2]},
+             "section_types": [1, 2, 3]},                    # valid
             {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2], "section_depths": [1, 0]},
+             "section_types": [1, 2]},                       # valid (no depths key)
             {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [2, 2], "section_depths": [2, 2]},
+             "section_types": [2, 2]},                       # head coerced -> [1, 2]
         ]
         for bad in bad_variants:
             loader = _loader_with_config(bad)

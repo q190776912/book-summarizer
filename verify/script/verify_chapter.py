@@ -499,7 +499,7 @@ def _main_impl():
         print("  --fix: auto-correct format-layer fixer issues (H/G/I/J/K/L/M/N) before verification")
         print("  ordinal(数组) / language / strict / ignore / manual are")
         print("  configured in <book>/_extract/verify_config.json (see verify/verify.md).")
-        print("  ordinal / section_types / section_depths 必须在 <book>/_extract/verify_config.json")
+        print("  ordinal / section_types 必须在 <book>/_extract/verify_config.json")
         print("  显式配置（缺失 ordinal 将直接报错 exit 2；缺失文件仅警告并沿用默认 ordinal=3）。")
         sys.exit(2)
 

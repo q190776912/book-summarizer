@@ -10,7 +10,7 @@
 
 ## 步骤（有序）
 1. 用全书 `page_*.json` 探测编号形态：
-   - `ordinal` 分组（`type` / `name` / `scope`）、`language`、章节层级（`section_types` / `section_depths`，多数由 `primary_type` 自动反推，仅四级子小节 `1.1.1.1` 需显式覆盖）；
+   - `ordinal` 分组（`type` / `name` / `scope`）、`language`、章节层级（`section_types`，深度经 `SECTION_TYPE_DEPTH` 派生，多数由 `primary_type` 自动反推，仅四级子小节 `1.1.1.1` 需显式覆盖）；
    - **公式序标形态**：若书含公式编号，扫 `page_*.json` 的 `text[]` 实测段数（如 `C.N` → `type 4`(depth 2)、`C.S.N` → `type 3`(depth 3)、章级 → `scope 2`），推导 `formula` map 的 `type` / `scope`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）；
    - **图序标体例（🔴 强制显式生成，不得留缺）**：无论书是否用自定义图号前缀，`verify_config.json` **必须**显式包含 `figure` 块（见 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)）：
      - 书以非默认前缀标注图（如 `Scheme` / `Illustration` / 仅 `图` / 仅 `Fig`）→ 写 `"figure": {"labels": [...]}` 列出**本书全部**图号前缀词；

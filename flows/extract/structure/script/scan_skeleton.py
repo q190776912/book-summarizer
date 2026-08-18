@@ -112,7 +112,7 @@ EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 # TITLE.  It deliberately excludes labeled items (`Theorem 20.4`), formula
 # numbers (`(20.53)`), figure/table labels (`Figure 20.1`), and bare numbers
 # without a title.  `scan()` activates it (instead of the mode's SEC regex)
-# whenever the book declares `section_depths`.
+# whenever the book declares `section_types` (depth derived via SECTION_TYPE_DEPTH).
 # ---------------------------------------------------------------------------
 _SEC_SEP_RE = re.compile(r'[.\-–·/．－〜]')
 _SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')

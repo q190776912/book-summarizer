@@ -219,8 +219,9 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
     if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
         return check_d_layer_gm(ch, start, end, md_file, ext)
     # Resolve the verified hierarchy. Real configs come via ConfigLoader ->
-    # from_dict (section_depths populated); fall back to the ordinal default so
-    # a directly-constructed BookConfig still verifies something sensible.
+    # from_dict (section_types populated; depth DERIVED via SECTION_TYPE_DEPTH);
+    # fall back to the ordinal default so a directly-constructed BookConfig
+    # still verifies something sensible.
     section_depths = list(cfg.section_depths) or list(
         ORDINAL_SECTION_TYPES.get(cfg.primary_type, [1]))
     max_level = len(section_depths)

@@ -3,11 +3,11 @@ feature (book-summarizer, 2026-08-06 incremental change) — REWRITTEN for the
 verify_config v2 schema (GroupConfig ARRAY, not int `ordinal`).
 
 Covers:
-  * BookConfig.from_dict — back-compat section_types/section_depths inference
-    (now driven by the primary GroupConfig `type`, NOT an int `ordinal`);
-    explicit 4-level declaration; length-mismatch fallback; sd[0]!=1 forced to
-    1; illegal role codes filtered; and the max_level / section_depth /
-    section_role helpers.
+  * BookConfig.from_dict — back-compat section_types inference (now driven by
+    the primary GroupConfig `type`, NOT an int `ordinal`); explicit 4-level
+    declaration; illegal role codes filtered; depth DERIVED from section_types
+    via SECTION_TYPE_DEPTH (no separate `section_depths` field); and the
+    max_level / section_depth / section_role helpers.
   * d_layer._partition_sections_by_level — per-level continuity / tail split,
     merged list relative-to-chapter path strings, ancestor-prefix auto-existence.
   * d_layer.check_d_layer (end-to-end, synthetic md + raw page JSON) for 1/2/3/4
@@ -98,7 +98,7 @@ class TestBookConfigFromDict(unittest.TestCase):
         cfg = BookConfig.from_dict({})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2, 3])
-        self.assertEqual(cfg.section_depths, [1, 2, 3])
+        self.assertEqual(cfg.section_depths, [1, 2, 3])  # derived via map
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_3_infers_three_level(self):
@@ -131,46 +131,26 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.max_level, 3)
 
     def test_explicit_four_level(self):
-        cfg = BookConfig.from_dict({
-            "section_types": [1, 2, 3, 4],
-            "section_depths": [1, 2, 3, 4],
-        })
+        cfg = BookConfig.from_dict({"section_types": [1, 2, 3, 4]})
         self.assertEqual(cfg.section_types, [1, 2, 3, 4])
-        self.assertEqual(cfg.section_depths, [1, 2, 3, 4])
+        self.assertEqual(cfg.section_depths, [1, 2, 3, 4])  # derived via map
         self.assertEqual(cfg.max_level, 4)
+        self.assertEqual(cfg.section_depth(4), 4)
 
-    def test_section_depths_length_mismatch_falls_back_to_types(self):
-        # length 2 != len(types) 3 -> sd must be copied from section_types.
+    def test_section_depths_input_is_ignored(self):
+        # The stored `section_depths` field is gone; depth is derived from
+        # section_types via SECTION_TYPE_DEPTH.  A stale `section_depths` key
+        # in the config must NOT affect the derived depths.
         cfg = BookConfig.from_dict({
             "section_types": [1, 2, 3],
-            "section_depths": [1, 2],
+            "section_depths": [9, 9, 9],
         })
-        self.assertEqual(cfg.section_depths, [1, 2, 3])
-        self.assertEqual(cfg.max_level, 3)
-
-    def test_section_depths_zero_invalid_falls_back(self):
-        # depth 0 is invalid -> sd rejected -> falls back to copy of types.
-        cfg = BookConfig.from_dict({
-            "section_types": [1, 2, 3],
-            "section_depths": [1, 2, 0],
-        })
+        self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
 
-    def test_section_depths_first_not_one_is_forced_to_one(self):
-        # len matches & all >=1, but sd[0] != 1 -> must be forced to 1.
-        cfg = BookConfig.from_dict({
-            "section_types": [1, 2, 3],
-            "section_depths": [2, 2, 3],
-        })
-        self.assertEqual(cfg.section_depths, [1, 2, 3])
-
-    def test_illegal_role_codes_filtered_and_aligns_depths(self):
-        # code 9 is not a valid SECTION_ROLE -> dropped; sd length then
-        # mismatches and falls back to the filtered types.
-        cfg = BookConfig.from_dict({
-            "section_types": [1, 2, 9, 4],
-            "section_depths": [1, 2, 3, 4],
-        })
+    def test_invalid_role_code_filtered(self):
+        # code 9 is not a valid SECTION_ROLE -> dropped; derived depths follow.
+        cfg = BookConfig.from_dict({"section_types": [1, 2, 9, 4]})
         self.assertEqual(cfg.section_types, [1, 2, 4])
         self.assertEqual(cfg.section_depths, [1, 2, 4])
         self.assertEqual(cfg.max_level, 3)
@@ -181,10 +161,22 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_depths, [1])
         self.assertEqual(cfg.max_level, 1)
 
+    def test_unregistered_role_raises_in_section_depth(self):
+        # Guard against "depth == role_code": a registered-by-from_dict code
+        # missing from SECTION_TYPE_DEPTH must raise, never inherit its value.
+        import verify_config as vc
+        cfg = BookConfig.from_dict({"section_types": [1, 2, 3]})
+        saved = vc.SECTION_TYPE_DEPTH
+        vc.SECTION_TYPE_DEPTH = {1: 1, 2: 2}  # role 3 unregistered
+        try:
+            with self.assertRaises(vc.ConfigError):
+                cfg.section_depth(3)
+        finally:
+            vc.SECTION_TYPE_DEPTH = saved
+
     # -- helpers: max_level / section_depth / section_role --
     def test_helpers_on_three_level(self):
-        cfg = BookConfig.from_dict(
-            {"ordinal": [{"type": 3, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.max_level, 3)
         self.assertEqual(cfg.section_depth(1), 1)
@@ -195,10 +187,7 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_role(3), SECTION_ROLE_SUBSECTION)
 
     def test_helpers_on_four_level(self):
-        cfg = BookConfig.from_dict({
-            "section_types": [1, 2, 3, 4],
-            "section_depths": [1, 2, 3, 4],
-        })
+        cfg = BookConfig.from_dict({"section_types": [1, 2, 3, 4]})
         self.assertEqual(cfg.max_level, 4)
         self.assertEqual(cfg.section_depth(4), 4)
         self.assertEqual(cfg.section_role(4), SECTION_ROLE_SUBSUBSECTION)
@@ -215,7 +204,6 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(ORDINAL_SECTION_TYPES[5], [1, 2, 3])
         self.assertEqual(ORDINAL_SECTION_TYPES[6], [1, 2])
         self.assertEqual(ORDINAL_SECTION_TYPES[7], [1, 2])
-
 
 # ==========================================================================
 # 2) primitive helpers
@@ -352,7 +340,7 @@ class TestCheckDLayerE2E(unittest.TestCase):
     """Drive the full scan: read .md section headers + scan raw page JSON."""
 
     def _case(self, primary_type, md_content, page_texts,
-              section_types=None, section_depths=None):
+              section_types=None):
         tmp = tempfile.mkdtemp(prefix="d_layer_e2e_")
         md = os.path.join(tmp, "ch.md")
         _write_md(md, md_content)
@@ -364,7 +352,6 @@ class TestCheckDLayerE2E(unittest.TestCase):
                 scope=SCOPE_CHAPTER,
             )],
             section_types=list(section_types or []),
-            section_depths=list(section_depths or []),
         )
         return check_d_layer(1, 1, 1, md, ext, cfg=cfg), tmp
 
@@ -409,7 +396,6 @@ class TestCheckDLayerE2E(unittest.TestCase):
             ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL,
                                  scope=SCOPE_CHAPTER)],
             section_types=[1, 2, 3, 4],
-            section_depths=[1, 2, 3, 4],
         )
         out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
         self.assertEqual(out["levels"][4]["continuity"], ["1.1.2"])

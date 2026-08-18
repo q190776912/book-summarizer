@@ -13,7 +13,7 @@
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。 |
 | `figure` | `object?`→🔴 **`config_setting` 流程强制必现** | 图序标体例 `{"labels": ["图", "Figure", "Fig"], "components": 2}`。列出**每本书自己的**图号前缀词（图 / Figure / Fig / Scheme / Illustration …）；驱动 `extract_figures.parse_fig_label`（检测阶段裁图是否带 caption）与 `assign_figures.gather_refs`（分配阶段扫 OCR 图号）。**不再写死**中英语词表——书的图号到底长什么样由这里决定。🔴 **两种语义严格区分**：`figure` 块/`labels` 键**缺失** → 回落 `FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]`（向后兼容）；`figure.labels` **显式为空数组 `[]`** → 这是"**无图序标**"的**标记号**，返回真正的零匹配集（不回落默认），避免无图号书被误匹配 `Figure`/`图` 等前缀。见 `lib/figure_io.load_fig_labels`。 |
-| `section_types` / `section_depths` | `List[int]` | 多数由 `primary_type` 自动反推；仅四级子小节 `1.1.1.1` 需显式覆盖。 |
+| `section_types` | `List[int]` | 各层级**角色码**（章=1 / 节=2 / 小节=3 / 子小节=4）；深度由角色码经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。 |
 
 `figure.components`（可选，默认 2）控制图号**段数**，解决不同编号体例：
 - `1` = **全局整数序列**（如 Kreyszig "Fig. 1" / "Fig. 23" … 全书连续编号到 ~270）。**此类书必须声明 `"components": 1`**，否则 "Fig. 23" 因只有 1 段被正则 `{1,2}` 判为非图号，全部图沦为未命名。

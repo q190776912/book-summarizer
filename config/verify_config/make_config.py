@@ -33,15 +33,15 @@
        * 这正是 `ordinal` 数组的设计意图：一同升序的进同一对象，不升序的新增对象。
        * 未检出任何条目类型时回退为单个 [["uncat"]] 兜底组。
      - 若 detect_formula 非 None 再写入 "formula": {...}。
-     并打印醒目提示：四级子小节书（1.1.1.1）需手动补 section_types/section_depths；
+     并打印醒目提示：四级子小节书（1.1.1.1）需手动补 `section_types`；
      检出的分组若与实际不符请手动合并/拆分后再跑 verify。
-4. 同时显式写出 `section_types` / `section_depths`（D 层要校验的**小节层级**，
-   即书里实际有 `## §N` / `## §N.M` / `## §N.M.K` / `## §N.M.K.L` 几级标题——
-   与条目编号深度正交，不能由 ordinal 类型直接推定）。判定口径见
-   `_detect_section_hierarchy`：扫描整书 OCR，识别**任意深度**（2/3/4/5…级）的
-   "带标题、非条目标签"真小节头（如 `20.5` / `20.5.1` / `1.2.1.3`），据此给出
-   正确层级 `[1, 2, ...]`。该书既有二级小节（20.5）也有三级小节（20.5.1）这类
-   **混合深度**书，以及更深（4/5 级）的书，都能被正确识别——不再被旧逻辑一律
+4. 同时显式写出 `section_types`（D 层要校验的**小节层级**，深度由 `SECTION_TYPE_DEPTH`
+   派生、**不单独输出字段**；即书里实际有 `## §N` / `## §N.M` / `## §N.M.K` /
+   `## §N.M.K.L` 几级标题——与条目编号深度正交，不能由 ordinal 类型直接推定）。判定口径见
+   `_detect_section_hierarchy`：扫描整书 OCR，识别**任意深度**（目前封顶 4 级：
+   2/3/4 级）的"带标题、非条目标签"真小节头（如 `20.5` / `20.5.1` / `1.2.1.3`），
+   据此给出正确层级 `[1, 2, ...]`。该书既有二级小节（20.5）也有三级小节（20.5.1）
+   这类**混合深度**书，以及四级（1.1.1.1）的书，都能被正确识别——不再被旧逻辑一律
    强锁 `[1, 2]` 而漏掉三级小节、也不再由条目号派生幽灵小节。
 
 ⚠️ 相位护栏：ordinal/formula 探测均要求 MM Repair 已完成（完成标记 _extraction_done.json
@@ -79,15 +79,18 @@ sys.stdout.reconfigure(encoding='utf-8')
 from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
 
 # --- section hierarchy (D-layer) -------------------------------------------
-# `section_depths` MUST NOT be inferred from the ordinal type alone — it
-# describes how many NESTED SECTION levels the book's markdown / source actually
-# has (## §N / ## §N.M / ## §N.M.K), which is ORTHOGONAL to the item-numbering
-# depth.  A type-3 book can legitimately be either:
+# `section_types` (role codes) MUST NOT be inferred from the ordinal type
+# alone — it describes how many NESTED SECTION levels the book's markdown /
+# source actually has (## §N / ## §N.M / ## §N.M.K), which is ORTHOGONAL to
+# the item-numbering depth.  Each role's nesting depth is FIXED and resolved
+# via SECTION_TYPE_DEPTH in verify_config.py — it is NOT a separate stored
+# `section_depths` field (that would drift out of sync and wrongly equate
+# `depth == role_code`).  A type-3 book can legitimately be either:
 #   * a genuine 3-level-section book  (md has `#### §1.1.1`; items like
-#     `1.1.2 定义`)                                  -> section_depths = [1, 2, 3]
+#     `1.1.2 定义`)                                  -> section_types = [1, 2, 3]
 #   * a Kreyszig-shaped book (md only `## §1.3`; items like `1.3-4 Theorem`,
 #     deepest component IS the item counter, NOT a subsection)
-#                                                          -> section_depths = [1, 2]
+#                                                          -> section_types = [1, 2]
 # The only reliable way to tell them apart is to scan the raw OCR: does the
 # deepest level k (= item depth) contain any k-component numbered line that is a
 # GENUINE section header (a number followed by a non-label TITLE) rather than a
@@ -104,7 +107,7 @@ _LABEL_KW_RE = re.compile(
     r'Remark|Figure|Fig|Table)')
 
 
-def _section_header_depth(txt, max_depth=6):
+def _section_header_depth(txt, max_depth=4):
     """If `txt` is a GENUINE section header, return its component-count depth
     (>= 2); otherwise None.
 
@@ -118,9 +121,10 @@ def _section_header_depth(txt, max_depth=6):
     This detector is deliberately INDEPENDENT of the item-numbering style —
     a book may number its items one way (e.g. EN two-level ``Theorem 20.4``)
     yet nest its sections to ANY depth.  ``max_depth`` caps the search at a sane
-    upper bound (default 6 = chapter + 5 nested levels) so a runaway OCR
-    artifact can never produce an absurd hierarchy; genuine 4-/5-level
-    subsection books are fully supported.
+    upper bound (default 4 = chapter + 3 nested levels, matching the
+    SECTION_ROLE_CODES cap in verify_config.py) so a runaway OCR artifact can
+    never produce an absurd hierarchy; roles 5/6 were never observed in any
+    book and were dropped.
     """
     m = _SEC_HEAD_RE.match(txt)
     if not m:
@@ -139,14 +143,15 @@ def _section_header_depth(txt, max_depth=6):
     return len(comps)
 
 
-def _detect_section_hierarchy(extract_dir, max_depth=6):
-    """Return the D-layer `section_depths` list for this book.
+def _detect_section_hierarchy(extract_dir, max_depth=4):
+    """Return the D-layer `section_types` (role-code) list for this book.
 
-    `section_depths` enumerates the nested section levels present in the book's
-    SOURCE (chapter / section / subsection / sub-subsection / ...).  It is
-    ORTHOGONAL to the item-numbering depth — a book may number its items one
-    way (e.g. EN two-level ``Theorem 20.4``) yet nest its sections to ANY depth
-    (``20.5``, ``20.5.1``, ``20.5.1.2``, ...).  We therefore SCAN THE RAW OCR
+    The returned list enumerates the nested section levels present in the
+    book's SOURCE (chapter / section / subsection / sub-subsection) as ROLE
+    CODES (1..4).  It is ORTHOGONAL to the item-numbering depth — a book may
+    number its items one way (e.g. EN two-level ``Theorem 20.4``) yet nest its
+    sections to ANY depth (``20.5``, ``20.5.1``, ...).  We therefore SCAN THE
+    RAW OCR
     for genuine section headers of EVERY depth rather than inferring anything
     from the item depth.
 
@@ -160,8 +165,8 @@ def _detect_section_hierarchy(extract_dir, max_depth=6):
     (e.g. Koopman's ``20.5.1``), feeding phantom sections derived from item
     numbers into ``book_structure.json``.
 
-    `max_depth` bounds the hierarchy (default 6); genuine books with 4- or
-    5-level subsections are fully supported and no longer truncated.
+    `max_depth` bounds the hierarchy (default 4, matching the SECTION_ROLE_CODES
+    cap); roles 5/6 are not emitted (never observed in the corpus).
     """
     depths = set()
     pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
@@ -779,15 +784,17 @@ def main():
     # overrides the ORDINAL_SECTION_TYPES fallback so Kreyszig-shaped books get
     # the correct [1, 2] instead of the over-verifying [1, 2, 3].
     sd = _detect_section_hierarchy(extract_dir)
-    config["section_depths"] = sd
-    config["section_types"] = list(range(1, len(sd) + 1))
+    # The detected depths ARE the built-in role codes (role N == depth N), so
+    # write `section_types` directly.  Depth is derived via SECTION_TYPE_DEPTH
+    # in verify_config.py and is never stored as a separate `section_depths`.
+    config["section_types"] = sd
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
     print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
     print(f"   小节层级 section_types={config['section_types']} "
-          f"section_depths={config['section_depths']}（已显式写出，避免默认回退过度校验）。")
+          f"（角色码即层级深度，depth 由 SECTION_TYPE_DEPTH 派生，避免默认回退过度校验）。")
     print(f"   文件路径: {cfg_path}")
     print(f"   文件内容: {json.dumps(config, ensure_ascii=False)}")
     if groups and groups != [["uncat"]]:
@@ -815,9 +822,9 @@ def main():
     print("       item_numbering_integrity 误报跨节断号。EN 三级书（如 Kreyszig，")
     print("       编号 Definition 1.5-3）也会正确判为 type 3，不再误判为 EN 两级")
     print("       （type 4）而塌缩三级项。")
-    print("     · 小节层级 section_depths 现已由 OCR 自动识别任意深度")
-    print("       （2/3/4/5 级均支持），不再限制为 2 或 3 级；含混合深度")
-    print("       （如 20.5 + 20.5.1）的书也会被完整识别。")
+    print("     · 小节层级 section_types 现已由 OCR 自动识别（2/3/4 级，上限 4），")
+    print("       不再限制为 2 或 3 级；含混合深度（如 20.5 + 20.5.1）的书也会被完整识别；")
+    print("       层级深度由 verify_config.py 的 SECTION_TYPE_DEPTH 派生，不单独存储。")
     return 0
 
 

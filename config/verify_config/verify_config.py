@@ -91,35 +91,45 @@ _LEGACY_ORDINAL_STR = {
 
 # --- section role codes (1..4) for the nested section hierarchy ------------
 # Each level in the D-layer section hierarchy carries a ROLE. These codes are
-# stable identifiers stored in `section_types`; `section_depths` stores the
-# matching numeric component count per level (e.g. role 3 = subsection carried
-# by a 3-component number C.S.K).
+# stable identifiers stored in `section_types`; the matching numeric component
+# count per level (e.g. role 3 = subsection carried by a 3-component number
+# C.S.K) is DERIVED via the SECTION_TYPE_DEPTH map — it is NOT a stored field.
 SECTION_ROLE_CHAPTER       = 1
 SECTION_ROLE_SECTION       = 2
 SECTION_ROLE_SUBSECTION    = 3
 SECTION_ROLE_SUBSUBSECTION = 4
-SECTION_ROLE_SUBSUBSUB     = 5
-SECTION_ROLE_SUBSUBSUBSUB  = 6
-# A book may nest its sections ARBITRARILY deep (20.5, 20.5.1, 20.5.1.2, ...);
-# the role code is merely a stable per-level identifier, so there is NO
-# semantic cap.  We allow up to 6 components (chapter + 5 nested levels),
-# which covers any real mathematics text; extend the tuple if a deeper book
-# appears.  (Previously capped at 4, which wrongly rejected 4-/5-level
-# subsection books — see _detect_section_hierarchy / scan_skeleton.)
-SECTION_ROLE_CODES = tuple(range(1, 7))
+# SECTION_ROLE_CODES is capped at 4: no real book in this corpus nests deeper
+# than a 4-component heading (`## §N.M.K.L`; deepest observed `## §5.4.2.1`).
+# Raise this cap AND extend SECTION_TYPE_DEPTH together if a deeper book appears.
+SECTION_ROLE_CODES = tuple(range(1, 5))
+
+# --- role code -> nesting depth (number of `## §...` components) -----------
+# Each role has a FIXED segmentation => FIXED depth.  Depth is NOT inferred
+# from the role *number* (a future non-positional role e.g. code 10 must
+# declare its real depth here, not inherit `depth == code`).  Built-in roles
+# happen to be positional (role N == depth N); that is a coincidence, not an
+# invariant.  ALWAYS resolve depth through this map; never write `depth = role_code`.
+SECTION_TYPE_DEPTH = {
+    SECTION_ROLE_CHAPTER:       1,  # ## §N
+    SECTION_ROLE_SECTION:       2,  # ## §N.M
+    SECTION_ROLE_SUBSECTION:    3,  # ## §N.M.K
+    SECTION_ROLE_SUBSUBSECTION: 4,  # ## §N.M.K.L
+}
 
 # Default section-types (role codes) per ordinal code. BACK-COMPAT fallback
 # used only when a verify_config.json does not explicitly declare
-# `section_types`/`section_depths`.  The verified section hierarchy is
-# ORTHOGONAL to the item-numbering depth: it describes how many NESTED SECTION
-# levels the book's markdown / source actually has (## §N, ## §N.M, ## §N.M.K),
-# NOT how many components an item key carries.  For the historic three-level CN
-# families (type 3 / 5 / 8) the convention is that the book genuinely nests
-# sections three deep (chapter / section / subsection 1.1.1), so the default is
+# `section_types`.  The verified section hierarchy is ORTHOGONAL to the
+# item-numbering depth: it describes how many NESTED SECTION levels the book's
+# markdown / source actually has (## §N, ## §N.M, ## §N.M.K), NOT how many
+# components an item key carries.  For the historic three-level CN families
+# (type 3 / 5 / 8) the convention is that the book genuinely nests sections
+# three deep (chapter / section / subsection 1.1.1), so the default is
 # [1, 2, 3] — item keys such as ``1.3-4`` whose deepest component is an ITEM
 # counter (NOT a subsection) are the Kreyszig-shaped exception and must declare
-# ``"section_depths": [1, 2]`` explicitly; make_config.py detects and emits
-# this automatically so the fallback is only reached by genuine 3-level books.
+# ``"section_types": [1, 2]`` explicitly (i.e. only chapter + section, no
+# subsection verification); make_config.py detects this automatically so the
+# fallback is only reached by genuine 3-level books.  Depth is DERIVED from each
+# role code via SECTION_TYPE_DEPTH and is NEVER a separate config field.
 # Two-level families verify chapter + section only ([1, 2]); single-level
 # verifies the chapter prefix ([1]).
 ORDINAL_SECTION_TYPES = {
@@ -306,13 +316,15 @@ class BookConfig:
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
-    # `section_types`  : role code per level   (e.g. [1, 2, 3] = chapter/section/subsection)
-    # `section_depths`: numeric component count per level (parallel to section_types;
-    #                   always starts at 1 so level 1 is the chapter prefix).
-    # Both default to []; `from_dict` populates them from verify_config.json or,
-    # when absent, from ORDINAL_SECTION_TYPES (back-compat).
+    # `section_types`: role code per level (e.g. [1, 2, 3] = chapter/section/
+    #   subsection).  The depth of each role is FIXED by its segmentation and is
+    #   resolved via the SECTION_TYPE_DEPTH map — it is NOT stored as a parallel
+    #   `section_depths` field (that would only drift out of sync, and would
+    #   wrongly equate `depth == role_code`).  Defaults to []; `from_dict`
+    #   populates it from verify_config.json or, when absent, from
+    #   ORDINAL_SECTION_TYPES (back-compat).  Read the per-level depths via the
+    #   derived `section_depths` property (never assign it).
     section_types: List[int] = field(default_factory=list)
-    section_depths: List[int] = field(default_factory=list)
 
     # --- formula sequence-label audit (Q-LAYER) ----------------------------
     # Opt-in via a SINGLE `formula` map in verify_config.json (mirrors the
@@ -426,12 +438,33 @@ class BookConfig:
         return len(self.section_depths)
 
     def section_depth(self, level: int) -> int:
-        """Numeric component count for hierarchy level `level` (1-based)."""
-        return self.section_depths[level - 1]
+        """Numeric component count for hierarchy level `level` (1-based).
+
+        Resolved via the SECTION_TYPE_DEPTH map from the role *code* at that
+        level.  Depth is NOT inferred from the code number -- an unregistered
+        role raises ConfigError so a future non-positional role cannot silently
+        inherit `depth == code`.
+        """
+        code = self.section_types[level - 1]
+        if code not in SECTION_TYPE_DEPTH:
+            raise ConfigError(
+                f"[CONFIG] section_types 含未登记 role {code}；"
+                f"请在 SECTION_TYPE_DEPTH 中登记其分段深度。")
+        return SECTION_TYPE_DEPTH[code]
 
     def section_role(self, level: int) -> int:
         """Role code (SECTION_ROLE_*) for hierarchy level `level` (1-based)."""
         return self.section_types[level - 1]
+
+
+    @property
+    def section_depths(self) -> List[int]:
+        """Resolved nesting-depth per level — DERIVED from `section_types`
+        via SECTION_TYPE_DEPTH. Depth is NOT stored independently, so it can
+        never desync from the authoritative role codes. Consumers that read
+        `cfg.section_depths` (D-layer, structure builder, skeleton scanner)
+        get a freshly-derived list every time."""
+        return [self.section_depth(i + 1) for i in range(len(self.section_types))]
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BookConfig':
@@ -475,18 +508,17 @@ class BookConfig:
 
         # --- nested section hierarchy (D-layer, orthogonal) --------------------
         # Backward compatible: when `section_types` is absent, derive it from the
-        # primary group's type via ORDINAL_SECTION_TYPES.
+        # primary group's type via ORDINAL_SECTION_TYPES.  `section_depths` is NO
+        # LONGER read from config — depth is DERIVED from each `section_types`
+        # role code via the SECTION_TYPE_DEPTH map (see BookConfig.section_depths).
+        # A stale `section_depths` key in verify_config.json is ignored silently.
         st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(rep, [1])
         st = [int(x) for x in st if int(x) in SECTION_ROLE_CODES] or [1]
-        sd = data.get('section_depths')
-        if sd:
-            sd = [int(x) for x in sd]
-            if len(sd) != len(st) or any(d < 1 for d in sd):
-                sd = list(st)
-        else:
-            sd = list(st)
-        if sd[0] != 1:
-            sd[0] = 1
+        # Level 1 is ALWAYS the chapter (role 1); coerce defensively so a
+        # hand-written config can never start at role 2+.  require_complete()
+        # also enforces this as a backstop for direct BookConfig construction.
+        if st[0] != 1:
+            st[0] = 1
 
         # --- language (orthogonal; default derived from primary type) ---
         language = str(data.get('language', ORDINAL_LANGUAGE_DEFAULT.get(rep, 'cn')))
@@ -515,7 +547,6 @@ class BookConfig:
             ignore=ignore,
             manual=manual,
             section_types=st,
-            section_depths=sd,
             # --- Q-LAYER (formula sequence-label) opt-in: single `formula` map ---
             formula=dict(data['formula']) if data.get('formula') else None,
             # --- figure sequential-label convention (book-specific) ----------
@@ -632,9 +663,11 @@ class ConfigLoader:
               - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
               - allow_absent=False -> raise ConfigError.
           * File present but `ordinal` missing/illegal -> raise ConfigError (hard error).
-          * `section_types` / `section_depths` explicitly given but inconsistent
-            (length mismatch / component < 1 / bad role code / depth[0] != 1)
-            -> raise ConfigError.
+          * `section_types` explicitly given but with an illegal role code (not
+            in SECTION_ROLE_CODES) or a non-1 first level (the chapter is always
+            role 1) -> raise ConfigError.  Depth is DERIVED from each role code
+            via SECTION_TYPE_DEPTH, so there is NO separate depth field to check
+            (and a stale `section_depths` key in the JSON is ignored).
 
         `BookConfig.from_dict` already does most sanitising/inference, so this is
         a backstop consistency check mainly guarding hand-written mistakes.
@@ -679,28 +712,29 @@ class ConfigLoader:
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].scope={g.scope}"
                     f" 非法（应 1/2/3）。")
-        # --- section_types / section_depths (only when explicitly given) ---
-        if cfg.section_types or cfg.section_depths:
-            if len(cfg.section_types) != len(cfg.section_depths):
-                raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} section_types 与 section_depths "
-                    f"长度不等（{len(cfg.section_types)} vs {len(cfg.section_depths)}）。"
-                )
-            if any(d < 1 for d in cfg.section_depths):
-                raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} section_depths 含非法分量（<1）。"
-                )
+                # --- section_types (only the role codes; depth is derived) ----------
+        # `from_dict` already filters codes against SECTION_ROLE_CODES and forces
+        # the first to 1, so this is a backstop for hand-written configs.  Depth
+        # is NOT a separate field -- it is resolved via SECTION_TYPE_DEPTH from
+        # each role code in `section_types`.
+        if cfg.section_types:
             for code in cfg.section_types:
                 if code not in SECTION_ROLE_CODES:
                     raise ConfigError(
                         f"[CONFIG] {self.verify_config_path} section_types 含非法角色码 "
                         f"{code}（应在 {SECTION_ROLE_CODES}）。"
                     )
-            if cfg.section_depths[0] != 1:
+            if cfg.section_types[0] != 1:
                 raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} section_depths[0] 必须为 1"
+                    f"[CONFIG] {self.verify_config_path} section_types[0] 必须为 1"
                     f"（章首分量）。"
                 )
+            # Sanity: every declared role must resolve to a known depth.
+            for code in cfg.section_types:
+                if code not in SECTION_TYPE_DEPTH:
+                    raise ConfigError(
+                        f"[CONFIG] {self.verify_config_path} section_types 含未登记角色码 "
+                        f"{code}；请在 SECTION_TYPE_DEPTH 中登记其分段深度。")
 
     # ---- chapter_map.json ----
     def _load_chapter_map(self) -> Dict[int, ChapterInfo]:

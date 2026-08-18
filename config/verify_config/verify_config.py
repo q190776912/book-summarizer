@@ -98,10 +98,18 @@ SECTION_ROLE_CHAPTER       = 1
 SECTION_ROLE_SECTION       = 2
 SECTION_ROLE_SUBSECTION    = 3
 SECTION_ROLE_SUBSUBSECTION = 4
-# SECTION_ROLE_CODES is capped at 4: no real book in this corpus nests deeper
-# than a 4-component heading (`## §N.M.K.L`; deepest observed `## §5.4.2.1`).
-# Raise this cap AND extend SECTION_TYPE_DEPTH together if a deeper book appears.
-SECTION_ROLE_CODES = tuple(range(1, 5))
+# SECTION_ROLE_UNNUMBERED: a section level that carries NO ordinal in the
+# original book (e.g. Silverman's chapters are continuous prose; the only
+# anchors are theorems/lemmas).  It corresponds to `type 0` / `depth 0` and is
+# expressed in verify_config.json as a `0` in the `section_types` array.  The
+# `## §` heading for such a level is written `## § <title>` (no number) and the
+# gate matches it by POSITION, never fabricating a number.
+SECTION_ROLE_UNNUMBERED = 0
+# SECTION_ROLE_CODES spans 0..4: role 0 = unnumbered, 1..4 = chapter/section/
+# subsection/sub-subsection.  No real book nests deeper than a 4-component
+# heading (`## §5.4.2.1`).  Raise this cap AND extend SECTION_TYPE_DEPTH together
+# if a deeper book appears.
+SECTION_ROLE_CODES = tuple(range(0, 5))
 
 # --- role code -> nesting depth (number of `## §...` components) -----------
 # Each role has a FIXED segmentation => FIXED depth.  Depth is NOT inferred
@@ -110,6 +118,7 @@ SECTION_ROLE_CODES = tuple(range(1, 5))
 # happen to be positional (role N == depth N); that is a coincidence, not an
 # invariant.  ALWAYS resolve depth through this map; never write `depth = role_code`.
 SECTION_TYPE_DEPTH = {
+    SECTION_ROLE_UNNUMBERED:    0,  # ## § <标题> 无数字（type 0 / depth 0）
     SECTION_ROLE_CHAPTER:       1,  # ## §N
     SECTION_ROLE_SECTION:       2,  # ## §N.M
     SECTION_ROLE_SUBSECTION:    3,  # ## §N.M.K
@@ -352,19 +361,6 @@ class BookConfig:
     # just surfaces it for ConfigLoader-based consumers.
     figure: Optional[dict] = None
 
-    # --- subsection ordinal convention (respect the ORIGINAL book) ----------
-    # True  (default): the original book numbers its subsections (§1, §2, …),
-    #                  so md MUST write `## §N` and the gate matches sections
-    #                  by their NUMBER against the structure contract.
-    # False         : the original book's subsections carry NO ordinal (Silverman
-    #                 4th ed. — chapters are continuous prose, the only anchors
-    #                 are theorems/lemmas). md writes `## § <title>` WITHOUT a
-    #                 number; the gate matches sections by POSITION/ORDER against
-    #                 the contract (numbers are irrelevant, and would be a
-    #                 fabrication if we added them). This is per-book so other
-    #                 books that DO number their subsections are untouched.
-    section_numbers: bool = True
-
     # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
     def primary_group(self) -> 'GroupConfig':
@@ -456,6 +452,17 @@ class BookConfig:
         """Role code (SECTION_ROLE_*) for hierarchy level `level` (1-based)."""
         return self.section_types[level - 1]
 
+    @property
+    def sections_unnumbered(self) -> bool:
+        """True iff any declared section level is the UNNUMBERED role (0).
+
+        Drives the P-layer missing-section gate: when True, `## § <title>`
+        headings (no number) are matched by POSITION against the structure
+        contract, so a book whose original subsections carry no ordinal is
+        never forced to fabricate `## §N`. Mirrors the `type 0 / depth 0`
+        section convention — see SECTION_ROLE_UNNUMBERED / SECTION_TYPE_DEPTH."""
+        return SECTION_ROLE_UNNUMBERED in self.section_types
+
 
     @property
     def section_depths(self) -> List[int]:
@@ -514,10 +521,12 @@ class BookConfig:
         # A stale `section_depths` key in verify_config.json is ignored silently.
         st = data.get('section_types') or ORDINAL_SECTION_TYPES.get(rep, [1])
         st = [int(x) for x in st if int(x) in SECTION_ROLE_CODES] or [1]
-        # Level 1 is ALWAYS the chapter (role 1); coerce defensively so a
-        # hand-written config can never start at role 2+.  require_complete()
-        # also enforces this as a backstop for direct BookConfig construction.
-        if st[0] != 1:
+        # Level 1 is ALWAYS the chapter (role 1) OR an unnumbered section
+        # (role 0, e.g. Silverman — the chapter IS the file, within-file
+        # `## § <title>` headings are the unnumbered sections).  Coerce
+        # defensively so a hand-written config can never start at role 2+.
+        # require_complete() also enforces this as a backstop.
+        if st[0] not in (0, 1):
             st[0] = 1
 
         # --- language (orthogonal; default derived from primary type) ---
@@ -551,8 +560,6 @@ class BookConfig:
             formula=dict(data['formula']) if data.get('formula') else None,
             # --- figure sequential-label convention (book-specific) ----------
             figure=dict(data['figure']) if data.get('figure') else None,
-            # --- subsection ordinal convention (respect the ORIGINAL book) ----
-            section_numbers=bool(data.get('section_numbers', True)),
         )
 
 
@@ -724,10 +731,10 @@ class ConfigLoader:
                         f"[CONFIG] {self.verify_config_path} section_types 含非法角色码 "
                         f"{code}（应在 {SECTION_ROLE_CODES}）。"
                     )
-            if cfg.section_types[0] != 1:
+            if cfg.section_types[0] not in (0, 1):
                 raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} section_types[0] 必须为 1"
-                    f"（章首分量）。"
+                    f"[CONFIG] {self.verify_config_path} section_types[0] 必须为 0 或 1"
+                    f"（0=无序号标书的首层小节，1=章首分量）。"
                 )
             # Sanity: every declared role must resolve to a known depth.
             for code in cfg.section_types:

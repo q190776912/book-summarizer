@@ -99,9 +99,9 @@ DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 
 # md 中的节标题（兼容 `## §1.2` 与 `## 1.2`）
 SEC_HEADING_RE = re.compile(r'^##\s*§?\s*(\d+(?:\.\d+)?)')
-# 无编号小节（原书小节无序号标）专用：要求 `§` 符号、编号可选。用于
-# `section_numbers=False` 的书——闸门改用「按位置/顺序」比对结构契约小节，
-# 不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
+# 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
+# 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
+# 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
 SEC_HEADING_RE_OPT = re.compile(r'^##\s*§\s*(\d+(?:\.\d+)?)?')
 
 
@@ -191,7 +191,7 @@ def _load_contract(ext_dir, ch):
     return sections, item_keys
 
 
-def check_missing_sections(md_lines, ext_dir, ch, section_numbers=True):
+def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
     sections, _ = _load_contract(ext_dir, ch)
     if not sections:
         return []
@@ -201,41 +201,42 @@ def check_missing_sections(md_lines, ext_dir, ch, section_numbers=True):
     if not required:
         return []
 
-    if section_numbers:
-        # 标准书：md `## §N` 的数字必须与契约编号逐一对齐
-        present = set()
-        present_first = set()
-        for ln in md_lines:
-            m = SEC_HEADING_RE.match(ln)
-            if m:
-                num = m.group(1)
-                present.add(num)
-                # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
-                # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
-                # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
-                # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
-                present_first.add(num.split('.')[0])
+    if unnumbered:
+        # 无编号小节（section_types 含 role 0，对应 `type 0` / `depth 0`）：原书
+        # 小节无序号标（如 Silverman），尊重原书。闸门不依赖 md 标题里的数字，
+        # 改为「按位置」比对结构契约小节——仅校验契约要求的每一节在 md 中按出现
+        # 顺序位置对齐地存在（md 的 `## §` 编号可选，见 SEC_HEADING_RE_OPT）。
+        # 保持与标准书一致的**非对称**语义：只报「契约要求但 md 缺失」的节，不报
+        # 「md 多出契约未记的节」——因为原书 subsection 可能多于稀疏契约（契约由
+        # 抽取器生成、本身稀疏），且真实 md 忠实于原书，多出的 `## §` 是合理的
+        # 小节，不应阻断闸门。
+        md_secs = [ln for ln in md_lines if SEC_HEADING_RE_OPT.match(ln)]
         out = []
-        for s, title in required:
-            ok = (s in present) or (s.split('.')[-1] in present_first)
-            if not ok:
-                out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
+        for idx, (s, title) in enumerate(required):
+            if idx >= len(md_secs):
+                out.append(
+                    f"  x Ch{ch} §{s}: 结构契约要求此节（位置 {idx+1}），"
+                    f"但 md 仅 {len(md_secs)} 个 `## §` 标题（缺 {len(required)-len(md_secs)} 节）")
         return out
 
-    # section_numbers=False：原书小节无序号标（如 Silverman），尊重原书。
-    # 闸门不依赖 md 标题里的数字，改为「按位置」比对结构契约小节——仅校验
-    # 契约要求的每一节在 md 中位置对齐地存在（md 的 `## §` 编号可选，见
-    # SEC_HEADING_RE_OPT）。保持与原编号模式一致的**非对称**语义：只报
-    # 「契约要求但 md 缺失」的节，不报「md 多出契约未记的节」——因为原书
-    # subsection 可能多于契约（契约由抽取器生成、本身稀疏），且真实 md 忠实
-    # 于原书，多出的 `## §` 是合理的小节，不应阻断闸门。
-    md_secs = [ln for ln in md_lines if SEC_HEADING_RE_OPT.match(ln)]
+    # 标准书（带序标）：md `## §N` 的数字必须与契约编号逐一对齐
+    present = set()
+    present_first = set()
+    for ln in md_lines:
+        m = SEC_HEADING_RE.match(ln)
+        if m:
+            num = m.group(1)
+            present.add(num)
+            # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
+            # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
+            # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
+            # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
+            present_first.add(num.split('.')[0])
     out = []
-    for idx, (s, title) in enumerate(required):
-        if idx >= len(md_secs):
-            out.append(
-                f"  x Ch{ch} §{s}: 结构契约要求此节（位置 {idx+1}），"
-                f"但 md 仅 {len(md_secs)} 个 `## §` 标题（缺 {len(required)-len(md_secs)} 节）")
+    for s, title in required:
+        ok = (s in present) or (s.split('.')[-1] in present_first)
+        if not ok:
+            out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
     return out
 
 
@@ -414,7 +415,7 @@ class PLayer(VerifyLayer):
         noise = check_noise(lines)
         bare = check_bare_items(lines, ctx.config.primary_type)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch,
-                                         ctx.config.section_numbers)
+                                         ctx.config.sections_unnumbered)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
         verbose = check_verbose_paragraphs(lines)
         verbose_proof = check_verbose_proofs(lines)

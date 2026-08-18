@@ -16,9 +16,9 @@
      - 书以非默认前缀标注图（如 `Scheme` / `Illustration` / 仅 `图` / 仅 `Fig`）→ 写 `"figure": {"labels": [...]}` 列出**本书全部**图号前缀词；
      - 书**完全没有**图序标（正文不出现任何图号前缀）→ **显式写 `"figure": {"labels": []}`**（空数组即"无图序标"的**标记号**），与"`figure` 字段缺失→回落默认 `FIGURE_LABELS_DEFAULT`"严格区分：空数组表示"本书确无图号、禁止匹配任何前缀"，字段缺失才会静默用默认前缀（会误匹配无图号书里碰巧出现的 `Figure`/`图` 等词）。
      - **图检测子流程严格依赖此字段**。
-   - **小节序标体例（🔴 尊重原书，禁止编造）**：`_extract/verify_config.json` 须显式声明 `section_numbers` 字段（默认 `true`）：
-     - 原书小节**带序标**（如 `§3.2`、`3.1.4`）→ 保持默认 `"section_numbers": true`，总结写 `## §N.M 节名`，verify 缺节闸门按数字逐一对齐 `book_structure.json` 契约；
-     - 原书小节**无序号标**（如 Silverman《A Friendly Introduction to Number Theory》）→ **显式写 `"section_numbers": false`**，总结写 `## § 描述性标题`（数字留空、仅保留 `§`），verify 缺节闸门改为按「位置/数量」比对（只查契约要求的节是否都在、不计 md 多出的小节），**不强求加回原书没有的序标**。该字段是 per-book 开关，仅改本书行为，其他带序标书保持 `true`、零回归。
+   - **小节序标体例（🔴 尊重原书，禁止编造）**：`_extract/verify_config.json` 的 `section_types` 数组声明每层级角色码（章=1/节=2/小节=3/子小节=4/**无序号标=0**），`depth` 由角色码经 `SECTION_TYPE_DEPTH` 派生，不单独配置：
+     - 原书小节**带序标**（如 `§3.2`、`3.1.4`）→ 默认 `[1, 2]`（或按实际层级），总结写 `## §N.M 节名`，verify 缺节闸门按数字逐一对齐 `book_structure.json` 契约；
+     - 原书小节**无序号标**（如 Silverman《A Friendly Introduction to Number Theory》）→ **显式把对应层级写为 `0`**（如 `"section_types": [0]`），总结写 `## § 描述性标题`（数字留空、仅保留 `§`），verify 缺节闸门改为按「位置/数量」比对（只查契约要求的节是否都在、不计 md 多出的小节），**不强求加回原书没有的序标**。该角色码是 per-book 配置，仅改本书行为，其他带序标书保持 `[1,2]` 之类、零回归。
 2. 生成配置：
    ```powershell
    python config/verify_config/make_config.py <extract_dir>   # 半自动探测 + 人工核对（公用配置脚本）

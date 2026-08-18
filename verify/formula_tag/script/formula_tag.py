@@ -635,14 +635,20 @@ class SourceFormulaIndex:
 
         Strips whitespace, removes an outer `（）()` wrapper and any leading
         `Eq.` / `Equation` / `式` prefix, then folds every separator in
-        `[. - · ,]` to `.` while keeping a trailing letter suffix (e.g. `a`).
+        `[. - · ,]` to `.` and DROPS the trailing letter suffix (e.g. `a`).
         Returns None when the token cannot be parsed.
+
+        The suffix is dropped so that lettered sub-parts in the source
+        (e.g. `(8a)`, `(8b)`) reconcile with a curated summary that groups
+        them under one `\tag{8}` (avoids false MISSING).  For the INCONSISTENT
+        *duplicate* check — where distinct lettered sub-equations must remain
+        distinct — use `norm_full()` instead.
 
         Examples:
             '（11.1-1）' -> '11.1.1'
             'Eq. 2.3'    -> '2.3'
             '式（3,4）'  -> '3.4'
-            '2.3a'       -> '2.3a'
+            '2.3a'       -> '2.3'   (trailing letter suffix dropped)
         """
         if not raw:
             return None
@@ -672,7 +678,57 @@ class SourceFormulaIndex:
         # `\tag{2.5}`.  Pure-digit components only, so int() is safe.
         norm_core = re.sub(_SEP_CLASS, '.', core)
         norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
-        return norm_core + suffix
+        # Drop the trailing letter suffix (e.g. `8a` -> `8`).  Books such as
+        # Strogatz number sub-parts of a single displayed equation as
+        # `(8a)`, `(8b)`, while the curated summary groups them under one
+        # `\tag{8}`.  Keeping the suffix would flag every sub-part as MISSING;
+        # folding it to the digit base lets the source sub-parts and the
+        # summary's single group tag reconcile.  This is safe for books without
+        # trailing-letter numbering (e.g. Kreyszig's `11.1-1` style) because
+        # their tokens carry no suffix to begin with.
+        #
+        # NOTE: the INCONSISTENT *duplicate* detection does NOT use this
+        # suffix-dropped key — see `norm_full()` below.  Folding the suffix
+        # here is purely for S-membership / MISSING / FABRICATED reconciliation;
+        # collapsing distinct lettered sub-equations into one key would
+        # falsely flag them as duplicate \tag numbers.
+        return norm_core
+
+    @staticmethod
+    def norm_full(raw: Optional[str]) -> Optional[str]:
+        """Suffix-AWARE canonicalisation of a raw formula-number token.
+
+        Identical to `norm()` except it KEEPS the trailing letter suffix
+        (e.g. `5.1.3a` -> `5.1.3a`, `8.2.6c` -> `8.2.6c`).  Used exclusively
+        for the INCONSISTENT *duplicate* detection in `_compare()` so that
+        lettered sub-equations — which are genuinely distinct tags in the book
+        source (e.g. Lasota & Mackey number (5.1.3a) and (5.1.3b) as two
+        separate displayed equations) — are NOT collapsed into one key and
+        falsely reported as a duplicate \tag number.
+
+        The suffix-DROPPED `norm()` remains the key for S-membership /
+        MISSING / FABRICATED, preserving the book-source (8a),(8b) + curated
+        summary (8) reconciliation path.  Books without trailing letters are
+        unaffected (norm_full == norm for them, since there is no suffix to
+        keep), so this change is strictly non-regressing for digit-led books.
+        """
+        if not raw:
+            return None
+        s = str(raw).strip()
+        s = re.sub(r'(?i)^equation\s+', '', s)
+        s = re.sub(r'(?i)^eqn?\.?\s+', '', s)
+        s = re.sub(r'^式\s*', '', s)
+        s = s.strip()
+        while s and s[0] in '（(' and s[-1] in '）)':
+            s = s[1:-1].strip()
+        m = re.match(r'(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
+        if not m:
+            return None
+        core = m.group(1)
+        suffix = m.group(2)
+        norm_core = re.sub(_SEP_CLASS, '.', core)
+        norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
+        return norm_core + (suffix.lower() if suffix else '')
 
 
 def _extract_summary_tags(md_file: str) -> List[FormulaTag]:
@@ -907,9 +963,18 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
     seen_inc: Set[str] = set()
 
     numbered = [t for t in tags if t.normalized]
+    # INCONSISTENT duplicate detection is SUFFIX-AWARE: lettered sub-equations
+    # such as (5.1.3a) / (5.1.3b) are genuinely distinct tags and must NOT
+    # collapse to one key (which would falsely flag INCONSISTENT).  We key the
+    # duplicate count on the suffix-inclusive normalisation (norm_full) while
+    # the suffix-DROPPED `n` below is still used for S-membership / cross-
+    # chapter checks, preserving the book-source (8a),(8b) + curated summary
+    # (8) reconciliation path.  Books without trailing letters are unaffected
+    # (norm_full == norm for them), so this is strictly non-regressing.
     counts: Dict[str, int] = {}
     for t in numbered:
-        counts[t.normalized] = counts.get(t.normalized, 0) + 1
+        ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
+        counts[ik] = counts.get(ik, 0) + 1
 
     for t in numbered:
         n = t.normalized
@@ -917,7 +982,8 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
             continue
         prefix_ok = (not chapter_prefix) or (
             _first_component(n) == str(ch))
-        if counts[n] > 1:
+        ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
+        if counts[ik] > 1:
             status = 'INCONSISTENT'          # duplicate \tag number
         elif not prefix_ok:
             status = 'INCONSISTENT'          # cross-chapter number
@@ -1047,15 +1113,26 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
         S = src_sectioned.get(sec, set())
         s_empty = len(S) == 0
         tags = md_by_sec[sec]
+        # INCONSISTENT duplicate detection is SUFFIX-AWARE: lettered sub-
+        # equations such as (1a) / (1b) are genuinely distinct tags and must
+        # NOT collapse to one key (which would falsely flag INCONSISTENT).
+        # Key the duplicate count on the suffix-inclusive norm_full while the
+        # suffix-DROPPED `n` is still used for S-membership / FABRICATED checks,
+        # mirroring `_compare` (chapter-scoped path).  This only affects
+        # per-section-restart books (scope==3, e.g. Kreyszig) whose source AND
+        # summary both carry lettered sub-parts; digit-led books are unaffected
+        # (norm_full == norm for them).
         counts: Dict[str, int] = {}
         for t in tags:
             if t.normalized:
-                counts[t.normalized] = counts.get(t.normalized, 0) + 1
+                ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
+                counts[ik] = counts.get(ik, 0) + 1
         for t in tags:
             n = t.normalized
             if not n or n in ignore:
                 continue
-            if counts[n] > 1:
+            ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
+            if counts[ik] > 1:
                 status = 'INCONSISTENT'
             elif n not in chapter_union:
                 status = 'FABRICATED'
@@ -1242,6 +1319,27 @@ class QLayer(VerifyLayer):
         # `depth` is DERIVED from `type` via ORDINAL_DEPTH — it is NOT read from
         # the config (any stale `depth` key is ignored on purpose).
         fignore = set(formula.get('ignore') or [])
+        # Per-chapter formula noise (cross-chapter references like "(5.9) of
+        # Chapter 2", OCR comma-lists such as "k = 1, 2,3" -> 2.3, etc.) is
+        # registered by the operator in `ignore_ch{N}.json` — the SAME
+        # per-chapter file the B-layer consumes via ConfigLoader.ignore_for_
+        # chapter. The Q-layer previously read ONLY the GLOBAL `formula.ignore`,
+        # so such per-chapter noise produced spurious q-miss rows that could
+        # only be silenced by adding the (often section-reused) number to the
+        # GLOBAL ignore — which would also disable validation of genuinely
+        # present `\tag` in OTHER chapters (e.g. `\tag{2.3}` recurs in 7
+        # chapters). Merging ONLY `ignore_ch{N}.json` (NOT `ignore_fig_ch{N}.json`,
+        # whose "Figure 3.2"-style entries would collide with real formula
+        # norms like `\tag{3.2}`) gives a per-chapter-scoped, coverage-preserving
+        # way to register formula noise without the global-ignore breadth cost.
+        _pic = os.path.join(ctx.ext_dir, f'ignore_ch{ctx.ch}.json')
+        if os.path.exists(_pic):
+            try:
+                _pic_data = json.load(open(_pic, encoding='utf-8'))
+                if isinstance(_pic_data, list):
+                    fignore |= set(_pic_data)
+            except Exception:
+                pass
         fkeep = formula.get('keep_cross_refs', True)
         scope = formula.get('scope', 2)
         # Per-section formula numbering (Kreyszig: every section restarts at

@@ -64,7 +64,7 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登�
 - `code = 'Q'`，`order = 17`（当前最大层 P=16 之后），`auto_fixable = False`。
 - 经 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/*/script/` 自动发现注册，**无需改 register_all.py / VerifyManager / CLI**。
 - `build_formula_patterns(ncomp)`：按 `depth`（由 `type` 经 `ORDINAL_DEPTH` 派生）生成源抽取正则（单捕获组、`depth` 决定分量数）。
-- `SourceFormulaIndex.norm()`：去空白/去外层 `（）()`/去 `Eq.`·`Equation`·`式` 前缀；把 `.\-·,` 任一分隔符归一为 `.`；保留末尾字母后缀(a)。例 `（11.1-1）`→`11.1.1`，`Eq. 2.3`→`2.3`。
+- `SourceFormulaIndex.norm()`：去空白/去外层 `（）()`/去 `Eq.`·`Equation`·`式` 前缀；把 `.\-·,` 任一分隔符归一为 `.`；**折叠末尾字母后缀(a)**（如 `5.1.3a`→`5.1.3`）。折叠后缀只为「书源子式 `(8a)`/`(8b)` 与汇总结点 `\tag{8}` 对齐」的 S 成员 / MISSING / FABRICATED 比对；**INCONSISTENT 重复检测另用 `norm_full()`（保留后缀）**，使 `(5.1.3a)`/`(5.1.3b)` 这类真实子式不被误判为重复 `\tag`。无字母后缀的书 `norm_full == norm`，故该改动对纯数字编号书零回归。例 `（11.1-1）`→`11.1.1`，`Eq. 2.3`→`2.3`，`2.3a`→`2.3`。
 - `LayerResult` 返回的 5 个 `q_*` 键须与 `DEFAULT_RESULT`、本 `contract-keys`、以及 `report.py` 读取完全一致（由 `verify/tests/test_key_contract.py` 强制校验）。
 
 ## 子流程

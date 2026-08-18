@@ -426,7 +426,11 @@ def _main_impl():
     # Apply --fix flag (auto-correct format-layer fixers: H/G/I/J/K/L/M/N, etc.) before verification
     if '--fix' in sys.argv:
         if '--all' not in sys.argv:
-            args_fix = _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure', '--fix'))
+            # `--fix` is a NO-VALUE flag (like in the --all path below): strip it
+            # separately so _strip_flags does NOT consume the next positional
+            # (the chapter number) as a "value" and shift every argument.
+            args_fix = _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure'))
+            args_fix = [a for a in args_fix if a != '--fix']
             if len(args_fix) >= 4:
                 md_file = args_fix[3]
                 ext_fix = args_fix[4] if len(args_fix) > 4 else None

@@ -65,9 +65,9 @@
    ```
    - 至此 extract 阶段完成：`page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json` 均已就绪，供 write-source 消费、verify 读取。
 
-## 启动方式（后台提取启动逻辑，含启动脚本）
+## 启动方式（统一 PowerShell 后台启动，唯一写法）
 
-> 必须在 `pdfextract` conda 环境下运行（含 torch / fitz / paddle / PDF-Extract-Kit），PATH 要带上 torch 的 `lib` 与 nvidia cu12 bin（`cudnn\bin` 须故意留空，避免与 paddle 的 cudnn DLL 冲突，见 `extract_book.py` 顶部说明）。提取**范围**由脚本从 PDF 自动取全本（`fitz.open(pdf).page_count`，与 `extract_book.py` 第 449 行一致），**无需用户手填任何页数**。仅当要提取全本中的某一段时，才用 `--start N` / `--end N` 限定。三种启动形态等价，任选其一。
+> 统一用 **PowerShell `Start-Process` 后台启动**（中文 / 空格 / 括号路径实测安全）。Linux / Git Bash 环境才用 `launch_pipeline.sh`（行为等价，见下）。必须在 `pdfextract` conda 环境下运行（含 torch / fitz / paddle / PDF-Extract-Kit），PATH 要带上 torch 的 `lib` 与 nvidia cu12 bin（`cudnn\bin` 须故意留空，避免与 paddle 的 cudnn DLL 冲突，见 `extract_book.py` 顶部说明）。提取**范围**由脚本从 PDF 自动取全本（`fitz.open(pdf).page_count`），**无需用户手填任何页数**；仅当要提取全本中的某一段时，才用 `--start N` / `--end N` 限定。
 
 **提取范围（`--start` / `--end`，均可省略）**
 - 都不给 → 提取全本（start=1，end=PDF 自动识别总页数）。
@@ -76,49 +76,61 @@
 - `--start S --end E` → 提取精确的 `S..E` 段。
 - 断点续跑仍生效：实际起点 = `max(--start, 已提取最大页+1)`（`--force` 时强制从 1 重跑）。
 
-**形态 A — `launch_pipeline.sh`（推荐，`nohup` 后台 + 自动设 CUDA PATH）**
-```bash
-bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf"                # 全本，页数自动识别
-bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --end 320       # 仅提取前 320 页
-bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --start 100 --end 200  # 提取 100–200
-bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 从头重跑
-```
-- 脚本内部 `nohup … &` 脱离终端；日志写 `<pdf_parent>/_extract/extract_pipeline.log`。`--start`/`--end` 均可省略，省略即取全本。
-
-**形态 B — 直接 `python`（手动设 PATH）**
-```bash
-<conda.env_path>/python.exe flows/extract/pipeline/script/extract_pipeline.py \
-    "<corpus_root>/<书名>/<书名>.pdf"
-# 等价于：python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|off|force]
-```
-- 其余开关：`--force`（从头）/`--deskew auto|off|force`（纠斜）。范围用 `--start`/`--end` 限定，不给则全本。图检测单独由 figure_detection 子流程负责，此处不传图相关开关。
-
-**⚠️ Windows 启动失败模式（本机实测，别再踩）**
-- 🔴 **`bash` 不可用**：本机 `C:\Windows\system32\bash.exe` 是 WSL 启动器但**未装任何发行版**（`execvpe(/bin/bash) failed`），也无 Git Bash → **形态 A `launch_pipeline.sh` 与 `flow_runner run extract extract_text`（其命令模板即 `bash launch_pipeline.sh`）必然失败**。启动必须改用形态 B/C。
-- 🔴 **别用 `cmd /c` 包整条命令串**：PS 5.1 `Start-Process -ArgumentList @('/c', $cmdline)` 对「以引号开头」的命令串会二次加引号 → cmd 解析失败：表现为 cmd 立即退出 `code=1`、**日志文件根本不会创建**（连空文件都没有）。形如 `echo hello > "log"`（引号在中间）没事；`"python.exe" "script" "pdf" > "log"`（引号开头）必挂。
-- 🔴 **别写 `.bat` / `.ps1` 启动器文件**：cmd 按 OEM 代码页（中文系统 = GBK/936）读 `.bat`，PS 5.1 无 BOM 时按 ANSI 读 `.ps1`；UTF-8 写入（write 工具默认）的中文路径全部乱码 → `系统找不到指定的路径` / `文件名、目录名或卷标语法不正确`，日志同样不会创建。即使改写 GBK，LF-only 行尾也可能触发解析错误。
-- ✅ **正解就是下面的形态 C**（直接 `Start-Process python.exe`，不经 cmd）：中文路径、括号文件名（如 `遍历论+(孙文祥)+(Z-Library).pdf`）实测均安全；唯一注意点是 `-ArgumentList` 元素**含空格时必须自带引号**（PS 5.1 不会自动加引号，空格会把参数拆开）。
-
-**形态 C — PowerShell `Start-Process`（中文路径安全，Windows）**
+**统一启动（Windows 唯一写法）**
 ```powershell
-# 1) 设 PATH（含 torch lib + nvidia cu12 bin；故意不含 cudnn\bin）
+# 1) 设 PATH（torch lib + nvidia cu12 bin；故意不含 cudnn\bin）
 $env:Path = "<conda.env_path>\lib\site-packages\torch\lib;" +
+            "<conda.env_path>\lib\site-packages\nvidia\cublas\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\cuda_runtime\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\cufft\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\curand\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\cusolver\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\cusparse\bin;" +
+            "<conda.env_path>\lib\site-packages\nvidia\nvjitlink\bin;" +
             "<conda.env_path>\Library\bin;" +
             "<conda.env_path>\Scripts;<conda.env_path>;" + $env:Path
 # 2) 归位 PDF（Move-Item 而非 Copy-Item，确保仅此一份）
 if (-not (Test-Path -LiteralPath "<corpus_root>\<书名>\<书名>.pdf")) {
     Move-Item -LiteralPath "<原路径>" -Destination "<corpus_root>\<书名>\<书名>.pdf" -Force
 }
-# 3) 后台静默启动（仅传 PDF，范围默认全本；要限定段可加 "--start"/"--end" 元素）
+# 3) 拼整条命令行：所有参数统一用 [char]34 双引号包住（数值 token 可不加）
+$q = [string][char]34
+$cmd = $q + "<skill根>\flows\extract\pipeline\script\extract_pipeline.py" + $q + " " + `
+       $q + "<corpus_root>\<书名>\<书名>.pdf" + $q
+#     要限定段时在末尾追加，如：$cmd += " " + $q + "--start" + $q + " " + $q + "100" + $q
+# 4) 后台静默启动（子进程独立于本终端，窗口关闭不影响）
 $proc = Start-Process -WindowStyle Hidden -PassThru `
     -FilePath "<conda.env_path>\python.exe" `
-    -ArgumentList @("flows/extract/pipeline/script/extract_pipeline.py",
-                    "<corpus_root>\<书名>\<书名>.pdf")
-# 取 PID 便于跟踪：$proc.Id
+    -ArgumentList $cmd
+Write-Output ("PID: " + $proc.Id)   # 取 PID 便于跟踪
 ```
-- 中文 / 含空格路径安全（用 `-LiteralPath` 与带引号 `ArgumentList`）；只传 PDF 即全本，范围由脚本内 `fitz` 自动识别。
+- 🔴 **为什么必须这样写**：PS 5.1 的 `Start-Process -ArgumentList` 对**数组**元素会自行二次加引号 / 拆引号——`@($script, '"path with space.pdf"')` 时好时坏（实测多空格参数被劈开，argparse 报 `unrecognized arguments: to representation theory\...`，进程静默退出、日志不创建）；**传单个字符串则原样透传**，引号完全由自己控制 → 唯一可靠写法。
+- 只传 PDF 即全本；`--start` / `--end` 为不含空格的简单 token，可不加引号（加了也无害）。
+- `flow_runner run extract extract_text` 的命令模板是 `bash launch_pipeline.sh`，Windows 无 bash 时必然失败 → 启动一律用上方写法，全部页落盘后再 `flow_runner verify + mark extract extract_text` 落账。
 
-**启动后验证**：看 `<pdf_parent>/_extract/extract_pipeline.log` 首行应为 `--end omitted: using auto-detected PDF total=N as end`（或 `Using --end=N` / `--end=… exceeds PDF total … clamped` 等），随后出现 `Models loaded. Starting batch loop.` 即正常开工。
+**bash 环境（Linux / Git Bash，非 Windows）**
+```bash
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf"                # 全本，页数自动识别
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --end 320       # 仅提取前 320 页
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --start 100 --end 200  # 提取 100–200
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 从头重跑
+```
+- 脚本内部 `nohup … &` 脱离终端 + 自动设 CUDA PATH；日志同样写 `<pdf_parent>/_extract/extract_pipeline.log`。
+
+**前台直跑（仅调试用，看实时输出）**
+```powershell
+& "<conda.env_path>\python.exe" "<skill根>\flows\extract\pipeline\script\extract_pipeline.py" "<corpus_root>\<书名>\<书名>.pdf"
+```
+- `&` 调用符对引号处理正确（与 `Start-Process` 的数组行为不同）；会阻塞终端，仅供排障，不用于正式启动。
+
+**⚠️ Windows 启动失败模式（本机实测，别再踩）**
+- 🔴 **`bash` 不可用**：本机 `C:\Windows\system32\bash.exe` 是 WSL 启动器但**未装任何发行版**（`execvpe(/bin/bash) failed`），也无 Git Bash → `launch_pipeline.sh` 与 `flow_runner run extract extract_text` 必然失败，启动只用上方统一写法。
+- 🔴 **别用 `cmd /c` 包整条命令串**：PS 5.1 `Start-Process -ArgumentList @('/c', $cmdline)` 对「以引号开头」的命令串会二次加引号 → cmd 解析失败：表现为 cmd 立即退出 `code=1`、**日志文件根本不会创建**（连空文件都没有）。形如 `echo hello > "log"`（引号在中间）没事；`"python.exe" "script" "pdf" > "log"`（引号开头）必挂。
+- 🔴 **别写 `.bat` / `.ps1` 启动器文件**：cmd 按 OEM 代码页（中文系统 = GBK/936）读 `.bat`，PS 5.1 无 BOM 时按 ANSI 读 `.ps1`；UTF-8 写入（write 工具默认）的中文路径全部乱码 → `系统找不到指定的路径` / `文件名、目录名或卷标语法不正确`，日志同样不会创建。即使改写 GBK，LF-only 行尾也可能触发解析错误。
+- 🔴 **禁止并发多开**：同一本书同时跑两个 `extract_pipeline.py` 会互写 `page_*.json`；启动前先确认无残留实例（`Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 看 CommandLine）。
+- ✅ 统一写法实测通过：中文路径、括号文件名（如 `遍历论+(孙文祥)+(Z-Library).pdf`）均安全；首启失败时加 `-RedirectStandardError "<extract>\pipeline_stderr.txt"` 抓取 argparse 报错。
+
+**启动后验证**：看 `<pdf_parent>/_extract/extract_pipeline.log` 首行应为 `--end omitted: using auto-detected PDF total=N as end`（或 `Using --end=N` / `--end=… exceeds PDF total … clamped` 等），随后出现 `Models loaded. Starting batch loop.` 即正常开工。日志未创建 = 进程在 argparse 阶段就退出（多半是引号问题），按上面失败模式排查。
 
 ## 本阶段规则（🔴 内联）
 

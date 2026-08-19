@@ -108,7 +108,7 @@ bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf"          # 全本�
 bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --end 320 # 仅提取前 320 页
 ```
 
-若机器无 Git-Bash / bash（`C:\Windows\system32\bash.exe` 是 WSL 启动器且未装发行版），改用 `flows/extract/extract.md` 的**形态 C**（直接 `Start-Process python.exe`，不经 `cmd /c`）——中文路径 / 括号文件名实测安全；避免 `cmd /c` 包命令串与 `.bat`/`.ps1` 启动器（坑详见该文档「⚠️ Windows 启动失败模式」）。
+若机器无 Git-Bash / bash（`C:\Windows\system32\bash.exe` 是 WSL 启动器且未装发行版），改用 `flows/extract/extract.md` 的**统一 PowerShell 启动写法**（直接 `Start-Process python.exe`，不经 `cmd /c`）——中文路径 / 括号文件名实测安全；避免 `cmd /c` 包命令串与 `.bat`/`.ps1` 启动器（坑详见该文档「⚠️ Windows 启动失败模式」）。
 
 `.bat` 启动器仅作 PATH 设置逻辑参考（某些 cmd 环境可运行）：
 

@@ -13,7 +13,7 @@
 
 | 组件 | 版本/说明 | 来源 |
 |------|-----------|------|
-| Windows + Git-Bash | 运行 `launch_pipeline.sh`（无 Git-Bash 时用 PowerShell 形态 C，见 `flows/extract/extract.md`） | git for windows |
+| Windows + Git-Bash | 运行 `launch_pipeline.sh`（无 Git-Bash 时用 PowerShell 统一启动写法，见 `flows/extract/extract.md`） | git for windows |
 | conda + Python 3.10 | 提取环境 | conda |
 | NVIDIA GPU + 驱动 | CUDA 12.9（torch cu129 与 paddle cu129 必须同 minor，详见 `flows/prep/ref/environment.md`） | — |
 | PDF-Extract-Kit 源码 | clone 到 `model_root` | github.com/opendatalab/PDF-Extract-Kit |
@@ -70,7 +70,7 @@ python tools/flow_runner.py run "<corpus_root>/<书名>" derive verify_cn
 ## 常见问题
 
 - **`WinError 127/193`（cublas/cudnn DLL）**：torch 非 cu129 / 残留 `*-cu13` 包 / `nvidia/cudnn/bin` 非空，见 environment.md。
-- **`bash` 不可用**（`C:\Windows\system32\bash.exe` 是 WSL 启动器未装发行版）：用 `flows/extract/extract.md` 形态 C（`Start-Process python.exe`）。
+- **`bash` 不可用**（`C:\Windows\system32\bash.exe` 是 WSL 启动器未装发行版）：用 `flows/extract/extract.md` 统一 PowerShell 启动写法（`Start-Process python.exe`）。
 - **HF 下载权重失败**：用 ModelScope `opendatalab/pdf-extract-kit-1.0`。
 - **无 GPU**：CPU 可跑但极慢（`torch.cuda.is_available()` 为 False 时自动 CPU）。
 - **launch_pipeline.sh 报"cannot resolve conda env path"**：PATH 里没有 python/py，或未配 `BKS_CONDA_ENV_PATH`。

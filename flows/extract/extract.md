@@ -24,6 +24,9 @@
 
 2. **启动后台文本提取（启动前禁止做其他事）**
 
+   - 🔴 **视觉识别决策（询问式，全书仅此一次，先问后启动）**：启动后台提取**之前**，先向用户询问一次：「是否启用视觉识别（多模态识图，MM Repair 模式 A）修复低置信 OCR / 公式？⚠️ 视觉识别需逐批读图审读，**耗时会明显变长**（低置信条目多时可达数小时量级）；拒绝则整本书跳过视觉识别、仅靠文本层 / OCR 结果，除非你主动要求恢复。全书只问这一次。」把结果写入 `_extract/_mm_repair/vision_decision.json`（`{"enabled": true|false}`，多册书写到该册 extract_dir）：
+     - 用户选「启用」→ `VISION = yes`：后续每批稳定页照常跑模式 A 视觉审读。
+     - 用户选「拒绝」→ `VISION = no`：**全书跳过模式 A，不得再做任何视觉识别**；文本类书仍走模式 B（文本层补偿），非文本类书整书标 `MM_UNAVAILABLE` 跳过修复（处置见 [`extract/mm_repair`](mm_repair/mm_repair.md) Step 1）。**此后除非用户主动要求恢复，不得因任何批次 / 任何理由重新询问或自行视觉识别**（如拆子代理时也要把 `VISION` 决策传给子代理，禁止它们擅自读图）。
    - 归位完成后启动后台**文本**提取：只需传已确定的 PDF（如 `D/<N>/<N>.pdf`）；提取**范围**默认取全本（无需传任何页数）；三种启动形态（PowerShell `Start-Process` / `launch_pipeline.sh` / 直接 `python`）与 PATH 设置、范围参数说明见下方「启动方式」。若只想提取某一段，可加 `--start N` / `--end N`（见「启动方式」的范围说明）。🔴 **多册书（分支 D）必须追加 `--extract-dir "<书目录>/_extract/<册>"`**，否则输出会落在 PDF 同级 `_extract`，两册互相覆盖。启动后程序内部的执行流程（断点续跑 + 分批 MFD→MFR→OCR，**纯文本、不含图检测**）见子流程 [`extract/pipeline`](pipeline/pipeline.md)。
    - 启动后**立即转 Step 3 轮询、不等待**（并行强制规则见本阶段规则1）。
 
@@ -43,11 +46,11 @@
    ```
    - ⚠️ **流水线在首个批次失败时即整体停止**（日志 `Stopping due to batch failure`），**不会自动重试**；若不及时监控，会"静默死掉、0 页落盘"。因此每轮轮询**必须先做步骤 0 健康检查**，发现死掉立即排查+重启，绝不能在"以为还在跑"的状态下一步步空转。
    - **提取与 MM 修复门可并行**：MM Repair 只针对已落盘页码，绝不与提取进程写同一文件冲突。
-   - **视觉审读是瓶颈**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行。
+   - **视觉审读是瓶颈（仅当视觉识别启用，`VISION = yes`）**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行（子代理须继承 `VISION` 决策）；`VISION = no` 时无此瓶颈，跳过读图，仅跑模式 B / 记 `MM_UNAVAILABLE`。
 
 4. **MM Repair 完成后 → 跑 config 子流程（chapter_map + 书级配置）**
-   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读 + 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：先建章节映射 `_extract/chapter_map.json`（步骤 1，全书只此一份、不重复生成），再依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A 校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
-   - `_extraction_done.json` 是本阶段收尾**由主 Agent 在 MM Repair 完成后**写出的完成标记（不是后台文本流水线发出的中间信号）；它的存在应等价于「MM Repair 完成」，若它早于模式 A 写出则属误用（参见 Kreyszig 书 `_extraction_done.json` 的 `sample_pending` 反例）。
+   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读——若 `VISION = yes`——+ 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：先建章节映射 `_extract/chapter_map.json`（步骤 1，全书只此一份、不重复生成），再依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A（若启用）校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
+   - `_extraction_done.json` 是本阶段收尾**由主 Agent 在 MM Repair 完成后**写出的完成标记（不是后台文本流水线发出的中间信号）；它的存在应等价于「MM Repair 完成」，若它早于 MM Repair 完成（含模式 A，若启用）写出则属误用（参见 Kreyszig 书 `_extraction_done.json` 的 `sample_pending` 反例）。
    - 🔴 **图检测之前必须完成此步**：图检测严格读 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`），缺 Figure 组则退化默认前缀，自定义图号书（Scheme / Illustration 等）会漏识。
 
 5. **config 完成后 → 跑 figure_detection 子流程（图检测 + 分配）**
@@ -139,6 +142,7 @@ bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 
   - ❌ 更不得结束回合说"等你看完再聊 / 等通知我继续"。
   - ✅ 立即继续做可并行工作（轮询落盘页做 MM Repair）；若确实无任何可并行工作，则 `TaskOutput(block=True)` **原地**等结果、同一回合内继续推进。
 - **规则2 — 多册文档：强制逐册串行提取**（显存安全），前一册 `PIPELINE OK` + 显存回落后才启动下一册。
+- **规则3 — 视觉识别询问式（全书仅一次）**：视觉识别（MM Repair 模式 A）的启用与否，在 Step 2 启动后台提取**前询问用户一次**并写入 `vision_decision.json`，全书不再问第二次（若中途续跑时该文件缺失，由 [`extract/mm_repair`](mm_repair/mm_repair.md) Step 1 补问一次）。用户拒绝（`VISION = no`）后：**严禁** agent 自行读图视觉识别、**严禁**按批次重复询问；只有用户**主动要求**恢复时才临时启用，且只覆盖其要求范围。防停滞（规则1）不受此影响——`VISION = no` 时轮询循环照常推进（仅模式 B / `MM_UNAVAILABLE`）。
 
 ## 出口条件
 - 出口：全书页面提取 100% 且每页过 MM Repair，config + figure_detection + structure 子流程均已跑完，产出 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一）。

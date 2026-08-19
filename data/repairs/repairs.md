@@ -19,7 +19,7 @@
 - 结构化转换 `to_structured`：文本↔公式双向转换的段列表
   `[{"type":"text","text":"("},{"type":"formula","latex":"k=0,1,\\dots,n"}, …]`；
 - 判定：`ok` / `corrections`（已解决）/ `deferred`（交模式 A）/ `unavailable`（不可恢复，跳过）/ `resolved`。
-- 不可恢复标记：`mm_unavailable: true`（per-entry，经多轮视觉审读仍不可恢复；下游 `dump_chapter_ocr.py` 跳过、不污染内容；页级同时置 `MM_UNAVAILABLE: true`）。
+- 不可恢复标记：`mm_unavailable: true`（per-entry，经多轮视觉审读仍不可恢复，或**无视觉识别（`VISION = no`）时模式 B 无法可靠修复**（公式 / 文本层损坏）；下游 `dump_chapter_ocr.py` 跳过、不污染内容；页级同时置 `MM_UNAVAILABLE: true`）。
 
 > 具体字段以 MM Repair 链路运行时写出为准；本文件仅描述聚合层级与关键标记。
 
@@ -63,7 +63,7 @@
 - `ok`：无需修正的条目键列表，按页归集；
 - `to_structured`：文本↔公式双向转换段列表，按页归集；
 - `deferred`：`mm_repair_text_compare.py` 留给视觉 agent 的未决条目键列表，按页归集。
-- `unavailable`：经多轮视觉审读仍不可恢复的条目键列表（纯 OCR 噪声 / 严重乱码碎片），按页归集，形态同 `ok` / `deferred`；下游 `mm_repair_apply.py` 标 per-entry `mm_unavailable` + 页级 `MM_UNAVAILABLE` 并放行（`resolved=True`），writer 阶段（`dump_chapter_ocr.py`）跳过、不污染内容。
+- `unavailable`：不可恢复条目的键列表（纯 OCR 噪声 / 严重乱码碎片，经多轮视觉审读仍不可恢复；或 `VISION = no`（用户拒绝视觉识别）时模式 B 无法可靠修复的公式 / deferred 条目），按页归集，形态同 `ok` / `deferred`；下游 `mm_repair_apply.py` 标 per-entry `mm_unavailable` + 页级 `MM_UNAVAILABLE` 并放行（`resolved=True`），writer 阶段（`dump_chapter_ocr.py`）跳过、不污染内容。
 
 ## 消费方
 - `mm_repair_apply.py`：把 `repairs.json` 的修正**写回 `page_*.json`**（保持 schema 不变、

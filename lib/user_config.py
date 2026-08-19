@@ -35,7 +35,7 @@ _DEFAULTS = {
         "env_name": "pdfextract",
         "env_path": "D:/anaconda3/envs/pdfextract",
     },
-    "paddleocr_cache": "C:/Users/ye190/.paddleocr",
+    "paddleocr_cache": str(Path.home() / ".paddleocr").replace("\\", "/"),
 }
 
 #: dotted config key -> environment variable override

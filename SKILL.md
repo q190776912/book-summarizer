@@ -17,7 +17,7 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 ## 目录结构（书目录契约）
 
 ```
-D:\study\book\<书名>\       ← 每个书一个文件夹
+<corpus_root>\<书名>\       ← 每个书一个文件夹（corpus_root 见 user_config.json / README 配置章节）
   ├─ <书名>.pdf            ← 源 PDF（必须在此专属目录内）
   ├─ _extract\              ← 提取目录：所有后台数据（page_*.json / chapter_map.json / figure_* / _mm_repair/）
   ├─ 第1章_章名.md           ← 中文版
@@ -26,6 +26,17 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 ```
 
 > **临时文件隔离**：Agent 生成的所有临时脚本 / 日志必须放入 `_extract\`；根目录只允许 `.pdf`、`.md`、`_extract\` 三类。
+
+## 首次使用配置（前置，prep 之前）
+
+机器特定路径集中在 **skill 根目录 `user_config.json`**（gitignored，不随仓库上传；加载优先级：`BKS_*` env > `user_config.json` > 代码内置默认值；`lib/user_config.py` 统一读取，权重子路径由 `model_root` 派生，无需手配）。**首次使用（`user_config.json` 缺失或依赖路径失效）时，Agent 必须走下面流程，禁止静默使用内置默认值开工**：
+
+1. 跑 `python lib/user_config.py status`，读 JSON 的 `resolved`（各键 `exists` 真假）与 `missing`（含 `default` / `discovered` 候选）。
+2. 依赖探测：`missing` 为空 → 直接开工；非空 → 逐项**向用户提问**，顺序：先给 `discovered` 自动探测结果与内置 `default` 作选项 → 用户选已有目录或填新路径。
+3. 依赖确实不存在（用户回答"没有"）→ **询问是否安装**：是 → 按 [`flows/prep/ref/environment.md`](flows/prep/ref/environment.md) 引导安装（conda 环境 + ModelScope 权重 + cudnn 对齐）；否 → 停在 prep，不强行继续。
+4. 确认后把最终值写入 `user_config.json`（UTF-8），再进 prep。
+
+> env 覆盖 `BKS_CORPUS_ROOT` / `BKS_MODEL_ROOT` / `BKS_CONDA_ENV_NAME` / `BKS_CONDA_ENV_PATH` / `BKS_PADDLEOCR_CACHE` 仅供脚本直调场景，交互式首次配置以写 `user_config.json` 为准。
 
 ## 主流程（Stage 0 → 3，唯一主干）
 
@@ -90,7 +101,8 @@ D:\study\book\<书名>\       ← 每个书一个文件夹
 - `data/<json_name>/`：每个中间产物 JSON **独占一个目录**（如 `data/chapter_map`、`data/figure_index`），内含 `<json_name>.md`（数据结构说明）+ `<json_name>.py`（模型类，继承 `data/lib/json_data.py` 基类）；JSON 数据结构索引见 `data/data_schema.md`。各 JSON 的校验/编排脚本就近放在消费它的流程或 `verify` 层内，不在 `data`。
 - `lib`：**公用方法与变量锚点**，保留在技能根目录，被所有包 import。当前含：
   - `boot.py`：统一引导机制（`setup()` 把根目录 + `lib` + 所有 `flows/*/script`、`verify`（含各校验层 `<语义名>/` 子包）、`config/**/script`、`data/**/script` 注入 `sys.path`）。
-  - `config.py` / `numbering.py` / `regexlib.py`：跨流程的配置、编号、正则常量。
+  - `user_config.py`：用户配置加载器（`user_config.json` + `BKS_*` env 覆盖 + `user_config.example.json` 默认值；`weight_paths()` 由 `model_root` 派生 PDF-Extract-Kit 权重路径）。
+  - `numbering.py` / `regexlib.py`：跨流程的编号、正则常量。
   - `util.py`：`chapter_of_page()` 等无状态小工具（集中提供，无状态、无第三方依赖，供各包按需 `from lib.util import ...` 调用）。
   - `figure_io.py`：`load_figure_index()`——`figure_index.json` 的统一读取（原 figure 包返回 `[]`、verify 包返回 `None`，已统一为 `[]`；verify 侧调用方仅做真值/迭代判断，行为一致）。
   - `normalize_math.py`：公式定界符修复库（`normalize()` / `fix_backticks()` / `stats()`）——纯函数、无第三方依赖，被格式 / 校验流水线按需 `from lib.normalize_math import ...` 调用。对应的命令行入口在 `tools/normalize_math_cli.py`（直接 `python tools/normalize_math_cli.py <files>` 改写文件，会写 `.bak_mathfix` 备份）。

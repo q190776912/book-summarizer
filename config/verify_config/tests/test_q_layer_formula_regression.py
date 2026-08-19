@@ -72,7 +72,8 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 KREYSZIG_MD = os.path.join(FIXTURE_DIR, 'kreyszig_ch3.md')
 KREYSZIG_EXT = os.path.join(FIXTURE_DIR, 'kreyszig_ch3_ext')
 MAKE_CONFIG_PY = os.path.join(_ROOT, 'config/verify_config/make_config.py')
-CORPUS_ROOT = r'D:/study/book'
+from lib.user_config import get as _uc_get  # noqa: E402
+CORPUS_ROOT = _uc_get('corpus_root', r'D:/study/book')
 
 
 def _find_real_kreyszig_ext():

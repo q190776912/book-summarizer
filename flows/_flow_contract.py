@@ -41,7 +41,8 @@ FLOW_PREREQS = {
 # --------------------------------------------------------------------------
 RUN_COMMANDS = {
     "prep.env": ("agent",
-        "conda activate pdfextract; python -c \"import torch; print(torch.cuda.is_available())\" 须为 True;"
+        "conda activate <env_name>（见 user_config.json 的 conda.env_name，可用 "
+        "BKS_CONDA_ENV_NAME 覆盖）; python -c \"import torch; print(torch.cuda.is_available())\" 须为 True;"
         " 确认 <skill根>/node_modules/katex 存在（npm install katex --no-save）。"),
     "extract.place_pdf": ("agent",
         "按 extract.md 目录决策（分支 A-D）归位 PDF，确定 <book_dir>。"),

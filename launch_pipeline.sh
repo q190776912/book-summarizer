@@ -13,7 +13,26 @@
 #   [flags]     any flag understood by extract_pipeline.py is passed through (--force, --deskew ...)
 set -e
 
-ENV="D:/anaconda3/envs/pdfextract"
+# --- resolve the conda env path: BKS_CONDA_ENV_PATH > user_config.json > example ---
+SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+resolve_env_path() {
+  if [ -n "$BKS_CONDA_ENV_PATH" ]; then echo "$BKS_CONDA_ENV_PATH"; return 0; fi
+  local py="" v=""
+  for py in python py; do
+    if command -v "$py" >/dev/null 2>&1; then
+      v="$("$py" "$SKILL_ROOT/lib/user_config.py" conda.env_path 2>/dev/null)" || v=""
+      [ -n "$v" ] && echo "$v" && return 0
+    fi
+  done
+  return 1
+}
+
+ENV="$(resolve_env_path)" || {
+  echo "ERROR: cannot resolve conda env path. Set BKS_CONDA_ENV_PATH (e.g. D:/anaconda3/envs/pdfextract) or" >&2
+  echo "       configure conda.env_path in $SKILL_ROOT/user_config.json (see README)." >&2
+  exit 1
+}
 NV="$ENV/lib/site-packages/nvidia"
 
 # CUDA PATH: torch\lib provides the single shared cudnn; add nvidia cu12 bins
@@ -21,7 +40,6 @@ NV="$ENV/lib/site-packages/nvidia"
 export PATH="$ENV/lib/site-packages/torch/lib;$NV/cublas/bin;$NV/cuda_runtime/bin;$NV/cufft/bin;$NV/curand/bin;$NV/cusolver/bin;$NV/cusparse/bin;$NV/nvjitlink/bin;$ENV/Library/bin;$ENV/Scripts;$ENV;$PATH"
 
 PY="$ENV/python.exe"
-SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SKILL_ROOT/flows/extract/pipeline/script/extract_pipeline.py"
 
 PDF="$1"

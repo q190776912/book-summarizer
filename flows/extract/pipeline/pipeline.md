@@ -18,7 +18,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 
 ## 前置
 - PDF 置于 `<书名>/<书名>.pdf`（`_extract` 输出目录将建在其旁）。
-- `pdfextract` conda 环境可用，且 `D:\study\model\PDF-Extract-Kit` 权重就位（`extract_book.py` 内硬编码 MFD / MFR / OCR 权重路径）。
+- `pdfextract` conda 环境可用（环境名见 `user_config.json` 的 `conda.env_name`），且 `model_root`（`user_config.json`）下 PDF-Extract-Kit 权重就位——MFD / MFR / OCR 权重路径由 `lib/user_config.py` 的 `weight_paths()` 从 `model_root` 派生，不手改。
 - 提取范围由 `--start` / `--end` 决定（见上「运行方式」）。
 
 ## 步骤（有序）
@@ -58,7 +58,7 @@ python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/extract/pipeline/script/extract_pipeline.py`：主程序（断点续跑 + 分批提取，文本 only）。
-- `flows/extract/pipeline/script/extract_book`：底层引擎（`init_models` + `process_batch` 三阶段 MFD→MFR→OCR）。Phase 1 的 MFD 用 `yolo_v8_ft.pt`（数学公式检测，只出公式框），文本另由 PaddleOCR 识别；权重路径硬编码于 `D:\study\model\PDF-Extract-Kit`。
+- `flows/extract/pipeline/script/extract_book`：底层引擎（`init_models` + `process_batch` 三阶段 MFD→MFR→OCR）。Phase 1 的 MFD 用 `yolo_v8_ft.pt`（数学公式检测，只出公式框），文本另由 PaddleOCR 识别；权重路径由 `model_root` 派生（见 `lib/user_config.py`）。
 - `../../../data/page_json/page_json.py`：`page_*.json` 数据结构（`PageJson`）。
 
 ## 产物去向（上下文说明，非阅读依赖）

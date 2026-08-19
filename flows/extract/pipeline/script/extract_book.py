@@ -60,15 +60,16 @@ import gc
 
 logging.disable(logging.CRITICAL)
 
-# --- absolute paths (verified on this machine; see SKILL.md Reference paths) ---
-PEK_ROOT = r"D:\study\model\PDF-Extract-Kit"
-PEK_PKG = r"D:\study\model\PDF-Extract-Kit\pdf_extract_kit"
-MFD_WEIGHT = (r"D:\study\model\PDF-Extract-Kit\models\models\opendatalab--PDF-Extract-Kit"
-              r"\snapshots\master\models\MFD\models\MFD\YOLO\yolo_v8_ft.pt")
-MFR_DIR = r"D:\study\model\PDF-Extract-Kit\models\MFR\unimernet_tiny"
-MFR_CFG = r"D:\study\model\PDF-Extract-Kit\pdf_extract_kit\configs\unimernet.yaml"
-OCR_DET = r"D:\study\model\PDF-Extract-Kit\models\OCR\PaddleOCR\det\ch_PP-OCRv4_det"
-OCR_REC = r"D:\study\model\PDF-Extract-Kit\models\OCR\PaddleOCR\rec\ch_PP-OCRv4_rec"
+# --- model paths (from user_config; see lib/user_config.py + user_config.example.json) ---
+from lib.user_config import weight_paths
+_WP = weight_paths()
+PEK_ROOT = _WP["pek_root"]
+PEK_PKG = _WP["pek_pkg"]
+MFD_WEIGHT = _WP["mfd_weight"]
+MFR_DIR = _WP["mfr_dir"]
+MFR_CFG = _WP["mfr_cfg"]
+OCR_DET = _WP["ocr_det"]
+OCR_REC = _WP["ocr_rec"]
 
 os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 for p in (PEK_ROOT, PEK_PKG):

@@ -8,7 +8,7 @@ caption labels. To recover them:
   1. Render the offending page(s) and visually identify the figure region.
      A quick way: save a 200-DPI render of the page as PNG, view it, and
      read the bbox in rendered-image coordinates. The 110-DPI render under
-     D:/study/book/_tmp_pg/pNNN.png (if you made one) scales by 200/110.
+     <corpus_root>/_tmp_pg/pNNN.png (if you made one) scales by 200/110.
   2. Edit (or create) `_extract/figure_manual_chN.json`:
          {
            "1.3.1": {

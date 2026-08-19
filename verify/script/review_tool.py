@@ -22,7 +22,8 @@ _boot.setup()
 import subprocess
 
 # Python interpreter used to spawn skill-internal scripts (constant; no side effect).
-PY = r"D:\anaconda3\envs\pdfextract\python.exe"
+from lib.user_config import get as _uc_get
+PY = _uc_get("conda.env_path", r"D:\anaconda3\envs\pdfextract") + r"\python.exe"
 
 
 def resolve_md_file(book_dir, chapter_map, chapter_md_groups, merge_section_files, chapter):

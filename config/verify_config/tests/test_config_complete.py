@@ -75,8 +75,9 @@ SCAN_CLI = os.path.join(_ROOT, "flows/extract/structure/script/scan_skeleton.py"
 MAKE_CLI = os.path.join(_ROOT, "config/verify_config/make_config.py")
 
 # Real corpus books are discovered at runtime (the corpus changes); we do not
-# hard-code paths. CORPUS_ROOT is the only machine-specific anchor.
-CORPUS_ROOT = r"D:\study\book"
+# hard-code paths. CORPUS_ROOT comes from user_config (example default).
+from lib.user_config import get as _uc_get  # noqa: E402
+CORPUS_ROOT = _uc_get("corpus_root", r"D:\study\book")
 
 
 def _find_real_has_cfg_book():

@@ -6,7 +6,7 @@
 把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair；文本提取全部完成后，依次跑 **config 子流程**（生成 `verify_config.json`）、**figure_detection 子流程**（图检测 + 分配），最后跑 **structure 子流程**（生成全书单一的 `book_structure.json` 书对象）。本阶段最终产出修复后的 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一），**不做任何校验**。
 ## 前置
 - `prep` 完成，环境 OK。
-- 已知待提取 PDF 的路径 `P`（工作目录由 Step 1 的「目录决策」按分支 A–D 自动确定，必要时归一目录；不要求 PDF 预先就位于 `D:\study\book\<书名>\`）。
+- 已知待提取 PDF 的路径 `P`（工作目录由 Step 1 的「目录决策」按分支 A–D 自动确定，必要时归一目录；不要求 PDF 预先就位于 `<corpus_root>\<书名>\`）。
 
 ## 步骤（有序）
 
@@ -20,7 +20,7 @@
    - **分支 C — 无 `_extract`，且目录名与 PDF 名差别较大**：在 `D` 内新建目录 `D/<N>/`，把 PDF 移入 `D/<N>/<N>.pdf` → 工作目录 = `D/<N>`。
    - **分支 D — 上下册 / 多册书**：在 `D` 内按书名新建统一目录 `D/<书名>/`，其下再分册子目录（如 `D/<书名>/上册/`、`D/<书名>/下册/`，或 `册一/册二/…`）；把各册 PDF 分别放入对应册目录（如 `D/<书名>/上册/上册.pdf`）。逐册提取：每册工作目录为 `D/<书名>/<册>/`，前一册 `PIPELINE OK` 后再启动下一册（见本阶段规则2 多册串行）。
 
-   > 约定：提取输出 `_extract/` 始终建在「工作目录」同级（即 `<book_dir>/_extract/`）；`<书名>` 即最终确定的工作目录名。若 `<book_dir>` 不在 `D:\study\book\` 下，提取与产物仍只在 `<book_dir>` 内进行，不影响其它书籍。
+   > 约定：提取输出 `_extract/` 始终建在「工作目录」同级（即 `<book_dir>/_extract/`）；`<书名>` 即最终确定的工作目录名。若 `<book_dir>` 不在 `<corpus_root>\` 下，提取与产物仍只在 `<book_dir>` 内进行，不影响其它书籍。
 
 2. **启动后台文本提取（启动前禁止做其他事）**
 
@@ -78,36 +78,42 @@
 
 **形态 A — `launch_pipeline.sh`（推荐，`nohup` 后台 + 自动设 CUDA PATH）**
 ```bash
-bash launch_pipeline.sh "D:/study/book/<书名>/<书名>.pdf"                # 全本，页数自动识别
-bash launch_pipeline.sh "D:/study/book/<书名>/<书名>.pdf" --end 320       # 仅提取前 320 页
-bash launch_pipeline.sh "D:/study/book/<书名>/<书名>.pdf" --start 100 --end 200  # 提取 100–200
-bash launch_pipeline.sh "D:/study/book/<书名>/<书名>.pdf" --force         # 从头重跑
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf"                # 全本，页数自动识别
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --end 320       # 仅提取前 320 页
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --start 100 --end 200  # 提取 100–200
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 从头重跑
 ```
 - 脚本内部 `nohup … &` 脱离终端；日志写 `<pdf_parent>/_extract/extract_pipeline.log`。`--start`/`--end` 均可省略，省略即取全本。
 
 **形态 B — 直接 `python`（手动设 PATH）**
 ```bash
-D:/anaconda3/envs/pdfextract/python.exe flows/extract/pipeline/script/extract_pipeline.py \
-    "D:/study/book/<书名>/<书名>.pdf"
+<conda.env_path>/python.exe flows/extract/pipeline/script/extract_pipeline.py \
+    "<corpus_root>/<书名>/<书名>.pdf"
 # 等价于：python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|off|force]
 ```
 - 其余开关：`--force`（从头）/`--deskew auto|off|force`（纠斜）。范围用 `--start`/`--end` 限定，不给则全本。图检测单独由 figure_detection 子流程负责，此处不传图相关开关。
 
+**⚠️ Windows 启动失败模式（本机实测，别再踩）**
+- 🔴 **`bash` 不可用**：本机 `C:\Windows\system32\bash.exe` 是 WSL 启动器但**未装任何发行版**（`execvpe(/bin/bash) failed`），也无 Git Bash → **形态 A `launch_pipeline.sh` 与 `flow_runner run extract extract_text`（其命令模板即 `bash launch_pipeline.sh`）必然失败**。启动必须改用形态 B/C。
+- 🔴 **别用 `cmd /c` 包整条命令串**：PS 5.1 `Start-Process -ArgumentList @('/c', $cmdline)` 对「以引号开头」的命令串会二次加引号 → cmd 解析失败：表现为 cmd 立即退出 `code=1`、**日志文件根本不会创建**（连空文件都没有）。形如 `echo hello > "log"`（引号在中间）没事；`"python.exe" "script" "pdf" > "log"`（引号开头）必挂。
+- 🔴 **别写 `.bat` / `.ps1` 启动器文件**：cmd 按 OEM 代码页（中文系统 = GBK/936）读 `.bat`，PS 5.1 无 BOM 时按 ANSI 读 `.ps1`；UTF-8 写入（write 工具默认）的中文路径全部乱码 → `系统找不到指定的路径` / `文件名、目录名或卷标语法不正确`，日志同样不会创建。即使改写 GBK，LF-only 行尾也可能触发解析错误。
+- ✅ **正解就是下面的形态 C**（直接 `Start-Process python.exe`，不经 cmd）：中文路径、括号文件名（如 `遍历论+(孙文祥)+(Z-Library).pdf`）实测均安全；唯一注意点是 `-ArgumentList` 元素**含空格时必须自带引号**（PS 5.1 不会自动加引号，空格会把参数拆开）。
+
 **形态 C — PowerShell `Start-Process`（中文路径安全，Windows）**
 ```powershell
 # 1) 设 PATH（含 torch lib + nvidia cu12 bin；故意不含 cudnn\bin）
-$env:Path = "D:\anaconda3\envs\pdfextract\lib\site-packages\torch\lib;" +
-            "D:\anaconda3\envs\pdfextract\Library\bin;" +
-            "D:\anaconda3\envs\pdfextract\Scripts;D:\anaconda3\envs\pdfextract;" + $env:Path
+$env:Path = "<conda.env_path>\lib\site-packages\torch\lib;" +
+            "<conda.env_path>\Library\bin;" +
+            "<conda.env_path>\Scripts;<conda.env_path>;" + $env:Path
 # 2) 归位 PDF（Move-Item 而非 Copy-Item，确保仅此一份）
-if (-not (Test-Path -LiteralPath "D:\study\book\<书名>\<书名>.pdf")) {
-    Move-Item -LiteralPath "<原路径>" -Destination "D:\study\book\<书名>\<书名>.pdf" -Force
+if (-not (Test-Path -LiteralPath "<corpus_root>\<书名>\<书名>.pdf")) {
+    Move-Item -LiteralPath "<原路径>" -Destination "<corpus_root>\<书名>\<书名>.pdf" -Force
 }
 # 3) 后台静默启动（仅传 PDF，范围默认全本；要限定段可加 "--start"/"--end" 元素）
 $proc = Start-Process -WindowStyle Hidden -PassThru `
-    -FilePath "D:\anaconda3\envs\pdfextract\python.exe" `
+    -FilePath "<conda.env_path>\python.exe" `
     -ArgumentList @("flows/extract/pipeline/script/extract_pipeline.py",
-                    "D:\study\book\<书名>\<书名>.pdf")
+                    "<corpus_root>\<书名>\<书名>.pdf")
 # 取 PID 便于跟踪：$proc.Id
 ```
 - 中文 / 含空格路径安全（用 `-LiteralPath` 与带引号 `ArgumentList`）；只传 PDF 即全本，范围由脚本内 `fitz` 自动识别。

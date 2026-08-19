@@ -11,6 +11,11 @@ dist/
 *.egg-info/
 .eggs/
 
+# ===== 用户配置（本地覆盖）=====
+# user_config.json 是「首次使用配置」的落盘位置，含本机私有路径，
+# 不随仓库上传；缺失时脚本回退到 lib/user_config.py 内置默认值。
+user_config.json
+
 # ===== 测试 / 静态分析缓存 =====
 .pytest_cache/
 .coverage
@@ -18,8 +23,6 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 *.log
-_*.txt
-_*.md
 
 # ===== 虚拟环境（若本地曾建）=====
 .venv/

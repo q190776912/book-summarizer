@@ -18,9 +18,9 @@
     python scan_skeleton.py <extract_dir> [ch ...]
 
     # 全书
-    python scan_skeleton.py D:/study/book/<书名>/_extract
+    python scan_skeleton.py <corpus_root>/<书名>/_extract
     # 指定章
-    python scan_skeleton.py D:/study/book/<书名>/_extract 1 2 3
+    python scan_skeleton.py <corpus_root>/<书名>/_extract 1 2 3
 
     # 编号模式（three-level / two-level / cn）由 <extract_dir>/verify_config.json
     # 的 `ordinal` 字段自动判定，无需任何 --scheme 之类的命令行 override。

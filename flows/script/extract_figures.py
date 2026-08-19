@@ -115,7 +115,8 @@ except Exception:
 
 
 # Default weights path (DocLayout-YOLO, from PDF-Extract-Kit 1.0 ModelScope repo).
-DEFAULT_WEIGHTS = r"D:\study\model\PDF-Extract-Kit\models\Layout\YOLO\doclayout_yolo_ft.pt"
+from lib.user_config import weight_paths
+DEFAULT_WEIGHTS = weight_paths()["layout_weight"]
 
 
 def render_page(doc, pno, dpi, deskew_mode="auto",

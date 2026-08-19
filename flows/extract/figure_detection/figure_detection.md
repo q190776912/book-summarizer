@@ -6,7 +6,7 @@
 对全书做一次图检测（DocLayout-YOLO 版面检测）与图分配（语义命名 `图X.X.X`），产出 `figure_detect.json` + `figure_index.json`，供写章阶段的图嵌入消费。本子流程是 extract 阶段里**唯一读图序标（`ordinal` 的 Figure 组）** 的环节，图号前缀=该组 `name`、段数 components=该组 `type` 经 `ORDINAL_DEPTH` 派生的 `depth`，故执行前须确保 `ordinal` 含 Figure 组（或过渡 `{"figure":{"labels":[]}}` 零匹配标记）。
 ## 前置
 - 全部 `page_*.json` 已落盘（文本提取阶段出口）。
-- `chapter_map.json` 就绪（检测阶段需把每页归到章节；分配阶段按章命名）。
+- `chapter_map.json` 就绪（由 config 子流程步骤 1 统一生成；检测阶段需把每页归到章节；分配阶段按章命名）。
 - `_extract/verify_config.json` 已存在且（若书图号前缀非默认）`ordinal` 含 Figure 组（`name` 列前缀词、`type` 设段数）。**缺 Figure 组则图号前缀退化为默认 `["图","Figure","Fig"]`**，自定义前缀书（Scheme / Illustration 等）会漏识 caption。
 
 ## 步骤（有序）

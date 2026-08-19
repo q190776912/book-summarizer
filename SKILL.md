@@ -45,7 +45,7 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 | Stage | 流程 | 一句话 | 关键约束 |
 |-------|------|--------|---------|
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
-| 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair；文本出口后跑 **config 子流程**（生成 `verify_config.json`）→ **figure_detection 子流程**（图检测+分配）→ **structure 子流程**（合并产出 `book_structure.json` 结构契约书对象，全书批量生成） | 防停滞（extract 规则1）；chapter_map 早建只一次（extract/chapter_map 规则1）；公式调参；**MM Repair 门（extract/mm_repair 流程 规则1）**；🔴 **图检测前必须 config 先行**（extract 内部顺序）；🔴 structure 为 extract 末尾 Step 5（结构契约在写源前就绪）；写源前可跑校验层 `verify/script/check_structure_completeness.py` 做源侧查漏 + 混合回填 |
+| 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair；文本出口后跑 **config 子流程**（先建章节映射 `chapter_map.json`，再生成 `verify_config.json`）→ **figure_detection 子流程**（图检测+分配）→ **structure 子流程**（合并产出 `book_structure.json` 结构契约书对象，全书批量生成） | 防停滞（extract 规则1）；chapter_map 在 config 子流程（MM 修复后）统一生成只一次（extract/config_setting 步骤 1）；公式调参；**MM Repair 门（extract/mm_repair 流程 规则1）**；🔴 **图检测前必须 config 先行**（extract 内部顺序）；🔴 structure 为 extract 末尾 Step 5（结构契约在写源前就绪）；写源前可跑校验层 `verify/script/check_structure_completeness.py` 做源侧查漏 + 混合回填 |
 | 2 | [`write-source`](flows/write-source/write-source.md) | 按骨架契约写源语言初稿 + 嵌图，末尾（步骤 3）批量校验至 PASS | 源语言优先（write-source 规则1）；拆章（write-source 规则3）；写源期间**禁逐章 verify（write-source 规则2）** |
 | 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS | 单向修复（derive-translate 规则1）；中英 1:1 同构 |
 

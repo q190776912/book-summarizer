@@ -57,7 +57,7 @@
 python tools/flow_runner.py run "<corpus_root>/<书名>" prep env
 python tools/flow_runner.py run "<corpus_root>/<书名>" extract place_pdf
 python tools/flow_runner.py run "<corpus_root>/<书名>" extract extract_text   # 后台提取（launch_pipeline.sh）
-# ... extract.chapter_map → extract.mm_repair → extract.config → extract.figure_detection → extract.structure
+# ... extract.mm_repair → extract.config（含 chapter_map 建映射）→ extract.figure_detection → extract.structure
 # 3. 写源语言初稿 → 派生翻译版 → 校验至 PASS
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source write_chapters
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source verify_source

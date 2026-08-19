@@ -22,7 +22,7 @@ import os
 # --------------------------------------------------------------------------
 FLOW_ORDER = {
     "prep": ["env"],
-    "extract": ["place_pdf", "extract_text", "chapter_map", "mm_repair",
+    "extract": ["place_pdf", "extract_text", "mm_repair",
                 "config", "figure_detection", "structure"],
     "write_source": ["write_chapters", "embed_figures", "verify_source"],
     "derive": ["translate", "verify_cn"],
@@ -49,14 +49,13 @@ RUN_COMMANDS = {
     "extract.extract_text": ("cmd",
         # 后台文本提取，断点续跑，纯文本不含图检测
         "bash launch_pipeline.sh \"{pdf}\""),
-    "extract.chapter_map": ("agent",
-        "从目录页读章名与 PDF 页码，写 _extract/chapter_map.json（见 chapter_map.md）。"),
     "extract.mm_repair": ("agent",
         "完整链路 audit → 模式B(--hybrid) → 模式A(视觉) → apply 写回 page_*.json；"
         "见 mm_repair.md。apply 真完成才出 _extraction_done.json。"),
-    "extract.config": ("cmd",
-        # 缺 _extraction_done.json 会硬拒绝
-        "python config/verify_config/make_config.py \"{extract_dir}\""),
+    "extract.config": ("agent",
+        "先按 config_setting.md 步骤 1 建章节映射 _extract/chapter_map.json"
+        "（MM Repair 完成后统一生成，只建一次），再跑 "
+        "python config/verify_config/make_config.py \"{extract_dir}\"；两者都完成才算 done。"),
     "extract.figure_detection": ("cmd",
         "python flows/script/extract_figures.py \"{pdf}\" --out \"{extract_dir}\" --book && "
         "python flows/script/assign_figures.py \"{pdf}\" --out \"{extract_dir}\" --book"),
@@ -202,6 +201,10 @@ class physical_evidence:
     @staticmethod
     def config_ok(book_dir, extract_dir):
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        # config 步骤现含 chapter_map 建映射（config_setting 步骤 1），一并核验
+        ok_cm, detail_cm = physical_evidence.chapter_map_ok(book_dir, extract_dir)
+        if not ok_cm:
+            return False, f"config 前置 chapter_map 缺失: {detail_cm}"
         p = os.path.join(ex, "verify_config.json")
         if not os.path.exists(p):
             return False, "缺 verify_config.json"
@@ -211,7 +214,7 @@ class physical_evidence:
             return False, f"verify_config.json 非法 JSON: {e}"
         if not (isinstance(d.get("ordinal"), list) and len(d.get("ordinal")) > 0):
             return False, "verify_config.json 缺 ordinal 数组"
-        return True, "verify_config.json 含 ordinal 数组"
+        return True, "chapter_map.json + verify_config.json（含 ordinal 数组）就绪"
 
     @staticmethod
     def figure_ok(book_dir, extract_dir):
@@ -318,7 +321,6 @@ EVIDENCE = {
     "prep.env": None,  # 环境检查由 agent 确认
     "extract.place_pdf": None,
     "extract.extract_text": physical_evidence.pages_all_landed,
-    "extract.chapter_map": physical_evidence.chapter_map_ok,
     "extract.mm_repair": physical_evidence.mm_repair_complete,
     "extract.config": physical_evidence.config_ok,
     "extract.figure_detection": physical_evidence.figure_ok,

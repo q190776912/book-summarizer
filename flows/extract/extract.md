@@ -28,29 +28,25 @@
    - 启动后**立即转 Step 3 轮询、不等待**（并行强制规则见本阶段规则1）。
 
 3. **主 Agent 进入轮询循环（强制并行，见本阶段规则1）**
-   ```
-   total_chapters = len(chapter_map)
-   chapter_map_ready = False
+```
    while True:
        0. 健康检查（每轮先做）：确认后台提取进程仍存活 ——
           `tasklist` 中应有 pdfextract 的 `python.exe` 进程，且 `extract_pipeline.log`
-          末尾无 `Batch N–M FAILED` / `Pipeline finished` / `Traceback`。
-          若进程已不在 或 日志出现失败 → **立即排查原因**（读 `extract_pipeline.log`
-          与对应 `batch_*.log` 末段定位异常并修复），随后**直接重启流水线**
-          （脚本支持断点续跑，会从已落盘最大页+1 续跑，无需 --force）；
-          修复前不要继续推进后续步骤。
+           末尾无 `Batch N–M FAILED` / `Pipeline finished` / `Traceback`。
+           若进程已不在 或 日志出现失败 → **立即排查原因**（读 `extract_pipeline.log`
+           与对应 `batch_*.log` 末段定位异常并修复），随后**直接重启流水线**
+           （脚本支持断点续跑，会从已落盘最大页+1 续跑，无需 --force）；
+           修复前不要继续推进后续步骤。
        1. current_max_page = max(现有 _extract/page_*.json 的页码)
-       2. if not chapter_map_ready and current_max_page >= 5:
-            从目录页读章名与 PDF 页码 → 写 chapter_map.json（见子流程 [`extract/chapter_map`](chapter_map/chapter_map.md)）；chapter_map_ready = True
-       3. 若 current_max_page 自上次 MM audit 以来增长（建议新增 ≥1 稳定批次，如 50 页；或后台提取已结束）：
+       2. 若 current_max_page 自上次 MM audit 以来增长（建议新增 ≥1 稳定批次，如 50 页；或后台提取已结束）：
             对"新增稳定落盘区间"跑 MM Repair 完整链路（见子流程 [`extract/mm_repair`](mm_repair/mm_repair.md)）
    ```
    - ⚠️ **流水线在首个批次失败时即整体停止**（日志 `Stopping due to batch failure`），**不会自动重试**；若不及时监控，会"静默死掉、0 页落盘"。因此每轮轮询**必须先做步骤 0 健康检查**，发现死掉立即排查+重启，绝不能在"以为还在跑"的状态下一步步空转。
    - **提取与 MM 修复门可并行**：MM Repair 只针对已落盘页码，绝不与提取进程写同一文件冲突。
    - **视觉审读是瓶颈**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行。
 
-4. **MM Repair 完成后 → 跑 config 子流程（生成书级配置）**
-   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读 + 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A 校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
+4. **MM Repair 完成后 → 跑 config 子流程（chapter_map + 书级配置）**
+   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读 + 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：先建章节映射 `_extract/chapter_map.json`（步骤 1，全书只此一份、不重复生成），再依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A 校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
    - `_extraction_done.json` 是本阶段收尾**由主 Agent 在 MM Repair 完成后**写出的完成标记（不是后台文本流水线发出的中间信号）；它的存在应等价于「MM Repair 完成」，若它早于模式 A 写出则属误用（参见 Kreyszig 书 `_extraction_done.json` 的 `sample_pending` 反例）。
    - 🔴 **图检测之前必须完成此步**：图检测严格读 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`），缺 Figure 组则退化默认前缀，自定义图号书（Scheme / Illustration 等）会漏识。
 
@@ -149,7 +145,7 @@ bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 
 本 flow 的 Step 1→6 是**硬有序**，且作为 `flows/_flow_gate.md` 定义的 `extract`
 flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_flow_gate.md)）：
 
-- **顺序铁律**：`extract_text → chapter_map → mm_repair → config → figure_detection →
+- **顺序铁律**：`extract_text → mm_repair → config（含 chapter_map 建映射）→ figure_detection →
   structure` 依次进行；任一步未完成，下一步被 flow_runner 顺序闸 + 下游加载器双拦截。
 - 🔴 **`_extraction_done.json` 是 MM Repair 真完成的唯一标记**：只能由
   `mm_repair_apply.py` 在「条目全 resolved + 每页有 mm 标记」时写出。本 flow 的
@@ -176,8 +172,7 @@ flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_f
 
 ## 子流程
 - [`extract/pipeline`](pipeline/pipeline.md) — 后台**文本**提取流水线（Step 2 启动：断点续跑 + 分批 MFD→MFR→OCR；不含图检测）
-- [`extract/chapter_map`](chapter_map/chapter_map.md) — 建章节映射
 - [`extract/mm_repair`](mm_repair/mm_repair.md) — MM Repair 链路（Step 2 轮询）
-- [`extract/config_setting`](config_setting/config_setting.md) — 书级配置生成（Step 3，图检测之前）
-- [`extract/figure_detection`](figure_detection/figure_detection.md) — 图检测 + 分配（Step 4，config 之后）
+- [`extract/config_setting`](config_setting/config_setting.md) — chapter_map 建映射 + 书级配置生成（Step 4，MM Repair 之后、图检测之前）
+- [`extract/figure_detection`](figure_detection/figure_detection.md) — 图检测 + 分配（Step 5，config 之后）
 - [`extract/structure`](structure/structure.md) — 统一结构骨架（Step 6，生成 `book_structure.json` 书对象；写作契约 + verify 基准合一）

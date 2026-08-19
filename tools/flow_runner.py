@@ -19,10 +19,10 @@
 
 约定：book_dir 为本书工作目录（含 _extract/）。extract_dir 默认 = <book_dir>/_extract。
 
-注意：agent 驱动的步（环境检查 / 归位 / chapter_map / mm_repair 视觉 / 写作 / 翻译）
-无法被机械跑完——flow_runner 会打印该步的文档说明，agent 按文档做完后，
-用 ``verify`` 复核、``mark`` 落账。scripted 步（extract_text/config/figure/
-structure/embed/verify）由 ``run`` 直接执行。
+注意：agent 驱动的步（环境检查 / 归位 / mm_repair 视觉 / config 含 chapter_map 建映射 /
+写作 / 翻译）无法被机械跑完——flow_runner 会打印该步的文档说明，agent 按文档做完后，
+用 ``verify`` 复核、``mark`` 落账。scripted 步（extract_text/figure/structure/embed/
+verify）由 ``run`` 直接执行。
 """
 import os
 import sys

@@ -54,21 +54,25 @@ assert 上游完成，照样被挡：
 
 ```
 prep:            [env]
-extract:         [place_pdf, extract_text, chapter_map, mm_repair,
+extract:         [place_pdf, extract_text, mm_repair,
                   config, figure_detection, structure]
 write_source:    [write_chapters, embed_figures, verify_source]
 derive:          [translate, verify_cn]
 ```
 
+> `config` 步骤包含两件事（见 config_setting.md）：① 建章节映射
+> `chapter_map.json`（MM Repair 完成后统一生成，只建一次）；② `make_config.py`
+> 生成 `verify_config.json`。旧 `extract.chapter_map` 独立步骤已并入 `config`。
+
 ## 每步"完成"的判据（物理证据，见 flows/_flow_contract.py）
 
 不看账本、只看磁盘产物：
 - `extract_text`：`page_*.json` 连续落盘 1..N 无空洞。
-- `chapter_map`：`chapter_map.json` 存在且含章节。
 - `mm_repair`：`_extraction_done.json` 存在 **且** manifest 条目全 resolved **且**
   每页 `page_*.json` 有 `mm_repaired/mm_reviewed/mm_converted` 标记（legacy 缺
   marker 时回退物理核对）。
-- `config`：`verify_config.json` 存在且含 `ordinal` 数组。
+- `config`：`chapter_map.json` 存在且含章节 **且** `verify_config.json` 存在且
+  含 `ordinal` 数组。
 - `figure_detection`：`figure_index.json` 存在。
 - `structure`：`book_structure.json` 存在且含章节节点。
 - `write_chapters`：已写源语言章数 == chapter_map 章数。

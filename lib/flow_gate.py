@@ -38,7 +38,7 @@ GATE_FILE = os.path.join("_extract", ".flow_gate.json")
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {
     "prep": ["env"],
-    "extract": ["place_pdf", "extract_text", "chapter_map", "mm_repair",
+    "extract": ["place_pdf", "extract_text", "mm_repair",
                 "config", "figure_detection", "structure"],
     "write_source": ["write_chapters", "embed_figures", "verify_source"],
     "derive": ["translate", "verify_cn"],

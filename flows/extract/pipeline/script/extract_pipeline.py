@@ -11,7 +11,9 @@ Extraction RANGE (--start / --end), both optional:
 The upper bound (end) is auto-detected from the PDF via PyMuPDF when --end is omitted,
 so there is never a need to pass a bare "total page count".
 
-The _extract/ output directory is derived automatically as <pdf_parent>/_extract.
+The _extract/ output directory is derived automatically as <pdf_parent>/_extract;
+multi-volume books override it with --extract-dir <book_dir>/_extract/<vol>/ so that
+each volume keeps its own page_*.json (see flows/extract/extract.md branch D).
 
 IMPORTANT — this driver produces ONLY text + formula ``page_*.json`` (the "raw
 material"). Figure detection + assignment is a SEPARATE phase — the
@@ -118,11 +120,16 @@ def main():
                     help="restart from page 1, ignoring existing pages")
     ap.add_argument("--deskew", default="auto", choices=["auto", "off", "force"],
                     help="skew correction for scanned pages (see extract_book.py --deskew)")
+    ap.add_argument("--extract-dir", default=None,
+                    help="override output directory (default: <pdf_parent>/_extract). "
+                         "Multi-volume books: point each volume at "
+                         "<book_dir>/_extract/<vol>/, e.g. .../_extract/上册")
     args = ap.parse_args()
 
     global LOG_FILE
     PDF = args.pdf
-    EXTRACT_DIR = str(Path(PDF).resolve().parent / "_extract")
+    EXTRACT_DIR = str(Path(args.extract_dir).resolve()) if args.extract_dir \
+        else str(Path(PDF).resolve().parent / "_extract")
     LOG_FILE = Path(EXTRACT_DIR) / "extract_pipeline.log"
     Path(EXTRACT_DIR).mkdir(parents=True, exist_ok=True)
 

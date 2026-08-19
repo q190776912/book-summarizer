@@ -18,12 +18,14 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 
 ```
 <corpus_root>\<书名>\       ← 每个书一个文件夹（corpus_root 见 user_config.json / README 配置章节）
-  ├─ <书名>.pdf            ← 源 PDF（必须在此专属目录内）
+  ├─ <书名>.pdf            ← 源 PDF（必须在此专属目录内，保留原名）
   ├─ _extract\              ← 提取目录：所有后台数据（page_*.json / chapter_map.json / figure_* / _mm_repair/）
   ├─ 第1章_章名.md           ← 中文版
   ├─ Chapter1_Name.md       ← 英文版（仅英文/他语种书时有）
   └─ ...
 ```
+
+> **上下册 / 多册书**：PDF 与总结 md 均留在书级目录（`<书名>.pdf` 保持原位**原名不动**）；`_extract\` 内按册分子目录（`_extract\上册\`、`_extract\下册\`），各册提取数据（page_*.json / chapter_map.json / figure_* / _mm_repair/ 及 flow 账本 `.flow_gate.json`）落在对应册目录，由流水线 `--extract-dir` 指定（见 `flows/extract/extract.md` 分支 D）；每册的后续子流程与 flow_runner 操作均以 `<书目录>/_extract/<册>` 为该册 extract_dir。
 
 > **临时文件隔离**：Agent 生成的所有临时脚本 / 日志必须放入 `_extract\`；根目录只允许 `.pdf`、`.md`、`_extract\` 三类。
 

@@ -17,9 +17,13 @@
 ## 机制（四层）
 
 ### 1. 证明账本（ledger）
-- 位置：`<book_dir>/_extract/.flow_gate.json`
+- 位置：`<extract_dir>/.flow_gate.json`（单卷书即 `<book_dir>/_extract/.flow_gate.json`）
 - 内容：`{steps: { "<flow>.<step>": {done, ts, iso, evidence} }}`
 - **仅 `flow_runner.py` 在证据复核通过后写 `done`**；任何脚本/agent 不得手填。
+- 🔴 **上下册 / 多册书**：每册的 extract_dir 为 `<书目录>/_extract/<册>`，账本随之
+  分册隔离；`flow_runner` 每册操作须传 `--extract <书目录>/_extract/<册>`（`status /
+  next / verify / mark / run / bootstrap` 均支持），book_dir 仍传书级目录（.md 落位
+  处）。
 
 ### 2. 顺序闸（flow_runner 编排器）
 - `tools/flow_runner.py` 是推进任何步骤的**唯一 sanctioned 入口**。

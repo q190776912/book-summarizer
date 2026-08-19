@@ -10,14 +10,16 @@
 
 用法
 ----
-  python tools/flow_runner.py status <book_dir>
-  python tools/flow_runner.py next <book_dir>
-  python tools/flow_runner.py verify <book_dir> <flow> <step>
-  python tools/flow_runner.py mark   <book_dir> <flow> <step>
-  python tools/flow_runner.py run    <book_dir> <flow> <step> [--pdf <pdf>]
+  python tools/flow_runner.py status <book_dir> [--extract <extract_dir>]
+  python tools/flow_runner.py next   <book_dir> [--extract <extract_dir>]
+  python tools/flow_runner.py verify <book_dir> <flow> <step> [--extract <extract_dir>]
+  python tools/flow_runner.py mark   <book_dir> <flow> <step> [--extract <extract_dir>]
+  python tools/flow_runner.py run    <book_dir> <flow> <step> [--pdf <pdf>] [--extract <extract_dir>]
   python tools/flow_runner.py bootstrap <book_dir> [--extract <extract_dir>]
 
-约定：book_dir 为本书工作目录（含 _extract/）。extract_dir 默认 = <book_dir>/_extract。
+约定：book_dir 为本书工作目录（含最终 .md）。extract_dir 默认 = <book_dir>/_extract；
+多册书每册传 --extract <book_dir>/_extract/<册>，账本即分册隔离
+（lib/flow_gate.ledger_path，单卷书路径与历史一致）。
 
 注意：agent 驱动的步（环境检查 / 归位 / mm_repair 视觉 / config 含 chapter_map 建映射 /
 写作 / 翻译）无法被机械跑完——flow_runner 会打印该步的文档说明，agent 按文档做完后，
@@ -46,9 +48,9 @@ def _extract_dir(book_dir, override=None):
     return override or os.path.join(book_dir, "_extract")
 
 
-def _print_status(book_dir):
-    st = gate_status(book_dir)
-    print(f"账本: {ledger_path(book_dir)}\n")
+def _print_status(book_dir, extract_dir):
+    st = gate_status(book_dir, extract_dir)
+    print(f"账本: {ledger_path(book_dir, extract_dir)}\n")
     print(f"{'FLOW':<12} {'STEP':<18} {'DONE'}")
     print("-" * 40)
     for flow, steps in FG_FLOW_ORDER.items():
@@ -56,37 +58,37 @@ def _print_status(book_dir):
             flag = "✅" if st[flow][s] else "⬜"
             print(f"{flow:<12} {s:<18} {flag}")
     # 找下一个未完成
-    nxt = _next_step(book_dir)
+    nxt = _next_step(book_dir, extract_dir)
     if nxt:
         print(f"\n下一个可执行: {nxt[0]}.{nxt[1]}")
     else:
         print("\n所有步骤已完成 ✅")
 
 
-def _next_step(book_dir):
+def _next_step(book_dir, extract_dir=None):
     for flow, steps in FG_FLOW_ORDER.items():
         # flow 前置
         try:
-            require_flow_prereqs(book_dir, flow)
+            require_flow_prereqs(book_dir, flow, extract_dir)
         except FlowGateError:
             continue
         for s in steps:
             try:
-                require_ordered(book_dir, flow, s)
+                require_ordered(book_dir, flow, s, extract_dir)
             except FlowGateError:
                 continue
-            if not is_done(book_dir, flow, s):
+            if not is_done(book_dir, flow, s, extract_dir):
                 return (flow, s)
     return None
 
 
-def cmd_status(book_dir):
-    _print_status(book_dir)
+def cmd_status(book_dir, extract_dir):
+    _print_status(book_dir, extract_dir)
     return 0
 
 
-def cmd_next(book_dir):
-    nxt = _next_step(book_dir)
+def cmd_next(book_dir, extract_dir):
+    nxt = _next_step(book_dir, extract_dir)
     if not nxt:
         print("所有步骤已完成 ✅")
         return 0
@@ -97,9 +99,8 @@ def cmd_next(book_dir):
     return 0
 
 
-def cmd_verify(book_dir, flow, step, pdf=None):
-    ex = _extract_dir(book_dir)
-    ok, detail = check_evidence(flow, step, book_dir, ex)
+def cmd_verify(book_dir, flow, step, extract_dir=None):
+    ok, detail = check_evidence(flow, step, book_dir, extract_dir)
     mark_state = "✅ 通过" if ok else "❌ 不通过"
     print(f"证据复核 {flow}.{step}: {mark_state}")
     print(f"  详情: {detail}")
@@ -109,52 +110,52 @@ def cmd_verify(book_dir, flow, step, pdf=None):
     return 0
 
 
-def cmd_mark(book_dir, flow, step):
+def cmd_mark(book_dir, flow, step, extract_dir=None):
     # 标记前先复核证据
-    ex = _extract_dir(book_dir)
-    ok, detail = check_evidence(flow, step, book_dir, ex)
+    ok, detail = check_evidence(flow, step, book_dir, extract_dir)
     if not ok:
         print(f"❌ 拒绝标记 {flow}.{step}：证据未通过（{detail}）。"
               f"先完成该步工作，勿手填账本。")
         return 1
-    mark(book_dir, flow, step, evidence={"detail": detail})
+    mark(book_dir, flow, step, evidence={"detail": detail}, extract_dir=extract_dir)
     print(f"✅ 已标记 {flow}.{step} 完成（{detail}）。")
     return 0
 
 
-def cmd_run(book_dir, flow, step, pdf=None):
+def cmd_run(book_dir, flow, step, pdf=None, extract_dir=None):
     # 1) 主干前置闸
     try:
-        require_flow_prereqs(book_dir, flow)
+        require_flow_prereqs(book_dir, flow, extract_dir)
     except FlowGateError as e:
         print(str(e))
         return 2
     # 2) 顺序闸
     try:
-        require_ordered(book_dir, flow, step)
+        require_ordered(book_dir, flow, step, extract_dir)
     except FlowGateError as e:
         print(str(e))
         return 2
     # 3) 若该步已 done，提示而非重复
-    if is_done(book_dir, flow, step):
+    if is_done(book_dir, flow, step, extract_dir):
         print(f"⚠️ {flow}.{step} 已标记完成；如需重做先 unmark（未提供）。")
         return 0
 
     kind, spec = RUN_COMMANDS.get(f"{flow}.{step}", ("agent", "(无命令，按文档手动)"))
-    ex = _extract_dir(book_dir)
     if kind == "cmd":
-        cmd = spec.format(pdf=pdf or "", book_dir=book_dir, extract_dir=ex)
+        cmd = spec.format(pdf=pdf or "", book_dir=book_dir,
+                          extract_dir=extract_dir or os.path.join(book_dir, "_extract"))
         print(f"▶ 执行 [{flow}.{step}]:\n  {cmd}\n")
         rc = os.system(cmd)
         if rc != 0:
             print(f"❌ 命令返回非零 {rc}；步骤未完成，未标记。先排查后重试 run。")
             return rc
         # 4) 执行后证据复核
-        ok, detail = check_evidence(flow, step, book_dir, ex)
+        ok, detail = check_evidence(flow, step, book_dir, extract_dir)
         if not ok:
             print(f"❌ 命令已跑但证据未通过（{detail}）；未标记，请检查输出。")
             return 1
-        mark(book_dir, flow, step, evidence={"detail": detail, "cmd": cmd})
+        mark(book_dir, flow, step, evidence={"detail": detail, "cmd": cmd},
+             extract_dir=extract_dir)
         print(f"✅ {flow}.{step} 完成并标记（{detail}）。")
         return 0
     else:
@@ -173,7 +174,7 @@ def cmd_bootstrap(book_dir, extract_dir=None):
         return 2
     ok, gaps = gate_bootstrap(book_dir, ex)
     if ok:
-        print(f"✅ 历史书回填完成（依据物理证据）。账本: {ledger_path(book_dir)}")
+        print(f"✅ 历史书回填完成（依据物理证据）。账本: {ledger_path(book_dir, ex)}")
         return 0
     print("⚠️ 部分步骤物理证据不满足，仅回填满足的部分；缺口如下：")
     for step, detail in gaps:
@@ -184,13 +185,25 @@ def cmd_bootstrap(book_dir, extract_dir=None):
 
 USAGE = """\
 用法:
-  flow_runner.py status  <book_dir>
-  flow_runner.py next    <book_dir>
-  flow_runner.py verify  <book_dir> <flow> <step>
-  flow_runner.py mark    <book_dir> <flow> <step>
-  flow_runner.py run     <book_dir> <flow> <step> [--pdf <pdf>]
+  flow_runner.py status  <book_dir> [--extract <extract_dir>]
+  flow_runner.py next    <book_dir> [--extract <extract_dir>]
+  flow_runner.py verify  <book_dir> <flow> <step> [--extract <extract_dir>]
+  flow_runner.py mark    <book_dir> <flow> <step> [--extract <extract_dir>]
+  flow_runner.py run     <book_dir> <flow> <step> [--pdf <pdf>] [--extract <extract_dir>]
   flow_runner.py bootstrap <book_dir> [--extract <extract_dir>]
+
+多册书：每册操作时传 --extract <book_dir>/_extract/<册>，账本分册隔离。
 """
+
+
+def _pop_extract(rest):
+    """从参数列表取 --extract 后的值（默认 None）；不存在的键时原样返回。"""
+    ex = None
+    if "--extract" in rest:
+        i = rest.index("--extract")
+        ex = rest[i + 1] if i + 1 < len(rest) else None
+        del rest[i:i + 2]
+    return ex
 
 
 def main():
@@ -204,34 +217,37 @@ def main():
     if cmd == "status":
         if not rest:
             print(USAGE); return 2
-        return cmd_status(rest[0])
+        ex = _pop_extract(rest)
+        return cmd_status(rest[0], ex)
     if cmd == "next":
         if not rest:
             print(USAGE); return 2
-        return cmd_next(rest[0])
+        ex = _pop_extract(rest)
+        return cmd_next(rest[0], ex)
     if cmd == "verify":
         if len(rest) < 3:
             print(USAGE); return 2
-        return cmd_verify(rest[0], rest[1], rest[2])
+        ex = _pop_extract(rest)
+        return cmd_verify(rest[0], rest[1], rest[2], extract_dir=ex)
     if cmd == "mark":
         if len(rest) < 3:
             print(USAGE); return 2
-        return cmd_mark(rest[0], rest[1], rest[2])
+        ex = _pop_extract(rest)
+        return cmd_mark(rest[0], rest[1], rest[2], extract_dir=ex)
     if cmd == "run":
         if len(rest) < 3:
             print(USAGE); return 2
         book_dir, flow, step = rest[0], rest[1], rest[2]
+        ex = _pop_extract(rest)
         pdf = None
         if "--pdf" in rest:
             i = rest.index("--pdf"); pdf = rest[i + 1] if i + 1 < len(rest) else None
-        return cmd_run(book_dir, flow, step, pdf=pdf)
+        return cmd_run(book_dir, flow, step, pdf=pdf, extract_dir=ex)
     if cmd == "bootstrap":
         if not rest:
             print(USAGE); return 2
         book_dir = rest[0]
-        ex = None
-        if "--extract" in rest:
-            i = rest.index("--extract"); ex = rest[i + 1] if i + 1 < len(rest) else None
+        ex = _pop_extract(rest)
         return cmd_bootstrap(book_dir, ex)
     print(USAGE)
     return 2

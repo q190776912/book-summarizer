@@ -18,13 +18,13 @@
    - **分支 A — 已有 `_extract`**：若 `D` 内已存在 `_extract/` → 工作目录 = `D`，**直接在 `D` 提取，不移动 PDF、不新建目录**。
    - **分支 B — 无 `_extract`，且目录名 ≈ PDF 名（或译名对应）**：若 `D` 的目录名与 `N` 相似（含译名对应，如目录 `Evans 偏微分方程` 对应 PDF `Evans-PDE.pdf`），或 `D` 本身即以书名命名 → 工作目录 = `D`，**在当前目录提取，不新建目录、不移动 PDF**。
    - **分支 C — 无 `_extract`，且目录名与 PDF 名差别较大**：在 `D` 内新建目录 `D/<N>/`，把 PDF 移入 `D/<N>/<N>.pdf` → 工作目录 = `D/<N>`。
-   - **分支 D — 上下册 / 多册书**：在 `D` 内按书名新建统一目录 `D/<书名>/`，其下再分册子目录（如 `D/<书名>/上册/`、`D/<书名>/下册/`，或 `册一/册二/…`）；把各册 PDF 分别放入对应册目录（如 `D/<书名>/上册/上册.pdf`）。逐册提取：每册工作目录为 `D/<书名>/<册>/`，前一册 `PIPELINE OK` 后再启动下一册（见本阶段规则2 多册串行）。
+   - **分支 D — 上下册 / 多册书（PDF 原位不动，`_extract` 内分册）**：书级目录 `D` 即 `<书名>` 目录；**PDF 保持原位、保留原名**（如 `D/<书名>/常庚哲 史济怀 数学分析教程3ed上册.pdf`），总结 md 同样写在书级目录。提取输出按册落在 `D/<书名>/_extract/<册>/`（如 `_extract/上册/`、`_extract/下册/`），由 `extract_pipeline.py` 的 `--extract-dir` 指定（见「启动方式」）。逐册提取：前一册 `PIPELINE OK` 后再启动下一册（见本阶段规则2 多册串行）。后续各子流程（MM Repair / config / figure / structure）与 flow 账本均以 `<书目录>/_extract/<册>` 为该册的 extract_dir；flow_runner 每册操作须传 `--extract <书目录>/_extract/<册>`（账本分册隔离，见 flows/_flow_gate.md）。
 
    > 约定：提取输出 `_extract/` 始终建在「工作目录」同级（即 `<book_dir>/_extract/`）；`<书名>` 即最终确定的工作目录名。若 `<book_dir>` 不在 `<corpus_root>\` 下，提取与产物仍只在 `<book_dir>` 内进行，不影响其它书籍。
 
 2. **启动后台文本提取（启动前禁止做其他事）**
 
-   - 归位完成后启动后台**文本**提取：只需传已确定的 PDF（如 `D/<N>/<N>.pdf` 或 `D/<书名>/<册>/<册>.pdf`），提取**范围**默认取全本（无需传任何页数）；三种启动形态（PowerShell `Start-Process` / `launch_pipeline.sh` / 直接 `python`）与 PATH 设置、范围参数说明见下方「启动方式」。若只想提取某一段，可加 `--start N` / `--end N`（见「启动方式」的范围说明）。启动后程序内部的执行流程（断点续跑 + 分批 MFD→MFR→OCR，**纯文本、不含图检测**）见子流程 [`extract/pipeline`](pipeline/pipeline.md)。
+   - 归位完成后启动后台**文本**提取：只需传已确定的 PDF（如 `D/<N>/<N>.pdf`）；提取**范围**默认取全本（无需传任何页数）；三种启动形态（PowerShell `Start-Process` / `launch_pipeline.sh` / 直接 `python`）与 PATH 设置、范围参数说明见下方「启动方式」。若只想提取某一段，可加 `--start N` / `--end N`（见「启动方式」的范围说明）。🔴 **多册书（分支 D）必须追加 `--extract-dir "<书目录>/_extract/<册>"`**，否则输出会落在 PDF 同级 `_extract`，两册互相覆盖。启动后程序内部的执行流程（断点续跑 + 分批 MFD→MFR→OCR，**纯文本、不含图检测**）见子流程 [`extract/pipeline`](pipeline/pipeline.md)。
    - 启动后**立即转 Step 3 轮询、不等待**（并行强制规则见本阶段规则1）。
 
 3. **主 Agent 进入轮询循环（强制并行，见本阶段规则1）**
@@ -63,7 +63,7 @@
 
 ## 启动方式（统一 PowerShell 后台启动，唯一写法）
 
-> 统一用 **PowerShell `Start-Process` 后台启动**（中文 / 空格 / 括号路径实测安全）。Linux / Git Bash 环境才用 `launch_pipeline.sh`（行为等价，见下）。必须在 `pdfextract` conda 环境下运行（含 torch / fitz / paddle / PDF-Extract-Kit），PATH 要带上 torch 的 `lib` 与 nvidia cu12 bin（`cudnn\bin` 须故意留空，避免与 paddle 的 cudnn DLL 冲突，见 `extract_book.py` 顶部说明）。提取**范围**由脚本从 PDF 自动取全本（`fitz.open(pdf).page_count`），**无需用户手填任何页数**；仅当要提取全本中的某一段时，才用 `--start N` / `--end N` 限定。
+> 统一用 **PowerShell `Start-Process` 后台启动**（中文 / 空格 / 括号路径实测安全）。Linux / Git Bash 环境才用 `launch_pipeline.sh`（行为等价，见下）。必须在 `pdfextract` conda 环境下运行（含 torch / fitz / paddle / PDF-Extract-Kit），PATH 要带上 torch 的 `lib` 与 nvidia cu12 bin（`cudnn\bin` 须故意留空，避免与 paddle 的 cudnn DLL 冲突，见 `extract_book.py` 顶部说明）。提取**范围**由脚本从 PDF 自动取全本（`fitz.open(pdf).page_count`），**无需用户手填任何页数**；仅当要提取全本中的某一段时，才用 `--start N` / `--end N` 限定。**输出目录**默认 = `<pdf_parent>/_extract`；🔴 **上下册 / 多册书（分支 D）必须加 `--extract-dir <书目录>/_extract/<册>`**，否则两册会共写同一 `_extract` 互相覆盖。
 
 **提取范围（`--start` / `--end`，均可省略）**
 - 都不给 → 提取全本（start=1，end=PDF 自动识别总页数）。
@@ -94,6 +94,8 @@ $q = [string][char]34
 $cmd = $q + "<skill根>\flows\extract\pipeline\script\extract_pipeline.py" + $q + " " + `
        $q + "<corpus_root>\<书名>\<书名>.pdf" + $q
 #     要限定段时在末尾追加，如：$cmd += " " + $q + "--start" + $q + " " + $q + "100" + $q
+#     上下册书（分支 D）在末尾追加，如：$cmd += " " + $q + "--extract-dir" + $q + " " + `
+#       $q + "<corpus_root>\<书名>\_extract\上册" + $q
 # 4) 后台静默启动（子进程独立于本终端，窗口关闭不影响）
 $proc = Start-Process -WindowStyle Hidden -PassThru `
     -FilePath "<conda.env_path>\python.exe" `
@@ -109,9 +111,10 @@ Write-Output ("PID: " + $proc.Id)   # 取 PID 便于跟踪
 bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf"                # 全本，页数自动识别
 bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --end 320       # 仅提取前 320 页
 bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --start 100 --end 200  # 提取 100–200
+bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --extract-dir "<书目录>/_extract/上册"  # 上下册书：输出按册隔离
 bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 从头重跑
 ```
-- 脚本内部 `nohup … &` 脱离终端 + 自动设 CUDA PATH；日志同样写 `<pdf_parent>/_extract/extract_pipeline.log`。
+- 脚本内部 `nohup … &` 脱离终端 + 自动设 CUDA PATH；日志同样写 `<extract-dir>/extract_pipeline.log`（默认 `<pdf_parent>/_extract`）。
 
 **前台直跑（仅调试用，看实时输出）**
 ```powershell
@@ -126,7 +129,7 @@ bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 
 - 🔴 **禁止并发多开**：同一本书同时跑两个 `extract_pipeline.py` 会互写 `page_*.json`；启动前先确认无残留实例（`Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 看 CommandLine）。
 - ✅ 统一写法实测通过：中文路径、括号文件名（如 `遍历论+(孙文祥)+(Z-Library).pdf`）均安全；首启失败时加 `-RedirectStandardError "<extract>\pipeline_stderr.txt"` 抓取 argparse 报错。
 
-**启动后验证**：看 `<pdf_parent>/_extract/extract_pipeline.log` 首行应为 `--end omitted: using auto-detected PDF total=N as end`（或 `Using --end=N` / `--end=… exceeds PDF total … clamped` 等），随后出现 `Models loaded. Starting batch loop.` 即正常开工。日志未创建 = 进程在 argparse 阶段就退出（多半是引号问题），按上面失败模式排查。
+**启动后验证**：看 `<extract-dir>/extract_pipeline.log`（默认 `<pdf_parent>/_extract/`，多册书为 `--extract-dir` 指定目录）首行应为 `--end omitted: using auto-detected PDF total=N as end`（或 `Using --end=N` / `--end=… exceeds PDF total … clamped` 等），随后出现 `Models loaded. Starting batch loop.` 即正常开工。日志未创建 = 进程在 argparse 阶段就退出（多半是引号问题），按上面失败模式排查。
 
 ## 本阶段规则（🔴 内联）
 

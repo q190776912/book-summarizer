@@ -6,10 +6,12 @@
 # Use this instead of the .bat/.ps1 launchers — those are blocked by this env's
 # security policy / silently fail on space-containing paths.
 #
-# Usage:  bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...]
+# Usage:  bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...] [--extract-dir <dir>]
 #   <pdf_path>  absolute path to the PDF, e.g. "D:/study/book/Koopman Operator/Koopman Operator.pdf"
 #   [--start N] first page to extract (default 1).
 #   [--end N]   last page to extract (inclusive). Omitted -> auto-detected PDF total page count.
+#   [--extract-dir <dir>]  override output dir (default <pdf_parent>/_extract); multi-volume
+#                          books pass <book_dir>/_extract/<vol>/ so volumes never share pages.
 #   [flags]     any flag understood by extract_pipeline.py is passed through (--force, --deskew ...)
 set -e
 
@@ -44,9 +46,10 @@ SCRIPT="$SKILL_ROOT/flows/extract/pipeline/script/extract_pipeline.py"
 
 PDF="$1"
 EXTRA=()
-# $2.. are passthrough args for extract_pipeline.py (--start/--end/--force/--deskew...).
-# Flags that take a value (--start/--end/--deskew) consume the following token; valueless
-# flags (--force) are passed through as-is.
+EXTRACT_DIR_OVERRIDE=""
+# $2.. are passthrough args for extract_pipeline.py (--start/--end/--force/--deskew/--extract-dir...).
+# Flags that take a value (--start/--end/--deskew/--extract-dir) consume the following token;
+# valueless flags (--force) are passed through as-is.
 i=2
 while [ $i -le $# ]; do
   a="${!i}"
@@ -54,6 +57,8 @@ while [ $i -le $# ]; do
     --force) EXTRA+=("$a") ;;
     --start|--end|--deskew) i=$((i+1)); EXTRA+=("$a" "${!i}") ;;
     --deskew=*) EXTRA+=("$a") ;;
+    --extract-dir) i=$((i+1)); EXTRA+=("$a" "${!i}"); EXTRACT_DIR_OVERRIDE="${!i}" ;;
+    --extract-dir=*) EXTRACT_DIR_OVERRIDE="${a#*=}"; EXTRA+=("$a") ;;
     --*) echo "unsupported flag: $a" >&2; exit 1 ;;
     *)   echo "unexpected positional arg: $a (only <pdf_path> is positional)" >&2; exit 1 ;;
   esac
@@ -61,12 +66,17 @@ while [ $i -le $# ]; do
 done
 
 if [ -z "$PDF" ]; then
-  echo "Usage: bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...]" >&2
+  echo "Usage: bash launch_pipeline.sh <pdf_path> [--start N] [--end N] [--force] [--deskew ...] [--extract-dir <dir>]" >&2
   exit 1
 fi
 
-# _extract lives next to the PDF's parent (see SKILL.md: PDF must be inside <书名>\<书名>.pdf)
-EXTRACT_DIR="$(dirname "$PDF")/_extract"
+# _extract lives next to the PDF's parent by default (see SKILL.md contract);
+# --extract-dir overrides it (multi-volume books: <book_dir>/_extract/<vol>/).
+if [ -n "$EXTRACT_DIR_OVERRIDE" ]; then
+  EXTRACT_DIR="$EXTRACT_DIR_OVERRIDE"
+else
+  EXTRACT_DIR="$(dirname "$PDF")/_extract"
+fi
 mkdir -p "$EXTRACT_DIR"
 LOG="$EXTRACT_DIR/extract_pipeline.log"
 

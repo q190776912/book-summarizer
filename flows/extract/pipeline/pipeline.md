@@ -8,23 +8,24 @@
 ## 运行方式
 直接运行主程序：
 ```bash
-python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|off|force]
+python extract_pipeline.py <pdf> [--start N] [--end N] [--force] [--deskew auto|off|force] [--extract-dir <dir>]
 ```
-- `<pdf>`：书籍 PDF 路径，约定为 `<书名>/<书名>.pdf`；`_extract` 输出目录自动建在其同级。
+- `<pdf>`：书籍 PDF 路径，约定为 `<书名>/<书名>.pdf`；`_extract` 输出目录默认建在其同级。
 - `--start N` / `--end N`：提取范围。`--end` 省略时取 PDF 自动识别的总页数（全本）；`--end` 单独给出则开始页默认为 1；两者都给则为精确区间。脚本启动时用 PyMuPDF（`fitz.open(pdf).page_count`）识别总页。
 - `--force`：从头重跑，忽略已落盘页。
 - `--deskew auto|off|force`：扫描页纠斜（默认 auto）。
+- `--extract-dir <dir>`：输出目录覆盖（默认 `<pdf_parent>/_extract`）。**上下册 / 多册书必须使用**：各册 PDF 留在书级目录（原名不动），输出按册隔离到 `<书目录>/_extract/<册>/`（见 extract.md 分支 D），防止两册共写同一 `_extract` 互相覆盖。
 - 必须在 `pdfextract` conda 环境运行（含 torch / fitz / paddle / PDF-Extract-Kit）。
 
 ## 前置
-- PDF 置于 `<书名>/<书名>.pdf`（`_extract` 输出目录将建在其旁）。
+- PDF 置于 `<书名>/<书名>.pdf`（`_extract` 输出目录将建在其旁；多册书用 `--extract-dir` 指向 `<书目录>/_extract/<册>/`）。
 - `pdfextract` conda 环境可用（环境名见 `user_config.json` 的 `conda.env_name`），且 `model_root`（`user_config.json`）下 PDF-Extract-Kit 权重就位——MFD / MFR / OCR 权重路径由 `lib/user_config.py` 的 `weight_paths()` 从 `model_root` 派生，不手改。
 - 提取范围由 `--start` / `--end` 决定（见上「运行方式」）。
 
 ## 步骤（有序）
 
 **Step 1 — 目录与日志准备**
-- `EXTRACT_DIR = <pdf_parent>/_extract`，自动 `mkdir -p`。
+- `EXTRACT_DIR = <pdf_parent>/_extract`（`--extract-dir` 给定时为指定目录），自动 `mkdir -p`。
 - `LOG_FILE = <EXTRACT_DIR>/extract_pipeline.log`，所有日志 append 写入（同时 `print`）。
 - 每批额外写 `<EXTRACT_DIR>/batch_{start}-{end}.log`，便于单批排查。
 

@@ -6,7 +6,8 @@
 ----
 1. 单一真源：``FLOW_ORDER`` 定义每个 flow 的有序步骤；``FLOW_PREREQS`` 定义
    flow 之间的主干先后（prep → extract → write_source → derive）。
-2. 证明账本（ledger）：``<book_dir>/_extract/.flow_gate.json`` 记录每步完成情况
+2. 证明账本（ledger）：``<extract_dir>/.flow_gate.json``（单卷书即
+   ``<book_dir>/_extract/.flow_gate.json``）记录每步完成情况
    （done / ts / iso / evidence）。**仅 flow_runner 在证据复核通过后写 done**，
    禁止任何脚本/agent 手填账本。
 3. 顺序闸：
@@ -33,7 +34,7 @@ import json
 import os
 import time
 
-GATE_FILE = os.path.join("_extract", ".flow_gate.json")
+GATE_FILE = ".flow_gate.json"
 
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {
@@ -59,12 +60,18 @@ class FlowGateError(RuntimeError):
 # --------------------------------------------------------------------------
 # 账本读写
 # --------------------------------------------------------------------------
-def ledger_path(book_dir):
-    return os.path.join(book_dir, GATE_FILE)
+def ledger_path(book_dir, extract_dir=None):
+    """账本落在 extract_dir 内（默认 <book_dir>/_extract）。
+
+    多册书每册用独立的 extract_dir（如 <book_dir>/_extract/上册），账本即分册
+    隔离；单卷书路径与历史一致（<book_dir>/_extract/.flow_gate.json）。
+    """
+    ex = extract_dir or os.path.join(book_dir, "_extract")
+    return os.path.join(ex, GATE_FILE)
 
 
-def _load(book_dir):
-    p = ledger_path(book_dir)
+def _load(book_dir, extract_dir=None):
+    p = ledger_path(book_dir, extract_dir)
     if os.path.exists(p):
         try:
             d = json.load(open(p, encoding="utf-8"))
@@ -75,8 +82,8 @@ def _load(book_dir):
     return {"steps": {}}
 
 
-def _save(book_dir, data):
-    p = ledger_path(book_dir)
+def _save(book_dir, data, extract_dir=None):
+    p = ledger_path(book_dir, extract_dir)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -90,67 +97,67 @@ def _key(flow, step):
 # --------------------------------------------------------------------------
 # 查询 / 标记
 # --------------------------------------------------------------------------
-def is_done(book_dir, flow, step):
-    return bool(_load(book_dir)["steps"].get(_key(flow, step), {}).get("done"))
+def is_done(book_dir, flow, step, extract_dir=None):
+    return bool(_load(book_dir, extract_dir)["steps"].get(_key(flow, step), {}).get("done"))
 
 
-def mark(book_dir, flow, step, evidence=None):
+def mark(book_dir, flow, step, evidence=None, extract_dir=None):
     """仅由 flow_runner 在证据复核通过后调用；禁止其它路径手填。"""
-    data = _load(book_dir)
+    data = _load(book_dir, extract_dir)
     data["steps"][_key(flow, step)] = {
         "done": True,
         "ts": time.time(),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "evidence": evidence,
     }
-    _save(book_dir, data)
+    _save(book_dir, data, extract_dir)
 
 
-def unmark(book_dir, flow, step):
+def unmark(book_dir, flow, step, extract_dir=None):
     """复核失败 / 回滚时清除标记（flow_runner 使用）。"""
-    data = _load(book_dir)
+    data = _load(book_dir, extract_dir)
     data["steps"].pop(_key(flow, step), None)
-    _save(book_dir, data)
+    _save(book_dir, data, extract_dir)
 
 
-def require(book_dir, flow, step, msg=None):
-    if not is_done(book_dir, flow, step):
+def require(book_dir, flow, step, msg=None, extract_dir=None):
+    if not is_done(book_dir, flow, step, extract_dir):
         raise FlowGateError(
             msg or f"GATE BLOCKED: 必须先完成 {_key(flow, step)} 后才能继续。"
-                   f"账本: {ledger_path(book_dir)}"
+                   f"账本: {ledger_path(book_dir, extract_dir)}"
         )
 
 
-def require_ordered(book_dir, flow, step):
+def require_ordered(book_dir, flow, step, extract_dir=None):
     """断言 flow 内 step 之前的所有步骤均已 done；否则硬拒绝（禁止跳步）。"""
     steps = FLOW_ORDER.get(flow, [])
     if step not in steps:
         return
     idx = steps.index(step)
-    missing = [s for s in steps[:idx] if not is_done(book_dir, flow, s)]
+    missing = [s for s in steps[:idx] if not is_done(book_dir, flow, s, extract_dir)]
     if missing:
         raise FlowGateError(
             f"GATE BLOCKED: {_key(flow, step)} 要求本 flow 前置步骤完成，"
             f"但以下未完成: {[_key(flow, s) for s in missing]}。"
-            f"禁止跳步进入 {_key(flow, step)}（账本 {ledger_path(book_dir)}）。"
+            f"禁止跳步进入 {_key(flow, step)}（账本 {ledger_path(book_dir, extract_dir)}）。"
         )
 
 
-def require_flow_prereqs(book_dir, flow):
+def require_flow_prereqs(book_dir, flow, extract_dir=None):
     """断言进入某 flow 前其上游 flow 的末步已完成。"""
     for pre in FLOW_PREREQS.get(flow, []):
         seq = FLOW_ORDER.get(pre, [])
         last = seq[-1] if seq else None
-        if last and not is_done(book_dir, pre, last):
+        if last and not is_done(book_dir, pre, last, extract_dir):
             raise FlowGateError(
                 f"GATE BLOCKED: 进入 flow '{flow}' 前必须完成 flow '{pre}'"
-                f"（缺 {_key(pre, last)}；账本 {ledger_path(book_dir)}）。"
+                f"（缺 {_key(pre, last)}；账本 {ledger_path(book_dir, extract_dir)}）。"
             )
 
 
-def status(book_dir):
+def status(book_dir, extract_dir=None):
     """返回 {flow: {step: bool}} 供 status 命令打印。"""
-    return {flow: {s: is_done(book_dir, flow, s) for s in steps}
+    return {flow: {s: is_done(book_dir, flow, s, extract_dir) for s in steps}
             for flow, steps in FLOW_ORDER.items()}
 
 
@@ -171,7 +178,7 @@ def bootstrap(book_dir, extract_dir):
     steps = FLOW_ORDER.get(flow, [])
     # 先清空本 flow 旧标记，保证重跑幂等、不从错误状态累积
     for s in steps:
-        unmark(book_dir, flow, s)
+        unmark(book_dir, flow, s, extract_dir)
 
     gaps = []
     stopped = False
@@ -181,7 +188,8 @@ def bootstrap(book_dir, extract_dir):
             continue
         ok, detail = check_evidence(flow, s, book_dir, extract_dir)
         if ok:
-            mark(book_dir, flow, s, evidence={"bootstrap": True, "detail": detail})
+            mark(book_dir, flow, s, evidence={"bootstrap": True, "detail": detail},
+                 extract_dir=extract_dir)
         else:
             gaps.append((f"{flow}.{s}", detail))
             stopped = True

@@ -121,7 +121,7 @@ class Repairs(JsonData):
                         warnings.append(f"[{sec}] page {page} not in manifest")
                         continue
                     man_keys = {e["key"] for e in mp.get("entries", [])}
-                    keys = val if sec in ("ok", "deferred") else val.keys()
+                    keys = val if sec in ("ok", "deferred", "unavailable") else val.keys()
                     for k in keys:
                         if k not in man_keys:
                             warnings.append(f"[{sec}] page {page} key {k} not in manifest")

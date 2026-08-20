@@ -427,10 +427,12 @@ def _maybe_write_extraction_done(extract_dir):
         return
     # 每页标记核对：只对 manifest 中实际出现过条目（被 flag）的页面要求 mm 标记。
     # 未被 flag 的页面没有任何待修条目，自然不需要 mm 标记。
-    manifest_pages = set()
-    for pg in m.get("pages", {}).values():
-        for e in pg.get("entries", []):
-            manifest_pages.add(e.get("page", 0))
+    # manifest entries carry NO "page" field — the page number is the KEY of
+    # m["pages"] (e.g. "003"). Derive the flagged-page set from those keys;
+    # building it from e.get("page", 0) yields {0} and silently skips every
+    # real page file, so the per-page marker check below becomes dead code and
+    # a false-green slips through. Bug found 2026-08-20 (数学物理方程 pure-scan).
+    manifest_pages = set(int(k) for k in m.get("pages", {}).keys())
     pages = glob.glob(os.path.join(extract_dir, "page_*.json"))
     for pf in pages:
         try:

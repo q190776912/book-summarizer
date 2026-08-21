@@ -13,10 +13,14 @@
 1. **逐节点双源写作 + 格式落地**：对每个结构节点一次性完成「锁骨架 → 取原文 → 套格式」单节点闭环：
    - **(a) 锁骨架与页码锚点**（结构契约 `book_structure.json`，前置已确认，SSOT 见 `flows/extract/structure/structure.md`）：书对象 `sub_sec` 内按章顺序嵌套——每个 `type:"section"` 节点对应一个 `## §N.M` 标题（`name` 即带序标的纯标题，顺序照抄）；每个编号项节点（`type∉{section,exercise,chapter}`：定义 / 定理 / 引理 / 推论 / 命题 / 例 / 评注 / uncat）必须落地；`type:"exercise"` 节点为练习（照下方「习题收录规则」决定省略或保留）。⚠️ 此契约**只定骨架 + 印刷标题 + 页码区间，不含正文**，用于确认"写哪些、按什么顺序、每条目标题是什么"。
    - **(b) 取正文内容**（原文回归 `page_*.json`，内容来源）：对每个节点，按其 `page_start..page_end` 经 `data/page_json/page_json.py` 适配器读取 OCR 原文——`page_json.PageJson.load(fp).page_text()`（整页文本）或 `.text_blocks`（分块）。**以此原文为唯一内容来源**，忠于原文写出陈述 / 证明梗概 / 例题 / 评注；剔除页眉页脚版权行等噪声。
-   - **(c) 套格式规则写源语言文件**：书写严格遵循 [`docs/writing-rules.md`](../../docs/writing-rules.md)（格式约定 **SSOT**）定义的全部格式——标题体系（`# 第N章` / `## §N.M` / `### §N.M.K`）、粗体条目标签（`**Definition 1.1**` 禁 `###`）、块引用、分隔线、`$$` 公式、图片嵌入（见子流程 figures）、练习收录；并须满足 [`verify/format_verify/format_verify.md`](../../verify/format_verify/format_verify.md) 的 **F 层格式校验（15 项格式规则 + KaTeX 真渲染）**——该层是 writing-rules 各项约定的机器化强制实现，**write-source 的输出须 100% 通过其步骤 3 的 verify 校验，否则整章 FAIL**。两层关系：writing-rules 定规则、format_verify 强制规则，authoring 阶段即按二者共同约束落笔，不要依赖后处理 / `--fix` 兜底。
+   - **(c) 套格式规则写源语言文件**：书写严格遵循 [`docs/writing-rules.md`](../../docs/writing-rules.md)（**写源阶段唯一必读规则文档 / SSOT**）定义的全部格式与保真规则——标题体系（`# 第N章` / `## §N.M` / `### §N.M.K`）、粗体条目标签（`**Definition 1.1**` 禁 `###`）、块引用、分隔线、`$$` 公式、图片嵌入（见子流程 figures）、练习收录、结构完整性（D/B/O 层）、反照抄与自造结构闸门（P 层）、OCR 漏标处理、公式序标（Q 层）——这些规则全部在 writing-rules.md 的 [verify 收敛区](#verify-收敛区唯一规则源) 有唯一载体（V-F / V-S / V-P / V-M / V-K 锚点），按锚点查阅即可，本文件不重复展开。writing-rules.md 末尾的「verify 规则 ↔ 写作规则映射表」已把 verify 全部 8 个校验层的**写作期可规避规则**收拢到本文件唯一的 [verify 收敛区](#verify-收敛区唯一规则源)（按 V-C / V-I / V-S / V-P / V-F / V-K / V-E / V-M 锚点组织）；verify 各子文档（`verify/<snake>/<snake>.md`、含 `format_verify.md`）仅承载「机器判定 / 阈值 / `--fix` / 字节契约键」实现，**写源阶段不必逐一读取**——authoring 即按 writing-rules 单一约束落笔，不要依赖后处理 / `--fix` 兜底。
    - **配合流程（单节点闭环）**：先用 (a) 锁骨架与页码锚点 → 再对每节点用 (b) 取原文写正文 → 同时按 (c) 落地格式 → 写完回查 (a) 保证 1:1 同构（无遗漏、无自创层级、无重排）。
-2. 跑 `flows/script/embed_figures <book_dir>` 嵌入本章图片（见子流程 figures，Step 3.5，强制）。
-3. **使用 `verify/verify.md` 批量校验所有总结文件**（源语言全部章节初稿写完 + 已嵌图后执行，🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
+2. **🔴 章首序言先行 + 逐节切片加载（Lever 3 · token 精简 + 信息保全）**：章与第一节之间的章级信息**绝不可丢失**。按以下顺序组织上下文与落笔：
+   - **(a) 先写章首序言（preamble）**：在 `.md` 开头先落 `## §` 之前的所有章级内容——章标题（`# 第N章 …` / `# Chapter N …`）、章导语 / 动机段落、章内**全局记号约定**（如全章统一使用的算子符号、空间定义）、章级 TOC / "四块基石"式摘要列表、以及任何不属于任一具体 `## §` 小节的引子文字。取数边界：**章节点的 `page_start` 至"首个 `## §` 节点 `page_start` 之前"的原文页段**（章 `page_start..page_end` 覆盖整章，首个 `## §` 之前的页即章首序言）。用 `page_json.PageJson.load(fp).page_text()` 逐页取这段、剔除页眉页脚版权噪声后照写。⚠️ 即便后续按节切片调用子代理，**每次切片都必须把这段章首序言作为公共前缀注入**，确保任何小节写作都能看到章级上下文（尤其全局记号），不会因切片而丢信息。
+   - **(b) 逐节切片**：按 `book_structure.json` 的 `## §` 节点把该章切成「一节一上下文」的单元；每节单元只加载该节自身的 `page_start..page_end` 原文切片（不重复加载全章 JSON），再携 (a) 的章首序言前缀落笔该节。超大章（字符 > 60000）仍按规则 3 文件级拆分到「节」一级。
+   - **(c) 拼接**：各节切片写完后按原顺序拼回整章 `.md`，节与节之间以 `---` + 空行分隔；章首序言置于全章最前、首个 `## §` 之前。
+3. 跑 `flows/script/embed_figures <book_dir>` 嵌入本章图片（见子流程 figures，Step 3.5，强制）。
+4. **使用 `verify/verify.md` 批量校验所有总结文件**（源语言全部章节初稿写完 + 已嵌图后执行，🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
    ```bash
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
    ```
@@ -24,9 +28,11 @@
 
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动 write-source 前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
-- **规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
-- **规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 已嵌图后、由步骤 3 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
-- **规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。
+- **🔴 规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
+- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 已嵌图后、由步骤 3 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
+- **🔴 规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。
+- **🔴 规则4 — 写源唯一规则文档 = `writing-rules.md`**：本步骤格式与保真约束**只来自 [`docs/writing-rules.md`](../../docs/writing-rules.md)**（含其末尾「verify 规则 ↔ 写作规则映射表」）。verify 各子文档（`verify/<snake>/<snake>.md`、含 `format_verify.md`）仅承载机器判定 / `--fix` 实现，写源阶段**不必读**；校验失败时再查对应子文档。此举收敛 skill 的 token 开销——写源上下文不再重复注入整组 verify 规则文档。
+- **🔴 规则5 — 章首序言保全（切片不丢章级信息）**：按步骤 1.2 逐节切片时，**章标题、章导语、章内全局记号约定、章级 TOC / 摘要列表等「`## §` 之前的所有章级内容」必须先于任何小节写出，且作为公共前缀注入每一次节切片**。禁止把章首信息并入「第一节」或丢弃——否则会丢失跨节共享的记号定义与章级动机。
 - **核心原则（保真底线）**：OCR 噪声可修、表述可精简但**不得省略编号项 / 描述性内容中的公式概念**；**不编造**内容、**不编造结构**（不得新建原书没有的标题层级、不得重排条目顺序）；**严禁照抄 OCR 文本流**（页眉 / 页脚 / 版权行属噪声须剔除）；非核心内容须"摘要"而非整段照抄（Tier 1/2/3 分级见 `docs/writing-rules.md`）。
 - **双源铁律（结构 ≠ 内容）**：正文**必须回归 `page_*.json` 原文**，禁止把结构契约的 `name` 当作正文来源、禁止脱离契约自创结构或重排顺序；契约只告诉你"有什么标题 / 在哪几页"，原文才告诉你"写什么内容"。
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
@@ -38,7 +44,7 @@
 - `flows/extract/structure/script/build_structure`：统一结构契约生成器（产出 `book_structure.json` 书对象，内部调用 `scan_skeleton` / `extract_items` 系列，命令见 `flows/extract/extract.md`）。
 - `flows/extract/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/extract/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
-- `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 写源时按节点 `page_start..page_end` 取 OCR 原文（双源 (b) 内容来源）。
+- `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 写源时按节点 `page_start..page_end` 取 OCR 原文（双源 (b) 内容来源；步骤 1.2 逐节切片只加载该节 `page_start..page_end` 切片）。
 - `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **H 层 `h_mbq` + G 层** 在步骤 3 `verify --fix` 自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
 - `../../verify/script/audit_counts.py`：逐节条数核对（原由 write-source 步骤 2 调用；该步骤取消后须在 cli 入口或 write-source 步骤 3 前另行挂接，否则源版缺失逐节条数核对）。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
@@ -46,6 +52,6 @@
 - `verify/script/verify_chapter.py`：步骤 3 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 
 ## 子流程
-- [`写作规则`](../../docs/writing-rules.md) — 格式与保真规则（SSOT）
+- [`写作规则`](../../docs/writing-rules.md) — **写源阶段唯一必读规则文档（SSOT）**，已含 verify 全部写作期规则收敛（末尾映射表）
 - [`write-source/figures`](figures/figures.md) — 嵌入图片（Step 3.5）
-- [`verify`](../../verify/verify.md) — 批量校验关卡（步骤 3 引用）
+- [`verify`](../../verify/verify.md) — 批量校验关卡（步骤 3 引用；写源阶段不必读各子文档，校验失败排查时再查）

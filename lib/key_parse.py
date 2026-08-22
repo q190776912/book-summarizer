@@ -93,7 +93,13 @@ COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(
     r'\*\*(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*\*+')
 PROSE_RE_EN = re.compile(
-    r'\b(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)')
+    # CJK-aware boundaries: \b never fires after a CJK char (由定理X.Y / 见命题X.Y
+    # are all \w on both sides), which hid every Chinese cross-reference that
+    # directly followed CJK text and surfaced them as false "truly missing".
+    # (?<![A-Za-z0-9]) keeps the old protection against matches inside Latin
+    # words (reTheorem); (?![A-Za-z]) still rejects the plural "Theorems" while
+    # ALLOWING a digit right after the label (CN no-space form 定理14.15).
+    r'(?<![A-Za-z0-9])(?:' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 # Capturing variants of the EN regexes (label as group(1)) — used by
 # keys_in_md('en'), which needs the label to canonicalize (Definition->定义...).
@@ -121,7 +127,9 @@ ENTRY_RE_EN_NF_C = re.compile(
     r'\*\*(\d+)' + SEP_TIGHT + r'(\d+)\s*(' + '|'.join(COMBINED_LABEL_KINDS) + r')',
     re.IGNORECASE)
 PROSE_RE_EN_C = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    # Same CJK-aware boundaries as PROSE_RE_EN (see note there): \b fails after
+    # CJK chars (「由命题 14.17」) and before digits in no-space form (命题14.17).
+    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])\s*(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 # Single-level English entries (e.g. `**Example 1**`, `**Remark 2**`) where the
 # item carries ONE numeric component only (no section/item split).  This is the
@@ -147,7 +155,7 @@ ENTRY_RE_EN3_C = re.compile(
     r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 PROSE_RE_EN3_C = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b'
+    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])'
     r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 
@@ -157,7 +165,7 @@ PROSE_RE_EN3_C = re.compile(
 ENTRY_RE_ROMAN = re.compile(
     r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+))')
 PROSE_RE_ROMAN = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\b\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
+    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![a-z])\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 
 # --- GM (ordinal=ORDINAL_GM): BOOK-printed forms, roman machine keys ---
 # Gelfand-Manin style books print sections per chapter ("## §1. Triangulated

@@ -16,6 +16,8 @@
 import glob
 import json
 import os
+import re
+import subprocess
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -245,11 +247,11 @@ class physical_evidence:
         n = 0
         for f in glob.glob(os.path.join(book_dir, "*.md")):
             b = os.path.basename(f)
-            if b.startswith(prefix) and "第" not in b[:3]:
-                # ChapterN_*.md
-                if re.match(r"^Chapter\d", b):
-                    n += 1
-            elif b.startswith("第") and "章" in b[:6]:
+            # 英文源版：ChapterN_*.md；附录单元：AppendixX_*.md（结构契约名含 "Appendix X"）
+            if re.match(r"^Chapter\d", b) or re.match(r"^Appendix[A-Z]", b):
+                n += 1
+            # 中文翻译版：第N章_*.md / 附录X_*.md
+            elif (b.startswith("第") and "章" in b[:6]) or re.match(r"^附录[A-Z]", b):
                 n += 1
         return n
 
@@ -288,9 +290,20 @@ class physical_evidence:
 
     @staticmethod
     def verify_source_ok(book_dir, extract_dir):
-        # verify 的 PASS 以 verify_chapter.py exit 0 为准；此处仅作软提示，
-        # 真判定由 agent 跑 verify 后确认 exit 0 再 mark。
-        return True, "需 agent 跑 verify_chapter.py --all 确认 exit 0 后 mark"
+        # 🔴 翻译硬闸的物理证据：必须真实复验源语言版 exit 0，否则视为未完成。
+        # 不再软放行——未嵌图 / 未校验 PASS 的源语言不得 mark，从而闸门挡住 derive。
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        # 仅校验源语言版：此时翻译版尚未写出，--all 只会扫到已存在的源版 .md。
+        # （英文书源=ChapterN_*.md；中文书源=第N章_*.md，且无翻译版。）
+        cmd = (f'python verify/script/verify_chapter.py --all "{ex}" "{book_dir}"')
+        try:
+            rc = subprocess.call(cmd, shell=True)
+        except Exception as e:
+            return False, f"verify 执行异常: {e}"
+        if rc == 0:
+            return True, "源语言 verify_chapter.py --all exit 0（verify PASS + KaTeX OK）"
+        return False, (f"源语言 verify 未通过（exit {rc}）。禁止 mark，"
+                       f"须先 embed_figures + --fix 复验至 exit 0，再进 derive 翻译。")
 
     @staticmethod
     def translate_ok(book_dir, extract_dir):
@@ -303,8 +316,11 @@ class physical_evidence:
                 total = len(d.get("chapters") or d.get("ch") or [])
             except Exception:
                 pass
-        cn = sum(1 for f in glob.glob(os.path.join(book_dir, "*.md"))
-                 if os.path.basename(f).startswith("第") and "章" in os.path.basename(f)[:6])
+        cn = 0
+        for f in glob.glob(os.path.join(book_dir, "*.md")):
+            b = os.path.basename(f)
+            if (b.startswith("第") and "章" in b[:6]) or re.match(r"^附录[A-Z]", b):
+                cn += 1
         if total and cn < total:
             return False, f"已译 {cn}/{total} 章"
         if cn == 0:

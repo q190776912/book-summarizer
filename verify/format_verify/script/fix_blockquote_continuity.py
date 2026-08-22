@@ -6,11 +6,14 @@ owns the whole blockquote-continuity family (per format_verify.py's
 docstring: "blockquote_continuity -> quote-block continuity / nested /
 example-proof gap").  So this single fixer repairs ALL of:
 
-  * bare blank lines inside blockquotes  -> `> `   (quote_gaps)
-  * orphan bare `>` lines                -> removed (quote_gaps)
-  * nested blockquotes `> > **`          -> `> **`  (nested_bq)
-  * example + proof not in one blockquote-> merged  (ex_proof_gaps)
-  * same-line `> **例…**…**证明…**`       -> split   (ex_proof_gaps same-line form)
+   * bare blank lines inside blockquotes  -> `> `   (quote_gaps)
+   * orphan bare `>` lines                -> removed (quote_gaps)
+   * nested blockquotes `> > **`          -> `> **`  (nested_bq)
+   * example + proof not in one blockquote-> merged  (ex_proof_gaps)
+   * same-line `> **例…**…**证明…**`       -> split   (ex_proof_gaps same-line form)
+   * **例/Example** block not wrapped (incl. half-wrapped head `> **Example**`
+     with top-level body) -> wrapped into one `>` block (delegates to
+     `tools/wrap_examples_bq.wrap_text`, so `verify --fix` self-heals this case)
 
 All sub-fixes are idempotent and run in one in-memory pass + single write.
 Self-registers via register_fixer('G', 5, apply_fix).
@@ -37,6 +40,16 @@ from verify.script.base import LayerFixResult, register_fixer
 from lib.regexlib import G_HEAD
 from format_verify import G_TERM
 from verify.script.struct_labels import G_PF_RE
+
+# Reuse the canonical example-wrapper so `verify --fix` can also RECOVER from
+# half-wrapped examples (example head already carries `>` but its body is left
+# at top level).  This is the exact case `wrap_examples_bq` used to skip; now
+# both the standalone tool and the G-layer fixer handle it.
+import os as _os
+_tools_dir = _os.path.join(_ROOT, 'tools')
+if _tools_dir not in sys.path:
+    sys.path.insert(0, _tools_dir)
+import wrap_examples_bq as _webq  # noqa: E402  (import after sys.path is ready)
 
 # Broad example-head match for the MERGE step: covers `> **例**`, `> **例2.1-1**`
 # (no space, the legacy bq_core.merge_example_block format), `> **例 2.1-1**`
@@ -235,7 +248,8 @@ def _merge_example_proof(text):
 # ---------------------------------------------------------------------------
 _SAME_LINE_EX_PROOF_RE = re.compile(
     r'^(> \*\*例(?:\d[\d.]*-[0-9]+|\d+)?\*\*[^>]*?)'
-    r'(\*\*(?:证明思路|证明|证明梗概|证明概要)\*\*[^>]*)$'
+    r'(\*\*(?:证明(?:思路|梗概|概要)?'
+    r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*[^>]*)$'
 )
 
 def _split_inline_ex_proof(text):
@@ -257,24 +271,118 @@ def _split_inline_ex_proof(text):
     return text, 0
 
 
+# A `>` line that opens a NEW item (proof / example / structural label) terminates
+# the current proof block during extension.
+_ITEM_HEAD_RE = re.compile(
+    r'> \*\*(?:例|Example|证明|Proof|定义|定理|引理|推论|命题|断言|公理)\b'
+)
+
+
+def _ensure_proof_separator(lines):
+    """Insert a `---` separator below each top-level proof blockquote whose
+    immediately following content is a plain discussion (not a heading, `---`,
+    a structural item, or another `>` block).
+
+    Proof blocks already live entirely inside `>` (the blockquote engine wraps
+    them); the only defect is the missing separator that makes the following
+    discussion read as if it were part of the proof.  Bilingual proof heads
+    (中文 证明* / 英文 Proof / Proof sketch / Proof outline / Proof of <...>)
+    are recognised via G_PF_RE.
+
+    Insertion rule (idempotent): extend the proof block over contiguous `>`
+    lines but STOP at a new `>` item head (another proof / example / structural
+    label) so a following example block is never swallowed into the proof; then
+    insert `---` only when the next non-blank line is a top-level discussion
+    (a heading / `---` / structural item / `>` block is already a boundary and
+    is left to its own handling).  Two `---` around an intervening context
+    sentence are intentional and distinct boundaries, not a duplicate.
+    Returns (lines, n_changed)."""
+    n = len(lines)
+    out = []
+    changes = 0
+    i = 0
+    while i < n:
+        ln = lines[i]
+        if G_PF_RE.match(ln):
+            # extend to the end of this proof block (stop at a new > item head)
+            j = i
+            while j + 1 < n:
+                nj = lines[j + 1]
+                if nj.lstrip().startswith('>'):
+                    if _ITEM_HEAD_RE.match(nj):
+                        break
+                    j += 1
+                elif nj.strip() == '':
+                    kk = j + 2
+                    while kk < n and lines[kk].strip() == '':
+                        kk += 1
+                    if kk < n and lines[kk].lstrip().startswith('>') \
+                            and not _ITEM_HEAD_RE.match(lines[kk]):
+                        j += 1
+                    else:
+                        break
+                else:
+                    break
+            for r in range(i, j + 1):
+                out.append(lines[r])
+            # next non-blank line after the block
+            k = j + 1
+            while k < n and lines[k].strip() == '':
+                k += 1
+            if k < n:
+                nxt = lines[k]
+                is_term = bool(re.match(r'^#{1,6}\s', nxt)) or nxt.strip() == '---'
+                is_item = bool(re.match(
+                    r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理|式'
+                    r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom'
+                    r'|例|Example)\b', nxt))
+                if not is_term and not is_item and not nxt.lstrip().startswith('>'):
+                    if not (out and out[-1].strip() == ''):
+                        out.append('')
+                    out.append('---')
+                    out.append('')
+                    changes += 1
+            i = j + 1
+            continue
+        out.append(ln)
+        i += 1
+    return out, changes
+
+
 def apply_fix(ctx) -> LayerFixResult:
     """Run the full G auto-fix and return the byte-compatible fix dict {g}."""
     md = ctx.md_file
     try:
         with open(md, encoding='utf-8') as f:
-            text = f.read()
+            orig = f.read()
     except Exception:
         return LayerFixResult(fix_dict={'g': 0})
+    text = orig
     total = 0
+    # (0) wrap any **例/Example** block (incl. half-wrapped heads) into `>` so
+    #     the continuity / merge / split steps below operate on clean blocks.
+    text, c0 = _webq.wrap_text(text); total += c0
     lines = text.split('\n')
     lines, c1 = _fix_quote_gaps(lines); total += c1
     lines, c2 = _flatten_nested(lines); total += c2
     text = '\n'.join(lines)
     text, c3 = _merge_example_proof(text); total += c3
     text, c4 = _split_inline_ex_proof(text); total += c4
-    if total > 0:
-        with open(md, 'w', encoding='utf-8') as f:
-            f.write(text)
+    lines = text.split('\n')
+    lines, c5 = _ensure_proof_separator(lines); total += c5
+    text = '\n'.join(lines)
+    # canonicalise trailing newline (the joins above drop it) so changed files
+    # keep a consistent ending and a re-run on an already-fixed file is a true
+    # no-op instead of an oscillating write
+    if not text.endswith('\n'):
+        text += '\n'
+    # only write + report when the content actually changed; the sub-step counts
+    # above can be non-zero (e.g. blockquote-gap normalisation) without altering
+    # the text, and we must not report/spurious-write in that case
+    if text == orig:
+        return LayerFixResult(fix_dict={'g': 0})
+    with open(md, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
     return LayerFixResult(fix_dict={'g': total})
 
 

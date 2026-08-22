@@ -45,9 +45,15 @@ ITEM_OPEN = re.compile(r'^>\s+\*\*(?:' + _ITEM_LABELS + r')\b')
 # 收束上一个引用块但【不】把本行/后续内容包进上一块引用（修复吞并定理陈述的 bug）。
 ITEM_STANDALONE = re.compile(r'^\*\*(?:定义|定理|引理|推论|命题|断言)')
 from lib.regexlib import FMT_SEC_RE as SEC_RE      # 匹配 '## ' '### ' '#### ' 等任意层级节标题；其下首个 item 前均不插 '---'
-# 证明梗概 / 证明思路 / 证明概要 均可识别
-PROOF_RE = re.compile(r'\*\*证明(思路|梗概|概要)\*\*')
-PROF_LINE_RE = re.compile(r'^>\s+\*\*证明(思路|梗概|概要)\*\*[:：]\s*(.*)$')
+# 证明梗概 / 证明思路 / 证明概要 / 英文 Proof / Proof sketch / Proof outline / Proof of <...>
+PROOF_RE = re.compile(
+    r'\*\*(?:证明(?:思路|梗概|概要)?'
+    r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*'
+)
+PROF_LINE_RE = re.compile(
+    r'^>\s+\*\*(?:证明(?:思路|梗概|概要)?'
+    r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*[:：]?\s*(.*)$'
+)
 from lib.regexlib import FMT_HR_RE as HR_RE    # 水平分隔线
 
 STRONG = (r'首先|其次|再次|然后|接着|最后|先证|再证|次证|又证|后证|'
@@ -101,7 +107,7 @@ def _close_block_below(out):
         out.append('---')
 
 
-NESTED_BQ_RE = re.compile(r'^>\s+>\s+\*\*(?:证明|证|例|证明思路|证明梗概|证明概要|定理|引理|推论|命题|定义)\b')
+NESTED_BQ_RE = re.compile(r'^>\s+>\s+\*\*(?:证明|证|例|证明思路|证明梗概|证明概要|Proof|定理|引理|推论|命题|定义)\b')
 
 
 def stage1(text):

@@ -154,5 +154,9 @@ G_EX_RE = re.compile(
     r'|\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*例)'
 )
 
-# g_layer._PF_RE。
-G_PF_RE = re.compile(r'> \*\*(?:证明思路|证明|证明梗概|证明概要)\*\*')
+# g_layer._PF_RE。双语：中文 证明/证明思路/证明梗概/证明概要 + 英文
+# Proof / Proof sketch / Proof outline / Proof of <...>。
+G_PF_RE = re.compile(
+    r'> \*\*(?:证明(?:思路|梗概|概要)?'
+    r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*'
+)

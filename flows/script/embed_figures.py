@@ -277,11 +277,33 @@ def find_after(lines, start):
     return i
 
 
+def _appendix_letter(book_dir, ch):
+    """'A'..'Z' when book_structure names chapter `ch` "Appendix <L> ...". """
+    fp = os.path.join(book_dir, "_extract", "book_structure.json")
+    try:
+        import json
+        with open(fp, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        for k in node.get("sub_sec", []) or []:
+            if str(k.get("key")) == str(ch):
+                m = re.search(r"\bAppendix\s+([A-Z])\b", str(k.get("name", "")))
+                if m:
+                    return m.group(1)
+            stack.append(k)
+    return None
+
+
 def chap_mds(book_dir, ch):
     """Return ALL summary md files for chapter `ch` (both Chinese `第N章` and
     English `ChapterN` variants) so figures are embedded into every version."""
     out = []
     ch_s = str(ch)
+    lab = _appendix_letter(book_dir, ch)
     for fn in sorted(os.listdir(book_dir)):
         if not fn.endswith(".md"):
             continue
@@ -292,6 +314,10 @@ def chap_mds(book_dir, ch):
             rest = fn[len("chapter") + len(ch_s):]
             en_ok = (rest == "" or not rest[0].isdigit())
         if fn.startswith(f"第{ch}章") or fn.startswith(f"第{ch}_") or en_ok:
+            out.append(os.path.join(book_dir, fn))
+            continue
+        # Appendix units: Appendix{L}_*.md / 附录{L}_*.md
+        if lab and (fn.startswith(f"Appendix{lab}_") or fn.startswith(f"附录{lab}")):
             out.append(os.path.join(book_dir, fn))
     return out
 

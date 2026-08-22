@@ -77,19 +77,54 @@ def _section_num_from_filename(fn):
     return sec
 
 
+def _appendix_letter(book_dir, ch):
+    """Return 'A'..'Z' when the structure contract names chapter `ch`
+    ``Appendix <L> ...`` (math-textbook back-matter units), else None.
+
+    SSOT for the letter is `_extract/book_structure.json` (written by
+    build_structure from the PDF headings) — never guessed from filenames.
+    """
+    fp = os.path.join(book_dir, '_extract', 'book_structure.json')
+    try:
+        with open(fp, encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    def _walk(node):
+        for k in node.get('sub_sec', []) or []:
+            if str(k.get('key')) == str(ch):
+                m = re.search(r'\bAppendix\s+([A-Z])\b', str(k.get('name', '')))
+                if m:
+                    return m.group(1)
+            r = _walk(k)
+            if r:
+                return r
+        return None
+
+    return _walk(data)
+
+
 def chapter_md_groups(book_dir, ch):
     """Return per-language verification groups for chapter `ch`.
 
     A group is a list of .md files that together form one language's full
     chapter: either the single merged file (第N章_*.md / ChapterN_*.md if it
     still exists) or the rule-D section files sorted by section number.
+    Appendix units (structure name contains "Appendix <L>") additionally
+    accept `Appendix{L}_*.md` (en) / `附录{L}_*.md` (zh).
     Returns [] if none found.
     """
     groups = []
-    for merged_pat, sec_pat in (
+    pats = [
         (f'第{ch}章_*.md', f'第{ch}章*.md'),       # zh
         (f'Chapter{ch}_*.md', f'Chapter{ch}_*.md'),  # en
-    ):
+    ]
+    lab = _appendix_letter(book_dir, ch)
+    if lab:
+        pats.append((f'附录{lab}_*.md', f'附录{lab}*.md'))          # zh appendix
+        pats.append((f'Appendix{lab}_*.md', f'Appendix{lab}_*.md'))  # en appendix
+    for merged_pat, sec_pat in pats:
         merged = [f for f in glob.glob(os.path.join(book_dir, merged_pat))
                   if _section_num_from_filename(f) is None]
         if merged:

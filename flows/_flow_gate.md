@@ -79,8 +79,11 @@ derive:          [translate, verify_cn]
   含 `ordinal` 数组。
 - `figure_detection`：`figure_index.json` 存在。
 - `structure`：`book_structure.json` 存在且含章节节点。
-- `write_chapters`：已写源语言章数 == chapter_map 章数。
-- `verify_source` / `verify_cn`：agent 跑 `verify_chapter.py --all` 确认 `exit 0`。
+- `write_chapters`：已写源语言章数 == chapter_map 章数 **且** 每章含完整条目（非空壳）。
+- `embed_figures`：`flows/script/embed_figures` 已对全书执行，章节内图归属完成（落盘产物可查）。
+- `verify_source`：agent 跑 `verify_chapter.py --all` 对**源语言版**确认 `exit 0`（`verify PASS + KaTeX OK`）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**——未嵌图 / 未复验 PASS 不得视为完成。
+- `translate`：**前置硬闸**＝源语言 `verify_source` 已 `done`（即 `verify_chapter.py --all` 对源语言真实 `exit 0`）。源语言未 PASS 时 `require_flow_prereqs` 硬拒，禁止进入翻译。
+- `verify_cn`：agent 跑 `verify_chapter.py --all` 对翻译版确认 `exit 0`。
 
 ## 标准工作流（agent 必须遵守）
 
@@ -108,5 +111,6 @@ python tools/flow_runner.py bootstrap <book_dir>
 - ❌ 提前手 touch `_extraction_done.json` 冒充 MM Repair 完成（它只能由
   `mm_repair_apply.py` 真完成写出，或 `bootstrap` 依物理证据补写）。
 - ❌ 跳步：未跑完本 flow 前置步骤就进下一步（顺序闸硬拒）。
+- ❌ **源语言「写完但未嵌图 / 未校验 PASS」就进 `derive` 翻译**：这是死规则违规。`write_source` 的 `embed_figures` + `verify_source` 必须全部 `done`，源语言 `verify_chapter.py --all` 真实 `exit 0`，否则 `derive` 硬拒（详见 [`derive-translate`](derive-translate/derive-translate.md) 翻译硬闸）。
 - ❌ 手填 `_extract/.flow_gate.json` 账本（仅 `flow_runner` 经证据复核后写）。
 - ❌ 把"文本 100% 落盘 / Pipeline finished 日志 / 后台进程结束"当作"MM Repair 完成"。

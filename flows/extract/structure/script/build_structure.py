@@ -78,6 +78,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import scan_skeleton
 from extract_items import extract_items, extract_items_two_level
+from extract_items_cn_single import extract_items_cn_single
 from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
@@ -112,15 +113,23 @@ _LABEL_TO_TYPE = {
     "注": "remark",
     "断言": "proposition", "Assertion": "proposition",  # 近似归入命题
     "猜想": "uncat", "Conjecture": "uncat",
-    "算法": "uncat", "Algorithm": "uncat",
+    "算法": "algorithm", "Algorithm": "uncat",
+    "性质": "property",
     "假设": "uncat", "Assumption": "uncat",
     "uncat": "uncat",
 }
 _EXERCISE_LABELS = {"练习", "习题", "Exercise", "练习."}
 
+# Case-insensitive view of `_LABEL_TO_TYPE` so OCR-mangled UPPERCASE labels
+# (do Carmo prints `DEFINITION` / `THEOREM` in all caps; OCR may also mangle
+# them to `DEFINrTION`) still resolve to the correct node type instead of
+# falling through to "uncat".  CN keys are unchanged by lowercasing.
+_LABEL_TO_TYPE_LC = {k.lower(): v for k, v in _LABEL_TO_TYPE.items()}
+
 
 def _type_of(label):
-    return _LABEL_TO_TYPE.get((label or "").strip(), "uncat")
+    l = (label or "").strip().lower()
+    return _LABEL_TO_TYPE_LC.get(l, "uncat")
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +140,17 @@ _STRIP_LABEL = re.compile(
     r'Definition|Theorem|Lemma|Corollary|Proposition|Example|Remark|'
     r'Assertion|Conjecture|Algorithm|Assumption)\b\s*', re.IGNORECASE)
 _STRIP_LABEL_CN = re.compile(r'^(定义|定理|引理|推论|命题|例|评注|注)')
+
+
+def _nat_key(k):
+    """自然序键：数字段按数值比较（'例9' < '例10'）。
+
+    同页条目以 key 作次级排序时，纯字符串序会把 '例10' 排在 '例9' 前
+    （'1' < '9'），B 层顺序校验随即报「顺序错乱」。数字按值比较对既有书
+    亦严格更正确（同页 'Theorem 9' / 'Theorem 10' 同理）。
+    """
+    return tuple(int(x) if x.isdigit() else x
+                 for x in re.split(r"(\d+)", str(k)))
 
 
 def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False):
@@ -440,6 +460,13 @@ def _exercise_region_start(ext, ch, start, end):
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
     if primary == ORDINAL_SINGLE:
+        # CN 单级编号书（如李庆扬《数值分析》第5版：定理1 / 定义3 / 例12 /
+        # 算法2 / 性质4——「标签+单一数字」、章内连续或节内重置）：既有抽取器
+        # 均不覆盖（extract_items 只认多级号，EN 单级抽取器无中文标签词），
+        # 按 config_setting 规则5 走增量扩展的中文单级抽取器。
+        if getattr(book, "language", "cn") == "cn":
+            return extract_items_cn_single(ext, start, end, groups=book.ordinal,
+                                           manual_overrides=manual)
         # Single-level EN book (e.g. Silverman's "A Friendly Introduction to
         # Number Theory" 4th ed — ordinal type 1): items are ONE numeric
         # component ("Theorem 1", "Lemma 1"), no section/item split. Without an
@@ -523,7 +550,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
 
     # 1) skeleton 原始行
     rows = scan_skeleton.scan(ext, ch, start, end, mode,
-                              section_depths=section_depths)
+                              section_depths=section_depths,
+                              chapter_first=book.chapter_first)
     ex_rows = [r for r in rows if r[1] == "EXER"]
     if getattr(book, 'chapter_local_sections', False):
         # Chapter-local sections (Karlin-style "§1" that RESET per chapter) are
@@ -683,9 +711,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node = _node(num, "exercise", name, p)
         _place(node, sec_key, p)
 
-    # 6) 章节内子节点按页码稳定排序
+    # 6) 章节内子节点按页码稳定排序（同页用自然序，防 '例10'<'例9' 伪乱序）
     for n in all_sec_nums:
-        sec_nodes[n]["sub_sec"].sort(key=lambda x: (x["page_start"], x["key"]))
+        sec_nodes[n]["sub_sec"].sort(key=lambda x: (x["page_start"], _nat_key(x["key"])))
 
     # 7) 递归算 page_start / page_end（容器取末代子孙页）
     def _fix_pages(node):
@@ -702,8 +730,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for s in ordered_secs:
         _fix_pages(s)
 
-    # 章级子节点：章级桶（无章节可挂）置于章节之前，按页码排
-    chapter_bucket.sort(key=lambda x: (x["page_start"], x["key"]))
+    # 章级子节点：章级桶（无章节可挂）置于章节之前，按页码排（同页自然序）
+    chapter_bucket.sort(key=lambda x: (x["page_start"], _nat_key(x["key"])))
     sub = chapter_bucket + ordered_secs
 
     ch_title = _chapter_title(cm, ch)

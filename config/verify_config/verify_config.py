@@ -232,6 +232,7 @@ _LABEL_CANON = {
     'Condition': '条件', '条件': '条件',
     'Assumption': '假设', '假设': '假设', '假定': '假设',
     'Algorithm': '算法', '算法': '算法',
+    'Property': '性质', '性质': '性质',
     # exercise-family labels canonize to 练习; Example canonizes to 例
     # (例子 ≠ 练习). A book that checks examples uses a group named
     # ["Example"] (canon -> 例); a book that checks exercises uses
@@ -805,12 +806,20 @@ class ConfigLoader:
         #                                        number is the DICT KEY; the
         #                                        value has NO 'ch' field.
         #   * [ {...}, {...} ]                 bare list (legacy)
+        # NOTE: chapter 0 is legitimate (Fraleigh §0 preliminaries, ...).
+        # `ChapterInfo.from_dict` coerces a MISSING chapter key to 0, so a
+        # falsy-`ch` guard silently drops genuine ch0 entries; skip only
+        # entries that carry no chapter-identifying key at all.
+        def _has_ch_key(d):
+            return any(k in d for k in ('ch', 'num', 'chapter'))
+
         if isinstance(cm, dict) and 'chapters' in cm:
             entries = cm['chapters']
             for e in entries:
+                if not _has_ch_key(e):
+                    continue
                 info = ChapterInfo.from_dict(e)
-                if info.ch:
-                    out[info.ch] = info
+                out[info.ch] = info
         elif isinstance(cm, dict):
             for k, e in cm.items():
                 if not isinstance(e, dict):
@@ -822,13 +831,13 @@ class ConfigLoader:
                 if 'ch' not in e and 'num' not in e and 'chapter' not in e:
                     e['ch'] = int(k) if str(k).isdigit() else k
                 info = ChapterInfo.from_dict(e)
-                if info.ch:
-                    out[info.ch] = info
+                out[info.ch] = info
         elif isinstance(cm, list):
             for e in cm:
+                if not _has_ch_key(e):
+                    continue
                 info = ChapterInfo.from_dict(e)
-                if info.ch:
-                    out[info.ch] = info
+                out[info.ch] = info
         return out
 
     # ---- figure_index.json ----

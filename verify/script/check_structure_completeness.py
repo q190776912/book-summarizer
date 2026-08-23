@@ -45,7 +45,8 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
+    ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
+    _canon_label, _load_ignore_file,
 )
 
 # manual_overrides_chN：手写恢复条目（OCR 完全吃掉标题时，agent 凭书补写并登记）。
@@ -166,7 +167,7 @@ def _is_three(scheme):
     return scheme in ('cn3_lf', 'cn3_nf', 'en3_lf', 'en3_nf')
 
 
-def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None):
+def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None, groups=None):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的 book_structure.json 契约格式一致
@@ -189,7 +190,27 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
     裸号方案 `en3_nf` 误吞 59+ 个图号/公式号/习题号为伪「缺项」，闸门永 FAIL。
     故此处一并把 `THREE_LEVEL + language=="en"` 纳入「禁用数字前置三段裸号」范围，
     与 build_structure 的分派对齐（单一真相源）。
+
+    （2026-08-23 规则5增量扩展）CN 单级编号书（ORDINAL_SINGLE + language=="cn"，
+    如李庆扬《数值分析》第5版：定理1/定义3/例12）：通用数字扫描会把三级小节
+    标题（`1.1.1数学科学与数值分析`）误读为三段裸号伪项，故直接委托
+    extract_items_cn_single（与 build_structure 同一抽取真源），不再走 _PATTERNS。
     """
+    if primary_type == ORDINAL_SINGLE and language == "cn":
+        from extract_items_cn_single import extract_items_cn_single
+        out = []
+        for it in extract_items_cn_single(ext, start, end, groups=groups):
+            m = re.search(r"(\d+)$", it["key"])
+            if not m:
+                continue
+            out.append({
+                "key": it["key"], "label": it.get("label") or "uncat",
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "cn_single", "canon": (int(m.group(1)),),
+                "has_label": True,
+            })
+        return out
     patterns = _PATTERNS
     if primary_type == ORDINAL_EN3 or (primary_type == ORDINAL_THREE_LEVEL and language == "en"):
         # EN3 书条目恒带显式标签词（`Label C.S.N`），且编号按类型独立成序
@@ -309,10 +330,14 @@ def _composite_key(primary_type, label, canon):
     Remark 2.1.1 并存），若只按数字 canon 比对会把两者折叠成同一键，导致契约丢失
     条目、集合差把真实漏项静默吞掉（假绿）。故此类方案用 ``(label_lower, canon)``
     复合键，label 区分类型；无标签方案（纯数字三级等）仍用 canon 本身。
+
+    label 一律先经 ``_canon_label`` 规范化（Theorem/定理 → 定理）：契约侧
+    `_TYPE_TO_LABEL` 产英文标签、源侧抽取器产中文标签，不规范化则复合键永不
+    相交、整章被误报缺失（2026-08-23 CN 单级书实测）。
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3):
-        return (str(label).lower(), canon)
+                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE):
+        return (_canon_label(str(label)).lower(), canon)
     return canon
 
 
@@ -488,6 +513,7 @@ _TYPE_TO_LABEL = {
     "definition": "Definition", "theorem": "Theorem", "lemma": "Lemma",
     "corollary": "Corollary", "proposition": "Proposition", "example": "Example",
     "remark": "Remark", "exercise": "Exercise", "uncat": "uncat",
+    "algorithm": "Algorithm", "property": "Property",
 }
 # 三级裸键（"C.S-K" / "C.S.K"，无内置标签）——这类键需补一个类型标签，B 层
 # num-first 解析才认得出是真实条目（否则尾串无标签 -> 被当 reference 丢弃）。
@@ -509,6 +535,12 @@ def synthetic_item_md(tree):
 
     def walk(n):
         if n.type in ("chapter", "section"):
+            # Emit `## §C.S` anchors so prefix-less entries (single-level
+            # labels like do Carmo "Example 4") get their true per-section
+            # counter window in the B layer (item_numbering_integrity windows
+            # prefix-less items by the current § heading when one is active).
+            if n.type == "section":
+                lines.append("## §%s" % n.key)
             for k in n.sub_sec:
                 walk(k)
             return
@@ -578,7 +610,8 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
 
-    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language)
+    raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
+                                             groups=getattr(cfg, "ordinal", None))
                  if it["label"] not in _EXER_LABELS_RAW]
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
@@ -642,6 +675,15 @@ def _run_b_layer(ch, start, end, ext, cfg, tree, source_items):
     """把 book_structure 派生 md + 源条目集喂给 item_numbering_integrity（B 层），
     返回其 metadata：{blocking, b_gap_warnings, b_tail_warnings, ignored_hit}。"""
     md = synthetic_item_md(tree)
+    # 按章合并 ignore_ch{N}.json（与正式 verify 流程 ConfigLoader.ignore_for_chapter
+    # 同语义）：否则预检管线里登记的稀疏号豁免对 B 层不可见，闸门永 FAIL。
+    try:
+        from dataclasses import replace as _dc_replace
+        extra = _load_ignore_file(os.path.join(ext, f'ignore_ch{ch}.json'))
+        if extra:
+            cfg = _dc_replace(cfg, ignore=sorted(set(cfg.ignore) | set(extra)))
+    except Exception:
+        pass
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(md)
         md_path = f.name

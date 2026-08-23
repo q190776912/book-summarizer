@@ -5,10 +5,10 @@
 > **注册机制**：本层脚本位于 `verify/format_verify/script/format_verify.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/*/script/` 自动发现并注册。`code = 'F'` 是稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
 
 ## 目的
-统一全部「格式」类校验：KaTeX 渲染校验 + 引用块连续性/嵌套/例证空隙 + 结构标签守卫（4 子项）+ 条目分隔符完整性/条目内分隔符 + 证明-列表间距 + 分隔符空行 + 数学块引用泄漏 + 引用块空行过多。任一子项非空即整章 FAIL（KaTeX 与结构类同阻断）。
+统一全部「格式」类校验：KaTeX 渲染校验 + 引用块连续性/嵌套/例证空隙 + 结构标签守卫（4 子项）+ 条目分隔符完整性/条目内分隔符 + 证明-列表间距 + 分隔符空行 + 标题上方空行 + 数学块引用泄漏 + 引用块空行过多。任一子项非空即整章 FAIL（KaTeX 与结构类同阻断）。
 
 ## 步骤（实际校验流程）
-全部检测函数为内联实现（与原九个格式校验逐字一致），`run()` 一次性返回下方 15 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
+全部检测函数为内联实现（与原九个格式校验逐字一致），`run()` 一次性返回下方 17 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
 
 1. 加载章节 markdown，并调用 `verify/format_verify/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
 2. 扫描 `>` 引用块，检查连续性 / 嵌套 / 例证空隙（原 G 层）。
@@ -19,6 +19,7 @@
 7. 检查分隔符上下空行——`---` 上下缺空行（原 L 层）。
 8. 检查数学块引用泄漏——`$$...$$` 内有 `>` 行（原 M 层）。
 9. 检查引用块空行过多——`>` 块内连续空 `>` 行超过 1（原 N 层）。
+10. 检查标题上方空行——任意 ATX 标题（`#`…`######`）上一行非空（紧接列表项/段落）即缺空行（新规则，L 层扩展；文件首行、代码围栏与 `$$` 块内豁免）。
 
 > 上述所有阈值/形态与原有各格式校验完全一致；[`docs/writing-rules.md`](../../docs/writing-rules.md)（SSOT）定义的格式规则本来即由这些校验 + katex 子进程 + 格式管线脚本共同强制，本层**不新增任何检查**，仅把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）。
 
@@ -80,7 +81,7 @@ $$x = y$$
 - 勿在替换中破坏命令间距（`\int` → `\in t`、`\infty` → `\in fty` 类）。
 
 ### 检测规则2 · quote_gaps（原 G 层，可 `--fix`）
-一个 `> **证明/例**` 块处于「激活态」时，若遇**裸空行**（空行且其后首个非空行仍是块内容），判定连续性被切断；应将该空行改为 `> `（空引用行）以维持块连续。允许作为「块间分隔」的裸空行：其后为 `> **证明/例**` / `---` / `## ` / 顶层 `**标签**`。契约键 `quote_gaps`。
+一个 `> **证明/例**` 块处于「激活态」时，若遇**裸空行**（空行且其后首个非空行仍是块内容），判定连续性被切断；应将该空行改为 `> `（空引用行）以维持块连续。允许作为「块间分隔」的裸空行：其后为 `> **证明/例**` / `---` / 任意层级 ATX 标题（`#`…`######`，含 `###`/`####`）/ 顶层 `**标签**`。契约键 `quote_gaps`。
 
 **错误格式（块被裸空行切断）：**
 ```text
@@ -259,23 +260,19 @@ $$x = y$$
 ```
 
 ### 检测规则11 · k_proof_list（原 K 层，可 `--fix`）
-若定理/定义的陈述含 4 空格缩进编号列表（`    (a)` / `    N.`），且其后**紧接** `> **证明**`/`> **证明思路**` 块引用，则列表末项与证明块之间**必须有一空行**（否则渲染时证明块会错误地对齐编号项而非定理外层）。契约键 `k_proof_list`。
+列表（任意缩进：顶层 `1.` / `1)` / `(1)` / `- * +`，或 4 空格缩进 `N.` / `(a)` 伪列表）的**最后一个列表项**与其后紧跟的**新块**之间**必须有一空行**；否则渲染器把新块惰性续接进该列表项，右偏移到列表层级内。判定为「新块」的后随行：`>` 引用块（证明/例/注）、`$$` 展示公式、顶层 `**标签**` 陈述、`<div` 图容器。不判：后续列表项、更深缩进的**下级**内容、标题（归 heading_blank_above）、普通续行散文（合法 lazy continuation）。真实事故：Koopman ch12 定理 12.2 列表第 2 项直接接 `> **Proof sketch**`。契约键 `k_proof_list`。
 
 **错误格式（编号列表紧接证明块，缺空行）：**
 ```text
-**定义 1.1** 
-    (a) 第一条。
-    (b) 第二条。
-> **证明** 证明内容。
+2. For each $\varepsilon>0$, ... $\nabla V\,F(x)+\nabla V\,G(x)u<0$.
+> **Proof sketch**: Condition (2) is the small-control property...   ← 证明被吸进第 2 项，右偏移
 ```
 
-**正确格式（列表与证明块间留一空行）：**
+**正确格式（列表与新块间留一空行）：**
 ```text
-**定义 1.1** 
-    (a) 第一条。
-    (b) 第二条。
+2. For each $\varepsilon>0$, ... $\nabla V\,F(x)+\nabla V\,G(x)u<0$.
 
-> **证明** 证明内容。
+> **Proof sketch**: Condition (2) is the small-control property...
 ```
 
 ### 检测规则12 · l_sep_blanks（原 L 层，可 `--fix`）
@@ -349,8 +346,24 @@ $$
 > **例 2.1-1** ...
 ```
 
+### 检测规则16 · heading_blank_above（新规则，可 `--fix`）
+任意 ATX 标题（`#`…`######`，正则 `^#{1,6}\s`）的**上一行必须为空行**。标题若紧接有序列表项（`10. …`）或普通段落行，渲染器会把标题吸进上方块——标题及其下整节随之缩进、失去左对齐（真实事故：Koopman ch12 算法列表第 10 项直接接 `## §12.5`，整节被吞进列表项）。豁免：文件首行（其上无内容）、```` ``` ````/`~~~` 代码围栏内、`$$` 数学块内。契约键 `heading_blank_above`。**可自动修复**：`verify/format_verify/script/fix_separator_spacing.py`（code `L`）在分隔符修复之后为每个缺空行的标题补一个空行（幂等）。
+
+**错误格式（标题紧接列表项/段落，整节被吸进上方块）：**
+```text
+10. *Feedback.* Set $u=k(z)=...$.
+## §12.5 Simulation Results      ← 标题上一行非空，§12.5 整节缩进不左对齐
+```
+
+**正确格式（标题上方留一空行）：**
+```text
+10. *Feedback.* Set $u=k(z)=...$.
+
+## §12.5 Simulation Results
+```
+
 ## 阻断性与可修复（出口判定）
-- 16 个键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
+- 17 个键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
 - 本检测层 `auto_fixable = False`：**自动修复不由本层完成**，改由下方 FIXERS 注册表（按原 fixer 代号）执行，字节兼容不变。
 
 ## 出口条件
@@ -358,7 +371,7 @@ $$
 
 ## 相关代码（`verify/format_verify/script/format_verify.py`）
 - `code = 'F'`，`order = 6`，`auto_fixable = False`。
-- `run()` 返回元数据含 16 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），其余为 list。
+- `run()` 返回元数据含 17 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），其余为 list。
 
 ## 子流程（自动修复）
 自动修复逻辑位于 `verify/format_verify/script/fix_*.py`，各自在模块顶层调用 `register_fixer(code, fix_order, apply_fix)` 注册，**fixer 代号沿用原层字母**，fix-dict 键顺序字节兼容不变：
@@ -371,7 +384,7 @@ $$
 | I | fix_item_separator.py | 6 | `i` | i_sep_gaps |
 | J | fix_intra_item_dash.py | 7 | `j` | j_header_dash |
 | K | fix_proof_list_spacing.py | 8 | `k` | k_proof_list |
-| L | fix_separator_spacing.py | 9 | `l` | l_sep_blanks / heading_sep（删除标题下的 `---`） |
+| L | fix_separator_spacing.py | 9 | `l` | l_sep_blanks / heading_sep（删除标题下的 `---`）/ heading_blank_above（标题上方补空行，最后执行） |
 | M | fix_math_blockquote_leak.py | 10 | `m` | m_dm_gt |
 | N | fix_blockquote_spacing.py | 11 | `n` | n_bq_empty |
 
@@ -393,6 +406,7 @@ j_header_dash
 k_proof_list
 l_sep_blanks
 heading_sep
+heading_blank_above
 m_dm_gt
 n_bq_empty
 ```

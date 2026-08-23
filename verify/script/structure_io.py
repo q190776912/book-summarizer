@@ -35,6 +35,7 @@ TYPE_TO_LABEL = {
     'definition': '定义', 'theorem': '定理', 'lemma': '引理',
     'corollary': '推论', 'proposition': '命题', 'example': '例',
     'remark': '评注', 'uncat': 'uncat',
+    'algorithm': '算法', 'property': '性质',
 }
 
 

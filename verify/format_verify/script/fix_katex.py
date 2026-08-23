@@ -245,11 +245,23 @@ def fix_cd_blocks(lines: list) -> tuple:
 
 
 def fix_escaped_braces_in_math(content: str) -> tuple:
-    """Pattern 9: fix brace escaping in math mode (3 sub-cases).
+    """Pattern 9: fix brace escaping in math mode.
 
-    (a) \\_\\{FP\\} -> _{FP} (group delimiters after _/^/cmd)
-    (b) \\{...} -> \\{...\\} (set notation missing closing \\)
-    (c) do NOT unescape \\}\\} -> }} (literal braces like \\sqrt{1-x\\}})
+    Brace accounting uses a KIND STACK instead of a bare depth counter:
+    every open brace pushes 'g' (grouping `{`) or 'l' (literal set `\\{`),
+    and a closing `\\}` is unescaped ONLY when the innermost open brace is a
+    group.  A bare depth counter corrupts correct set notation inside
+    subscript groups — e.g. `\\min_{\\{x_k\\}_{k=0}}`: the min-group puts the
+    counter at 1, so the literal `\\}` got wrongly unescaped to `}`,
+    producing a KaTeX "Double subscript" error (2026-08 Koopman ch3
+    formulas 3.40/3.45/3.47).
+
+    Sub-cases:
+    (a) \\_\\{FP\\} -> _{FP} (escaped braces acting as GROUP delimiters after
+        _/^/cmd are classified 'g' at OPEN, so their close unescapes too)
+    (b) \\{...} -> \\{...\\} (set notation whose closing backslash was lost)
+    (c) do NOT unescape \\}\\} -> }} (literal braces like \\sqrt{1-x\\}}) and
+        do NOT touch \\} closing a literal set.
     """
     original = content
     out = []
@@ -261,9 +273,9 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
     # $ inside $$ is treated as literal (not a toggle).
     in_dd = False
     in_single = False
-    depth = 0
-    # flag: True if the last depth-raising char was \{ (escaped open)
-    # i.e., we are inside a \{...  group whose closing \} may be missing
+    # Kind stack for open braces: 'g' = grouping `{`, 'l' = literal set `\{`.
+    brace_stack = []
+    # flag: True if a literal-set opener `\{` is still unclosed
     seen_esc_open = False
 
     def in_math():
@@ -287,14 +299,14 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
             in_dd = not in_dd
             if not in_dd:
                 in_single = False  # leaving display math resets inline too
-            depth = 0
+            brace_stack = []
             seen_esc_open = False
             i += 2
             continue
         if content[i] == '$' and not in_dd:
             out.append('$')
             in_single = not in_single
-            depth = 0
+            brace_stack = []
             seen_esc_open = False
             i += 1
             continue
@@ -313,36 +325,39 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
 
             if nxt == '{':
                 before = ''.join(out[-20:]).rstrip()
-                unescape = False
+                kind = 'l'  # default: a genuine literal set opener
                 if before.endswith('_') or before.endswith('^'):
-                    unescape = True
+                    kind = 'g'
                 elif before.endswith('}'):
-                    if depth <= 2:
-                        unescape = True
+                    if len(brace_stack) <= 2:
+                        kind = 'g'
                 else:
                     m = _CMD_RE.search(before)
                     if m and m.group(0)[1:] in ARG_CMDS:
-                        unescape = True
+                        kind = 'g'
 
-                if unescape:
+                if kind == 'g':
                     out.append('{')
-                    depth += 1
                 else:
                     out.append('\\{')
                     seen_esc_open = True   # we are in \{... zone
+                brace_stack.append(kind)
                 i += 2
                 continue
 
             if nxt == '}':
-                if depth > 0:
+                if brace_stack and brace_stack[-1] == 'g':
                     # Only unescape \} if NOT immediately followed by }
                     # (literal brace like \sqrt{1-x\}})
                     if i + 2 < len(content) and content[i + 2] == '}':
                         out.append('\\}')
                     else:
                         out.append('}')
-                        depth -= 1
+                        brace_stack.pop()
                 else:
+                    # closing a literal set (or nothing open) — keep literal
+                    if brace_stack:
+                        brace_stack.pop()
                     out.append('\\}')
                     seen_esc_open = False  # set notation properly closed
                 i += 2
@@ -350,22 +365,23 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
 
         # --- unescaped { ---
         if c == '{':
-            depth += 1
+            brace_stack.append('g')
             out.append(c)
             i += 1
             continue
 
-        # --- unescaped } at depth 0: maybe missing \ from set notation ---
+        # --- unescaped }: closes a group, restores a lost set-backslash
+        # (pattern 9b), or passes through when nothing is open ---
         if c == '}':
-            if depth > 0:
-                depth -= 1
+            if brace_stack and brace_stack[-1] == 'g':
+                brace_stack.pop()
                 out.append(c)
+            elif brace_stack and brace_stack[-1] == 'l':
+                brace_stack.pop()
+                out.append('\\}')
+                seen_esc_open = False
             else:
-                if seen_esc_open:
-                    out.append('\\}')
-                    seen_esc_open = False
-                else:
-                    out.append(c)
+                out.append(c)
             i += 1
             continue
 

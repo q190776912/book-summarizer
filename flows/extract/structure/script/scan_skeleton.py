@@ -85,7 +85,21 @@ SEC_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{
 ITEM_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\.\s*(.{0,90})')
 EXER_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
-SEC_2 = re.compile(r'^(\d{1,2})\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$')
+# Two-level section: "2 Riemannian Metrics" / "1. Introduction".  Allow an
+# OPTIONAL leading noise char before the number — do Carmo's OCR mis-reads the
+# section sign (§) / dagger as an apostrophe, producing "'1. Introduction", which
+# a strict `^\d` anchor would miss.  Also allow an OPTIONAL dot after the number
+# ("2. Riemannian Metrics" — do Carmo prints sections as `N. Title` with a dot,
+# while its page-number RUNNING HEADERS are printed as `N Title` WITHOUT a dot,
+# so the optional dot lets us match real dotted sections while the page-number
+# guard below still rejects the headers).  The noise set is tiny and a prose
+# line never starts with "'N.", so this is benign for other books.
+SEC_2 = re.compile(r"^(?:['\u2019\u00b6\u00a7\u2020\*]\s*)?(\d{1,2})\.?\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$")
+# Section numbers are small (a chapter rarely has > ~30 flat `N. Title`
+# sections).  A much larger number is a PAGE-NUMBER RUNNING HEADER (e.g. do
+# Carmo's "36 Riemannian Metrics" printed at the top of every page), never a
+# real section — reject it so it isn't fabricated into the structure contract.
+SEC_MAX_NUMBER = 30
 ITEM_2 = re.compile(r'^(\d{1,2})\.(\d{1,3})\.\s*(.{0,90})')
 EXER_2 = re.compile(r'^(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
@@ -110,8 +124,11 @@ EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 # by ITEM_3's trailing-dot requirement.  We detect the "EXERCISES FOR CHAPTER N"
 # heading (case-insensitive, space-optional so it survives OCR like
 # `EXERCISESFORCHAPTER3`) and, once inside that region, treat bare `C.S.N` numbers
-# as exercises (EXER) rather than items.
-EXER_HEADING = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
+# as exercises (EXER) rather than items.  do Carmo prints a BARE `EXERCISES`
+# heading (no "FOR CHAPTER N") — the optional capture group lets both forms start
+# the exercise region so its single-number "N. Problem" lines are NOT mistaken for
+# sections/items.
+EXER_HEADING = re.compile(r'EXERCISES?(?:\s*FOR\s*CHAPTER\s*(\d+))?', re.IGNORECASE)
 EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
 
 # ---------------------------------------------------------------------------
@@ -162,11 +179,18 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     if depths is not None and depth not in depths:
         return None
     rest = ln[m.end():].lstrip()
+    # Tolerate an optional dot right after the number ("1-2. Parametrized
+    # Curves", do Carmo) — a real header may print `C.S. Title`; strip the
+    # punctuation run before the alnum check below.
+    rest = rest.lstrip('.．。').lstrip()
     if not rest or not rest[0].isalnum():
         return None  # number with no following title -> not a header
     title = rest[:12]
     if _SEC_TITLE_LABEL_RE.search(title):
         return None  # labeled item / figure / table, not a section
+    if len(rest.strip()) < 4:
+        return None  # too short to be a title ("A"/"B" junk from OCR'd
+        # section-dependency diagrams like "5-6.A") — real titles have words
     if not re.search(r'[A-Za-z一-鿿]', title):
         return None
     # A genuine section title is Title-Case / Han / starts with a digit — reject
@@ -208,10 +232,12 @@ def lines_of(page_json):
             yield ln.strip()
 
 
-def scan(extract_dir, ch, start, end, mode, section_depths=None):
+def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None):
     rows = []
-    # Exercise-region state: once "EXERCISES FOR CHAPTER N" is seen, all
-    # subsequent bare `C.S.N` numbers (three-level mode) are exercises.
+    # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
+    # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
+    # two-level mode we also suppress SEC_2 / ITEM_2 so single-number "N. Problem"
+    # exercise lines (do Carmo) are NOT mistaken for sections/items.
     in_exercise = False
     # Depth-agnostic section detection (config-driven).  When the book declares
     # `section_depths`, we use the universal detector for SEC rows (it catches
@@ -222,11 +248,14 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None):
     # for back-compatibility.
     depths_set = (set(d for d in section_depths if isinstance(d, int) and d >= 2)
                   if section_depths else None)
-    # When the book declares `section_depths` we use the universal (depth-
-    # agnostic) detector for SEC rows and must NOT also run the mode's single-
-    # depth SEC regex — that regex would re-emit sections (duplicate) or, in
-    # two-level mode, emit the chapter title "20" as a phantom section.
-    use_universal_sec = depths_set is not None
+    # 🔴 Only enable the universal (depth-agnostic) detector when there is at
+    # least one depth>=2 section to find.  A book whose sections are single
+    # numbers (`## §N`, e.g. do Carmo) has `depths_set == set()` (empty) — the
+    # universal detector REJECTS single-number headings (`len(comps) < 2`), so
+    # leaving it on would silently detect ZERO sections and force every item to
+    # page-proximity.  `bool(depths_set)` falls back to the mode's SEC regex
+    # (SEC_2 for two-level) which correctly catches single-number sections.
+    use_universal_sec = bool(depths_set)
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
@@ -239,28 +268,46 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None):
                 continue
             # Exercise-region detection (case-insensitive, space-optional so it
             # survives OCR like `EXERCISESFORCHAPTER3`).  Once seen, the chapter
-            # is in its exercise block through to the end.
+            # is in its exercise block through to the next genuine section
+            # header (multi-section books like do Carmo run an EXERCISES block
+            # at the END OF EVERY SECTION, so the latch must reset on SEC).
             if not in_exercise and EXER_HEADING.search(ln):
                 in_exercise = True
                 continue
             # --- universal, depth-agnostic section detection ---
+            # Runs BEFORE (not gated by) the exercise latch: a real section
+            # header after an exercise block must be detected AND end that
+            # block.  Bare `N.M` exercise lines are single/double-component
+            # numbers without label titles and are rejected by
+            # `_section_header_info`, so they cannot fake a section.
             if depths_set is not None:
                 sec = _section_header_info(ln, ch=ch, depths=depths_set)
                 if sec is not None:
                     num_str, _depth, title = sec
                     rows.append((p, 'SEC', num_str, title))
+                    in_exercise = False  # new section ends the exercise region
                     continue
             if mode == 'two-level':
                 m = SEC_2.match(ln)
-                if not use_universal_sec and m and int(m.group(1)) == ch and not m.group(2).endswith('.'):
+                # 🔴 chapter_first gate: for section-scoped books (do Carmo,
+                # chapter_first=False) section numbers restart per chapter and
+                # are INDEPENDENT of the chapter number, so the `== ch` guard
+                # must be disabled (otherwise "2. Riemannian Metrics" inside
+                # chapter 1 would be rejected).  Chapter-first books keep the
+                # guard; legacy callers (chapter_first=None) also keep it.
+                _sec_ch_ok = ((chapter_first is False) or m is None
+                              or (int(m.group(1)) == ch))
+                if (not use_universal_sec and not in_exercise and m and _sec_ch_ok
+                        and int(m.group(1)) <= SEC_MAX_NUMBER
+                        and not m.group(2).endswith('.')):
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
                     continue
                 m = EXER_2.match(ln)
-                if m and int(m.group(1)) == ch:
+                if not in_exercise and m and int(m.group(1)) == ch:
                     rows.append((p, 'EXER', '%s.%s' % m.group(1, 2), m.group(3).strip()))
                     continue
                 m = ITEM_2.match(ln)
-                if m and int(m.group(1)) == ch:
+                if not in_exercise and m and int(m.group(1)) == ch:
                     rows.append((p, 'ITEM', '%s.%s' % m.group(1, 2), m.group(3).strip()))
             elif mode == 'cn':
                 m = SEC_CN.match(ln)

@@ -99,6 +99,7 @@ def _numpath_regexes(levels):
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
     r'定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
+    r'|算法|性质'
     r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Remark'
     r'|Exercise|Problem|Note|Axiom'
 )
@@ -111,7 +112,7 @@ _LABEL_NORM = {
     '命题': 'Proposition', '例子': 'Example', '例题': 'Example', '例': 'Example',
     '注记': 'Remark', '评注': 'Remark', '注': 'Remark', '公理': 'Axiom',
     '问题': 'Problem', '练习': 'Exercise', '习题': 'Exercise', '引例': 'Example',
-    '附注': 'Remark',
+    '附注': 'Remark', '算法': 'Algorithm', '性质': 'Property',
 }
 
 
@@ -466,6 +467,31 @@ def _md_gap_blocking(ctx):
     # to its group and use THAT group's prefix length.  Parsing at the highest
     # depth first means a three-level "4.1-5" is captured fully even when a
     # two-level 练习 group also declares depth 2.
+    #
+    # Section anchors for prefix-less entries: single-level books (ordinal
+    # type 1, e.g. do Carmo "Example 4") print NO numeric prefix on items and
+    # reset their counters PER SECTION (scope==3).  A whole-file window would
+    # fabricate false 缺号/顺序错乱 (§2-2 Example 6 followed by §2-3 Example 1
+    # looks like a restart).  When the md carries `## §` headings, use the
+    # current section as the true window prefix for prefix-less entries of
+    # scope-3 groups; entries carrying a numeric prefix and non-section-scoped
+    # groups are untouched (zero regression).  The anchor id is the first token
+    # after § (numbered "2-2" / appendix-style "2-A" / descriptive word for
+    # unnumbered sections) so every distinct `## §` heading resets the window.
+    _sec_pos = []   # sorted heading start offsets
+    _sec_str = []   # parallel section ids
+    for _m in re.finditer(r'^#{2,4}[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
+        _tok = (_m.group(1) or '').strip().split()
+        if not _tok:
+            continue
+        _sec_pos.append(_m.start())
+        _sec_str.append(_tok[0].strip(':.，,；;')[:24])
+
+    def _cur_sec(pos):
+        import bisect as _bisect
+        i = _bisect.bisect_right(_sec_pos, pos) - 1
+        return _sec_str[i] if i >= 0 else None
+
     _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
     entries = []  # (group_key, item_num, unique_key, label, prefix_str)
     for span in _SPAN_RE.finditer(txt):
@@ -490,6 +516,17 @@ def _md_gap_blocking(ctx):
         prefix_str = '.'.join(str(c) for c in prefix)
         if prefix_str:
             gk = f"{gi}:{prefix_str}"
+        elif g.scope == 3:
+            # Section-scoped counters: window by the current `## §` heading
+            # (see anchors above); before the first heading keep file window.
+            sec_str = _cur_sec(span.start()) if _sec_pos else None
+            if sec_str:
+                prefix_str = sec_str
+                gk = f"{gi}:{prefix_str}"
+            elif label and label != 'uncat':
+                gk = f"{gi}:file:{label}"
+            else:
+                gk = f"{gi}:file"
         elif label and label != 'uncat':
             gk = f"{gi}:file:{label}"
         else:

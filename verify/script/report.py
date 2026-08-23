@@ -280,9 +280,10 @@ def print_result(r):
     k_list = r.get('k_proof_list', [])
     if k_list:
         problems += 1
-        print(f"\nF-LAYER FORMAT · Proof-after-list ({len(k_list)}): a `> **证明**` blockquote "
-              f"directly follows a numbered list item without a blank line — add a "
-              f"blank line so the proof aligns at the theorem's outer level:")
+        print(f"\nF-LAYER FORMAT · List-tail blank ({len(k_list)}): a new block "
+              f"(blockquote / `$$` / top-level `**label**` / `<div`) directly follows a "
+              f"list item without a blank line — the renderer lazy-continues it INTO the "
+              f"item, shifting it right. Insert a blank line between:")
         for g in k_list:
             print(g)
     # ---- 分隔符空行（原 L 层）----
@@ -293,6 +294,16 @@ def print_result(r):
               f"must have a blank line immediately before AND after it — "
               f"insert missing blank line(s):")
         for g in l_sep:
+            print(g)
+    # ---- 标题上方空行（L 层扩展）----
+    h_blank = r.get('heading_blank_above', [])
+    if h_blank:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · Heading blank-above ({len(h_blank)}): a heading "
+              f"directly follows a list item / paragraph — the renderer absorbs it "
+              f"into that block and indents the whole section (not flush-left). "
+              f"Insert one blank line above each flagged heading:")
+        for g in h_blank:
             print(g)
     # ---- 数学块引用泄漏（原 M 层）----
     m_dm = r.get('m_dm_gt', [])
@@ -488,7 +499,7 @@ def print_result(r):
     # 任一格式子项非空即计入 F 总数；ex_warns 为非阻断 warn，不计入阻断计数。
     f_n = (len(r.get('katex_lines', [])) + len(r.get('quote_gaps', [])) + len(r.get('nested_bq', []))
            + len(ex_gaps) + len(h_bq) + len(h_stmt) + len(h_ul) + len(h_mbq)
-           + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(m_dm) + len(n_bq))
+           + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(h_blank) + len(m_dm) + len(n_bq))
 
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "

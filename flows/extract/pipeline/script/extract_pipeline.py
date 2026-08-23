@@ -57,7 +57,10 @@ DPI = 200
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
-    print(line)
+    try:
+        print(line)
+    except OSError:
+        pass
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -197,7 +200,10 @@ def main():
                     def blog_log(msg):
                         ts = time.strftime("%H:%M:%S")
                         line = f"[{ts}] {msg}"
-                        print(line)
+                        try:
+                            print(line)
+                        except OSError:
+                            pass
                         blog.write(line + "\n")
                         blog.flush()
 

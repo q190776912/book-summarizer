@@ -136,7 +136,7 @@ except Exception:  # pragma: no cover — boot normally injects config/verify_co
 # Attribution rule: a formula's enclosing section is the nearest preceding
 # numbered heading line (the canonical convention carried over when the
 # formula-manifest subsystem's capability was merged into this Q layer).
-_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:\.\d+)+)\b')
+_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:\.\d+)+)(?![\d.])')
 
 # Figure-caption leader prefixes (Bug #22).  A text block whose stripped content
 # STARTS with one of these keywords is a figure caption, NOT a formula-bearing
@@ -502,6 +502,32 @@ class SourceFormulaIndex:
             self._book_section[n] = self._cur_heading
 
     def _scan_text(self, txt: str, nums: Set[str], pg=None, y=None) -> None:
+        # 单分量书（ncomp==1，Kreyszig/Fraleigh 式裸 `(N)`）的 plain-path 门禁：
+        # 真公式编号只有两种形态——①「独立成行的标签块」`(N)` / `（N）`
+        # （fullmatch，与 build_sectioned 对 ncomp==1 的门禁一致）；②OCR 把右缘
+        # 编号并进公式行时的「含数学记号且以 `(N)` 结尾」的块（Kreyszig 夹具
+        # `'3.1-1 Theorem. We define a = 1 (1).'` 即此形态）。②形态**只提取块尾
+        # 那一个匹配**——否则块内部的括号数字（阶乘 `n!=n(n-1)…(3)(2)(1)` 的
+        # 因子、习题 `H=(4)` 的生成元记号等）会全部混入 S 制造假 MISSING
+        # （2026-08 Fraleigh 案例）。其余——散文交叉引用 ("By (3) ...")、习题
+        # 列表、函数调用结尾等——一律拒绝。（此前 plain 路径对 ncomp==1 完全不设
+        # 门禁，仅依赖 scope==3 的 sectioned 路径兜底；对无 `## §` 扁平结构的
+        # 稀疏编号书会整章失守。）
+        _tail_only_span = None
+        if self._ncomp == 1:
+            _t = (txt or '').strip()
+            if not re.fullmatch(
+                    r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*', _t):
+                _m_tail = None
+                if self._block_has_math(_t):
+                    _m_tail = re.search(
+                        r'[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?$', _t)
+                if _m_tail is None:
+                    return
+                # 只放行块尾这一个匹配：把它的原始 txt 坐标区间记下来。
+                _off = len(txt) - len(txt.lstrip()) if txt else 0
+                _tail_only_span = (_off + _m_tail.start(),
+                                   _off + _m_tail.end())
         # 🔴 Bug #18 修复（增强）：多分量编号 (ncomp>=2) 的 bare `N.N` pattern
         # 会命中节标题 ("1.1 Introduction")、图号子图 ("Fig. 1.1a")、参考文献
         # 页码 ("pp. 1-34") 等散文数字串——这些非公式编号须被拦截，否则污染
@@ -515,6 +541,10 @@ class SourceFormulaIndex:
         has_math = self._block_has_math(txt) if need_gate else True
         for pat in self.patterns:
             for m in pat.finditer(txt):
+                if _tail_only_span is not None and not (
+                        m.start() >= _tail_only_span[0]
+                        and m.end() <= _tail_only_span[1]):
+                    continue
                 span = m.group(0)
                 if need_gate and not has_math and (
                         not self.keep_cross_refs or not self._is_strong_signal(span)):
@@ -847,11 +877,20 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     agnostic.build(ctx.ch, ctx.start, ctx.end)
     agnostic_nums = agnostic.all_numbers()
 
-    configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False)
+    configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False,
+                                    ncomp=_DEFAULT_DEPTH_BY_TYPE.get(
+                                        formula.get('type'), None))
     configured.build(ctx.ch, ctx.start, ctx.end)
     configured_nums = configured.all_numbers()
 
     if len(configured_nums) == 0 and len(agnostic_nums) > 0:
+        # 稀疏编号书（如 Fraleigh：全书仅少数章有编号公式，其余章合法地没有）：
+        # agnostic 探测的命中多半是条目标签（"7.5 Theorem"）而非公式编号，
+        # 不能据此断言 depth/scope 配错。只有本章总结里确实出现 \tag 编号
+        # 公式、而 configured 又一无所获时，才存在"配错导致无法校验"的风险。
+        # 无 tag 的章按 SSOT「S 为空降级」放行（结构检查照常，不判 FAIL）。
+        if not _summary_has_tags(ctx.md_file):
+            return None
         return (f"`formula` 配置 (type={formula.get('type')}, "
                 f"depth={_DEFAULT_DEPTH_BY_TYPE.get(formula.get('type'), 3)}, "
                 f"scope={formula.get('scope', 2)}) "
@@ -1336,8 +1375,12 @@ class QLayer(VerifyLayer):
         if os.path.exists(_pic):
             try:
                 _pic_data = json.load(open(_pic, encoding='utf-8'))
+                # 两种形状都收：list（纯键）与 dict（键 -> 登记理由，B 层 /
+                # IGNORE-AUDIT 惯例形状）。dict 的键即忽略编号，理由仅供人审。
                 if isinstance(_pic_data, list):
-                    fignore |= set(_pic_data)
+                    fignore |= {str(x) for x in _pic_data}
+                elif isinstance(_pic_data, dict):
+                    fignore |= {str(k) for k in _pic_data.keys()}
             except Exception:
                 pass
         fkeep = formula.get('keep_cross_refs', True)

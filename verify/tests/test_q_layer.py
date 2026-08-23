@@ -67,7 +67,9 @@ class NormTest(unittest.TestCase):
             ('equation 5-2', '5.2'),
             ('式（3,4）', '3.4'),
             ('(8.3)', '8.3'),
-            ('2.3a', '2.3a'),
+            # 1568894 起 norm 折叠尾随字母后缀（Strogatz 式 `(8a)`/`(8b)` 归组
+            # 对齐 `\tag{8}`，避免假 MISSING）；需区分字分子项时用 norm_full。
+            ('2.3a', '2.3'),
             ('  (  3.2  )  ', '3.2'),
             ('（1.1-1）', '1.1.1'),       # 3-component with dash separator
         ]
@@ -78,11 +80,11 @@ class NormTest(unittest.TestCase):
         n = SourceFormulaIndex.norm
         for raw in ['', None, 'abc', '（lol）', 'x.y.z']:
             self.assertIsNone(n(raw), msg=f"norm({raw!r}) should be None")
-        # Single-component formula numbers (Kreyszig per-section bare `(N)`,
-        # `(N)a`) ARE valid formula labels — norm keeps them as-is (scope:3
-        # ⇒ depth:1 ⇒ 节级裸 `(N)`，见 formula_tag.md 不变量)。
+        # Single-component formula numbers (Kreyszig per-section bare `(N)`)
+        # ARE valid formula labels (scope:3 ⇒ depth:1 ⇒ 节级裸 `(N)`，见
+        # formula_tag.md 不变量)；尾随字母按 1568894 契约折叠到数字基。
         self.assertEqual(n('1'), '1')
-        self.assertEqual(n('2a'), '2a')
+        self.assertEqual(n('2a'), '2')
 
 
 class ExtractTagsTest(unittest.TestCase):

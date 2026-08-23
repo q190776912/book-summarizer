@@ -25,14 +25,15 @@ fixer 代号 H/G/I/J/K/L/M/N 对应的检测项：
     H  structural_label_guard  -> structural label in blockquote (4 sub-checks)
     I  item_separator          -> `---` between consecutive items
     J  intra_item_dash         -> no `---` inside an item block
-    K  proof_list_spacing      -> blank line between list and proof blockquote
+    K  proof_list_spacing      -> blank line between a list's last item and a
+                                  following new block (bq/$$/label/<div)
     L  separator_spacing       -> blank lines around `---` separators
     M  math_blockquote_leak    -> `>` lines inside display math blocks
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
-所有检测逻辑内联于本文件；本层产出 16 个字节契约键，并追加 `heading_sep` 检测键（由
-`DEFAULT_RESULT` 与契约测试的动态 `ALLOWED` 集覆盖）——故 `report.py`、
-`verify_chapter.py` 与契约测试保持通过。
+所有检测逻辑内联于本文件；本层产出 17 个字节契约键，并追加 `heading_sep` /
+`heading_blank_above` 检测键（由 DEFAULT_RESULT 与契约测试的动态 ALLOWED 集覆盖）
+——故 `report.py`、`verify_chapter.py` 与契约测试保持通过。
 
 Auto-fix is NOT performed by this layer: it is implemented by the eight
 `fix_*.py` modules in this same `script/` directory, which self-register via
@@ -87,7 +88,11 @@ def check_katex(md_file):
 # naturally exit it, so treat a <div> as a block terminator. This avoids a
 # false conflict with the C-layer, which requires a truly blank line before
 # a <div> (a `> ` empty-quote line would itself fail C).
-G_TERM = re.compile(r'^(?:---+\s*$|##\s|\*\*[^*]+\*\*|\$\$\s*$|<div)')
+# ANY ATX heading level (`#`…`######`) terminates the blockquote context —
+# not just `## `: a heading after a proof block ends it, and the blank line
+# required above headings (heading_blank_above) is a legitimate inter-block
+# separator.
+G_TERM = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$\s*$|<div)')
 
 NESTED_BQ = re.compile(r'^>\s*>\s*\S')
 
@@ -99,8 +104,8 @@ def check_g_quote_continuity(md_file):
     `> **证明/例` block, whose next non-blank line is block CONTENT
     (a `>` line or any line that is neither a new block start nor a block
     terminator). Allowed bare blanks: those immediately preceding a new
-    block start (`> **证明/例`) or a terminator (`---` / `## ` / top-level
-    `**label**`) — these are inter-block separators.
+    block start (`> **证明/例`) or a terminator (`---` / any ATX heading /
+    top-level `**label**`) — these are inter-block separators.
     """
     try:
         with open(md_file, encoding='utf-8') as f:
@@ -583,16 +588,55 @@ def check_item_header_dash(md_file):
 
 
 # ===========================================================================
-# K-LAYER: blank line between numbered list and proof blockquote
+# K-LAYER: blank line between a list's last item and a following new block
 # ===========================================================================
-def check_proof_after_list(md_file):
-    """K-LAYER: ensure a blank line separates a numbered list from the proof
-    blockquote that follows it.
+# List item markers at ANY indentation: `1.` / `1)`, `(1)`, bullets `- + *`
+# (a bullet-looking `*bold*:` emphasis has no whitespace after `*`, so it is
+# never matched).
+_K_LIST_RE = re.compile(r'^\s*(?:\d+[.)]|\(\d+\)|[-+*])\s')
 
-    A `> **证明`/`> **证明思路**` blockquote that directly follows the last
-    item of a 4-space-indented numbered list (without a blank line) will render
-    the proof at the list's indentation rather than the theorem's outer level.
-    Returns a list of violation strings (with line numbers). Empty = pass."""
+_K_LABEL_RE = re.compile(r'^\*\*[^*]+\*\*')
+
+def _k_next_is_new_block(item_line, nx):
+    """True when `nx` (the line directly after a list item) is a NEW BLOCK
+    that must be separated by a blank line.
+
+    Not flagged (no blank needed):
+      * blank line already present,
+      * another list item (continuation of the same list),
+      * deeper-indented (subordinate) content belonging to the item,
+      * headings (owned by heading_blank_above),
+      * plain wrapped prose (legal lazy continuation).
+    Flagged (renderer absorbs them into the list item — right-shifted boxes):
+      * `>` blockquote (proof/example/note),
+      * `$$` display math,
+      * top-level `**label**` statement,
+      * `<div` figure container."""
+    if nx.strip() == '':
+        return False
+    if len(nx) - len(nx.lstrip()) > len(item_line) - len(item_line.lstrip()):
+        return False  # subordinate content of the item
+    if _K_LIST_RE.match(nx):
+        return False  # next item of the same list
+    t = nx.strip()
+    if re.match(r'^#{1,6}\s', t):
+        return False  # heading_blank_above owns heading separation
+    if t.startswith('>') or t.startswith('$$') or t.startswith('<div'):
+        return True
+    if _K_LABEL_RE.match(t):
+        return True
+    return False
+
+def check_proof_after_list(md_file):
+    """K-LAYER: ensure a blank line separates a list's last item from a
+    following new block (proof blockquote, display math, structural label,
+    figure container).
+
+    Without the blank line the renderer lazy-continues the block INTO the
+    last list item — the proof/math renders at the list's indentation
+    instead of the outer level (real incident: Koopman ch12 Theorem 12.2,
+    list item 2 directly followed by `> **Proof sketch**`).  Returns a list
+    of violation strings (with line numbers). Empty = pass."""
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -601,13 +645,9 @@ def check_proof_after_list(md_file):
     out = []
     n = len(lines)
     for i in range(n - 1):
-        # A candidate list line: starts with 4 spaces + digit + `.`
-        if re.match(r'^    \d+\.\s', lines[i]) or re.match(r'^    \(\d+\)\s', lines[i]):
-            nx = lines[i + 1].strip()
-            if (nx.startswith('> **证明') or nx.startswith('> **证明思路**')
-                    or re.search(r'\*\*(?:Proof|Proof sketch|Proof outline|Example|Note|Remark)\b', nx)):
-                out.append(f"  x L{i+2}: `{nx[:50]}` directly follows list item "
-                           f"L{i+1} without blank line — add blank line between")
+        if _K_LIST_RE.match(lines[i]) and _k_next_is_new_block(lines[i], lines[i + 1]):
+            out.append(f"  x L{i+2}: new block `{lines[i + 1].strip()[:50]}` directly follows "
+                       f"list item L{i+1} without blank line — add one")
     return out
 
 
@@ -659,6 +699,49 @@ def check_heading_separators(md_file):
             if j >= 0 and FMT_SEC_RE.match(lines[j]):
                 out.append(f"  x L{i+1}: `---` directly under a heading "
                            f"(remove it): {ln.strip()[:40]}")
+    return out
+
+
+# ===========================================================================
+# L-EXT2: blank line above every section heading
+# ===========================================================================
+_FENCE_RE = re.compile(r'^\s*(?:```|~~~)')
+
+_HEADING_ABOVE_RE = re.compile(r'^#{1,6}\s')
+
+def check_heading_blank_above(md_file):
+    """L-EXT2: every ATX heading (`#`…`######`) must be separated from the
+    content above it by a blank line.
+
+    A heading that directly follows an ordered-list item (e.g. `10. …`) or any
+    paragraph line gets ABSORBED into that block by the renderer — the whole
+    section below then renders indented instead of flush-left (real incident:
+    Koopman ch12, list item 10 directly followed by `## §12.5`).  Returns a
+    list of violation strings (with line numbers). Empty = pass."""
+    try:
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except Exception:
+        return []
+    out = []
+    in_fence = False
+    in_math = False
+    for i, ln in enumerate(lines):
+        if _FENCE_RE.match(ln):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        s = ln.strip()
+        if s == '$$':
+            in_math = not in_math
+            continue
+        if in_math:
+            continue
+        if _HEADING_ABOVE_RE.match(ln):
+            if i > 0 and lines[i - 1].strip() != '':
+                out.append(f"  x L{i+1}: heading has no blank line above "
+                           f"(prev L{i}: {lines[i - 1].strip()[:40]}) — add one")
     return out
 
 
@@ -767,6 +850,7 @@ class FLayer(VerifyLayer):
             'k_proof_list': check_proof_after_list(ctx.md_file),
             'l_sep_blanks': check_separator_blank_lines(ctx.md_file),
             'heading_sep': check_heading_separators(ctx.md_file),
+            'heading_blank_above': check_heading_blank_above(ctx.md_file),
             'm_dm_gt': check_displaymath_gt(ctx.md_file),
             'n_bq_empty': check_excessive_bq_empty_lines(ctx.md_file),
         })

@@ -26,7 +26,7 @@
 | D | section-continuity | section_continuity | 1 | 否 | — | [section_continuity](section_continuity/section_continuity.md) |
 | B | item-numbering-integrity | item_numbering_integrity | 3 | 否 | — | [item_numbering_integrity](item_numbering_integrity/item_numbering_integrity.md) |
 | E | figure（图完整性 + 图有效性） | figure_completeness | 5 | 否 | — | [figure_completeness](figure_completeness/figure_completeness.md) |
-| F | format-verify（统一格式校验：KaTeX + 引用块 + 结构标签 + 条目分隔 + 证明间距 + 分隔空行 + 数学泄漏 + 引用块空行） | format_verify | 6 | 否 | — | [format_verify](format_verify/format_verify.md) |
+| F | format-verify（统一格式校验：KaTeX + 引用块 + 结构标签 + 条目分隔 + 证明间距 + 分隔空行 + 标题上空行 + 数学泄漏 + 引用块空行） | format_verify | 6 | 否 | — | [format_verify](format_verify/format_verify.md) |
 | O | subitem-continuity | subitem_continuity | 15 | 否 | — | [subitem_continuity](subitem_continuity/subitem_continuity.md) |
 | P | verbose-gates | verbose_gates | 16 | 否 | — | [verbose_gates](verbose_gates/verbose_gates.md) |
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](formula_tag/formula_tag.md) |

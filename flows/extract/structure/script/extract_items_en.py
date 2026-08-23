@@ -63,6 +63,78 @@ def _ocr_int(tok):
     s = ''.join(str(OCR_DIGIT.get(c, c)) for c in tok)
     return int(s) if s.isdigit() else None
 
+
+def _levenshtein(a, b):
+    """Standard Levenshtein edit distance (case-insensitive already applied
+    by callers). Small, dependency-free; only used on short label words."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+        prev = cur
+    return prev[-1]
+
+
+# Tolerance for OCR-garbled label words in the NUMBER-FIRST (section-scoped)
+# path.  do Carmo prints entries as `2.1 DEFINITION` but OCR mangles the label
+# (`DEFINrTION`, `DEFINrrION`, `BxAMPLE`, `PROPosrTION`, …) while the `N.M`
+# number stays intact.  The number alone is enough to know it IS an entry, but
+# we still need the canonical label to key/type it correctly, so we fuzzy-match
+# the garbled word against the known label set.  Threshold 2 recovers every
+# observed do Carmo garble (all are <= 2 substitutions) without false-positive
+# matches against ordinary prose words like `Let`/`Then` (distance >= 3).
+_LABEL_FUZZY_THRESHOLD = 2
+
+
+def _resolve_label(word, labels):
+    """Resolve a (possibly OCR-garbled) heading word to its canonical label.
+
+    Tries, in order: exact case-insensitive match, then Levenshtein-fuzzy
+    match within `_LABEL_FUZZY_THRESHOLD`, then (fallback) scanning the first
+    ~40 chars of the line for any exact label word — this last one catches
+    named theorems where the label is NOT the first word, e.g. do Carmo's
+    `2.2 Index Theorem.` (label = Theorem, not `Index`).
+    Returns the canonical label string (e.g. ``"Definition"``) or None.
+    """
+    w = (word or "").strip()
+    if not w:
+        return None
+    wl = w.lower()
+    # 1) exact
+    for lab in labels:
+        if lab.lower() == wl:
+            return lab
+    # 2) fuzzy
+    best, best_d = None, 99
+    for lab in labels:
+        d = _levenshtein(wl, lab.lower())
+        if d <= _LABEL_FUZZY_THRESHOLD and d < best_d:
+            best, best_d = lab, d
+    if best is not None:
+        return best
+    return None
+
+
+def _scan_inline_label(text, labels, window=40):
+    """Fallback: return the first exact (case-insensitive) label word found in
+    the first `window` chars of `text` (so a named theorem's label that appears
+    after the entry name is still caught)."""
+    head = text[:window]
+    toks = re.findall(r"[A-Za-z][A-Za-z]{2,}", head)
+    for t in toks:
+        for lab in labels:
+            if lab.lower() == t.lower():
+                return lab
+    return None
+
 # Character class: any digit OR any OCR-confusable letter from OCR_DIGIT keys.
 # NOTE: must include \d (all 0-9).  OCR_DIGIT only lists the letters it maps
 # plus the literal digits that appear as map *values*; the digit "4" (and any
@@ -85,9 +157,16 @@ EN_LAB_RE = re.compile(
 # ONLY when `section_scoped=True`, so normal chapter-first EN books (Silverman,
 # stochastic-processes, ...) keep their exact prior behavior untouched.
 SECTION_LABELS = EN_LABELS + ["Table", "Figure", "表", "图"]
+# Number-first headings ("2.1 DEFINITION", "24.2 Corollary") — the label word
+# is captured RAW (may be OCR-garbled) and resolved to its canonical form by
+# `_resolve_label` in the loop below.  We intentionally do NOT require the label
+# to exactly match SECTION_LABELS here, because OCR mangles it
+# (`DEFINrTION`, `BxAMPLE`, …); the number `N.M` is the reliable signal that
+# this is an entry.  The captured word must be >= 3 letters so we don't grab a
+# stray single letter.
 EN_LAB_RE_NF = re.compile(
     r'(' + EN_OCR_NUM + r')\s*' + SEP_TIGHT + r'\s*(' + EN_OCR_NUM + r')\s+'
-    r'(?:\([^)]*\)\s+)?\b(' + '|'.join(SECTION_LABELS) + r')\b',
+    r'(?:\([^)]*\)\s+)?([A-Za-z][A-Za-z]{2,})',
     re.IGNORECASE,
 )
 
@@ -161,6 +240,14 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # IGNORECASE is needed above, but it also widens prose capture).
                 if txt[:m.start()].strip():
                     continue
+                # Reject cross-reference headings: a genuine entry heading is
+                # followed by a sentence period / space + title, never a closing
+                # delimiter.  do Carmo prints entries NUMBER-FIRST, so a label-
+                # first "Example 4.8)" is a reference, not a heading; without this
+                # guard it fabricates a phantom item.
+                _after = txt[m.end():m.end() + 1]
+                if _after and _after in ")]},;:":
+                    continue
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.
                 n1 = _ocr_int(m.group(2))
@@ -194,18 +281,28 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 items.append({"key": key, "label": label,
                               "page": p, "text": snippet})
             # Section-scoped EN source also prints NUMBER-FIRST headings
-            # ("26.4 Lemma", "24.2 Corollary") — always two-level, so no
-            # single-level prose ambiguity to guard against.
+            # ("2.1 DEFINITION", "24.2 Corollary") — always two-level, so no
+            # single-level prose ambiguity to guard against.  The label word is
+            # OCR-garbled in practice; resolve it to the canonical label via
+            # exact/fuzzy/inline scan so the entry is keyed and typed correctly.
             if section_scoped:
                 for m in EN_LAB_RE_NF.finditer(txt):
-                    label = m.group(3)
-                    if label == "Example" and not want_examples:
-                        continue
+                    raw = m.group(3)
                     if txt[:m.start()].strip():
                         continue
                     n1 = _ocr_int(m.group(1))
                     n2 = _ocr_int(m.group(2))
                     if n1 is None or n2 is None:
+                        continue
+                    label = _resolve_label(raw, SECTION_LABELS)
+                    if label is None:
+                        # tertiary: the label may appear just after the entry
+                        # name (e.g. "2.2 Index Theorem." -> Theorem).
+                        label = _scan_inline_label(
+                            txt[m.start():m.start() + 50], SECTION_LABELS)
+                    if label is None:
+                        continue
+                    if label == "Example" and not want_examples:
                         continue
                     key = f"{label} {n1}.{n2}"
                     snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")

@@ -1,17 +1,22 @@
 """fix_separator_spacing.py — L-LAYER (code 'L', fix_order 9) auto-fix.
 
-Owns separator hygiene:
+Owns separator + heading-spacing hygiene:
   * insert blank lines around every `---` missing them  (legacy l_sep_blanks)
   * remove a `---` that sits directly under a section heading (`## `/`###` …),
     which is never a legitimate separator per the format convention
     (legitimate separators are only: below a lead-in paragraph, or between
     adjacent items).  -> heading_sep
+  * insert a blank line above every ATX heading missing one
+    (heading_blank_above) — a heading directly following a list item /
+    paragraph gets absorbed into it by the renderer, indenting the whole
+    section instead of rendering flush-left.  Skips file start, ``` / ~~~
+    code fences and `$$` math blocks.
 
 The under-heading `---` is removed FIRST, then blank-line spacing is applied
-to the remaining separators, so a stray separator under a heading is taken
-out rather than merely padded.  Both operations are idempotent.
+to the remaining separators, then the heading blank-above pass runs LAST so
+it sees the settled line stream.  All operations are idempotent.
 Self-registers via register_fixer('L', 9, apply_fix).
-Fix-dict key: {l}.
+Fix-dict key: {l} (all three passes counted into the single `l` counter).
 """
 import os
 import sys
@@ -32,6 +37,10 @@ _boot.setup()
 
 from verify.script.base import LayerFixResult, register_fixer
 from lib.regexlib import FMT_HR_RE as HR_RE, FMT_SEC_RE as SEC_RE
+
+_HEADING_ABOVE_RE = re.compile(r'^#{1,6}\s')
+
+_FENCE_RE = re.compile(r'^\s*(?:```|~~~)')
 
 
 def _remove_heading_seps(lines):
@@ -79,10 +88,42 @@ def _fix_separator_blank_lines(lines):
     return out, changes
 
 
+def _fix_heading_blank_above(lines):
+    """Insert a blank line above every ATX heading missing one.
+    Skips file start, code fences and `$$` math blocks.
+    Returns (lines, n_changed).  Idempotent."""
+    out = []
+    changes = 0
+    in_fence = False
+    in_math = False
+    for line in lines:
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        if line.strip() == '$$':
+            in_math = not in_math
+            out.append(line)
+            continue
+        if in_math:
+            out.append(line)
+            continue
+        # File start (out empty) needs no separator; otherwise require a blank
+        # line between the previous block and the heading.
+        if _HEADING_ABOVE_RE.match(line) and out and out[-1].strip() != '':
+            out.append('')
+            changes += 1
+        out.append(line)
+    return out, changes
+
+
 def apply_fix(ctx) -> LayerFixResult:
     """Run L auto-fix (remove under-heading `---` first, then blank-line
-    spacing on the remaining separators) and return the byte-compatible
-    fix dict {l}."""
+    spacing on the remaining separators, then heading blank-above last) and
+    return the byte-compatible fix dict {l}."""
     md = ctx.md_file
     try:
         with open(md, encoding='utf-8') as f:
@@ -92,7 +133,8 @@ def apply_fix(ctx) -> LayerFixResult:
     lines = text.split('\n')
     lines, c1 = _remove_heading_seps(lines)
     lines, c2 = _fix_separator_blank_lines(lines)
-    total = c1 + c2
+    lines, c3 = _fix_heading_blank_above(lines)
+    total = c1 + c2 + c3
     if total > 0:
         with open(md, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))

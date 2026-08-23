@@ -87,7 +87,7 @@ def normkey(s):
 
 # Chinese label synonyms that appear in bilingual-book .md files.
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
-                  '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法']
+                  '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法', '性质']
 # Combined (used when ordinal == ORDINAL_EN so either language matches).
 COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(

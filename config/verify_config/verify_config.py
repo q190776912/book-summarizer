@@ -66,18 +66,25 @@ ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.
                           #   `Definition 2.3.4` / `Theorem 3.2.1`，编号三段 C.S.N；与 type 3
                           #   (CN 三级虚线键 `C.S-N`) 不同：要求显式英文标签词，因此天然
                           #   排除 `FIGURE 1.1.1` / `(1.1.1)` 等图号/公式号（避免键碰撞）。
+ORDINAL_CN3LAB = 10         # CN three-level, LABEL-FIRST dots (标签C.S.N), e.g. 孙文祥《遍历论》.
+                          #   条目形如 `定理1.1.1` / `定义2.3.4` / `例2.1.6`，三段 C.S.N 且
+                          #   **每类标签各自独立计数、每节重置**（定义1.1.1 与 定理1.1.1 并存）。
+                          #   与 type 3（CN 三级裸键 `C.S-N`，共享计数器）不同：键内嵌规范中文
+                          #   标签（`定理1.1.1`，与 type 9 的 `评注1.1.1` 同构），要求块首显式
+                          #   标签词，天然排除三级小节标题（`2.3.1 Birkhoff遍历定理的陈述`——
+                          #   数字在前）与裸 `C.S.N` 图号/公式号，避免键碰撞。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9)
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3',
+    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3}
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None}
+ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en'}
+ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en', 10: 'cn'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -168,7 +175,7 @@ SECTION_TYPE_DEPTH = {
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
-    9: [1, 2],
+    9: [1, 2], 10: [1, 2, 3],
 }
 
 # --- formula sequence-label (Q-LAYER) config ------------------------------
@@ -533,7 +540,7 @@ class BookConfig:
                     raise ConfigError(f"[CONFIG] ordinal[{i}] 必须是对象（GroupConfig）")
                 t = int(g.get('type', ORDINAL_THREE_LEVEL))
                 if t not in ORDINAL_CODES:
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 1..8）")
+                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）")
                 nm = g.get('name') or ["uncat"]
                 if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
                     raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
@@ -760,7 +767,7 @@ class ConfigLoader:
             if g.type not in ORDINAL_CODES:
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].type={g.type}"
-                    f" 非法（应 1..9）。")
+                    f" 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）。")
             if g.scope not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
                 raise ConfigError(
                     f"[CONFIG] {self.verify_config_path} ordinal[{gi}].scope={g.scope}"

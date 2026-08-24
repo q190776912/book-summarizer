@@ -113,6 +113,26 @@ EXER_2 = re.compile(r'^(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
 # Chinese-scheme section headings — patterns shared from lib/regexlib.py
 from lib.regexlib import SEC_CN, SECBARE_CN, SECGLUE_CN
+
+# Global single-number section heads (Arnold《数学方法》-style "§12．变分法"):
+# sections carry ONE number and are numbered GLOBALLY across the book
+# (§1..§52 spanning all chapters), so the leading number is NOT the chapter.
+# Declared via section_types having a depth-1 level BELOW the chapter level
+# (e.g. [1, 1]); standard books ([1, 2] / [1, 2, 3]) never enter this branch
+# (zero regression).  OCR noise: § mis-read as $/S/8 ("84．" = §4, "827．" =
+# §27), so the prefix class is [§$S8]; a separator ([．.、。:]) is REQUIRED
+# (prose like "85 年" has none and is rejected), and the title must start with
+# a Han char / letter (never a digit — rejects "810.15元" style decimals).
+# No label-word guard: Arnold's real titles legitimately contain 定理/例
+# ("§20．E.诺特定理").  Titleless running heads ("§4.") are rejected (no title).
+SEC_GLOBAL = re.compile(
+    r'^[§$S8](\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+# § mis-read as 9 and GLUED to the number ("99.三维空间…" = §9, "948.生成函数"
+# = §48; the only two instances in this book, found by full-book scan).  The
+# plain [§$S8] class cannot cover these (prefix '9' is itself a digit), so a
+# second alternative with the same title/separator guards.
+SEC_GLOBAL_9 = re.compile(
+    r'^9(\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
 ITEM_CN = re.compile(
     r'^(?:定理|定义|引理|推论|命题|性质|例|注|表|图)\s*[（(]?(\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)]?(?!\d)\s*(.{0,90})')
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
@@ -150,11 +170,21 @@ EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
 # whenever the book declares `section_types` (depth derived via SECTION_TYPE_DEPTH).
 # ---------------------------------------------------------------------------
 _SEC_SEP_RE = re.compile(r'[.\-–·/．－〜]')
-_SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
+# 前缀容错与 D 层 sec_re（D_SEC_HEAD_A）对齐：§ 的 OCR 变形 §/S/s/8 之外，
+# 孙文祥《遍历论》实测还有 `$6.3熵映射`（§→$），一并容忍。
+_SEC_HEAD_RE = re.compile(r'^(?:[§8Ss$])?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
 _SEC_TITLE_LABEL_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)')
+# 标题首字符白名单：真小节标题可能以数学符号开头（Brin & Stuck §5.3
+# "∈-Orbits"——∈ 不是 alnum，旧 isalnum 检查整节漏检）。
+_SEC_TITLE_SYMBOLS = set('∈∗*×→←↦∀∃∈⊂⊆∩∪∞δΔ')
+# 标签词 + 后随数字 = 条目标题；仅含标签词（无数字）是合法章节标题。
+_SEC_TITLE_LABEL_NUM_RE = re.compile(
+    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
+    r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
+    r'Remark|Figure|Fig|Table)\s*\d')
 
 
 def _section_header_info(ln, ch=None, depths=None, max_depth=6):
@@ -183,15 +213,25 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     # Curves", do Carmo) — a real header may print `C.S. Title`; strip the
     # punctuation run before the alnum check below.
     rest = rest.lstrip('.．。').lstrip()
-    if not rest or not rest[0].isalnum():
+    if not rest or not (rest[0].isalnum() or rest[0] in _SEC_TITLE_SYMBOLS):
         return None  # number with no following title -> not a header
-    title = rest[:12]
-    if _SEC_TITLE_LABEL_RE.search(title):
+    title = rest[:20]
+    # 标签词只有后随数字才是条目标题（"2.1 Definition of ..."）；纯含标签词的
+    # 章节标题（"4.4 Examples"、"5.11 Axiom A and Structural Stability"）是
+    # 真小节，不得据此拒绝（Brin & Stuck 实测整节漏检根因）。
+    # 🔴 锚定改为「标题起始」：条目标题的标签词必在编号紧后（标题起点），
+    # 而真小节标题中部的「定理+页码粘连」（孙文祥《遍历论》实测
+    # "82.4Poincaré回复定理43"——页眉页码 43 粘在「定理」后构成
+    # "定理43" 假条目形态）不应触发拒绝，否则整节漏检。
+    if _SEC_TITLE_LABEL_NUM_RE.match(title.lstrip()):
         return None  # labeled item / figure / table, not a section
-    if len(rest.strip()) < 4:
+    # 短标题守卫：拉丁字母 1-3 字（"A"/"B" OCR 图示残粒）拒；含 CJK 的
+    # 2-3 字真标题（孙文祥《遍历论》"熵映射"/"平衡态"）保留。
+    _rest_stripped = rest.strip()
+    if len(_rest_stripped) < 4 and not re.search(r'[一-鿿]', _rest_stripped):
         return None  # too short to be a title ("A"/"B" junk from OCR'd
         # section-dependency diagrams like "5-6.A") — real titles have words
-    if not re.search(r'[A-Za-z一-鿿]', title):
+    if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
         return None
     # A genuine section title is Title-Case / Han / starts with a digit — reject
     # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
@@ -199,7 +239,10 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     # lowercase ASCII letter is rejected; Han / digit / uppercase are kept.
     first = next((c for c in rest if c.isalnum()), None)
     if first is not None and 'a' <= first <= 'z':
-        return None
+        # 容忍「小写符号变量 + 连字 + 大写词」型标题：Brin & Stuck §5.3
+        # "∈-Orbits" 被 OCR 读成 'e-Orbits'——首字符小写但非散文。
+        if not re.match(r"[a-z][-–—][A-Z]", rest):
+            return None
     return m.group(1), depth, rest.strip()
 
 
@@ -248,6 +291,11 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # for back-compatibility.
     depths_set = (set(d for d in section_depths if isinstance(d, int) and d >= 2)
                   if section_depths else None)
+    # Global single-number sections (Arnold-style "§12．变分法", section_types
+    # like [1, 1]): enabled iff a section level BELOW the chapter level has
+    # depth 1.  Standard books ([1, 2]...) have no such level -> branch off.
+    global_sec = bool(section_depths) and any(
+        isinstance(d, int) and d == 1 for d in section_depths[1:])
     # 🔴 Only enable the universal (depth-agnostic) detector when there is at
     # least one depth>=2 section to find.  A book whose sections are single
     # numbers (`## §N`, e.g. do Carmo) has `depths_set == set()` (empty) — the
@@ -286,6 +334,17 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     num_str, _depth, title = sec
                     rows.append((p, 'SEC', num_str, title))
                     in_exercise = False  # new section ends the exercise region
+                    continue
+            # --- global single-number section heads (Arnold-style) -----------
+            # The § number is book-global, so NO `== ch` guard: scan() already
+            # runs inside the chapter's page range, so every §N found here
+            # belongs to this chapter.  Running heads repeat per page and are
+            # deduped downstream (sec_best keeps the best title).
+            if global_sec:
+                m = SEC_GLOBAL.match(ln) or SEC_GLOBAL_9.match(ln)
+                if m:
+                    rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
+                    in_exercise = False
                     continue
             if mode == 'two-level':
                 m = SEC_2.match(ln)

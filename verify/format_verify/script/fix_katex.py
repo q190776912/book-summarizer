@@ -37,6 +37,10 @@ Pattern 1 — Unclosed $ before Chinese/English punctuation
 Pattern 2 — $$ blocks wrapping $...$ inline math
   Before:  $$ text $formula$ more text $$
   After:   text $formula$ more text
+  (2026-08 tightened: unwraps ONLY when the out-of-inline-span text carries
+  CJK prose and the block has no LaTeX structure anywhere; genuine display
+  math — including letter-led formulas and \\text{中文} payloads — keeps its
+  fences. Plain relational displays without any command are kept too.)
 
 Pattern 3 — $$ blocks wrapping ## headings
   Before:  $$ ## \S N.S 标题 $$
@@ -139,44 +143,123 @@ def fix_unclosed_dollars(lines: list) -> tuple:
     return changed
 
 
+_MATHISH_RE = re.compile(r"\\[a-zA-Z]+|\\\\|[&^_{}]")
+
+
+def _outer_segments(line: str):
+    """Split `line` into character segments lying OUTSIDE $...$ / $$ spans
+    (backslash escapes respected).  Used to judge whether a $$-wrapped block
+    is real display math (LaTeX structure OUTSIDE inline spans) or prose."""
+    segs = []
+    cur = []
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            cur.append(line[i : i + 2])
+            i += 2
+            continue
+        if c == "$":
+            j = i
+            while j < n and line[j] == "$":
+                j += 1
+            segs.append("".join(cur))
+            cur = []
+            i = j
+            continue
+        cur.append(c)
+        i += 1
+    segs.append("".join(cur))
+    return segs
+
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _looks_like_display(inner_lines) -> bool:
+    """True when the $$-block content carries real LaTeX structure OUTSIDE
+    inline-$ spans (commands, alignment &, scripts ^_, braces, \\begin{...},
+    \\\\ breaks) — i.e. genuine display math that must KEEP its fences."""
+    for ln in inner_lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if "\\begin{" in s:
+            return True
+        for seg in _outer_segments(s):
+            if _MATHISH_RE.search(seg):
+                return True
+    return False
+
+
+def _outer_has_cjk(inner_lines) -> bool:
+    """True when CJK characters appear OUTSIDE inline-$ spans (i.e. the block
+    wraps natural-language prose).  \\text{中文} inside an otherwise-LaTeX
+    line does NOT count — those live INSIDE the single outer segment which
+    is full of LaTeX commands, but we must test per-segment so a formula
+    like `p(\\alpha x)=\\alpha p(x) \\qquad \\text{对所有 }\\alpha` (one
+    outer segment containing BOTH commands and CJK) is judged by its
+    commands, not by its CJK."""
+    for ln in inner_lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if "\\begin{" in s:
+            continue
+        for seg in _outer_segments(s):
+            # skip segments dominated by LaTeX commands — CJK inside a
+            # command-heavy segment is \\text{} payload of a real formula
+            if _MATHISH_RE.search(seg):
+                continue
+            if _CJK_RE.search(seg):
+                return True
+    return False
+
+
 def fix_wrapping_dollars(lines: list) -> tuple:
-    """Pattern 2-3: remove $$ that wrap $...$ or ## headings."""
+    """Pattern 2-3: remove $$ that wrap ## headings or CJK prose (optionally
+    carrying inline $..$); NEVER touch genuine display math."""
     changed = False
     i = 0
     while i < len(lines):
-        if lines[i].strip() == '$$':
+        if lines[i].strip() == "$$":
             open_idx = i
             j = i + 1
-            while j < len(lines) and lines[j].strip() != '$$':
+            while j < len(lines) and lines[j].strip() != "$$":
                 j += 1
             if j < len(lines):
                 close_idx = j
-                inner = [l for l in lines[open_idx+1:close_idx] if l.strip()]
-                inner_text = '\n'.join(l.rstrip('\n\r') for l in inner)
+                inner = [l for l in lines[open_idx + 1 : close_idx]]
+                inner_text = "\n".join(
+                    l.rstrip("\n\r") for l in inner if l.strip()
+                )
 
-                has_inline = '$' in inner_text
-                has_display = '\\begin{' in inner_text
-                has_heading = bool(re.search(r'^##? ', inner_text, re.MULTILINE))
-                has_chinese = bool(re.search(r'[\u4e00-\u9fff]', inner_text))
-                is_math = bool(re.search(r'^\\[a-zA-Z]', inner_text))
+                has_heading = bool(
+                    re.search(r"^##? ", inner_text, re.MULTILINE)
+                )
 
-                # Determine if this $$ should be removed
-                should_remove = False
-                if has_heading:
-                    should_remove = True
-                elif has_chinese and not has_display and (has_inline or not is_math):
-                    should_remove = True
-                elif has_inline and not has_display and not is_math:
-                    should_remove = True
+                # Conservative unwrap (2026-08 Kreyszig incident): the old
+                # has_chinese/is_math heuristic mass-stripped fences of real
+                # formulas whose first line starts with a letter and whose
+                # \\text{} carries CJK.  Unwrap ONLY unambiguous abuse:
+                #   * a ## heading wrapped in $$;
+                #   * CJK prose OUTSIDE inline spans with no LaTeX structure
+                #     anywhere in the block.
+                # Plain relational displays without any LaTeX command
+                # (`x = y + z.`) are KEPT — benefit of doubt to the fences.
+                should_remove = has_heading or (
+                    bool(inner_text.strip())
+                    and _outer_has_cjk(inner)
+                    and not _looks_like_display(inner)
+                )
 
                 if should_remove:
-                    # Keep the inner content, remove the $$ wrappers
-                    content_lines = lines[open_idx+1:close_idx]
-                    # Dedent blockquote if needed
+                    content_lines = lines[open_idx + 1 : close_idx]
                     result = []
                     for cl in content_lines:
                         result.append(cl)
-                    lines[open_idx:close_idx+1] = result
+                    lines[open_idx : close_idx + 1] = result
                     changed = True
                     i = open_idx + len(result)
                     continue

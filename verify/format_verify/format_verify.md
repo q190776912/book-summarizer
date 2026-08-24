@@ -59,6 +59,8 @@ $$x = y$$
 | 8 | `$$` 块内空行 | 空白行插入 `$$` 内部，部分渲染器中断显示块 |
 
 > 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–10（含单行 `$$…$$` 显示数学拆分）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览），复验 `python verify/format_verify/script/check_katex.py <file>`。
+>
+> 🔴 **模式 2 的保守判定（2026-08 Kreyszig 事故修复）**：旧启发式「块内含中文且首行非反斜杠命令 → 拆围栏」把 `\text{中文}` 公式与字母开头的合法显示式（如 `p(\alpha x)=… \text{对所有 }…`）成批误拆（单章最多 -14 对围栏）。现规则：剥离 `$…$` 行内段后，仅当**行外文本含 CJK 散文且全块无任何 LaTeX 结构**（无命令/`&`/`^`/`_`/`{}`/`\begin{}`）或包裹 `##` 标题时才拆；纯关系式（`x=y+z.` 这类无命令块）一律保留围栏（疑错从有）。回归测试见 `verify/tests/test_fix_katex_fence.py`。
 
 #### 手动修复要点
 - **模式 1（缺闭合 `$`）**：搜"奇数个 `$` 的行"，查是否以 `$formula，` / `$formula.` 结尾且之后有 `$$`；在末尾标点前补 `$`（如 `记 $\langle h,\mu\rangle=\int_X h(x)\,\mu(dx).`）。

@@ -38,7 +38,7 @@
   ```
   - `type`：ORDINAL_* 风格码（1..9）；**`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生**（2 段→`4`，3 段→`3`，单分量→`1`），不再单独配置。`ORDINAL_SECTION_TYPES` 是小节层级反推，与 formula 的 `depth` 无关。
   - `scope`：1=book / 2=chapter / 3=section——编号重置窗口；**跨章守卫**（首分量 ≠ 当前章号判 INCONSISTENT）当且仅当 `scope == 2` 开启，book/section 作用域关闭该守卫。
-  - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。
+  - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。支持两种键形态：裸编号（全章生效）与 `'<sec>#<num>'` 作用域键（仅该节生效，见上）。
 - **scope/depth 耦合不变量（由 `type` 决定，配置必守）**：scope:3⇒`type 1`(depth 1，节级裸`(N)`)；scope:2⇒`type≥4`(depth≥2，章级带 C. 前缀)；scope:1 通常 `type 1` 全局连续。违反即非法，`require_complete` 应拒。
 - **书源编号抽取**：`SourceFormulaIndex.build()` 遍历 `page_{start:03d}.json .. page_{end:03d}.json`，对每页 `text[].text` 用**由 `type` 派生的 `depth`** 正则抽编号（`build_formula_patterns(ncomp)` 覆盖 `（1.17）`/`(1.17)`/`Eq. 1.17`/`Equation 1.17`/`式（1.17）`/裸 `1.17` 六种变体，每式单捕获组），`norm()` 归一后归入本章集合 S。**只读 text，不读被扫花的 `formulas[].latex`**。
 - **序标校验（自动 FAIL）**：
@@ -47,9 +47,11 @@
 - **遗漏校验（未登记 `formula.ignore` 时阻断 FAIL）**：
   - `q_missing`(MISSING)：S 中属于本章、规范、前缀匹配的编号在总结无对应 `\tag` → **FAIL（阻断）**。writing-rules 硬性要求 7 规定书源所有带编号公式（含描述性散文中的推导式）都必须保留，故"未登记的遗漏"即"漏写公式"。书源确有该编号但属合法省略（如纯排版重复）时，把它加入 `formula.ignore` 跳过比对；未在 `ignore` 登记的遗漏一律阻断，以防漏写描述性推导公式。
 - **序列顺序校验（WARN，永不阻断）**：
-  - `q_order_mismatch`(ORDER_MISMATCH)：总结文档序与书源阅读序（按公式首次出现的 `page, y` 位置）不一致 → 仅 WARN。`scope==3`（节级重置，编号每节重复）时按 `## §N.M` 窗口独立判定（跨节重置避免重复编号误报）；`scope==2/1`（编号全局唯一）时窗口跨节，连跨节顺序偏移也捕获；仅对 S 中命中的编号判定，不与 FABRICATED/MISSING 重复计数。
+  - `q_order_mismatch`(ORDER_MISMATCH)：总结文档序与书源阅读序不一致 → 仅 WARN。`scope==3`（节级重置，编号每节重复）时按 `## §N.M` 窗口独立判定，且比较用 **per-(sec,n) 节内首现位置**（`_pos_sec`）——重复编号的全局首现位置恒来自最早含 `(n)` 的节，跨节比较必产生噪声（2026-08 Kreyszig 实测）；某 tag 无节内位置记录（其独立标签被 OCR 并行/丢失）时**跳过该 tag 的顺序判定**（既不判倒挂也不更新游标）。`scope==2/1` 时窗口跨节、沿用全局首现位置。
 - **小节定位校验（WARN，永不阻断）**：
-  - `q_misplaced`(MISPLACED)：总结公式所在 `## §N.M` 小节与书源该公式定义所在小节**非前缀兼容**时 → 仅 WARN。判定用"前缀兼容"而非精确相等：书源定义于更深子节（如 §1.3.1）而总结置于其祖先节（§1.3）视为**正确**（子节是父节后代，不算挂错节）；仅当二者真正分叉（书源 §1.4 却放 §1.3、或书源 §1.3.5 却放 §1.3.2）才报 MISPLACED。捕获"标号挂错节"。
+  - `q_misplaced`(MISPLACED)：总结公式所在 `## §N.M` 小节与书源定义小节非前缀兼容 → 仅 WARN。判定用"前缀兼容"；`scope==3` 下另设**页范围证据门**：仅当书源在该节自身页跨度 `[start(sec), start(next)-1]` 内**从未**记录过独立 `(n)` 标签时才判挂错——只要范围内有任何命中即视为放置正确。此门用于吸收 OCR 把标签并入公式行的漏抽（2026-08 Kreyszig：章首导览页跨引用曾把整章编号扫入末尾节，修复推进后仍会因标签合并产生大量假 MISPLACED）。
+- **build_sectioned 节推进信号（2026-08 收紧）**：`C.S-1` 推进标记只接受**剥离后行首**且后随空白的形态（真实条目标题形如 `9.3-1 Definition (Monotone sequence). ...`）；行中引用（`(cf. 9.9-1)`、`theorem 4.2-1 (variants`）与 OCR 断行残块（行首 `9.2-1), and ...`）一律不再触发。Strogatz 式标题路径（`_HEAD_RE` + 顺序 +1）排除 `N.M-K` 条目形态与行首 `N.M)` 括注断行，防止把条目续行当标题。
+- **作用域化 ignore 键**：per-chapter ignore 文件的键可为裸编号或 `'<sec>#<num>'`（如 `'9.8#17'`）——后者只在该节内静默该编号。节级重置书中每个裸编号在全章各节复用，章级忽略会连累其他节的合法 `\tag{n}` 校验；浓缩省略类豁免一律优先用 scoped 键并附理由。
 - **公式内容校验（人工对账）**：`verify_all` 末聚合各章 `q_rows` 写出 `<extract_dir>/formula_audit.md`，并排列出「总结 LaTeX / 书源文本片段」，机器**不判内容对错**。
 - **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错，**或书源采用字母/罗马开头编号 `(A.3)`/`(I.2)` 这类 Q 层暂不支持的形态（预留待实现）**），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。字母/罗马开头场景由 `_detect_letter_led_formulas` 提前探测并把 WARN 文案改为「该格式暂不校验、须人工核对 formula_audit」，避免误导成配置错。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
 

@@ -137,9 +137,9 @@ def print_result(r):
         for w in r['b_gap_warnings']:
             print(f"  ~ {w.strip()}")
     # E-LAYER: figure completeness (analog of B-layer) — only if figure extraction ran.
-    if r.get('fig_skipped'):
-        print("\nE-LAYER FIGURES: SKIPPED — no figure_index.json (figure extraction not run for this chapter).")
-    else:
+    # （fig_skipped = 本章在 figure_index.json 中没有图条目：属正常静默跳过，
+    #   汇总行的 FgMiss='-' 已传达该状态，不再逐文件打印噪声行。）
+    if not r.get('fig_skipped'):
         # Language-aware figure prefix: honor the book's own figure labels
         # (the `ordinal` Figure group's `name`) instead of a hardcoded 图.
         try:

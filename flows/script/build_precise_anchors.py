@@ -81,8 +81,9 @@ def main():
     ext = os.path.join(book_dir, "_extract")
     det_path = os.path.join(ext, "figure_detect.json")
     cmap_path = os.path.join(ext, "chapter_map.json")
-    det = figure_detect.FigureDetect.load(det_path).data
-    chaps = chapter_map.load_chapter_map_raw(cmap_path)["chapters"]
+    det = FigureDetect.load(det_path).data
+    _cm_raw = chapter_map.load_chapter_map_raw(cmap_path)
+    chaps = _cm_raw["chapters"] if isinstance(_cm_raw, dict) and "chapters" in _cm_raw else [dict(v, chapter=int(k)) for k, v in _cm_raw.items()]
 
     pdfs = [f for f in os.listdir(book_dir) if f.lower().endswith('.pdf')]
     doc = fitz.open(os.path.join(book_dir, pdfs[0]))

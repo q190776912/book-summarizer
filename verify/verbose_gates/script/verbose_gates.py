@@ -104,11 +104,11 @@ DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 # 否则三级小节号会被截断为两级、或三级 `###`/四级 `####` 标题根本不被扫描，
 # 导致 p-layer-missing-sec 把真实存在的小节误报为缺失（回归：commit 5390e5d
 # 把契约源切到 book_structure.json 后未同步放宽此正则）。
-SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*(\d+(?:\.\d+)*)')
+SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*(\d+(?:\.\d+)*(?:-[A-Za-z])?)')
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
-SEC_HEADING_RE_OPT = re.compile(r'^##\s*§\s*(\d+(?:\.\d+)?)?')
+SEC_HEADING_RE_OPT = re.compile(r'^##\s*§\s*([\dA-Za-z][\d.\-A-Za-z]*)?')
 
 
 def check_exer_blocks(lines):
@@ -125,6 +125,11 @@ def check_noise(lines):
     for i, ln in enumerate(lines):
         s = ln.strip()
         if not s:
+            continue
+        # Long lines (>120 chars) carrying a publisher/citation fragment inside
+        # running prose (e.g. do Carmo citing "Princeton University Press,
+        # 1957-1958" in a remark) are legitimate content, not header noise.
+        if len(s) > 120:
             continue
         for rx in NOISE_RES:
             if rx.search(s):
@@ -246,6 +251,13 @@ def _load_contract(ext_dir, ch):
     return sections, item_keys
 
 
+def _norm_secnum(s):
+    """Normalize a section-number token for comparison: dash/EN-dash/en-dot
+    separators all collapse to '.' so contract keys printed as '1-1' (do Carmo)
+    match md headings written `## §1.1`."""
+    return re.sub(r'[.\-\u2013\u00b7\uff0e]+', '.', (s or '').strip())
+
+
 def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
     sections, _ = _load_contract(ext_dir, ch)
     if not sections:
@@ -280,7 +292,7 @@ def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
     for ln in md_lines:
         m = SEC_HEADING_RE.match(ln)
         if m:
-            num = m.group(1)
+            num = _norm_secnum(m.group(1))
             present.add(num)
             # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
             # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
@@ -289,7 +301,8 @@ def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
             present_first.add(num.split('.')[0])
     out = []
     for s, title in required:
-        ok = (s in present) or (s.split('.')[-1] in present_first)
+        ns = _norm_secnum(s)
+        ok = (ns in present) or (ns.split('.')[-1] in present_first)
         if not ok:
             out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
     return out
@@ -351,7 +364,8 @@ def check_verbose_paragraphs(lines):
         ln = lines[i]
         s = ln.strip()
         if not s or s.startswith('>') or s.startswith('#') or s.startswith('$$') \
-           or s.startswith('---') or s.startswith('|'):
+           or s.startswith('---') or s.startswith('|') \
+           or s.startswith(('<div', '</div', '<img')):
             i += 1
             continue
         if s.startswith('**'):
@@ -372,7 +386,7 @@ def check_verbose_paragraphs(lines):
         buf = []
         while j < n:
             cur = lines[j].strip()
-            if not cur or cur.startswith(('>', '#', '$$', '---', '|', '**')):
+            if not cur or cur.startswith(('>', '#', '$$', '---', '|', '**', '<div', '</div', '<img')):
                 break
             buf.append(cur)
             j += 1

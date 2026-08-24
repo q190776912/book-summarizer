@@ -69,11 +69,33 @@ def _register_verify_package(r):
         spec.loader.exec_module(mod)
 
 
+def _force_utf8_stdio():
+    """Force UTF-8 (errors=replace) on stdout/stderr for every entry point.
+
+    Windows consoles default to a legacy codepage (GBK/cp936 on zh-CN); layer
+    reports print box-drawing / symbol characters (⚠ · —— 等) that raise
+    UnicodeEncodeError there and kill long --all runs at the very last step
+    (实测：audit_ignore._print_report 打印 ⚠ 时崩在 GBK，校验已完成却拿不到
+    退出码)。setup() 被 所有入口脚本 调用，这里集中加固一次即可全局生效；
+    用户侧仍可用 BKS/PYTHONIOENCODING=utf-8 覆盖（本函数不覆盖已显式设置的
+    PYTHONIOENCODING 场景之外的流属性，仅兜底）。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                # 非常规流（IDE 捕获/管道包装）可能不支持 reconfigure —— 静默跳过。
+                pass
+
+
 def setup():
     """Ensure the skill root, ``lib``, all ``flows/*/script``, ``verify/**/script``,
     ``config/**/script`` dirs, and every direct child of ``data/`` (each
     ``data/<json_name>/`` package + ``data/lib``) and ``config/`` (each
     ``config/<json_name>/`` package) are importable."""
+    _force_utf8_stdio()
     r = root()
     dirs = [r, os.path.join(r, "lib")]
     for base in ("flows", "verify", "config", "data"):

@@ -15,7 +15,7 @@
 
 四类输出（见「字节契约键」）：
 - `blocking`：严格模式下 md 内部首项/连续性缺口 + 提取侧查漏（整类首项缺失、OCR over-mark 守卫），（硬 FAIL，`auto_fixable=False`）。
-- `truly_missing` / `mentioned_only` / `extra`：整章完整性（B 层职责）。`truly_missing`=书有而 md 全宇宙无 → 阻断；`mentioned_only`=仅正文/引用出现、非独立条目 → 仅复核；`extra`=md 有而提取未检出（多为合法交叉引用）→ 仅参考。
+- `truly_missing` / `mentioned_only` / `extra`：整章完整性（B 层职责）。`truly_missing`=书有而 md 全宇宙无 → 阻断；`mentioned_only`=仅正文/引用出现、非独立条目 → 仅复核；`extra`=md 有而提取未检出（多为合法交叉引用）→ 仅参考。EXTRACT 供水时经 `keys_in_md(..., chapter=ch)` 把「带显式异章限定词」（of Chap. X / 第X章…，X≠本章）的正文提及排除在 all_keys 之外，故此类跨章引用不再进入 EXTRA（条目标签不受影响；实现见 `lib/key_parse.py::_is_foreign_chapter_ref`）。
 - `warnings`：非阻断（含 over-mark 守卫的误标提示、OCR 漏检复核等）。
 - `b_gap_warnings`：非严格模式（`strict:false`）下 md 内部首项/连续性缺口，降级为非阻断警示。
 - `b_tail_warnings`：尾部校验，始终非阻断。
@@ -65,7 +65,7 @@
 - **与 EXTRACT 解耦**：B 不再消费 `ctx.extraction_blocking`；提取侧查漏 + 完整性 + `ignored_hit` 全部由 B 自行计算（数据源为 EXTRACT 供水集 `ctx.items` / `ctx.entry_keys` / `ctx.all_keys`）。EXTRACT 现仅供水、不做事。
 - 编号配置由 `config/verify_config.BookConfig` 经 `ConfigLoader` 从 `<book>/_extract/verify_config.json` 一次性读出，挂在 `ctx.config` 上；B 层读 `ctx.config`，**不再各自读文件**（配置统一经 `ConfigLoader` 一次性加载）。分组由 `ordinal` 数组各 group 的 `type`/`scope` 决定（`depth` 由 `type` 派生）（见 `config/verify_config/verify_config.py` 的 `GroupConfig` / `ORDINAL_DEPTH`），JSON 里 `ordinal` 必填为数组。
 - `ItemNumberingIntegrityLayer.run`（自包含，不依赖任何其他层）：
-  1. 整章完整性（原 A 层）：`truly_missing = sorted(extracted - all_keys)`、`mentioned_only = sorted((extracted & all_keys) - entry_keys)`、`extra = sorted(all_keys - extracted)`，其中 `extracted = {it['key'] for it in ctx.items} - ignore_keys`；并算 `ignored_hit` stage1（噪声键 `extracted_raw & ignore_keys`）。
+  1. 整章完整性（原 A 层）：`truly_missing = sorted(extracted - all_keys)`、`mentioned_only = sorted((extracted & all_keys) - entry_keys)`、`extra = sorted(all_keys - extracted)`，其中 `extracted = {it['key'] for it in ctx.items} - ignore_keys`；并算 `ignored_hit` stage1（噪声键 `extracted_raw & ignore_keys`）。`all_keys` 由 `keys_in_md(..., chapter=ch)` 供给：带显式异章限定词的正文提及已被剔除（见上）。
   2. 提取侧查漏（原 P2 的 Q+over-mark 逻辑）：`_merged_category_first_missing(ctx, all_keys, blocking)` + `_merged_ocr_overmark_guard(ctx, items, warnings)`（基于 raw `page_*.json` + `ctx.items` + md）。
   3. `ignored_hit` 第二段 suppression：遍历 `blocking`，若某条引用键全部 ∈ `ignore_keys`，把 `bkeys` 并入 `ctx.ignored_hit` 并从 `blocking` 剔除（最终 `ignored_hit` 完全由 B 层在本层内计算，EXTRACT 仅提供 `ctx.items` 数据源）。
   4. 算 MD 侧 `_md_gap_blocking` -> `(md_blocking, md_warnings, present_md, md_tail)`。

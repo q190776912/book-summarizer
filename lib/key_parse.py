@@ -42,7 +42,8 @@ from lib.regexlib import (
 )
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
-    ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
+    ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
+    GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
 
@@ -211,7 +212,37 @@ def _first_num(key):
     m = re.search(r'\d+', key)
     return int(m.group()) if m else -1
 
-def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=None):
+# --- 显式异章限定词（cross-chapter qualifier）---
+# 正文交叉引用常带显式章限定："Proposition 5.4 of Chap. 0" / "第9章的引理 3.8" /
+# "（第9章，推论 3.10）"。这类 mention 指向**别的章**的条目，不属于本章契约，
+# 若进入 all_keys 会在 A 层 EXTRA（仅参考）中反复刷屏。keys_in_md 收到
+# `chapter` 参数时，把「限定词章号 != 本章」的正文提及剔除；条目（加粗标签）
+# 永不过滤。限定词识别：AFTER 型 "… of Chap.(ter) X"（匹配点后 20 字符内）、
+# BEFORE 型 "第X章[的，、：:；]" 与 "Chap.(ter) X[,，]"（紧贴匹配点之前）。
+_CHAP_QUAL_AFTER_RE = re.compile(r'[Cc]hap(?:ter|\.)?\s*(\d{1,3})')
+_CHAP_QUAL_BEFORE_CN_RE = re.compile(r'第\s*(\d{1,3})\s*章\s*[的，、：:；]?\s*$')
+_CHAP_QUAL_BEFORE_EN_RE = re.compile(r'[Cc]hap(?:ter|\.)\s*(\d{1,3})\s*[,，]\s*$')
+
+
+def _is_foreign_chapter_ref(line, start, end, chapter):
+    """该正文提及是否带「指向异章」的显式章限定词（chapter=None 时恒 False）。"""
+    if chapter is None:
+        return False
+    m = _CHAP_QUAL_AFTER_RE.search(line, end, min(len(line), end + 20))
+    if m and int(m.group(1)) != chapter:
+        return True
+    before = line[max(0, start - 16):start]
+    mb = _CHAP_QUAL_BEFORE_CN_RE.search(before)
+    if mb and int(mb.group(1)) != chapter:
+        return True
+    mb = _CHAP_QUAL_BEFORE_EN_RE.search(before)
+    if mb and int(mb.group(1)) != chapter:
+        return True
+    return False
+
+
+def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=None,
+               chapter=None):
     """Entries/all_keys from an .md file.
 
     `groups` is the BookConfig.ordinal GroupConfig array (new v2 form).  When
@@ -220,7 +251,9 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
     the exercise group's two-level keys are captured alongside the theorem
     group's three-level keys.  When only `ordinal` (int) is supplied it is
     treated as a single group (back-compat shortcut).  `chapter_roman` is
-    required for any GM/ROMAN group.
+    required for any GM/ROMAN group.  `chapter`（可选）为该 md 所属章号：给出时，
+    带显式异章限定词（of Chap. X / 第X章…，X != chapter）的正文提及不进入
+    all_keys（条目标签不受影响）；缺省 None 保持旧行为。
     """
     if groups is None:
         groups = [GroupConfig(type=int(ordinal) if ordinal is not None else ORDINAL_THREE_LEVEL)]
@@ -255,13 +288,15 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                            if lbl else f"{chapter_roman}.{cur_sec}-{n}")
                     entries.add(key); allk.add(key)
                 for m in GM_LABELED_RE.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
             elif t == ORDINAL_TWO_LEVEL:
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_2.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             elif t == ORDINAL_EN:
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
@@ -273,13 +308,19 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     key = f"{_canon_label(m.group(3))}{m.group(1)}.{m.group(2)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif t == ORDINAL_EN3:
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+            elif t in (ORDINAL_EN3, ORDINAL_CN3LAB):
+                # EN3（Label C.S.N，如 Lasota & Mackey）与 CN3LAB（标签C.S.N，如
+                # 孙文祥《遍历论》`定理1.1.1`）共用同一 md 侧解析：键 = 规范标签
+                # （_canon_label 双语归一，Theorem/定理 → 定理）+ 点分三段。
+                # COMBINED_LABEL_KINDS 同时含中英标签词，两侧天然对齐。
                 for m in ENTRY_RE_EN3_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN3_C.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
             elif t == ORDINAL_SINGLE:
                 # Single-level EN book (e.g. Silverman "A Friendly Introduction to
                 # Number Theory" 4th ed — ordinal type 1): items carry ONE
@@ -301,7 +342,8 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_ROMAN.finditer(line):
-                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
             else:
                 for m in ENTRY_RE.finditer(line):
                     entries.add(normkey(m.group(1)))

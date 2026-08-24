@@ -46,16 +46,24 @@ EN3_LABELS = ["Definition", "Theorem", "Lemma", "Proposition", "Corollary",
 EN3_LABEL_CANON = {
     'definition': 'Definition', 'defnition': 'Definition', 'defintion': 'Definition',
     'theorem': 'Theorem', 'lemma': 'Lemma', 'proposition': 'Proposition',
+    'proposltlon': 'Proposition',
     'corollary': 'Corollary', 'example': 'Example', 'remark': 'Remark',
     'exercise': 'Exercise', 'assertion': 'Assertion', 'conjecture': 'Conjecture',
     'fact': 'Fact',
 }
 EN3_LABEL_ALT = '|'.join([
-    '(?:Definition|Defnition|Defintion)', 'Theorem', 'Lemma', 'Proposition',
-    'Corollary', 'Example', 'Remark', 'Exercise', 'Assertion', 'Conjecture', 'Fact',
+    '(?:Definition|Defnition|Defintion)', 'Theorem', 'Lemma',
+    # OCR 常把 i 误读为 l（PROPOslTloN），加模糊分支容忍
+    '(?:Proposition|Propos[l1]t[l1]on)',
+    'Corollary', 'Example', 'Remark',
+    'Exercise', 'Assertion', 'Conjecture', 'Fact',
 ])
 EN3_LAB_RE = re.compile(
-    r'\b(' + EN3_LABEL_ALT + r')s?\b\s*(?:\([^)]*\))?\s*'
+    # 🔴 尾界用 `(?![A-Za-z])` 而非 `\b`：OCR 常把标签与编号粘连成
+    # `PROPOsITiON2.7.2`（无空格），而 `\b` 在「字母→数字」之间永不成立
+    # （两者都是 \w），粘连形态整条漏抽；负向前瞻既容忍粘连又排除
+    # `Propositional` 这类单词延伸。
+    r'\b(' + EN3_LABEL_ALT + r')s?(?![A-Za-z])\s*(?:\([^)]*\))?\s*'
     r'(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)',
     re.IGNORECASE,
 )
@@ -68,6 +76,33 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
     stray `Remark 2.3.4` inside chapter 1 is dropped.  Returns items shaped like
     the other extractors: {key, label, page, text}.
     """
+    # 块首装饰字符（Brin & Stuck 用 * 标记难题："*Exercise 1.2.4 ..."），
+    # 不剥离会被「块首判定」整条漏抽；括号 ( 不在白名单——"(Exercise 2.1.3)"
+    # 是交叉引用，必须保持拒绝。
+    _DECOR = "*\u00b7\u2022\u2192'\u201d\u201c\""
+
+    def _emit(txt, m, p):
+        # 标题判别：真条目头在 C.S.N 后是句点（或「(定理名/人名)」括注再句点）。
+        # OCR 断行会把 'by Proposition' 留在上块，使行首引用伪装成条目头
+        # （实测：'PROPOSITION 2.1.2, Zorn's lemma...' / 'LEMMA 6.1.1 are
+        # satisfied...' / 'PROPOSITION 9.2.1(6), H(...'）——按后随标点拒绝。
+        rest = txt[m.end():].lstrip()
+        if rest and not (rest[0] == "." or rest[0] == "\u3002" or
+                         re.match(r"\(([^)]*[A-Za-z][^)]*)\)\s*[.\s]", rest)):
+            return
+        label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
+        if label == "Example" and not want_examples:
+            return
+        c, s, n = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        if c != chapter:
+            return
+        # Sanity bounds (avoid OCR garbage like 1.99.1).
+        if s > 20 or n > 60:
+            return
+        key = f"{label} {c}.{s}.{n}"
+        snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+        items.append({"key": key, "label": label, "page": p, "text": snippet})
+
     items = []
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, f"page_{p:03d}.json")
@@ -75,30 +110,31 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
             continue
         with open(fp, "r", encoding="utf-8") as f:
             data = PageJson.load(os.path.join(extract_dir, f"page_{p:03d}.json")).data
-        for t in data.get("text", []):
-            txt = t.get("text", "")
+        blocks = [t.get("text", "") for t in data.get("text", [])]
+        prev = ""
+        for txt in blocks:
             if not txt:
                 continue
             for m in EN3_LAB_RE.finditer(txt):
-                label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
-                if label == "Example" and not want_examples:
-                    continue
                 # Heading vs prose reference: a real entry heading starts the
                 # text block (e.g. "REMARK 1.1.1. Map (1.1.1) ...").  A
                 # cross-reference like "by Lemma 11.26" / "satisfy Theorem 2.3"
                 # sits mid-block and is skipped.
-                if txt[:m.start()].strip():
+                if txt[:m.start()].strip(_DECOR + " \t"):
                     continue
-                c, s, n = int(m.group(2)), int(m.group(3)), int(m.group(4))
-                if c != chapter:
-                    continue
-                # Sanity bounds (avoid OCR garbage like 1.99.1).
-                if s > 20 or n > 60:
-                    continue
-                key = f"{label} {c}.{s}.{n}"
-                snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
-                items.append({"key": key, "label": label,
-                              "page": p, "text": snippet})
+                _emit(txt, m, p)
+            # 跨块连字标签：OCR 把 "Proposi-" 留在上块末尾、下块以
+            # "tion 4.10.3." 开头（实测 p112→p113 Proposition 4.10.3 整条漏抽）。
+            # 取上块尾部字母段与下块拼接（有连字则去连字直拼）后锚定重试。
+            tailm = re.search(r"([A-Za-z]{2,})([-\u00ad])?\s*$", prev)
+            if tailm:
+                frag = tailm.group(1)
+                joined = (frag + txt.lstrip()) if tailm.group(2) \
+                    else (frag + " " + txt.lstrip())
+                jm = EN3_LAB_RE.match(joined)
+                if jm:
+                    _emit(joined, jm, p)
+            prev = txt or prev
     # Collapse reference mentions but KEEP two genuinely different items that
     # share a (label, number) — e.g. a source book printing the same number
     # twice (a printing off-by-one, like Lasota & Mackey's Proposition 12.8.3

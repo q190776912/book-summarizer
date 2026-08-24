@@ -59,6 +59,8 @@
 - **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
 - **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。（🟢 例外：带 `VERIFIED-SPARSE` 等显式证据标记的序列洞 ignore 判 `ACCEPTED`，非阻断、不阻止 PASS——因其是书源真实跳号而非隐藏缺项；无证据标记则仍 SUSPECT。）
+- **规则3 控制台编码（Windows GBK 崩溃防护）**：层报告含 ⚠ · —— 等 GBK 不可编码字符，zh-CN 控制台管道输出会在收尾报告处抛 `UnicodeEncodeError`（实测 chaos-fractals：--all 全部校验完成后崩在 `audit_ignore._print_report` 的 ⚠，拿不到退出码）。防护已集中落在 `lib/boot.py::_force_utf8_stdio()`（每个入口脚本的 `_boot.setup()` 自动把 stdout/stderr 重配置为 UTF-8 + errors=replace），无需逐脚本处理；异常包装环境（IDE 捕获/非常规管道）下仍建议 `$env:PYTHONIOENCODING='utf-8'` 兜底。
+- **规则4 `--fix` 批处理独占树（防手工修改被吞）**：`--fix` / `--all --fix` 运行期间**禁止并行手工编辑任何 `.md`**——批处理对每文件"读新→有变更才写回"，运行期插入的手工修改属 lost-update 高危窗口（2026-08-23 chaos-fractals 实测：批量运行结束回写后，同窗口期的手工编辑丢失）。正确姿势：先完成全部手工修改 → 单跑一次校验（不带 `--fix`）确认 → 再按需跑 `--fix`；或 `--fix` 结束后再做手工修改。另注意 F 层「裸 LaTeX 命令在数学环境外」类问题（naked `\bigcup`/`\max`/`\mathrm` 等）**不在任何 fixer 自动修复范围内，必须手工包 `$...$` / `$$…$$`**；`--fix` 对其零改动（沙箱实证），勿期待自动兜底。
 
 ## 出口条件
 - 出口：`verify/script/verify_chapter.py --all` 对**该语言全部章节 `exit 0`**（`verify PASS + KaTeX OK`），且**收尾的 B 层编号 ignore agent 审计无 SUSPECT**（存在编号 ignore 条目时 `audit_ignore.py` 退出码须为 0；SUSPECT 即未通过）。

@@ -405,7 +405,13 @@ def _md_tail_warnings(ctx, cfg, groups):
         else:
             prefix_str, label = body, 'uncat'
         last = max(n for n, _ in pairs)
-        prefix = tuple(int(x) for x in prefix_str.split('.')) if prefix_str else ()
+        try:
+            prefix = tuple(int(x) for x in prefix_str.split('.')) if prefix_str else ()
+        except ValueError:
+            # Non-numeric section anchor (e.g. unnumbered `## § Appendix: ...`
+            # heading used as a scope-3 window id): no numeric source-side
+            # counterpart exists, so tail comparison is meaningless — skip.
+            continue
         gi = int(gk.split(':', 1)[0]) if ':' in gk else 0
         smax = src_max.get((gi, prefix), 0)
         if smax <= last:
@@ -698,13 +704,16 @@ def _md_gap_blocking(ctx):
         for i in range(1, len(ordered)):
             if ordered[i] < ordered[i - 1]:
                 blocking.append(
-                    f"  WARN (BLOCKING): 顺序错乱 @{pref}: 编号 {ordered[i]} "
+                    f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq}]: 编号 {ordered[i]} "
                     f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
                     f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
                     f"将 {pref}-{ordered[i]} 移到正确位置。")
                 break  # 每节只报一次，避免洪水
 
     # 尾部校验：.md 最大号 vs 提取契约（源）同组最大号（非阻断）
+    if os.environ.get('BKS_DEBUG'):
+        for gk_key, seq in sorted(section_order.items()):
+            print(f"  [DEBUG] order {gk_key}: {seq}", file=sys.stderr)
     tail_warnings = _md_tail_warnings(ctx, cfg, groups)
 
     return blocking, warnings, present_md, tail_warnings

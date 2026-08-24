@@ -46,6 +46,7 @@ from audit_ignore import run_audit             # ignore 条目审核（防误用
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
+    ORDINAL_CN3LAB,
     _canon_label, _load_ignore_file,
 )
 
@@ -94,6 +95,7 @@ LABEL_TO_TYPE = {
     '算法': 'uncat', 'Algorithm': 'uncat',
     '假设': 'uncat', 'Assumption': 'uncat',
     '公理': 'uncat', 'Axiom': 'uncat', '准则': 'uncat',
+    '性质': 'property', 'Property': 'property',
     'uncat': 'uncat',
 }
 
@@ -208,6 +210,27 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "page": it["page"],
                 "snippet": (it.get("text") or "")[:120].replace("\n", " "),
                 "scheme": "cn_single", "canon": (int(m.group(1)),),
+                "has_label": True,
+            })
+        return out
+    if primary_type == ORDINAL_CN3LAB:
+        # （规则5增量扩展）CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 /
+        # 定义2.3.4，每类标签独立计数、每节重置）。委托 extract_items_cn3lab
+        # （与 build_structure 同一抽取真源），禁用 _PATTERNS——数字前置的
+        # cn3_nf 会把三级小节标题（`2.3.1 标题`）误读为伪项，cn3_lf 的裸键
+        # `C.S-N` 也与本书「标签内嵌键」形不一致。
+        from extract_items_cn3lab import extract_items_cn3lab
+        out = []
+        for it in extract_items_cn3lab(ext, ch, start, end, groups=groups):
+            nums = re.findall(r"\d+", it["key"])
+            if len(nums) < 3:
+                continue
+            out.append({
+                "key": it["key"], "label": it.get("label") or "uncat",
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "cn3lab",
+                "canon": tuple(int(x) for x in nums[:3]),
                 "has_label": True,
             })
         return out
@@ -336,7 +359,8 @@ def _composite_key(primary_type, label, canon):
     相交、整章被误报缺失（2026-08-23 CN 单级书实测）。
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE):
+                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
+                        ORDINAL_CN3LAB):
         return (_canon_label(str(label)).lower(), canon)
     return canon
 

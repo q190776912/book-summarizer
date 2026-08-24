@@ -79,14 +79,15 @@ sys.stdout.reconfigure(encoding="utf-8")
 import scan_skeleton
 from extract_items import extract_items, extract_items_two_level
 from extract_items_cn_single import extract_items_cn_single
+from extract_items_cn3lab import extract_items_cn3lab
 from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
-                           ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
-                           ORDINAL_THREE_LEVEL,
-                           ConfigLoader, ConfigError, BookConfig)
+                              ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
+                              ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB,
+                              ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label, normkey
 from data.book_structure.book_structure import BookStructure, StructureNode
@@ -151,6 +152,18 @@ def _nat_key(k):
     """
     return tuple(int(x) if x.isdigit() else x
                  for x in re.split(r"(\d+)", str(k)))
+
+
+def _nat_key_digits(k):
+    """数字优先自然序键：主键 = key 内全部数字段（按值），次键 = _nat_key。
+
+    同一计数器内条目号在阅读序中单调递增（B 层连续性的前提），而
+    _nat_key 把标签词放在元组首位，CJK 标签按码位比较（'命'<'定'<'引'）
+    会颠倒同页条目（Brin & Stuck 实测：命题4.2.2 排到 定理4.2.1 前，
+    引理9.5.3 排到 定理9.5.4 后，B 层整章报「顺序错乱」）。数字段为主键
+    后，同页条目恢复真实阅读序；字母位（Vakil '7.2.A'）由次键消解。
+    """
+    return (tuple(int(x) for x in re.findall(r"\d+", str(k))), _nat_key(k))
 
 
 def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False):
@@ -477,6 +490,12 @@ def _extract_items(ext, ch, start, end, book, manual=None):
         # (single number has no chapter component).
         return extract_items_en(ext, start, end, want_examples=True,
                                 section_scoped=book.section_scoped, single=True)
+    if primary == ORDINAL_CN3LAB:
+        # CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 / 定义2.3.4，每类标签
+        # 独立计数、每节重置）：键内嵌规范中文标签（`定理1.1.1`，与 type 9 的
+        # `评注1.1.1` 同构），块首锚定天然排除三级小节标题与裸 C.S.N 公式号。
+        # 按 config_setting 规则5 走增量扩展的 extract_items_cn3lab。
+        return extract_items_cn3lab(ext, ch, start, end, groups=book.ordinal)
     if primary in (ORDINAL_EN, ORDINAL_EN3):
         if primary == ORDINAL_EN:
             items = extract_items_en(ext, start, end, want_examples=True,
@@ -499,6 +518,23 @@ def _extract_items(ext, ch, start, end, book, manual=None):
             it = dict(it)
             it["key"] = f"{_canon_label(lab)}{num}"
             kept.append(it)
+        # ---- Merge manual overrides（OCR 漏识真实条目的 agent 回填通道）----
+        # 与 extract_items 末尾的合并同构：此前 EN 路径没有 overrides 通道，
+        # 印刷条目头被 OCR 整行丢失时（如 do Carmo Ch13 "2.7 Corollary …"）
+        # 契约永远缺号，A 层 EXTRA 无法消除。override 约定：key=印刷裸编号
+        # （如 "2.7"）、label=英文类别词、text=印刷标题。
+        if manual:
+            existing = {it["key"]: idx for idx, it in enumerate(kept)}
+            for mo in manual:
+                k = f"{_canon_label(mo.get('label', ''))}{mo.get('key', '')}"
+                item = {"key": k, "page": mo.get("page"),
+                        "label": mo.get("label", ""), "text": mo.get("text", ""),
+                        "agent_recovered": True}
+                if k in existing:
+                    kept[existing[k]] = item
+                else:
+                    kept.append(item)
+            kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
     if primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en":
         # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The
@@ -584,9 +620,51 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #    Example/Definition 条目，造成重复键、错类型、乱序。
     raw_items = _extract_items(ext, ch, start, end, book, manual=manual)
     ex_start = _exercise_region_start(ext, ch, start, end)
+
+    # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器
+    #     已把它们作为带标签条目抓出，但练习节点权威来源是 skeleton EXER——
+    #     而此类书无 "EXERCISES" 标题块、编号也无字母位，EXER 恒空，直接丢弃
+    #     会整书漏练。故把练习类条目转成 EXER 行并入 ex_rows（按练习号去重，
+    #     skeleton EXER 优先），非练习类照旧进 ITEM 合同。
+    _exer_num_re = re.compile(r'(\d{1,2}\.\d{1,2}(?:\.\d{1,3}|[A-Z])?)\.?$')
+    _exer_seen = {r[2] for r in ex_rows}
+    for it in raw_items:
+        if (it.get("label") or "").strip() not in _EXERCISE_LABELS:
+            continue
+        m = _exer_num_re.search((it.get("key") or "").strip())
+        if not m:
+            continue
+        num = m.group(1).rstrip('.')
+        if num in _exer_seen:
+            continue
+        _exer_seen.add(num)
+        title = _clean_title(it.get("text", ""), it["key"])
+        ex_rows.append((it.get("page", 0), 'EXER', num, title))
+
     items = [it for it in raw_items
              if (it.get("label") or "").strip() not in _EXERCISE_LABELS
              and (ex_start is None or it.get("page", 0) < ex_start)]
+
+    # 3b) 同 key 去重：OCR 断行会把正文引用顶到块首，产生与真条目同号的
+    #     假条目（如 §7.3 前言裸号块 "7.3.9."、§5.4 跨块拼接的第二个
+    #     5.4.2）。判别：标题非裸者胜（真条目头带印刷标题/正文延续，
+    #     引用块常只有裸号或逗号续句）；同态取页码小者（书内编号单调，
+    #     真标题先出现）。dedup_items 刻意保留同 key 异文（Lasota-Mackey
+    #     双印），故此处按「裸号劣汰」再收一轮。
+    _by_key = {}
+    for it in items:
+        prev = _by_key.get(it["key"])
+        if prev is None:
+            _by_key[it["key"]] = it
+            continue
+        def _title_len(x):
+            return len(_clean_title(x.get("text", ""), x["key"]))
+        if (_title_len(prev) < 8 and _title_len(it) >= 8) or \
+           (_title_len(prev) >= 8 == _title_len(it)) or \
+           (_title_len(prev) < 8 == _title_len(it) < 8 and it.get("page", 0) < prev.get("page", 0)):
+            _by_key[it["key"]] = it
+    items = sorted(_by_key.values(),
+                   key=lambda x: ((x.get("page") or 0), _nat_key_digits(x["key"])))
 
     # 4) 章节骨架：skeleton SEC ∪ 条目/练习派生章节号
     sec_pages = {}   # num -> 最佳候选页（skeleton）
@@ -713,7 +791,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
 
     # 6) 章节内子节点按页码稳定排序（同页用自然序，防 '例10'<'例9' 伪乱序）
     for n in all_sec_nums:
-        sec_nodes[n]["sub_sec"].sort(key=lambda x: (x["page_start"], _nat_key(x["key"])))
+        sec_nodes[n]["sub_sec"].sort(key=lambda x: (x["page_start"], _nat_key_digits(x["key"])))
 
     # 7) 递归算 page_start / page_end（容器取末代子孙页）
     def _fix_pages(node):
@@ -731,7 +809,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         _fix_pages(s)
 
     # 章级子节点：章级桶（无章节可挂）置于章节之前，按页码排（同页自然序）
-    chapter_bucket.sort(key=lambda x: (x["page_start"], _nat_key(x["key"])))
+    chapter_bucket.sort(key=lambda x: (x["page_start"], _nat_key_digits(x["key"])))
     sub = chapter_bucket + ordered_secs
 
     ch_title = _chapter_title(cm, ch)

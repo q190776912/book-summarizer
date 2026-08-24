@@ -132,11 +132,19 @@ except Exception:  # pragma: no cover — boot normally injects config/verify_co
     _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
 
 # Heading regex used to assign a book-source formula its enclosing section.
-# Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ...".
-# Attribution rule: a formula's enclosing section is the nearest preceding
-# numbered heading line (the canonical convention carried over when the
-# formula-manifest subsystem's capability was merged into this Q layer).
-_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:\.\d+)+)(?![\d.])')
+# Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ..."
+# / do Carmo-style dash headings "2-2 Regular Surfaces".  Separators '.', '-',
+# '–' are all accepted at capture time and NORMALIZED TO '.' by _head_norm()
+# so book-side (dash-printing) and summary-side (dotted) section ids compare
+# equal.  Attribution rule: a formula's enclosing section is the nearest
+# preceding numbered heading line (the canonical convention carried over when
+# the formula-manifest subsystem's capability was merged into this Q layer).
+_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:[.\-\u2013]\d+)+)(?!\d)')
+
+
+def _head_norm(s: str) -> str:
+    """Normalize a captured heading number to dot-separated form."""
+    return re.sub(r'[.\-\u2013]+', '.', s or '')
 
 # Figure-caption leader prefixes (Bug #22).  A text block whose stripped content
 # STARTS with one of these keywords is a figure caption, NOT a formula-bearing
@@ -279,6 +287,23 @@ class SourceFormulaIndex:
         # this maps `(sec, n) -> sec` so a formula `\tag{n}` under section `sec`
         # is "correctly placed" iff `(sec, n)` actually exists in the book.
         self._book_section_sec: Dict[tuple, str] = {}
+        # Per-(section, number) earliest (page, y): for per-section-restart books
+        # the GLOBAL first position of a repeated `(n)` always comes from the
+        # earliest section that carries an `(n)`, so comparing global positions
+        # inside a LATER section's ORDER window is meaningless noise.  The
+        # sectioned ORDER walk must use the position of `n` WITHIN `sec`.
+        self._pos_sec: Dict[tuple, tuple] = {}
+        # Evidence support for scope==3 WARN gates (populated by build_sectioned):
+        #   _sec_start_page : sec -> first page at which the walk entered `sec`
+        #   _n_pages        : n -> every page carrying a standalone `(n)` label
+        #   _walk_last_page : last page scanned
+        # A summary `\tag{n}` under `sec` counts as correctly placed iff the
+        # book recorded `(n)` somewhere inside sec's page range; absence of any
+        # in-range record means the label was OCR-merged (benefit of doubt) or
+        # genuinely misplaced.
+        self._sec_start_page: Dict[str, int] = {}
+        self._n_pages: Dict[str, Set[int]] = {}
+        self._walk_last_page: int = 0
         self._cur_heading: Optional[str] = None
 
     # -- public API ---------------------------------------------------------
@@ -288,6 +313,10 @@ class SourceFormulaIndex:
         self._source_text = {}
         self._primary_pos = {}
         self._book_section = {}
+        self._pos_sec = {}
+        self._sec_start_page = {}
+        self._n_pages = {}
+        self._walk_last_page = 0
         self._cur_heading = None
         nums: Set[str] = set()
         for pg in range(int(start), int(end) + 1):
@@ -331,6 +360,12 @@ class SourceFormulaIndex:
         sectioned: Dict[str, Set[str]] = {s: set() for s in md_sections}
         self._primary_pos = {}
         self._book_section = {}
+        self._pos_sec = {}
+        self._sec_start_page = {}
+        self._n_pages = {}
+        self._walk_last_page = int(start)
+        if md_sections:
+            self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
         for pg in range(int(start), int(end) + 1):
             fp = os.path.join(self.extract_dir, f'page_{pg:03d}.json')
@@ -353,24 +388,32 @@ class SourceFormulaIndex:
                 # an entry number `C.S-1` (the first definition/theorem heading
                 # of a section).  Kreyszig numbers every section's first entry as
                 # `C.S-1`, so this is the reliable marker across chapters.
-                # Robustness against OCR digit-drop (e.g. `2.10` scanned as
-                # `2.1`): instead of an exact-string lookup we do a MONOTONIC
-                # GREEDY match (_section_match) — map the parsed `C.S` to the
-                # earliest as-yet-unreached summary section whose number is
-                # compatible (exact, or digit-prefix of the other).  Because
-                # sections appear in order in the book, by the time the garbled
-                # `2.1-1` (really §2.10) shows up, §2.1..§2.9 have already
-                # consumed their markers, so the greedy match lands on §2.10
-                # (fixes the prior drift where §2.10's numbers piled into §2.1).
-                for mm in re.finditer(r'(\d{1,3}\.\d{1,3})-(\d{1,3})', txt):
-                    if mm.group(2) != '1':
-                        continue
-                    after = txt[mm.end():mm.end() + 1]
-                    if after in '）)':
-                        continue  # forward cross-reference, not a heading
-                    cs = mm.group(1)
+                #
+                # Bug (2026-08, Kreyszig): the marker was previously accepted
+                # ANYWHERE in the text block, so chapter-opening OUTLINE pages
+                # full of forward cross-references ("(cf. 9.9-1)", "theorem
+                # 4.2-1 (variants 4.3-1", "(cf. 2.10-1), which is denoted")
+                # dragged `cur` to a late section on page 1 of the chapter and
+                # every subsequent standalone `(N)` label piled into the wrong
+                # bucket — mass false MISPLACED/ORDER rows for Ch2/4/5/6/7/8/9/11.
+                # A real entry heading ALWAYS *starts* its text block with the
+                # marker followed by whitespace + a capitalised title
+                # ("9.3-1 Definition (Monotone sequence). ..."), whereas every
+                # observed prose reference either embeds the marker mid-line or
+                # has ')' / ',' glued right after it (OCR line-splits keep the
+                # closing paren attached: "9.2-1), and eigenvectors ...").
+                # Hence: anchor at stripped-start AND require `\s` after.
+                _mm_head = re.match(
+                    r'\(?\s*(\d{1,3}\.\d{1,3})-(\d{1,3})(?=\s)', txt.strip())
+                if _mm_head and _mm_head.group(2) == '1':
+                    cs = _mm_head.group(1)
                     j = _section_match(cs, md_sections, cur)
                     if j > cur:
+                        # record the start page of every newly-reached section
+                        # (jumped-over sections inherit the same page — they
+                        # carry no detectable heading of their own)
+                        for _k in range(cur + 1, j + 1):
+                            self._sec_start_page.setdefault(md_sections[_k], pg)
                         cur = j
                 # Strogatz-style section advance: the book carries clean section
                 # TITLES ("4.1 Examples and Definitions", "4.6 Superconducting
@@ -389,11 +432,31 @@ class SourceFormulaIndex:
                 # pile into the first section, producing mass false MISSING.
                 _hm = _HEAD_RE.match(txt.strip())
                 if _hm and len(txt.strip()) < 80:
-                    _hs = _hm.group(1)
+                    # Title-text guard: a genuine section heading carries a
+                    # textual title after the number ("5-11. Hilbert's
+                    # Theorem").  Bare numeric tokens (dependence-table cells,
+                    # TOC column entries like "5-11") must NOT advance cur.
+                    _tail_txt = txt.strip()[_hm.end():].strip().strip('.').strip()
+                    _has_title = bool(re.search(r'[A-Za-z\u4e00-\u9fff]{2}', _tail_txt))
+                    # OCR junk guard: lines like "5-6.A" / "3-4.B" (letter
+                    # suffix glued to the number) are figure/table artifacts,
+                    # not section headings — never advance on them.
+                    _junk = re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', txt.strip())
+                    # Kreyszig-style entry markers ("1.2-3 Definition ...",
+                    # OCR line-splits like "1.2-3 in the next section.) ...")
+                    # start with `N.M-K`; a real section TITLE never carries
+                    # the `-K` suffix.  Reject those so the sequential +1
+                    # advance cannot fire on garbled entry continuations.
+                    _not_entry = not re.match(
+                        r'\s*\d{1,3}\.\d{1,3}\s*-\s*\d', txt.strip())
+                    _hs = _head_norm(_hm.group(1))
                     _hp = _hs.split('.')
                     _h2 = '.'.join(_hp[:2]) if len(_hp) >= 2 else _hs
-                    if cur + 1 < len(md_sections) and _h2 == md_sections[cur + 1]:
+                    if (_not_entry and not _junk and _has_title
+                            and cur + 1 < len(md_sections)
+                            and _h2 == md_sections[cur + 1]):
                         cur = cur + 1
+                        self._sec_start_page.setdefault(md_sections[cur], pg)
                 sec = md_sections[cur] if cur < len(md_sections) else md_sections[-1]
                 y = None
                 if isinstance(block, dict):
@@ -436,6 +499,17 @@ class SourceFormulaIndex:
                         # (sec, n) membership — authoritative for per-section books
                         self._book_section_sec[(sec, n)] = sec
                         self._record_pos(n, pg, y)
+                        # per-(sec, n) earliest position — the ORDER window of a
+                        # per-section-restart book must compare positions WITHIN
+                        # the section, not global first occurrences (which for a
+                        # repeated `(n)` always come from the earliest section).
+                        _pk = (sec, n)
+                        _pp = self._pos_sec.get(_pk)
+                        if _pp is None or (pg, y) < _pp:
+                            self._pos_sec[_pk] = (pg, y)
+                        self._n_pages.setdefault(n, set()).add(pg)
+                        if pg > self._walk_last_page:
+                            self._walk_last_page = pg
                         # capture a short book-source snippet for the audit so
                         # MISSING rows can be judged real-vs-OCR-noise
                         if n not in self._source_text:
@@ -486,8 +560,10 @@ class SourceFormulaIndex:
         """
         s = txt.strip()
         hm = _HEAD_RE.match(s)
-        if hm and len(s) < 80:
-            self._cur_heading = hm.group(1)
+        if hm and len(s) < 80 and not re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s):
+            tail2 = s[hm.end():].strip().strip('.').strip()
+            if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
+                self._cur_heading = _head_norm(hm.group(1))
 
     def _record_pos(self, n: str, pg, y) -> None:
         """Record the earliest (page, y) occurrence of `n` (its definition site)."""
@@ -1124,7 +1200,8 @@ def _extract_summary_tags_sectioned(md_file: str) -> List[tuple]:
 def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]],
                        md_sections: List[str], chapter_union: Set[str],
                        ignore: Optional[Set[str]] = None,
-                       src: Optional['SourceFormulaIndex'] = None) -> tuple:
+                       src: Optional['SourceFormulaIndex'] = None,
+                       scoped_ignore: Optional[Set[tuple]] = None) -> tuple:
     """Per-section comparison for formula numbering.
 
     * FABRICATED : a summary ``\\tag`` number not in the chapter-wide union S
@@ -1168,7 +1245,7 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
                 counts[ik] = counts.get(ik, 0) + 1
         for t in tags:
             n = t.normalized
-            if not n or n in ignore:
+            if not n or n in ignore or (sec, n) in (scoped_ignore or set()):
                 continue
             ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
             if counts[ik] > 1:
@@ -1195,7 +1272,8 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
             covered = {t.normalized for t in tags
                        if t.normalized and t.normalized not in ignore}
             for n in sorted(S):
-                if n in ignore or n in covered:
+                if (n in ignore or n in covered
+                        or (sec, n) in (scoped_ignore or set())):
                     continue
                 row = {
                     'number': n,
@@ -1238,7 +1316,8 @@ def _section_prefix_compatible(a: str, b: str) -> bool:
 
 def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                                  ignore: Optional[Set[str]] = None,
-                                 reset_on_section: bool = True) -> tuple:
+                                 reset_on_section: bool = True,
+                                 scoped_ignore: Optional[Set[tuple]] = None) -> tuple:
     """Derive ORDER_MISMATCH + MISPLACED (both WARN, non-blocking) from the
     same data Q already has — no three-stage manifest pipeline needed.
 
@@ -1275,6 +1354,8 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         n = t.normalized
         if n not in union:
             continue  # FABRICATED handled elsewhere; skip here
+        if (sec, n) in (scoped_ignore or set()):
+            continue
         # ORDER-window reset on summary-section change (only for per-section
         # restart books, where numbers repeat across sections).
         if reset_on_section and sec != prev_sec:
@@ -1282,41 +1363,99 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         prev_sec = sec
         # ORDER_MISMATCH: summary lists n AFTER a formula whose book position is
         # later than n's -> the sequence got offset / shuffled.
-        cur = src.primary_pos(n)
-        if cur is not None and prev_pos is not None and cur < prev_pos:
-            if n not in seen_om:
-                seen_om.add(n)
-                om.append({
-                    'number': n,
-                    'status': 'ORDER_MISMATCH',
-                    'summary_latex': t.latex[:60],
-                    'source_text': '',
-                })
+        # For per-section-restart books (reset_on_section=True) use the position
+        # of `n` WITHIN `sec` (`_pos_sec`): the global first occurrence of a
+        # repeated `(n)` always comes from the earliest section carrying an
+        # `(n)`, which made every later section's window compare apples to
+        # oranges.  A tag without in-section evidence carries no trustworthy
+        # local position (label OCR-merged or genuinely misplaced), so neither
+        # flagging nor anchoring prev_pos is fair — skip it entirely.
+        cur = None
+        if reset_on_section:
+            cur = getattr(src, '_pos_sec', {}).get((sec, n))
+        else:
+            cur = src.primary_pos(n)
         if cur is not None:
+            if prev_pos is not None and cur < prev_pos:
+                if n not in seen_om:
+                    seen_om.add(n)
+                    om.append({
+                        'number': n,
+                        'status': 'ORDER_MISMATCH',
+                        'summary_latex': t.latex[:60],
+                        'source_text': '',
+                    })
             prev_pos = cur
         # MISPLACED: summary section != book definition section.
-        # For per-section-restart numbering (scope==3) the global
-        # `book_section` only records the FIRST occurrence of `n` across the
-        # whole chapter (every section repeats (1)..(N)), so comparing it to the
-        # summary's section produces 10 false MISPLACED.  Use the per-(sec, n)
-        # membership instead: a `\tag{n}` is correctly placed iff the book source
-        # actually carries `(n)` inside `sec`.  Fall back to the global
-        # `book_section` only when per-section tracking recorded nothing (e.g.
-        # chapter-scope books where a number is globally unique).
-        if (sec, n) in src._book_section_sec:
-            bsec = src._book_section_sec[(sec, n)]
+        #
+        # Plain path (chapter/book-scope numbering): compare against the global
+        # first-occurrence section (`book_section`).
+        #
+        # Per-section-restart path (scope==3): `(sec, n)` membership alone is
+        # NOT enough — the standalone-label gate legitimately misses labels
+        # that OCR merged into their equation line, so an honest `\tag{n}`
+        # would be flagged whenever its source label happened to be merged.
+        # Evidence gate: flag only when the book recorded `(n)` NOWHERE inside
+        # sec's own page span `[start(sec), start(next)-1]`; any in-range hit
+        # proves correct placement.
+        flagged = False
+        if reset_on_section:
+            rng = _section_page_range(src, sec)
+            npages = getattr(src, '_n_pages', {}).get(n) or set()
+            in_range = bool(rng) and any(rng[0] <= p <= rng[1] for p in npages)
+            flagged = not in_range
         else:
-            bsec = src.book_section(n)
-        if bsec is not None and not _section_prefix_compatible(bsec, sec):
-            if n not in seen_mp:
-                seen_mp.add(n)
-                mp.append({
-                    'number': n,
-                    'status': 'MISPLACED',
-                    'summary_latex': t.latex[:60],
-                    'source_text': '',
-                })
+            bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
+            flagged = (bsec is not None
+                       and not _section_prefix_compatible(bsec, sec))
+        if flagged and n not in seen_mp:
+            seen_mp.add(n)
+            mp.append({
+                'number': n,
+                'status': 'MISPLACED',
+                'summary_latex': t.latex[:60],
+                'source_text': '',
+            })
     return om, mp
+
+
+def _section_page_range(src: 'SourceFormulaIndex',
+                        sec: str) -> Optional[tuple]:
+    """Page span ``(first, last)`` of summary-section `sec` from the walk's
+    own bookkeeping (`_sec_start_page` / `_walk_last_page`).  Sections entered
+    on the same page share it; the span ends where the NEXT distinct section
+    start begins."""
+    starts = getattr(src, '_sec_start_page', None)
+    if not starts or sec not in starts:
+        return None
+    lo = starts[sec]
+    later = [p for p in starts.values() if p > lo]
+    hi = min(later) - 1 if later else getattr(src, '_walk_last_page', lo)
+    return (lo, hi)
+
+
+def _split_scoped_ignore(keys) -> tuple:
+    """Split ignore keys into ``(global_numbers, scoped_(sec, num)_pairs)``.
+
+    A key may be a bare normalized number (``'13'``) or section-scoped
+    (``'9.8#17'`` — ``'<md-section>#<raw tag>'``).  Scoped keys silence a
+    number ONLY inside that one summary section: per-section-restart books
+    repeat every bare number across all sections, so a chapter-wide ignore
+    would blind validation of legitimately tagged `(n)` everywhere else."""
+    glob: Set[str] = set()
+    scoped: Set[tuple] = set()
+    for k in keys or []:
+        k = str(k)
+        if '#' in k:
+            sec, _, num = k.partition('#')
+            nn = SourceFormulaIndex.norm(num)
+            if sec and nn:
+                scoped.add((sec.strip(), nn))
+        else:
+            nn = SourceFormulaIndex.norm(k)
+            if nn:
+                glob.add(nn)
+    return glob, scoped
 
 
 class QLayer(VerifyLayer):
@@ -1438,10 +1577,15 @@ class QLayer(VerifyLayer):
                                             md_sections, ncomp=ncomp)
                 src_sec = built['_sectioned']
                 union = built['_union']
+                # scoped-ignore support: keys may be bare numbers or
+                # '<sec>#<num>' (silences a number in ONE section only)
+                fglob, fscoped = _split_scoped_ignore(fignore)
                 fab, inc, miss, rows = _compare_sectioned(
-                    tags_sec, src_sec, md_sections, union, fignore, src)
+                    tags_sec, src_sec, md_sections, union, fglob, src,
+                    scoped_ignore=fscoped)
                 om, mp = _compute_order_and_section(
-                    tags_sec, src, fignore, reset_on_section=True)
+                    tags_sec, src, fglob, reset_on_section=True,
+                    scoped_ignore=fscoped)
                 # RESERVED letter/Roman-led: same BLOCKING probe as the chapter
                 # path — a letter-led book must not silently pass via section
                 # scope either.

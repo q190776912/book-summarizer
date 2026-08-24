@@ -210,6 +210,7 @@ def apply(extract_dir, dry=False, repairs_path=None):
                         log.append(f"  page {pno:03d} {key}: text repaired "
                                    f"(was {len(entry['text_ocr'])} chars)")
                         changed = True
+                    e["resolved"] = True
                 elif kind == "formula" and idx < len(formulas):
                     entry = formulas[idx]
                     if entry.get("latex") != new_val:
@@ -219,14 +220,25 @@ def apply(extract_dir, dry=False, repairs_path=None):
                         applied += 1
                         log.append(f"  page {pno:03d} {key}: latex repaired")
                         changed = True
-                e["resolved"] = True
+                    e["resolved"] = True
+                else:
+                    # 🔴 索引越界（repairs.json 相对已写回的 page_*.json 过期，
+                    # 常见于 to_structured 删除/替换后的索引漂移）：绝不置
+                    # resolved —— 否则修复被静默丢弃还贡献「假绿」完成标记。
+                    # 保持未解析，让 _all_resolved 门如实拦截并提示重审。
+                    log.append(f"  page {pno:03d} {key}: SKIP ({kind}[{idx}] 越界，"
+                               f"repairs.json 疑似过期——请重跑 audit 后再 apply)")
             elif key in ok_set:
                 if kind == "text" and idx < len(texts):
                     texts[idx]["mm_reviewed"] = True
+                    e["resolved"] = True
                 elif kind == "formula" and idx < len(formulas):
                     formulas[idx]["mm_reviewed"] = True
+                    e["resolved"] = True
+                else:
+                    log.append(f"  page {pno:03d} {key}: SKIP ({kind}[{idx}] 越界，"
+                               f"repairs.json 疑似过期——请重跑 audit 后再 apply)")
                 reviewed += 1
-                e["resolved"] = True
                 changed = True
             elif kind == "text" and key in tf_map and idx < len(texts):
                 # 被误判为文本的整行（或整行中的一段）→ 拆成 formulas[]/text[] 新段。
@@ -342,12 +354,20 @@ def apply(extract_dir, dry=False, repairs_path=None):
                 # 并标 mm_unavailable 让下游 write-source/verify 跳过、不污染内容。
                 if kind == "text" and idx < len(texts):
                     texts[idx]["mm_unavailable"] = True
+                    e["resolved"] = True
+                    e["mm_unavailable"] = True
+                    data["MM_UNAVAILABLE"] = True
+                    changed = True
                 elif kind == "formula" and idx < len(formulas):
                     formulas[idx]["mm_unavailable"] = True
-                e["resolved"] = True
-                e["mm_unavailable"] = True
-                data["MM_UNAVAILABLE"] = True
-                changed = True
+                    e["resolved"] = True
+                    e["mm_unavailable"] = True
+                    data["MM_UNAVAILABLE"] = True
+                    changed = True
+                else:
+                    # 越界：与 corr/ok 分支同规——不置 resolved，如实拦截。
+                    log.append(f"  page {pno:03d} {key}: SKIP ({kind}[{idx}] 越界，"
+                               f"repairs.json 疑似过期——请重跑 audit 后再 apply)")
 
         # 循环外用统一重建 text[]/formulas[]：先跳过被整体转换的项，再把拆分出的
         # 段按阅读顺序放回。单趟重建避免删除/插入导致的索引错位。

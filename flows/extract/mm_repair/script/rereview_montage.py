@@ -63,6 +63,10 @@ def main():
     ap.add_argument("pdf_path")
     ap.add_argument("extract_dir")
     ap.add_argument("--dpi", type=int, default=300)
+    ap.add_argument("--src-dpi", type=int, default=200,
+                    help="page_*.json bbox 所在的提取渲染 DPI（extract_book --dpi 默认 200）。"
+                         "bbox 是该 DPI 下的【像素】坐标，get_pixmap(clip=) 要的是 PDF "
+                         "【点】坐标——必须按 72/src_dpi 换算，否则裁剪区域放大且偏移。")
     ap.add_argument("--per", type=int, default=12, help="每张 montage 放几条")
     ap.add_argument("--text-thresh", type=float, default=0.80)
     ap.add_argument("--formula-conf", type=float, default=0.30)
@@ -91,7 +95,9 @@ def main():
             page = doc[pno - 1]
             if bbox and len(bbox) == 4:
                 x0, y0, x1, y1 = [v for v in bbox]
-                # 适度外扩，覆盖下标/根号
+                # 适度外扩，覆盖下标/根号（先按 src dpi 换算到 PDF 点空间）
+                _k = 72.0 / float(args.src_dpi)
+                x0, y0, x1, y1 = x0 * _k, y0 * _k, x1 * _k, y1 * _k
                 w = x1 - x0; h = y1 - y0
                 ex = max(6, int(w * 0.06)); ey = max(6, int(h * 0.18))
                 clip = fitz.Rect(x0-ex, y0-ey, x1+ex, y1+ey)
@@ -107,7 +113,7 @@ def main():
             if len(latex_s) > 90:
                 latex_s = latex_s[:87] + "..."
             label = f"p{pno:03d} f{fidx} conf={conf:.3f}\n{latex_s}"
-            cells.append((tc, label, tw))
+            cells.append((tc, label, th))   # 第三元存【高度】th：行高按图高算
         # compose
         rows = (len(cells) + 1) // 2  # 2 columns
         col_w = thumb_w + pad * 2

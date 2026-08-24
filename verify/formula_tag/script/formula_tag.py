@@ -139,7 +139,15 @@ except Exception:  # pragma: no cover — boot normally injects config/verify_co
 # equal.  Attribution rule: a formula's enclosing section is the nearest
 # preceding numbered heading line (the canonical convention carried over when
 # the formula-manifest subsystem's capability was merged into this Q layer).
-_HEAD_RE = re.compile(r'^\s*(?:§\s*)?(\d+(?:[.\-\u2013]\d+)+)(?!\d)')
+# OCR §-glitch tolerance (2026-08, 遍历论 孙文祥): scanned math books frequently
+# render the section glyph "§" as "8" / "S" / "s" ("84.1 条件期望" = "§4.1",
+# "S4.2 SMB定理" = "§4.2").  The heading prefix group therefore also accepts a
+# glued [Ss8] when a plausible section number follows — mirroring the D-layer's
+# `^(?:§|8)` precedent (section_continuity.D_SEC_HEAD_A).  A genuine heading
+# that simply starts with digit 8 ("8.4 Exercises") is untouched: the prefix
+# alternative fails its lookahead and backtracks to the bare-number capture.
+_HEAD_RE = re.compile(
+    r'^\s*(?:§\s*|[Ss8](?=\d{1,3}[.\u2013]\d))?(\d+(?:[.\-\u2013]\d+)+)(?!\d)')
 
 
 def _head_norm(s: str) -> str:
@@ -431,7 +439,7 @@ class SourceFormulaIndex:
                 # signal, `cur` would stick at 0 and every book number would
                 # pile into the first section, producing mass false MISSING.
                 _hm = _HEAD_RE.match(txt.strip())
-                if _hm and len(txt.strip()) < 80:
+                if _hm and len(txt.strip()) < 80 and txt.strip()[_hm.end():_hm.end() + 1] not in (')', '）', ',', '，', ';', '；'):
                     # Title-text guard: a genuine section heading carries a
                     # textual title after the number ("5-11. Hilbert's
                     # Theorem").  Bare numeric tokens (dependence-table cells,
@@ -480,33 +488,52 @@ class SourceFormulaIndex:
                 # for the standalone case, so we apply the stricter bare-label
                 # gate here; for multi-component books (ncomp>=2) the standalone
                 # pattern rarely fires on prose and the old heuristic is kept.
+                _tail_only_span = None
                 if ncomp == 1:
                     if not re.fullmatch(r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*', txt):
-                        continue
+                        # 形态②（与 _scan_text 的 plain 路径一致）：OCR 把右缘
+                        # 编号并进公式行时，块「含数学记号且以 `(N)` 结尾」——
+                        # 只放行块尾那一个匹配（_tail_only_span），块内部的括号
+                        # 数字（因子/生成元记号等）仍被拒绝，不污染 S。
+                        if not self._block_has_math(txt):
+                            continue
+                        _rtxt = txt.rstrip()
+                        _m_tail = re.search(
+                            r'[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?$', _rtxt)
+                        if _m_tail is None:
+                            continue
+                        _tail_only_span = (_m_tail.start(), _m_tail.end())
                 elif not self._block_has_math(txt):
                     continue
                 # extract formula numbers and attach to the current section
                 for pat in self.patterns:
                     for mm in pat.finditer(txt):
+                        if _tail_only_span is not None and not (
+                                mm.start() >= _tail_only_span[0]
+                                and mm.end() <= _tail_only_span[1]):
+                            continue
                         raw = mm.group(1)
                         n = self.norm(raw)
                         if not n or n in self.ignore or not self._plausible(n):
                             continue
                         sectioned[sec].add(n)
                         # first occurrence's section == book-side definition section
-                        if n not in self._book_section:
-                            self._book_section[n] = sec
+                        # （嵌入引用不作为定义节证据 —— 见 _embedded_ref）
+                        if not self._embedded_ref(txt, mm.start(), mm.end()):
+                            if n not in self._book_section:
+                                self._book_section[n] = sec
+                            self._record_pos(n, pg, y)
                         # (sec, n) membership — authoritative for per-section books
                         self._book_section_sec[(sec, n)] = sec
-                        self._record_pos(n, pg, y)
                         # per-(sec, n) earliest position — the ORDER window of a
                         # per-section-restart book must compare positions WITHIN
                         # the section, not global first occurrences (which for a
                         # repeated `(n)` always come from the earliest section).
                         _pk = (sec, n)
-                        _pp = self._pos_sec.get(_pk)
-                        if _pp is None or (pg, y) < _pp:
-                            self._pos_sec[_pk] = (pg, y)
+                        if not self._embedded_ref(txt, mm.start(), mm.end()):
+                            _pp = self._pos_sec.get(_pk)
+                            if _pp is None or (pg, y) < _pp:
+                                self._pos_sec[_pk] = (pg, y)
                         self._n_pages.setdefault(n, set()).add(pg)
                         if pg > self._walk_last_page:
                             self._walk_last_page = pg
@@ -561,6 +588,11 @@ class SourceFormulaIndex:
         s = txt.strip()
         hm = _HEAD_RE.match(s)
         if hm and len(s) < 80 and not re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s):
+            # OCR 行拆分的引用残行（"2.1.4)，则对于每个…"——上一行断在 "(2" 处）
+            # 编号后紧跟闭括号/逗号，绝非标题；否则会把 _cur_heading 拖到错误
+            # 小节，制造连锁假 MISPLACED（2026-08 遍历论 ch6 案例）。
+            if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
+                return
             tail2 = s[hm.end():].strip().strip('.').strip()
             if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
                 self._cur_heading = _head_norm(hm.group(1))
@@ -656,8 +688,36 @@ class SourceFormulaIndex:
                         idx = 0
                     snippet = txt[max(0, idx - 20): idx + len(span) + 20]
                     self._source_text[n] = snippet[:60]
-                if pg is not None:
+                if pg is not None and not self._embedded_ref(txt, m.start(), m.end()):
                     self._update_pos(n, pg, y)
+
+    @staticmethod
+    def _embedded_ref(txt: str, start: int, end: int) -> bool:
+        """True 当该命中是「条目引用 / 更长编号链」而非独立公式标签。
+
+        例：("例3.1.2" 中的 "3.1"、"命题3.1.1" 中的 "3.1"、"§3.1"/"S4.2" 节号
+        mention)。仅用于 ORDER/MISPLACED 的位置与定义节证据门禁——集合 S 的
+        成员资格（FABRICATED / MISSING）不受影响（`nums.add` / `sectioned.add`
+        在调用侧先行、不经过本门禁），因此不会把真实存在的编号错判为
+        FABRICATED。若某编号的所有书源出现都是嵌入引用，则其位置/定义节证据
+        记为缺失，ORDER/MISPLACED 按既有设计「无可信证据 → 跳过不判」。
+        """
+        rest = txt[end:]
+        if rest[:1] == '.' and rest[1:2].isdigit():
+            return True          # 更长编号链的头部（3.1 ⊂ 3.1.2）
+        j = start - 1
+        while j >= 0 and txt[j] in ' \u3000':
+            j -= 1
+        if j < 0:
+            return False
+        c = txt[j]
+        if c in '例义理题论质习节章图表§Ss':
+            return True          # 紧邻条目词 / 节字形（定义3.1、§3.1、S4.2）
+        # 紧邻 CJK 汉字或拉丁字母（如 OCR 数学碎片 "的2·2-1"、"为2·3n"、"x2.1"）
+        # ——独立公式标签的左边界只会是行首/空白/开括号/标点，绝不可能是文字
+        if ('\u4e00' <= c <= '\u9fff') or c.isascii() and c.isalpha():
+            return True
+        return False
 
     @staticmethod
     def _is_figure_caption(txt: str) -> bool:
@@ -1228,6 +1288,12 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     for sec in md_sections:
         S = src_sectioned.get(sec, set())
         s_empty = len(S) == 0
+        # S-empty degradation (mirrors `_compare`, chapter-scoped path): when
+        # the WHOLE-book union is empty the patterns matched nothing — usually
+        # a mis-configured `formula` map.  Structural checks (duplicate /
+        # section-local) still run, but FABRICATED must NOT be judged (every
+        # tag would false-flag); the trailing WARN row asks for a config fix.
+        s_empty_book = len(chapter_union) == 0
         tags = md_by_sec[sec]
         # INCONSISTENT duplicate detection is SUFFIX-AWARE: lettered sub-
         # equations such as (1a) / (1b) are genuinely distinct tags and must
@@ -1250,6 +1316,8 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
             ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
             if counts[ik] > 1:
                 status = 'INCONSISTENT'
+            elif s_empty_book:
+                continue                 # S-empty: structural-only, no OK/FAB
             elif n not in chapter_union:
                 status = 'FABRICATED'
             else:

@@ -225,7 +225,16 @@ def load_chapter_map(out_dir):
                 return {(ch.get("num") if ch.get("num") is not None else ch.get("ch")):
                         {"start": _se(ch)[0], "end": _se(ch)[1]}
                         for ch in chapters}
-            return {int(k): v for k, v in raw.items()}
+            # flat dict: keys may be int-like ("1","2") or appendix letters
+            # ("A","B") — keep letters as-is (chapter_for_page passes them
+            # through); only int() the numeric ones.
+            out = {}
+            for k, v in raw.items():
+                try:
+                    out[int(k)] = v
+                except (TypeError, ValueError):
+                    out[k] = v
+            return out
         except Exception:
             return None
     return None
@@ -241,7 +250,10 @@ def chapter_for_page(pno, chap_map):
         s = info.get("start")
         e = info.get("end")
         if s and e and s <= pno <= e:
-            return int(ch)
+            try:
+                return int(ch)
+            except (TypeError, ValueError):
+                return ch   # appendix letter chapter ("A") — pass through
     return 0
 
 

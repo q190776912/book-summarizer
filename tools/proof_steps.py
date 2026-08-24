@@ -55,7 +55,7 @@ def stage2(text):
         line = lines[i]
         m = PROF_LINE_RE.match(line)          # > **证明(思路|梗概|概要)**：<正文>
         if m:
-            variant = m.group(1)              # 思路 / 梗概 / 概要
+            variant = re.sub(r'^证明|^[Pp]roof\b[.\s]*', '', m.group(1)).strip()
             body = m.group(2)                 # 行内证明正文（可能为空）
             if body.strip():
                 numbered = number_proof(body)

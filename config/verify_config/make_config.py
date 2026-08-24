@@ -1062,6 +1062,16 @@ def main():
         print('  ❌ 禁止手写/手改 verify_config.json 绕过本护栏。')
         return 2
 
+    # 🔒 硬闸：config 子流程的契约是「先建 chapter_map.json，再生成
+    # verify_config.json」（extract/config_setting 步骤 1）。缺章节映射时
+    # 生成的配置没有章界可依（下游 ConfigLoader 也读不到章列表）——
+    # 拒绝生成，防止对半成品书伪造配置。
+    if not os.path.exists(os.path.join(extract_dir, 'chapter_map.json')):
+        print('[make_config] BLOCKED: 缺 chapter_map.json（章节映射未建立）。')
+        print('  config 子流程须先产出章节映射，再运行本脚本生成 verify_config.json。')
+        print('  ❌ 禁止跳过章节映射直接生成配置。')
+        return 2
+
     # One full scan yields the numbering family, the set of entry-type labels
     # actually present as numbered headings, their GROUPING by shared counter,
     # AND the book's language (derived from which label forms were seen).

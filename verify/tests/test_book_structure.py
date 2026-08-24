@@ -137,12 +137,16 @@ def test_structure_io_read_from_single_file():
         items = read_structure_items(d, "1")
         assert items is not None
         keys = [it["key"] for it in items]
-        assert "1.1-1" in keys and "1.2.3" in keys
+        # Key canonicalisation (2026-08-24): keys are emitted in the SAME key
+        # space `keys_in_md` produces, so the A-layer intersects 1:1.
+        #  * dashed three-level keys stay BARE ('1.1-1');
+        #  * dotted keys keep the legacy LABEL-PREFIXED form ('定理1.2.3'),
+        #    with the label also exposed separately via it["label"].
+        assert "1.1-1" in keys and "定理1.2.3" in keys
         assert "1.1.A" not in keys
-        # label mapping (Chinese labels, per structure_io.TYPE_TO_LABEL)
-        by_key = {it["key"]: it["label"] for it in items}
-        assert by_key["1.1-1"] == "定义"
-        assert by_key["1.2.3"] == "定理"
+        by_key = {it["key"]: it for it in items}
+        assert by_key["1.1-1"]["label"] == "定义"
+        assert by_key["定理1.2.3"]["label"] == "定理"
         # missing chapter -> empty list (not None)
         assert read_structure_items(d, "99") == []
     finally:

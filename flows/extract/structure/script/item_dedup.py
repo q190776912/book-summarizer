@@ -94,10 +94,14 @@ def _name_sig(it):
     so we anchor at the start of the snippet — identical headings then produce an
     identical signature and are coalesced.
     """
+    # 🔴 直接在 snippet 里定位 key 再取其后文本：en/en3 系抽取器的 snippet 是
+    # txt[max(0, m.start()-5):…] 截出来的——key 前可能带 0~5 个上下文字符，
+    # 且这类条目没有 mstart 字段。旧的固定偏移（ko=5 或 ko=0）会因前缀长度
+    # 漂移把同一标题切成不同签名，同号真双印被误判为「不同条目」保留两份。
     s = it.get('text', '')
-    mstart = it.get('mstart', 0)
-    ko = 5 if mstart >= 5 else mstart
-    tail = s[ko + len(it['key']):]
+    key = str(it.get('key', ''))
+    idx = s.find(key)
+    tail = s[idx + len(key):] if idx >= 0 else s
     tail = re.sub(r'\s+', ' ', tail).strip().lower()
     return tail[:60]
 

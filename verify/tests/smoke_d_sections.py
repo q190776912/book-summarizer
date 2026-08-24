@@ -59,7 +59,8 @@ def _cfg(path, obj):
 
 def _run(args):
     p = subprocess.run([PY, CLI] + args, cwd=_ROOT,
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120,
+                       encoding="utf-8", errors="replace")
     return p.returncode, p.stdout, p.stderr
 
 

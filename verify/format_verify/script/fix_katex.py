@@ -312,12 +312,33 @@ def fix_cd_blocks(lines: list) -> tuple:
                 if end_line + 1 < len(lines):
                     next_line = lines[end_line + 1].strip()
                     if next_line == '$$':
+                        # Does this CD block carry its own opening $$?  (The
+                        # opener sits either on its own line just above
+                        # \begin{CD} — skipping blank lines — or inline at the
+                        # start of the begin line, e.g. `$$\begin{CD}`.)  When
+                        # it does, the $$ after \end{CD} is the block's
+                        # LEGITIMATE closer and must be kept; deleting it (the
+                        # old behaviour when no later $$ exists) unbalanced the
+                        # fence and cascaded KaTeX errors over the rest of the
+                        # file.  Only a back-to-back doubled $$ is stray then.
+                        _p = i - 1
+                        while _p >= 0 and not lines[_p].strip():
+                            _p -= 1
+                        _has_opener = (
+                            (_p >= 0 and lines[_p].strip() == '$$')
+                            or lines[i].lstrip().startswith('$$'))
                         # Check if it forms a balanced pair later — if not, it's stray
                         k = end_line + 2
                         while k < len(lines) and lines[k].strip() != '$$':
                             k += 1
-                        if k >= len(lines) or k == end_line + 2:
-                            # No matching $$ found — remove the stray one
+                        if _has_opener:
+                            if k == end_line + 2:
+                                # Doubled closer (`$$\n$$`) — drop ONE extra.
+                                del lines[end_line + 2]
+                                changed = True
+                                continue
+                        elif k >= len(lines) or k == end_line + 2:
+                            # No opener AND no matching $$ found — truly stray.
                             del lines[end_line + 1]
                             changed = True
                             continue

@@ -148,7 +148,15 @@ EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 # heading (no "FOR CHAPTER N") — the optional capture group lets both forms start
 # the exercise region so its single-number "N. Problem" lines are NOT mistaken for
 # sections/items.
-EXER_HEADING = re.compile(r'EXERCISES?(?:\s*FOR\s*CHAPTER\s*(\d+))?', re.IGNORECASE)
+# 🔴 ANCHORED (bug fix): the heading must BE the line (optional leading section
+# number / § glyph; only dots/spaces may trail).  The old unanchored
+# `.search()` latched the exercise region on ANY prose line merely CONTAINING
+# "exercise(s)" ("We shall exercise caution…"), and in two-level mode without
+# declared depths nothing but a SEC could reset the latch — one stray mention
+# then suppressed every remaining SEC/ITEM row of the chapter.
+EXER_HEADING = re.compile(
+    r'^[§8Ss$\s]*(?:\d{1,2}(?:[.\-–·]\d{1,3})?[.\s]*)?'
+    r'EXERCISES?(?:\s*FOR\s*CHAPTER\s*(\d+))?[.\s]*$', re.IGNORECASE)
 EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
 
 # ---------------------------------------------------------------------------
@@ -319,8 +327,15 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # is in its exercise block through to the next genuine section
             # header (multi-section books like do Carmo run an EXERCISES block
             # at the END OF EVERY SECTION, so the latch must reset on SEC).
-            if not in_exercise and EXER_HEADING.search(ln):
+            if not in_exercise and EXER_HEADING.match(ln):
                 in_exercise = True
+                # 编号习题节标题（"2.6 Exercises"）同时是真实小节：在声明了
+                # section_types 的书里补发 SEC 行进骨架，避免该节从骨架中消失。
+                # （P 层对习题专属节本就豁免必写，但 D 层连续性/骨架仍需要它。）
+                if depths_set is not None:
+                    _secinfo = _section_header_info(ln, ch=ch, depths=depths_set)
+                    if _secinfo is not None:
+                        rows.append((p, 'SEC', _secinfo[0], _secinfo[2]))
                 continue
             # --- universal, depth-agnostic section detection ---
             # Runs BEFORE (not gated by) the exercise latch: a real section

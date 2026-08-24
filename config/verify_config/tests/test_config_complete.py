@@ -117,16 +117,39 @@ def _find_real_no_cfg_book():
     return None
 
 
+def _find_real_unprepared_book():
+    """Return the _extract path of a real book that has extracted pages but is
+    NOT even chapter-mapped yet (early-stage extraction), or None."""
+    if not os.path.isdir(CORPUS_ROOT):
+        return None
+    for root, dirs, files in os.walk(CORPUS_ROOT):
+        if os.path.basename(root) != "_extract":
+            continue
+        if "verify_config.json" in files or "chapter_map.json" in files:
+            continue
+        if not any(f.startswith("page_") and f.endswith(".json") for f in files):
+            continue
+        return root
+    return None
+
+
 # --------------------------------------------------------------------------
 # Part A — pure unit tests for ConfigLoader.require_complete()  (v2 array API)
 # --------------------------------------------------------------------------
 def _loader_with_config(cfg):
     """Build a ConfigLoader whose only candidate config is `cfg` (dict) or
-    None (no file). Returns the loader; extract_dir == book_dir == temp."""
+    None (no file). Returns the loader; extract_dir == book_dir == temp.
+
+    Writes the `_extraction_done.json` phase marker: these tests target
+    `require_complete` semantics, while ConfigLoader's own upstream gate
+    hard-rejects any config whose extract dir lacks the MM-Repair completion
+    marker (flow_gate contract)."""
     ext = tempfile.mkdtemp(prefix="qc_ext_")
     if cfg is not None:
         with open(os.path.join(ext, "verify_config.json"), "w", encoding="utf-8") as f:
             json.dump(cfg, f)
+    with open(os.path.join(ext, "_extraction_done.json"), "w", encoding="utf-8") as f:
+        json.dump({"done": True}, f)
     return ConfigLoader(ext, ext, extra_ignore=None)
 
 
@@ -138,9 +161,9 @@ class TestRequireComplete(unittest.TestCase):
             loader.require_complete(allow_absent=True)
         msg = str(cm.warning)
         self.assertIn("verify_config.json", msg)
-        self.assertIn("ordinal=3", msg)
-        # v2: default is a single uncat GroupConfig with primary_type 3.
-        self.assertEqual(loader.book.primary_type, 3)
+        # v2 "no default type": absent ordinal -> a single UNNUMBERED uncat
+        # group (type 0), deliberately NOT the legacy default type 3.
+        self.assertEqual(loader.book.primary_type, 0)
         self.assertIsInstance(loader.book.ordinal, list)
         self.assertEqual(len(loader.book.ordinal), 1)
         self.assertTrue(loader.book.ordinal[0].is_uncat)
@@ -290,7 +313,8 @@ def _build_synthetic_book(with_config, config_obj, with_page=True):
 
 def _run(args, expect_exists=None):
     p = subprocess.run([PY, args[0]] + args[1:], cwd=_ROOT,
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=300,
+                       encoding="utf-8", errors="replace")
     return p.returncode, p.stdout, p.stderr
 
 
@@ -311,14 +335,17 @@ def _best_effort_remove(path):
 class TestVerifyChapterEntry(unittest.TestCase):
     def test_all_missing_config_exits_2(self):
         # config_setting 流程 规则1: a book WITHOUT verify_config.json must
-        # HARD-FAIL (exit 2) — "文件缺失不能用默认配置，必须重新配置". verify
-        # is the strict gate; scan_skeleton keeps the warn+default safety net.
+        # HARD-FAIL (exit 2). verify is the strict gate. NOTE: on a synthetic
+        # book that also lacks book_structure.json, the extract-stage STRUCTURE
+        # gate fires BEFORE the config gate — both are hard blocks with rc=2,
+        # so assert the exit code + a BLOCKED diagnostic rather than the exact
+        # gate that tripped.
         _, ext, md = _build_synthetic_book(with_config=False, config_obj=None)
         rc, out, err = _run([VERIFY_CLI, "--all", ext, os.path.dirname(ext)])
         self.assertEqual(rc, 2,
                          "verify --all on no-config book must hard-fail (rc=2). "
                          "out=%s err=%s" % (out[-500:], err[-500:]))
-        self.assertIn("[CONFIG]", out + err)
+        self.assertIn("BLOCKED", out + err)
 
     def test_present_no_ordinal_exits_2(self):
         # File present but no ordinal -> ConfigError -> exit 2 with [CONFIG].
@@ -328,7 +355,7 @@ class TestVerifyChapterEntry(unittest.TestCase):
         self.assertEqual(rc, 2,
                          "verify --all with config-but-no-ordinal must exit 2. "
                          "out=%s err=%s" % (out[-500:], err[-500:]))
-        self.assertIn("[CONFIG]", out + err)
+        self.assertIn("BLOCKED", out + err)
 
 
 class TestScanSkeletonEntry(unittest.TestCase):
@@ -365,9 +392,17 @@ class TestScanSkeletonEntry(unittest.TestCase):
 
 
 class TestMakeConfig(unittest.TestCase):
+    @staticmethod
+    def _write_marker(ext):
+        with open(os.path.join(ext, "_extraction_done.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"done": True}, f)
+
     def test_make_config_generates_on_temp_no_config_book(self):
         # Best-effort generator on a synthetic no-config _extract (CN three-level
         # page content) -> creates file + prints 人工核对 prompt, exit 0.
+        # Requires the MM-Repair completion marker (flow_gate contract): without
+        # it make_config BLOCKS with exit 2 by design.
         ext = tempfile.mkdtemp(prefix="qc_mk_")
         with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
             json.dump({"chapters": [{"ch": 1, "start": 1, "end": 1}]}, f)
@@ -375,6 +410,7 @@ class TestMakeConfig(unittest.TestCase):
                            "poly": [0, 200, 100, 210, 100, 220, 0, 220]}]}
         with open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8") as f:
             json.dump(page, f)
+        self._write_marker(ext)
         rc, out, err = _run([MAKE_CLI, ext])
         self.assertEqual(rc, 0,
                          "make_config should exit 0. out=%s err=%s"
@@ -382,12 +418,15 @@ class TestMakeConfig(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(ext, "verify_config.json")),
                         "make_config must write verify_config.json")
         self.assertIn("人工核对", out + err)
-        # v2: the generated ordinal is a LIST of GroupConfig dicts.
+        # v2: the generated ordinal is a LIST of GroupConfig dicts; detected
+        # labels are split into per-counter groups (no uncat placeholder).
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
         self.assertIsInstance(gen["ordinal"], list)
-        self.assertEqual(len(gen["ordinal"]), 1)
-        self.assertIn(gen["ordinal"][0]["type"], (1, 2, 3, 4, 5, 6, 8, 9))
+        self.assertGreaterEqual(len(gen["ordinal"]), 1)
+        for g in gen["ordinal"]:
+            self.assertIn(g["type"], (1, 2, 3, 4, 5, 6, 8, 9))
+            self.assertNotEqual(g.get("name"), ["uncat"])
 
     def test_make_config_existing_config_skips_exit_0(self):
         # Real book that already has verify_config.json (v2 array form):
@@ -460,16 +499,20 @@ class TestMakeConfig(unittest.TestCase):
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
         self.assertIsInstance(gen["ordinal"], list)
-        self.assertEqual(len(gen["ordinal"]), 1)
-        name = gen["ordinal"][0]["name"]
-        self.assertNotEqual(name, ["uncat"],
-                            "detected labels must replace the default ['uncat']")
+        # Current contract: detected labels are split into PER-COUNTER groups
+        # (independent numbering sequences each get their own group) — six
+        # independently numbered entry types -> six groups, none named uncat.
+        all_names = [nm for g in gen["ordinal"] for nm in g.get("name", [])]
+        self.assertNotIn("uncat", all_names,
+                         "detected labels must replace the default ['uncat']")
         for expected in ["定义", "定理", "引理", "推论", "命题", "例"]:
-            self.assertIn(expected, name,
-                          "detected label %s missing from name %r" % (expected, name))
+            self.assertIn(expected, all_names,
+                          "detected label %s missing from group names %r"
+                          % (expected, all_names))
         # type 3 (CN three-level) + scope 3 still hold alongside the label fill.
-        self.assertEqual(gen["ordinal"][0]["type"], 3)
-        self.assertEqual(gen["ordinal"][0]["scope"], 3)
+        for g in gen["ordinal"]:
+            self.assertEqual(g["type"], 3)
+            self.assertEqual(g["scope"], 3)
 
     def test_make_config_fills_detected_labels_en(self):
         # EN three-level (Kreyszig-style) book: numbered "Definition/Lemma/
@@ -480,13 +523,22 @@ class TestMakeConfig(unittest.TestCase):
             json.dump({"chapters": [{"ch": 1, "start": 1, "end": 1}]}, f)
         with open(os.path.join(ext, "_extraction_done.json"), "w", encoding="utf-8") as f:
             json.dump({"done": True}, f)
+        # One heading per text block (real OCR output shape): make_config
+        # deliberately rejects label hits deep inside LONG blocks (prose /
+        # cross-reference guard), so multi-heading blocks undercount.
         page = {"text": [
-            {"text": "1.1-1 Definition (Metric). 1.1-2 Theorem (Complete).",
+            {"text": "Definition 1.1-1 (Metric).",
              "poly": [0, 200, 100, 210, 100, 220, 0, 220]},
-            {"text": "Definition 1.5-3 (Bounded). 1.5-4 Lemma (Hahn). "
-                     "1.6-1 Corollary (Baire). 1.7-1 Proposition (Open). "
-                     "1.8-1 Example (Convergent).",
+            {"text": "Theorem 1.1-2 (Complete).",
+             "poly": [0, 210, 100, 220, 100, 230, 0, 230]},
+            {"text": "Lemma 1.5-3 (Hahn).",
              "poly": [0, 300, 100, 310, 100, 320, 0, 320]},
+            {"text": "Corollary 1.6-1 (Baire).",
+             "poly": [0, 310, 100, 320, 100, 330, 0, 330]},
+            {"text": "Proposition 1.7-1 (Open).",
+             "poly": [0, 320, 100, 330, 100, 340, 0, 340]},
+            {"text": "Example 1.8-1 (Convergent).",
+             "poly": [0, 330, 100, 340, 100, 350, 0, 350]},
         ]}
         with open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8") as f:
             json.dump(page, f)
@@ -497,28 +549,60 @@ class TestMakeConfig(unittest.TestCase):
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
         self.assertIsInstance(gen["ordinal"], list)
-        self.assertEqual(len(gen["ordinal"]), 1)
-        name = gen["ordinal"][0]["name"]
-        self.assertNotEqual(name, ["uncat"])
+        # Per-counter group contract (see the CN variant above).
+        all_names = [nm for g in gen["ordinal"] for nm in g.get("name", [])]
+        self.assertNotIn("uncat", all_names)
         for expected in ["Definition", "Theorem", "Lemma", "Corollary",
                          "Proposition", "Example"]:
-            self.assertIn(expected, name,
-                          "detected label %s missing from name %r" % (expected, name))
-        self.assertEqual(gen["ordinal"][0]["type"], 3)
-        self.assertEqual(gen["ordinal"][0]["scope"], 3)
+            self.assertIn(expected, all_names,
+                          "detected label %s missing from group names %r"
+                          % (expected, all_names))
+        for g in gen["ordinal"]:
+            self.assertEqual(g["type"], 3)
+            self.assertEqual(g["scope"], 3)
         self.assertEqual(gen["language"], "en")
 
     def test_make_config_real_no_config_book_then_cleanup(self):
-        # Real no-config book (discovered at runtime): make_config should
-        # generate a starter file + print 人工核对. We DELETE the generated
-        # file afterwards so the real corpus is left exactly as found.
+        # Real no-config book (discovered at runtime), two tiers so the test
+        # exercises whichever real-corpus shape exists:
+        #   A) _extract WITH chapter_map but NO verify_config.json:
+        #      - marker present  -> make_config must GENERATE (exit 0, file
+        #        written + 人工核对 prompt); we DELETE the file afterwards so
+        #        the corpus is left exactly as found.
+        #      - marker missing  -> BLOCKED exit 2 (flow_gate contract).
+        #   B) fallback — _extract with pages but NOT even chapter_map.json
+        #      (early-stage extraction): config 子流程契约要求先建章节映射，
+        #      make_config 必须 BLOCK（rc=2）且绝不写配置。
         ext = _find_real_no_cfg_book()
         if ext is None:
-            self.skipTest("no real NO_CFG book (with pages+chapter_map) found")
+            ext = _find_real_unprepared_book()
+        if ext is None:
+            self.skipTest("no real no-config / unprepared book found under %s"
+                          % CORPUS_ROOT)
         cfg_path = os.path.join(ext, "verify_config.json")
+        marker = os.path.join(ext, "_extraction_done.json")
+        cmap = os.path.join(ext, "chapter_map.json")
         existed_before = os.path.exists(cfg_path)
         try:
             rc, out, err = _run([MAKE_CLI, ext])
+            if not os.path.exists(cmap):
+                # Tier B: unprepared book — never fabricate a config.
+                self.assertNotEqual(rc, 0,
+                                    "make_config must not generate a config "
+                                    "without chapter_map.json. out=%s err=%s"
+                                    % (out[-500:], err[-500:]))
+                self.assertIn("BLOCKED", out + err)
+                self.assertFalse(os.path.exists(cfg_path),
+                                 "make_config wrote a config for an "
+                                 "unprepared book (no chapter_map)")
+                return
+            if not os.path.exists(marker):
+                self.assertEqual(rc, 2,
+                                 "make_config without MM-Repair marker must "
+                                 "BLOCK (rc=2). out=%s err=%s"
+                                 % (out[-500:], err[-500:]))
+                self.assertIn("BLOCKED", out + err)
+                return
             self.assertEqual(rc, 0,
                              "make_config on real no-config book must exit 0. "
                              "out=%s err=%s" % (out[-500:], err[-500:]))

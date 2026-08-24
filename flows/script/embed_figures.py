@@ -625,7 +625,7 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
             cap_raw = f.get("caption", "") or ""
             cap = short_caption(cap_raw, fig_labels)
             mt = re.search(rf"(?:{fig_label_alt(fig_labels)})\s*\d+", cap_raw, re.IGNORECASE)
-            tag = mt.group(0) if mt else fig_labels[0]
+            tag = mt.group(0) if mt else (fig_labels[0] if fig_labels else "图")
             # use <img> with proportional width attribute so the image
             # occupies the same fraction of the reader's column width as it
             # did in the original book page. The percentage is derived from

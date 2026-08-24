@@ -111,6 +111,13 @@ def cmd_verify(book_dir, flow, step, extract_dir=None):
 
 
 def cmd_mark(book_dir, flow, step, extract_dir=None):
+    # 🔴 未知步骤拒绝：FG_FLOW_ORDER 之外的 (flow, step)（含拼写错误）一旦
+    # 入账，就是一条永不参与顺序闸的僵尸记录——真实步骤仍显示未完成。
+    if step not in FG_FLOW_ORDER.get(flow, ()):
+        known = ", ".join(f"{f}.{s}" for f, ss in FG_FLOW_ORDER.items() for s in ss)
+        print(f"✘ 拒绝标记 {flow}.{step}：不是已注册的流程步骤。\n"
+              f"  已注册: {known}")
+        return 1
     # 标记前先复核证据
     ok, detail = check_evidence(flow, step, book_dir, extract_dir)
     if not ok:

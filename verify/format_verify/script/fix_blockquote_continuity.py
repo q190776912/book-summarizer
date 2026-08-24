@@ -208,7 +208,8 @@ def _merge_example_proof(text):
                     break
                 if any(re.match(r'^#{1,6}\s', l) for l in mid):
                     break
-                if any(re.match(r'^\*\*(?:定义|定理|引理|推论|命题|断言)\b', l) for l in mid):
+                # CJK 后接数字时 \b 永不匹配（同为 \w）——纯 CJK 标签组直接去 \b。
+                if any(re.match(r'^\*\*(?:定义|定理|引理|推论|命题|断言)', l) for l in mid):
                     break
                 if any(re.match(r'^---\s*$', l) for l in mid):
                     break
@@ -335,7 +336,10 @@ def _ensure_proof_separator(lines):
                 is_item = bool(re.match(
                     r'^\*\*(?:定义|定理|引理|推论|命题|断言|公理|式'
                     r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom'
-                    r'|例|Example)\b', nxt))
+                    # CJK 后接数字时 \b 永不匹配（CJK 与数字同为 \w）——用
+                    # (?![A-Za-z]) 代替：仍挡住 EN 复数（Theorems），救活
+                    # CN 标签（**定理2.6**…）的中断判定。
+                    r'|例|Example)(?![A-Za-z])', nxt))
                 if not is_term and not is_item and not nxt.lstrip().startswith('>'):
                     if not (out and out[-1].strip() == ''):
                         out.append('')

@@ -28,7 +28,10 @@ _NEVER_RE = re.compile(r"[^\s\S]")
 # stays import-clean (no config-module import). A figure group's `type`
 # encodes its numbering depth (= number of numeric components = the former
 # `figure.components`).  🔴 `components` IS `depth`.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
+# Keep in sync with the config map (10: 3 = ORDINAL_CN3LAB) — a missing entry
+# makes a CN-三段标 figure group silently fall through to the legacy/default
+# components below.
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3}
 
 # Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
 # is matched separately (it carries no ASCII letters).

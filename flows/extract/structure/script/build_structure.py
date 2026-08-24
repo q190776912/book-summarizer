@@ -659,9 +659,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             continue
         def _title_len(x):
             return len(_clean_title(x.get("text", ""), x["key"]))
-        if (_title_len(prev) < 8 and _title_len(it) >= 8) or \
-           (_title_len(prev) >= 8 == _title_len(it)) or \
-           (_title_len(prev) < 8 == _title_len(it) < 8 and it.get("page", 0) < prev.get("page", 0)):
+        # 判优：①裸号劣汰——prev 裸(<8)而 it 带标题(>=8)时替换；
+        # ②同态（同裸/同带标题）取页码小者。原写法把「>=8 == 」写成链式
+        # 比较（等价于 it 恰为 8 才可能触发），且漏掉页码比较——已按注释
+        # 语义重写。
+        _lp, _li = _title_len(prev), _title_len(it)
+        if (_lp < 8 <= _li) or \
+           ((_lp >= 8) == (_li >= 8) and
+            it.get("page", 0) < prev.get("page", 0)):
             _by_key[it["key"]] = it
     items = sorted(_by_key.values(),
                    key=lambda x: ((x.get("page") or 0), _nat_key_digits(x["key"])))

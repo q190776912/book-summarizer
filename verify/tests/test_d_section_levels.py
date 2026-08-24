@@ -94,12 +94,17 @@ def _sets(*levels):
 # ==========================================================================
 class TestBookConfigFromDict(unittest.TestCase):
 
-    def test_empty_dict_defaults_to_three_level(self):
+    def test_empty_dict_defaults_to_unnumbered_uncat(self):
+        # v2 "no default type": an absent ordinal must NOT be silently upgraded
+        # to a fabricated three-level scheme — it becomes a single UNNUMBERED
+        # uncat group (type 0); require_complete() decides whether that is
+        # acceptable (warn) or fatal (raise).
         cfg = BookConfig.from_dict({})
-        self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
-        self.assertEqual(cfg.section_types, [1, 2, 3])
-        self.assertEqual(cfg.section_depths, [1, 2, 3])  # derived via map
-        self.assertEqual(cfg.max_level, 3)
+        self.assertEqual(cfg.primary_type, 0)
+        self.assertEqual(len(cfg.ordinal), 1)
+        self.assertTrue(cfg.ordinal[0].is_uncat)
+        # Section hierarchy falls back to the minimal chapter-only projection.
+        self.assertEqual(cfg.section_types, [1])
 
     def test_ordinal_3_infers_three_level(self):
         cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "scope": 2}]})
@@ -193,8 +198,9 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_role(4), SECTION_ROLE_SUBSUBSECTION)
 
     def test_section_role_codes_constant(self):
-        # role 0 = 无序号标层级（SECTION_ROLE_UNNUMBERED），故范围 0..4。
-        self.assertEqual(SECTION_ROLE_CODES, (0, 1, 2, 3, 4))
+        # role 0 = 无序号标层级（SECTION_ROLE_UNNUMBERED）。角色码已扩展到
+        # 5（五级小节层级，OCR 自动识别上限随之放开），范围 0..5。
+        self.assertEqual(SECTION_ROLE_CODES, (0, 1, 2, 3, 4, 5))
 
     def test_ordinal_section_types_backcompat_table(self):
         # The exact reverse-inference table mandated by the change.

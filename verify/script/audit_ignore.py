@@ -217,8 +217,15 @@ def run_audit(ext, chapter=None):
         by_ch[p[0]].append((key, reason, src, p))
 
     chapters = [chapter] if chapter else sorted(by_ch.keys())
-    results = list(unparsed)
-    suspect = len([u for u in unparsed if u["verdict"] == "SUSPECT"])
+    # 单章审计只汇总本章结果：unparsed 是【全书】无法解析出编号键的条目，
+    # 无法归属到具体章——只混入单章报告会让 total>0 而逐章循环零命中，
+    # 调用方（verify_chapter 单章 verify）据此误判「已审」。故仅全书审计呈现。
+    if chapter is not None:
+        chapter = int(chapter)
+        results = []
+    else:
+        results = list(unparsed)
+    suspect = len([u for u in results if u["verdict"] == "SUSPECT"])
     safe = 0
     accepted = 0
     for ch in chapters:

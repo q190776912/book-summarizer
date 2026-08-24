@@ -164,7 +164,7 @@ def check_bare_items(lines, ordinal):
 
 # 习题专属节（如 "1.11 Exercises" / "3.9 习题" / "Problems"）——按习题收录规则可省略，
 # 不计入「骨架必写节」契约（详见 verify/verbose_gates/verbose_gates.md 习题收录规则）
-EXER_SEC_TITLE_RE = re.compile(r'(练习|习题|[Ee]xercises?|[Pp]roblems?)\b')
+EXER_SEC_TITLE_RE = re.compile(r'(?:练习|习题|习)\s*\d*\s*$|[Ee]xercises?\b|[Pp]roblems?\b')
 
 
 # 标题归一化（无序号标小节按标题匹配用）：去 LaTeX/标点/空白，保留字母数字与

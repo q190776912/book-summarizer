@@ -165,8 +165,11 @@ PROSE_RE_EN3_C = re.compile(
 # The chapter prefix is a roman numeral; section/item are arabic.
 ENTRY_RE_ROMAN = re.compile(
     r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+))')
+# re.IGNORECASE: 与 PROSE_RE_EN_C 同理——OCR 常把标签打成全大写/混合大小写
+# ("THEOREM I.2.3")，无 IGNORECASE 时整条散文引用被漏抽、浮为假「真缺失」。
 PROSE_RE_ROMAN = re.compile(
-    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![a-z])\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
+    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![a-z])\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
 
 # --- GM (ordinal=ORDINAL_GM): BOOK-printed forms, roman machine keys ---
 # Gelfand-Manin style books print sections per chapter ("## §1. Triangulated

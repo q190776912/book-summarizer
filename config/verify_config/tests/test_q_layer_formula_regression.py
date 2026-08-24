@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_q_layer_formula_regression.py — regression tests for the Q-LAYER formula
 sequence-label *anti-cheat / config-validation* behaviour added in the
 2026-08-09 hardening pass.
@@ -231,21 +231,40 @@ class AntiCheatTest(unittest.TestCase):
 class MakeConfigFormulaKeyTest(unittest.TestCase):
     def test_make_config_emits_formula_key(self):
         # Synthetic Kreyszig-shaped _extract (every section restarts at (1)).
-        # Subprocess the fixed make_config.py; the generated verify_config.json
-        # must contain 'formula' with type==1 / scope==3 (depth derived from type, not stored).
+        # Subprocess make_config.py; the generated verify_config.json must
+        # contain 'formula' with type==1 / scope==3 (depth derived from type,
+        # not stored).
+        # The confidence gate (_FORMULA_MIN_COUNT=30 right-aligned singles +
+        # a consecutive run >= _FORMULA_MIN_RUN) demands ENOUGH evidence, so
+        # the fixture carries 6 sections x 6 right-aligned (N) labels = 36
+        # hits with per-section resets (longest ascending run 6).
         with tempfile.TemporaryDirectory() as d:
             ext = os.path.join(d, '_extract')
             os.makedirs(ext, exist_ok=True)
-            _write_pages(ext, [
-                "3.1-1 Theorem. We set a = 1 (1). 3.1-2 (2). 3.1-3 (3).",
-                "3.2-1 Lemma. We set b = 1 (1). 3.2-2 (2).",
-            ])
+            pages = []
+            for sec in range(1, 7):
+                # One BLOCK per line: detect_formula counts only the LAST
+                # right-aligned (N) per text block, so multi-line single-block
+                # pages would undercount (6 hits < _FORMULA_MIN_COUNT).
+                blocks = [f"3.{sec}-1 Theorem. Section opens here."]
+                for n in range(1, 7):
+                    blocks.append(f"Relation {n} holds: x = {n} ({n}).")
+                pages.append(blocks)
+            for i, blocks in enumerate(pages, start=1):
+                _write_page_at(ext, i, blocks)
+            # chapter_map so make_config sees a book shape (not needed by
+            # detect_formula but keeps the fixture realistic).
+            with open(os.path.join(ext, 'chapter_map.json'), 'w',
+                      encoding='utf-8') as f:
+                json.dump({'chapters': [{'ch': 3, 'start': 1,
+                                         'end': len(pages)}]}, f)
             # phase guard: whole-book extraction must be flagged done.
             with open(os.path.join(ext, '_extraction_done.json'), 'w',
                       encoding='utf-8') as f:
                 json.dump({'done': True}, f)
             r = subprocess.run([sys.executable, MAKE_CONFIG_PY, ext],
-                               capture_output=True, text=True, timeout=120)
+                               capture_output=True, text=True, timeout=120,
+                               encoding='utf-8', errors='replace')
             self.assertEqual(r.returncode, 0,
                              msg=f"make_config failed: {r.stderr}\n{r.stdout}")
             cfg_path = os.path.join(ext, 'verify_config.json')
@@ -324,7 +343,8 @@ class GlobalDetectionTest(unittest.TestCase):
                 % os.path.join(_ROOT, 'config', 'verify_config')
             )
             r = subprocess.run([sys.executable, '-c', code, ext],
-                               capture_output=True, text=True, timeout=120)
+                               capture_output=True, text=True, timeout=120,
+                               encoding='utf-8', errors='replace')
             self.assertEqual(r.returncode, 0,
                              msg=f"detect_formula failed: {r.stderr}")
             real = json.loads(r.stdout)

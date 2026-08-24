@@ -51,7 +51,7 @@ PROOF_RE = re.compile(
     r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*'
 )
 PROF_LINE_RE = re.compile(
-    r'^>\s+\*\*(?:证明(?:思路|梗概|概要)?'
+    r'^>\s+\*\*(证明(?:思路|梗概|概要)?'
     r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*[:：]?\s*(.*)$'
 )
 from lib.regexlib import FMT_HR_RE as HR_RE    # 水平分隔线

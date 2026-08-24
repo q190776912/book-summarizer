@@ -91,6 +91,11 @@ def normalize(lines):
                 interior.append(out[j])
                 j += 1
             close_idx = j  # index of the closing $$ line
+            if close_idx >= n:
+                # 未闭合的 $$：原样透传，绝不吞掉后续全部正文并伪造闭合 fence。
+                res.append(line)
+                i += 1
+                continue
             formulas = []
             for bl in interior:
                 st = bl.lstrip()

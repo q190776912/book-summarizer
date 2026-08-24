@@ -78,6 +78,12 @@ def _load(book_dir, extract_dir=None):
             d.setdefault("steps", {})
             return d
         except Exception:
+            # 账本损坏（半写/外部截断）：返回空账本会让下一次 mark() 把空账
+            # 落盘、静默清光全部完成记录。打印醒目告警，提示用 bootstrap 重建。
+            print(f"[flow_gate] WARNING: 账本 {p} 损坏无法解析——本次按空账本运行；"
+                  f"若继续 mark 将覆盖旧记录，建议先跑 "
+                  f"`python tools/flow_runner.py bootstrap <book_dir>` 依物理证据重建。",
+                  file=sys.stderr)
             return {"steps": {}}
     return {"steps": {}}
 
@@ -102,7 +108,16 @@ def is_done(book_dir, flow, step, extract_dir=None):
 
 
 def mark(book_dir, flow, step, evidence=None, extract_dir=None):
-    """仅由 flow_runner 在证据复核通过后调用；禁止其它路径手填。"""
+    """仅由 flow_runner 在证据复核通过后调用；禁止其它路径手填。
+
+    未注册步骤硬拒绝：一旦入账即成永不参与顺序闸的僵尸记录，
+    真实步骤仍显示未完成（CLI 层另有更友好的前置校验）。
+    """
+    if step not in FLOW_ORDER.get(flow, []):
+        raise FlowGateError(
+            f"拒绝标记 {flow}.{step}：不是已注册的流程步骤"
+            f"（{flow} 的合法步骤: {FLOW_ORDER.get(flow)}）。"
+        )
     data = _load(book_dir, extract_dir)
     data["steps"][_key(flow, step)] = {
         "done": True,
@@ -129,10 +144,22 @@ def require(book_dir, flow, step, msg=None, extract_dir=None):
 
 
 def require_ordered(book_dir, flow, step, extract_dir=None):
-    """断言 flow 内 step 之前的所有步骤均已 done；否则硬拒绝（禁止跳步）。"""
-    steps = FLOW_ORDER.get(flow, [])
+    """断言 flow 内 step 之前的所有步骤均已 done；否则硬拒绝（禁止跳步）。
+
+    未注册的 flow/step（含拼写错误）同样硬拒绝——旧行为是静默 return，
+    拼错的步骤名会绕过顺序闸直达执行层。
+    """
+    steps = FLOW_ORDER.get(flow)
+    if steps is None:
+        raise FlowGateError(
+            f"GATE BLOCKED: 未知 flow '{flow}'（已注册: {sorted(FLOW_ORDER)}）。"
+            f"拒绝静默放行未注册步骤（账本 {ledger_path(book_dir, extract_dir)}）。"
+        )
     if step not in steps:
-        return
+        raise FlowGateError(
+            f"GATE BLOCKED: '{flow}.{step}' 不是已注册步骤"
+            f"（flow '{flow}' 的合法步骤: {steps}）。"
+        )
     idx = steps.index(step)
     missing = [s for s in steps[:idx] if not is_done(book_dir, flow, s, extract_dir)]
     if missing:

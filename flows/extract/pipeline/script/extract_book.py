@@ -371,8 +371,9 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
             all_pred_strs[i] = "[MFR_SKIPPED]"
 
     phase2_elapsed = time.time() - phase2_t0
+    _ms_per = f"~{phase2_elapsed/total_formulas*1000:.0f}ms/crop" if total_formulas else "n/a (0 formulas)"
     log(f"Phase 2 done: {total_formulas} formulas in {batch_no} batches "
-          f"({phase2_elapsed:.1f}s, ~{phase2_elapsed/total_formulas*1000:.0f}ms/crop)")
+          f"({phase2_elapsed:.1f}s, {_ms_per})")
 
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -404,6 +405,38 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
     log(f"BATCH DONE pages {start}..{end}  |  total={total_elapsed:.1f}s  "
           f"(Phase1={phase1_elapsed:.1f}s  Phase2={phase2_elapsed:.1f}s  "
           f"Phase3={phase3_elapsed:.1f}s)")
+
+
+def _invalidate_stale_mm_state(out_dir, book_dir, log):
+    """重跑提取前使下游「完成状态」失效（防陈旧假绿）。
+
+    page_*.json 即将重新生成：旧 _extraction_done.json 若仍存在，
+    ConfigLoader / make_config / build_structure 的上游闸会把未修复的
+    新页面当「MM Repair 已完成」放行（Fraleigh 类事故的陈旧态变体）。
+    同时撤销账本中依赖页面内容的 extract 步骤标记，防止 flow_runner
+    以「已完成」为由跳过重做。
+    """
+    try:
+        import lib.boot as _boot
+        _boot.setup()
+        from lib.flow_gate import is_done as _fg_is_done, unmark as _fg_unmark
+    except Exception:
+        _fg_is_done = _fg_unmark = None
+    marker = os.path.join(out_dir, "_extraction_done.json")
+    if os.path.exists(marker):
+        try:
+            os.remove(marker)
+            log("INVALIDATED: 检测到（重）跑提取，已删除陈旧 _extraction_done.json"
+                "——MM Repair 须重新执行后才会重新写出")
+        except OSError as e:
+            log(f"WARNING: 删除陈旧 _extraction_done.json 失败: {e}")
+    # 账本只在已存在时同步失效（避免全新提取被写出一个空账本）。
+    ledger = os.path.join(out_dir, ".flow_gate.json")
+    if os.path.exists(ledger) and _fg_is_done is not None:
+        for st in ("mm_repair", "config", "figure_detection", "structure"):
+            if _fg_is_done(book_dir, "extract", st, extract_dir=out_dir):
+                _fg_unmark(book_dir, "extract", st, extract_dir=out_dir)
+                log(f"INVALIDATED: 撤销账本标记 extract.{st}（页面内容已重生成）")
 
 
 def main():
@@ -444,6 +477,9 @@ def main():
         _log_file.flush()
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
+
+    # 页面即将重写：先失效陈旧的 MM 完成标记 / 账本下游标记。
+    _invalidate_stale_mm_state(out_dir, book_dir, log)
 
     end = args.end if args.end is not None else fitz.open(pdf_path).page_count
     tasks, mfr_model, mfr_proc, device = init_models(log)

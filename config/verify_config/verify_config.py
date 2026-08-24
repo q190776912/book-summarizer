@@ -740,7 +740,8 @@ class ConfigLoader:
         if self.verify_config_path is None:
             if allow_absent:
                 warnings.warn(
-                    "[CONFIG] 未找到 verify_config.json，沿用默认 ordinal=3（向后兼容）。"
+                    "[CONFIG] 未找到 verify_config.json，沿用默认单个 uncat 组"
+                    "（type 0，无默认编号方案——「no default type」规则）。"
                     "新流程要求在源语言全部初稿完成后，用 config/verify_config/make_config.py 生成 "
                     "<book>/_extract/verify_config.json（至少含 ordinal）。",
                     stacklevel=2,

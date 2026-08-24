@@ -801,9 +801,15 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                     if not mk:
                         continue
                     c = _canon_key(_PRIMARY, mk)
-                    if c is None or c in contract_items:
+                    if c is None:
+                        continue
+                    # contract_items 以复合键 (label_lower, canon) 为键（见
+                    # load_contract / _composite_key）——裸 canon 永远查不中，
+                    # 重跑 --backfill 会把同一手写条目重复插入书结构。
+                    _mo_label = mo.get("label", "uncat")
+                    if _composite_key(_PRIMARY, _mo_label, c) in contract_items:
                         continue  # 已在校验起点契约中，跳过（避免重复插入）
-                    ok, where = insert_item(tree, mk, mo.get("label", "uncat"),
+                    ok, where = insert_item(tree, mk, _mo_label,
                                             mo.get("page", 0), c, mo.get("text", ""))
                     if ok:
                         backfilled_items.append({"key": mk, "where": where,

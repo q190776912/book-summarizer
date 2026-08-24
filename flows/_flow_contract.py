@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -178,8 +179,11 @@ class physical_evidence:
                     resolved = sum(1 for e in entries if e.get("resolved"))
                     if total and resolved < total:
                         return False, f"manifest 仍 {resolved}/{total} resolved"
-                except Exception:
-                    pass
+                except Exception as e:
+                    # manifest 损坏时不得谎称「全 resolved」——完成标记仍是
+                    # 权威（设计如此），但证据字符串必须如实说明复核未发生。
+                    return True, (f"MM Repair 完成标记存在；manifest 损坏无法"
+                                  f"复核（{e}），建议重跑 apply 复验")
             return True, "MM Repair 完成标记存在且 manifest 全 resolved"
         # 回退物理核对（legacy 书缺 marker 文件但确已完成）：manifest 全 resolved
         # 且每页有 mm 标记，才算完成；否则如实报缺口（bootstrap 据此拒绝伪造）。
@@ -289,19 +293,35 @@ class physical_evidence:
         return True, "嵌图为可选步骤（图少书可视为完成）"
 
     @staticmethod
+    def _run_verify_all(ex, book_dir):
+        """真实复验：跑 verify_chapter.py --all（中英两组 .md 都覆盖）。
+
+        list-form + sys.executable：不依赖 PATH 里的 `python`（conda 环境外
+        可能缺依赖），也不经 shell 规避含空格路径的引号问题。
+        返回 (rc, errmsg)；rc=None 表示执行异常。
+        """
+        # 本文件位于 <root>/flows/_flow_contract.py —— 向上一级即技能根。
+        root = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        script = os.path.join(root, "verify", "script", "verify_chapter.py")
+        try:
+            rc = subprocess.call([sys.executable, script, "--all", ex, book_dir])
+            return rc, None
+        except Exception as e:
+            return None, str(e)
+
+    @staticmethod
     def verify_source_ok(book_dir, extract_dir):
         # 🔴 翻译硬闸的物理证据：必须真实复验源语言版 exit 0，否则视为未完成。
         # 不再软放行——未嵌图 / 未校验 PASS 的源语言不得 mark，从而闸门挡住 derive。
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         # 仅校验源语言版：此时翻译版尚未写出，--all 只会扫到已存在的源版 .md。
         # （英文书源=ChapterN_*.md；中文书源=第N章_*.md，且无翻译版。）
-        cmd = (f'python verify/script/verify_chapter.py --all "{ex}" "{book_dir}"')
-        try:
-            rc = subprocess.call(cmd, shell=True)
-        except Exception as e:
-            return False, f"verify 执行异常: {e}"
+        rc, err = physical_evidence._run_verify_all(ex, book_dir)
         if rc == 0:
             return True, "源语言 verify_chapter.py --all exit 0（verify PASS + KaTeX OK）"
+        if rc is None:
+            return False, f"verify 执行异常: {err}"
         return False, (f"源语言 verify 未通过（exit {rc}）。禁止 mark，"
                        f"须先 embed_figures + --fix 复验至 exit 0，再进 derive 翻译。")
 
@@ -329,7 +349,19 @@ class physical_evidence:
 
     @staticmethod
     def verify_cn_ok(book_dir, extract_dir):
-        return True, "需 agent 跑 verify_chapter.py --all 确认 exit 0 后 mark"
+        # 🔴 与源语言侧同规（不再软放行）：翻译完成后必须真实复验 exit 0。
+        # --all 会同时校验中英两组 .md——源版在 write_source.verify_source 已
+        # 过闸，此处复验兼作回归保护；中文书源=第N章_*.md（无独立翻译版），
+        # 复验对象即源版本身，语义一致。
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        rc, err = physical_evidence._run_verify_all(ex, book_dir)
+        if rc == 0:
+            return True, ("verify_chapter.py --all exit 0"
+                          "（源版+中文版全部 verify PASS + KaTeX OK）")
+        if rc is None:
+            return False, f"verify 执行异常: {err}"
+        return False, (f"翻译版 verify 未通过（exit {rc}）。禁止 mark，"
+                       f"须按单向修复规则 --fix / 手工修复后复验至 exit 0。")
 
 
 # 步 -> 证据函数（与 FLOW_ORDER 对齐）

@@ -117,6 +117,36 @@ class FigureIndex(JsonData):
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=1)
 
 
+def _load_chapter_map_list(cmap_path: str) -> list:
+    """Load chapter_map.json in EITHER on-disk shape and return the entries
+    as a LIST of dicts with ``ch``/``start``/``end`` keys.
+
+    * list form  : ``{"chapters": [{"ch": 1, "start": .., "end": ..}, …]}``
+    * flat dict  : ``{"1": {"start": .., "end": ..}, …}`` (the form the
+      authoritative model data/chapter_map/chapter_map.py emits)
+
+    The two shapes coexist across the pipeline (flows/_flow_contract.py blesses
+    both), so every consumer must accept them; hard-requiring one shape made
+    ``main()`` crash on files written by the model itself.
+    """
+    with open(cmap_path, encoding="utf-8-sig") as f:
+        raw = json.load(f)
+    if isinstance(raw, dict) and "chapters" in raw:
+        return list(raw["chapters"])
+    if isinstance(raw, dict):
+        out = []
+        for k, v in raw.items():
+            try:
+                ch = int(k)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(v, dict):
+                out.append({"ch": ch, "start": v.get("start", 0),
+                            "end": v.get("end", v.get("start", 0))})
+        return sorted(out, key=lambda c: c["start"])
+    return []
+
+
 def section_map_for(ext: str, ch: int) -> dict:
     ocr = os.path.join(ext, f"ch{ch}_ocr.txt")
     if not os.path.exists(ocr):
@@ -189,7 +219,7 @@ def main() -> None:
     if not os.path.exists(det_path):
         print("No figure_detect.json — nothing to build.")
         return
-    chaps = json.load(open(cmap_path, encoding="utf-8"))["chapters"]
+    chaps = _load_chapter_map_list(cmap_path)
 
     figures = collect(ext, chaps)
     FigureIndex.from_figures(figures).dump(os.path.join(ext, "figure_index.json"))

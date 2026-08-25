@@ -35,6 +35,7 @@ from verify.script.gm_scan import scan_gm_blocks, _load_sections
 from lib.regexlib import SEP_TIGHT, SEC_LOCAL
 from verify_config import (
     ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,
+    ORDINAL_ROSS,
 )
 
 # Separator for splitting a captured dotted numbering token into int components.
@@ -71,8 +72,9 @@ _D_SUBSEC_SENTENCE_WORDS = {
 # --- raw (OCR) section-header features (1..N components) ---------------------
 # A: "§6.6" / "86.6" (OCR glues § -> 8).  B: "6.6 样条函数" (number then title).
 # C: "§ 6.6" short block (kept for the brief header lines < 60 chars).
+# B 的前缀类容忍 OCR 脚注星号提行首（"* 6.6 Order statistics"，Ross 实测）。
 D_SEC_HEAD_A = re.compile(r'^(?:§|8)(\d+(?:' + SEP_TIGHT + r'\d+)*)')
-D_SEC_HEAD_B = re.compile(r'^(\d+(?:' + SEP_TIGHT + r'\d+)*)\s+\S')
+D_SEC_HEAD_B = re.compile(r'^[\*§8Ss$]?\s*(\d+(?:' + SEP_TIGHT + r'\d+)*)\s+\S')
 D_SEC_HEAD_C = re.compile(r'§\s*(\d+(?:' + SEP_TIGHT + r'\d+)*)')
 
 # D_ITEM_RE is BUILT dynamically per chapter from `max(cfg.section_depths)`
@@ -425,6 +427,11 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
     try:
         import scan_skeleton as _ss
         gsec_res = [_ss.SEC_GLOBAL, _ss.SEC_GLOBAL_9]
+        # 与契约侧同源：build_structure 经 SEC_GLOBAL_GLUE 识别「§ 被 OCR 吞掉、
+        # 数字与标题粘连」的节头（谷超豪《数学物理方程》3ed 体例），D 层真值
+        # 重扫若不认同一形态，会把契约里真实存在的节误报成缺失。
+        if hasattr(_ss, 'SEC_GLOBAL_GLUE'):
+            gsec_res.append(_ss.SEC_GLOBAL_GLUE)
         if has_letter and not letter_sections:
             sub_re, sub_ok = _ss.SUB_GLOBAL, _ss._sub_global_title_ok
     except Exception:
@@ -531,6 +538,131 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
     }
 
 
+def _check_d_layer_ross(ch, start, end, md_file, ext, cfg):
+    """Ross 体例（ORDINAL_ROSS = 11，S. Ross《A First Course in Probability》）
+    专用 D 层：节内作用域条目（Example 2a / Proposition 4.1 / Axiom 1）是
+    「节 S 有真实内容」的证据，但通用路径的 `c[0] == ch` 守卫永远拒绝它们
+    （编号首段是节号不是章号），整书退化为 vacuous PASS——契约漏节无人能查。
+
+    本路径与通用路径同构，仅两处 Ross 化：
+      * labeled-item 特征 = 块首 Ross 条目形态；投影 (ch, S) 到 L2，
+        并在当前三级小节语境 (ch, S, K) 下追加 L3；
+      * 章末习题块（exercise_region_headings）之后不再扫描——习题行
+        "3.11 Two cards..." 恰好长得像节头，绝不能当真值证据。
+    """
+    depths = list(cfg.section_depths) or [1, 2, 3]
+    max_level = len(depths)
+
+    with open(md_file, encoding='utf-8') as f:
+        md_text = f.read()
+    md_sections = {L: set() for L in range(1, max_level + 1)}
+    for line in md_text.split('\n'):
+        m = D_MD_SEC_RE.match(line.strip())
+        if not m:
+            continue
+        c = _split_num(m.group(1))
+        if not c or c[0] != ch:
+            continue
+        _project(c, depths, md_sections)
+
+    # ---- source side ------------------------------------------------------
+    try:
+        import scan_skeleton as _ss
+        ex_head_re = _ss._exercise_headings_re(
+            getattr(cfg, 'exercise_region_headings', None))
+    except Exception:
+        ex_head_re = None
+
+    ross_item_re = re.compile(
+        r'^(Examples?|Theorems?|Propositions?|Lemmas?|Corollary|Axioms?)\b'
+        r'(?:\s*\(.*?\))?\s*([\dOoIlQDZzEeSsGgTtBb]{1,2})'
+        r'(?:\s*[.\-–·/．－〜]\s*(\d{1,3})|\s*([A-Za-z])(?![A-Za-z0-9]))?',
+        re.IGNORECASE)
+
+    raw_sec_header = {L: set() for L in range(1, max_level + 1)}
+    raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
+    cur_sec = None       # 当前节号（章内相对，如 §4.6 → 6）
+    cur_sub = None       # 当前三级小节号（如 §4.6.1 → 1）
+
+    def _note_item(sec, sub):
+        """把一条 Ross 条目投影为「节有真实内容」证据：恒 L2 (ch,sec)；
+        处于同号三级小节语境时追加 L3 (ch,sec,sub)。"""
+        if sec is None:
+            return
+        if max_level >= 2:
+            raw_labeled_item[2].add((ch, sec))
+        if sub is not None and max_level >= 3:
+            raw_labeled_item[3].add((ch, sec, sub))
+
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, f'page_{p:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = page_json.PageJson.load(fp).data
+        except Exception:
+            continue
+        for t in data.get('text', []):
+            txt = (t.get('text') or '').strip()
+            if not txt:
+                continue
+            if ex_head_re is not None and ex_head_re.match(txt):
+                return _partition_sections_by_level(
+                    md_sections, raw_sec_header, raw_labeled_item, max_level)
+            header_hit = False
+            for rgx in (D_SEC_HEAD_A, D_SEC_HEAD_B):
+                m = rgx.match(txt)
+                if m:
+                    c = _split_num(m.group(1))
+                    if c and c[0] == ch:
+                        _project(c, depths, raw_sec_header)
+                        if len(c) == 2:
+                            cur_sec, cur_sub = c[1], None
+                        elif len(c) >= 3:
+                            cur_sec, cur_sub = c[1], c[2]
+                        header_hit = True
+                    break
+            if not header_hit:
+                m = D_SEC_HEAD_C.search(txt)
+                if m and len(txt) < 60:
+                    c = _split_num(m.group(1))
+                    if c and c[0] == ch:
+                        _project(c, depths, raw_sec_header)
+                        if len(c) == 2:
+                            cur_sec, cur_sub = c[1], None
+                        elif len(c) >= 3:
+                            cur_sec, cur_sub = c[1], c[2]
+            m = ross_item_re.match(txt)
+            if m:
+                lab = m.group(1).lower()
+                if lab.startswith('axiom'):
+                    # "Axiom 1..4"：数字是公理序号，非节号位——证据归属当前节语境。
+                    _note_item(cur_sec, cur_sub)
+                else:
+                    toks = re.findall(r'\d', m.group(2) or '')
+                    sec = int(''.join(toks)) if toks else None
+                    if sec is not None:
+                        sub = int(m.group(3)) if m.group(3) else None
+                        if sub is not None:
+                            # "Proposition 6.2"：sec.sub 形态恒作 §S 的证据；
+                            # 若正处同号三级小节语境，亦作该小节的证据。
+                            use_sub = sub if (cur_sub is not None and sec == cur_sec) else None
+                            _note_item(sec, use_sub)
+                            if cur_sub is not None and sec == cur_sec:
+                                cur_sec, cur_sub = sec, sub
+                            elif cur_sub is not None:
+                                cur_sec, cur_sub = sec, None
+                        else:
+                            # "Example 6a"：单段编号自带节号位；异于当前小节语境
+                            # 时小节语境失效。
+                            _note_item(sec, cur_sub if sec == cur_sec else None)
+                            if sec != cur_sec:
+                                cur_sub = None
+
+    return _partition_sections_by_level(
+        md_sections, raw_sec_header, raw_labeled_item, max_level)
+
+
 def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_LEVEL):
     """Common (CN/EN) section-continuity check supporting an arbitrary nesting
     depth (1–4) from ``cfg.section_depths``.
@@ -543,6 +675,10 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
         cfg = BookConfig(ordinal=ordinal)
     if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
         return check_d_layer_gm(ch, start, end, md_file, ext)
+    # Ross 体例（ORDINAL_ROSS = 11）：节内作用域条目是节的证据，但通用路径的
+    # c[0]==ch 守卫恒拒绝它们 → vacuous PASS。走专用扫描器（见其 docstring）。
+    if cfg.primary_type == ORDINAL_ROSS:
+        return _check_d_layer_ross(ch, start, end, md_file, ext, cfg)
     # Chapter-local sections (Karlin-style `## §N`, reset per chapter) route to
     # the dedicated branch: the md `## §N` headers are the authoritative list and
     # the source `N. Title` form is ambiguous with problems/references, so we do

@@ -132,6 +132,16 @@ def dedup_items(raw_matches):
         if any(x['page'] == it['page'] for x in grp):
             continue
         genuines = [x for x in grp if _is_genuine(x)]
+        # 🔴 裸标签碎片并入（谷超豪《数学物理方程》ch6 §3 实测）：OCR 把同一
+        # 条目拆成「带标题的块」与近邻页的「裸标签块」（"性质1" 单独一行，陈述
+        # 在相邻显示公式里）。同 key、近页（≤2 页）、且一方签名为空 → 视为同一
+        # 条目的 OCR 断裂双读，合并（保留带标题者）。跨节真实重起不受影响：
+        # 平行条目双方签名非空且常距 ≥3 页。
+        if (g and genuines and abs((it['page'] or 0) - (genuines[0]['page'] or 0)) <= 2
+                and ((not _name_sig(it)) or (not _name_sig(genuines[0])))):
+            if _name_sig(it) and not _name_sig(genuines[0]):
+                grp[grp.index(genuines[0])] = it   # 升级：裸者让位给带标题者
+            continue
         if g and genuines and _name_sig(it) != _name_sig(genuines[0]):
             # same key, second genuine heading on a *different* page, different
             # heading text → DISTINCT item (e.g. a source book printing the same

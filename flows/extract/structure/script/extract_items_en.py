@@ -172,7 +172,7 @@ EN_LAB_RE_NF = re.compile(
 
 
 def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False,
-                     single=False):
+                     single=False, extra_labels=None):
     """Extract English item headings from OCR pages.
 
     ``single``: when True (single-level EN books, e.g. Silverman's "A Friendly
@@ -182,19 +182,35 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     glued to a later "7") would otherwise fabricate "Assertion 1.7". With
     ``single=False`` (default; two-level EN books like Kreyszig) the optional
     second component is kept ("Theorem 1.1").
+
+    ``extra_labels``: additional label words (config_setting 规则5 incremental
+    extension) taken from the book's ``ordinal`` group ``name`` lists — e.g.
+    Rosen's "Algorithm N" / "Axiom N" blocks, which base EN_LABELS lacks.
+    Purely additive: labels already in the base set are de-duplicated, and
+    callers not passing it keep exact prior behavior.
     """
     items = []
     # Section-scoped books also accept numbered graphics (Table/Figure) as items.
     lab_labels = SECTION_LABELS if section_scoped else EN_LABELS
+    if extra_labels:
+        lab_labels = list(lab_labels) + [
+            l for l in extra_labels if l not in lab_labels]
+    # 🔴 OCR merges the label word and its number ("EXAMPLE8", "THEOREM1") in
+    # this book's scans; the classic `LABEL\b\s*(NUM)` never matches there
+    # because `E|8` is not a \w/non-\w boundary.  Require only "not followed
+    # by a letter" after the label so both "EXAMPLE 8" and "EXAMPLE8" match,
+    # while prose like "Examples3D"/"Exampletext" still cannot (next char is
+    # a letter).
+    _lab_tail = r')(?![A-Za-z])\s*(?:\([^)]*\))?\s*'
     if single:
         lab_re = re.compile(
-            r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
+            r'\b(' + '|'.join(lab_labels) + _lab_tail +
             r'(' + EN_OCR_NUM + r')',
             re.IGNORECASE,
         )
     else:
         lab_re = re.compile(
-            r'\b(' + '|'.join(lab_labels) + r')\b\s*(?:\([^)]*\))?\s*'
+            r'\b(' + '|'.join(lab_labels) + _lab_tail +
             # 🔴 TIGHT second component (NO whitespace between SEP_TIGHT and the
             # digit).  Two-level EN numbering is ALWAYS printed tight
             # ("Theorem 1.1", "Lemma 2.3") with no space after the separator.

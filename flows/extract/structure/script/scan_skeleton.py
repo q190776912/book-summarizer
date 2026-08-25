@@ -133,6 +133,37 @@ SEC_GLOBAL = re.compile(
 # second alternative with the same title/separator guards.
 SEC_GLOBAL_9 = re.compile(
     r'^9(\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+# Glued / prefix-lost single-number section heads (谷超豪《数学物理方程》3ed 实测):
+# 「§N 标题」的 § 被 OCR 整个丢掉或读成 S/8，且数字与标题直接粘连、分隔符
+# [．.、。:] 一并丢失（"1方程的导出、定解条件"、"83初边值问题的分离变量法"、
+# "81热传导方程及其定解问题的导出"、"S5基本解"），SEC_GLOBAL 因要求分隔符而
+# 全部漏检。本变体允许【无分隔符】，靠多重守卫压误报（仅 global_sec 书启用；
+# Arnold 分隔符形态已被上方 SEC_GLOBAL 消费并 continue，不会到达此处）：
+#   * 标题必须紧跟数字后【无任何分隔符】且以汉字/字母起始——带分隔符的
+#     小节头/小节内子块头（"1．弦振动方程的导出"）、枚举项（"1）…"）、
+#     公式碎片（"0:u"、"4π小"）均不匹配；
+#   * 块顶 y ≥ _GLUE_MIN_Y：排除页眉区的重复节名（页眉每页重复当前节名，
+#     真节头首现即正文页中部，去重取首现，故页眉命中必须整体压掉）;
+#   * 行宽 ≤ _GLUE_MAX_WIDTH：真节头是居中短行（谷超豪《数学物理方程》实测
+#     457–906px）；章首导语的通栏散文行（"1中导出了一维波动方程…"）≥1150px，
+#     被宽度闸杀掉（通栏散文实测 ≥1200px）。注意不能用 SUB_GLOBAL_MAX_WIDTH=720：
+#     长标题节头（"82两个自变量的一阶线性偏微分方程组的特征理论"）达 906px。
+SEC_GLOBAL_GLUE = re.compile(
+    r'^[§$S8Ss6]?\s*(\d{1,2})([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+_GLUE_MIN_Y = 170.0
+_GLUE_MAX_WIDTH = 1000.0
+
+
+def _glue_title_ok(title):
+    """Validate a SEC_GLOBAL_GLUE candidate title (guards above)."""
+    t = (title or '').strip()
+    if not t:
+        return False
+    if len(re.findall(r'[一-鿿]', t)) < 2:
+        return False
+    if _SUB_MATH_OP_RE.search(t):
+        return False
+    return True
 # Bare-LETTER sub-block heads (Arnold《数学方法》: inside a §N the book prints
 # "A.变分" / "D. 相流" — ONE capital letter + separator + SHORT Han title,
 # parent section determined by POSITION).  Context decides the tier: under a
@@ -195,6 +226,31 @@ EXER_CN = re.compile(r'^习题\s*(\d{1,2})[\.\．·](\d{1,2})')
 EXER_HEADING = re.compile(
     r'^[§8Ss$\s]*(?:\d{1,2}(?:[.\-–·]\d{1,3})?[.\s]*)?'
     r'EXERCISES?(?:\s*FOR\s*CHAPTER\s*(\d+))?[.\s]*$', re.IGNORECASE)
+
+# Config-driven end-of-chapter exercise-block headings（Ross《A First Course in
+# Probability》体例："Problems" / "Theoretical Exercises" / "Self-Test Problems
+# and Exercises"，可按书在 verify_config.json 的 exercise_region_headings 声明）。
+# 与 EXER_HEADING（do Carmo/Strogatz 每节/每章 EXERCISES 块，SEC 可解除闩锁）
+# 不同：章末习题块一旦进入就直到章末——闩锁 STICKY，其后任何「像节头」的行
+# （如习题行 "3.11 Two cards..." 恰好通过 universal 节检测）都不再重置。
+# 标题行匹配允许 OCR 大小写漂移与标题内部空白折叠；标题前允许页眉碎屑
+# （§/8/S/$ 与可选编号），与 EXER_HEADING 同构。
+def _exercise_headings_re(headings):
+    parts = []
+    for h in headings or []:
+        h = str(h).strip()
+        if not h:
+            continue
+        parts.append(r'\s+'.join(re.escape(w) for w in h.split()))
+    if not parts:
+        return None
+    return re.compile(
+        r'^[§8Ss$\s]*(?:\d{1,2}(?:[.\-–·]\d{1,3})?[.\s]*)?'
+        r'(?:' + '|'.join(parts) + r')[.\s:.]*$', re.IGNORECASE)
+
+# 章末习题块内的数字题号行："3.11. Two cards are ..." / "3.7 The king ..."。
+# 仅当本书声明了 exercise_region_headings（opt-in）且闩锁已激活时捕获为 EXER。
+STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?:\s+\S|$)')
 EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
 
 # ---------------------------------------------------------------------------
@@ -218,7 +274,9 @@ EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
 _SEC_SEP_RE = re.compile(r'[.\-–·/．－〜]')
 # 前缀容错与 D 层 sec_re（D_SEC_HEAD_A）对齐：§ 的 OCR 变形 §/S/s/8 之外，
 # 孙文祥《遍历论》实测还有 `$6.3熵映射`（§→$），一并容忍。
-_SEC_HEAD_RE = re.compile(r'^(?:[§8Ss$])?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
+# 2026-08-26 Ross 体例实测：节头脚注星号被 OCR 提到行首（`* 1.6 The Number…` /
+# `* 6.6 Order statistics`）——前缀类补 `\*`，否则整节漏检。
+_SEC_HEAD_RE = re.compile(r'^(?:[§8Ss$\*])?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
 _SEC_TITLE_LABEL_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
@@ -321,13 +379,19 @@ def lines_of(page_json):
             yield ln.strip()
 
 
-def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None):
+def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
+         exercise_headings=None):
     rows = []
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
     # two-level mode we also suppress SEC_2 / ITEM_2 so single-number "N. Problem"
     # exercise lines (do Carmo) are NOT mistaken for sections/items.
     in_exercise = False
+    # Ross-style STICKY chapter-end exercise region（exercise_region_headings 声明）：
+    # 一旦进入章末习题块就直到章末——SEC 检测不再解除闩锁（习题行
+    # "3.11 Two cards..." 恰好长得像节头，绝不能把它当「新节」重置）。
+    ex_head_re = _exercise_headings_re(exercise_headings) if exercise_headings else None
+    sticky_exer = ex_head_re is not None
     # Depth-agnostic section detection (config-driven).  When the book declares
     # `section_depths`, we use the universal detector for SEC rows (it catches
     # genuine section headers at ANY declared depth, including mixed depth like
@@ -364,6 +428,10 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 ln_w = (float(poly[2]) - float(poly[0])) if len(poly) >= 3 else None
             except Exception:
                 ln_w = None
+            try:
+                ln_y = float(poly[1]) if len(poly) >= 8 else None
+            except Exception:
+                ln_y = None
             for _raw in (it.get('text') or '').split('\n'):
                 ln = _raw.rstrip('$').strip()
                 if not ln:
@@ -373,6 +441,11 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # is in its exercise block through to the next genuine section
             # header (multi-section books like do Carmo run an EXERCISES block
             # at the END OF EVERY SECTION, so the latch must reset on SEC).
+            if ex_head_re is not None and not in_exercise and ex_head_re.match(ln):
+                # Ross 体例章末习题块头（"Problems" 等）：STICKY 闩锁激活，
+                # 其后直到章末不再有正文/节。
+                in_exercise = True
+                continue
             if not in_exercise and EXER_HEADING.match(ln):
                 in_exercise = True
                 # 编号习题节标题（"2.6 Exercises"）同时是真实小节：在声明了
@@ -381,7 +454,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if depths_set is not None:
                     _secinfo = _section_header_info(ln, ch=ch, depths=depths_set)
                     if _secinfo is not None:
-                        rows.append((p, 'SEC', _secinfo[0], _secinfo[2]))
+                        rows.append((p, 'SEC', _secinfo[0], _secinfo[2], ln_y))
                 continue
             # --- universal, depth-agnostic section detection ---
             # Runs BEFORE (not gated by) the exercise latch: a real section
@@ -389,12 +462,25 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # block.  Bare `N.M` exercise lines are single/double-component
             # numbers without label titles and are rejected by
             # `_section_header_info`, so they cannot fake a section.
-            if depths_set is not None:
+            # 🔴 STICKY 例外：声明了 exercise_region_headings 的书，章末习题块
+            # 之后不再有正文——闩锁激活后跳过 universal 节检测（习题长句
+            # "3.11 Two cards..." 会被 universal 检测误判为真节头并错误解除闩锁）。
+            if depths_set is not None and not (sticky_exer and in_exercise):
                 sec = _section_header_info(ln, ch=ch, depths=depths_set)
                 if sec is not None:
                     num_str, _depth, title = sec
-                    rows.append((p, 'SEC', num_str, title))
+                    rows.append((p, 'SEC', num_str, title, ln_y))
                     in_exercise = False  # new section ends the exercise region
+                    continue
+            # --- sticky exercise-region numeric problem lines -----------------
+            # "3.11. Two cards are ..." / "3.7 The king ..." → EXER 行
+            # （键=印刷题号 "3.11"；Problems 与 Self-Test 两块题号各自从 1 重排，
+            # 同号去重由 build_structure 的 _exer_seen 处理）。
+            if sticky_exer and in_exercise:
+                m = STICKY_EXER_RE.match(ln)
+                if m and int(m.group(1)) == ch:
+                    rows.append((p, 'EXER', '%s.%s' % m.group(1, 2),
+                                 ln[m.end():].strip()[:90], None))
                     continue
             # --- global single-number section heads (Arnold-style) -----------
             # The § number is book-global, so NO `== ch` guard: scan() already
@@ -404,9 +490,26 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             if global_sec:
                 m = SEC_GLOBAL.match(ln) or SEC_GLOBAL_9.match(ln)
                 if m:
-                    rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
+                    rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))
                     in_exercise = False
                     cur_global_sec = int(m.group(1))
+                    continue
+                # Glued / separator-less variant（谷超豪《数学物理方程》体例，见
+                # SEC_GLOBAL_GLUE 注释）。守卫：页眉区 y 压制 + 短行宽闸 + 标题校验。
+                m = SEC_GLOBAL_GLUE.match(ln)
+                if (m and int(m.group(1)) <= SEC_MAX_NUMBER
+                        and _glue_title_ok(m.group(2))
+                        and (ln_y is None or ln_y >= _GLUE_MIN_Y)
+                        and (ln_w is None or ln_w <= _GLUE_MAX_WIDTH)):
+                    rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))
+                    in_exercise = False
+                    cur_global_sec = int(m.group(1))
+                    continue
+                # 节末习题块头（"习题"独占一行；谷超豪《数学物理方程》每节末
+                # 印习题块，TOC 亦记 "习题(N)"）：记为该节的 EXER 行（键=当前节
+                # 号），供写作契约标注习题块位置。练习节点不强制落地，缺失无害。
+                if cur_global_sec is not None and re.match(r'^习\s*题\s*$', ln):
+                    rows.append((p, 'EXER', str(cur_global_sec), '习题'))
                     continue
                 # Bare-letter sub-block head ("A.变分"): parented under the
                 # current global §N when one is active ("<N>.<L>"), parentless
@@ -433,7 +536,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if (not use_universal_sec and not in_exercise and m and _sec_ch_ok
                         and int(m.group(1)) <= SEC_MAX_NUMBER
                         and not m.group(2).endswith('.')):
-                    rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
+                    rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))
                     continue
                 m = EXER_2.match(ln)
                 if not in_exercise and m and int(m.group(1)) == ch:
@@ -448,20 +551,20 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
                         continue
                     rows.append((p, 'SEC', '%s.%s' % m.group(1, 2),
-                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip()))
+                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip(), ln_y))
                     continue
                 m = SECBARE_CN.match(ln)
                 if not use_universal_sec and m and int(m.group(1)) == ch:
                     if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
                         continue
-                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), ''))
+                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), '', ln_y))
                     continue
                 m = SECGLUE_CN.match(ln)
                 if not use_universal_sec and m and int(m.group(1)) == ch:
                     if m.group(1).startswith('0') or m.group(2).startswith('0') or int(m.group(2)) == 0:
                         continue
                     rows.append((p, 'SEC', '%s.%s' % m.group(1, 2),
-                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip()))
+                                 ln[m.end(2):].lstrip(' \u00a7.．·。').strip(), ln_y))
                     continue
                 m = ITEM_CN.match(ln)
                 if m and int(m.group(1)) == ch:
@@ -483,7 +586,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                         continue
                 m = SEC_3.match(ln)
                 if not use_universal_sec and m and int(m.group(1)) == ch and not m.group(3).endswith('.'):
-                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), m.group(3).strip()))
+                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), m.group(3).strip(), ln_y))
                     continue
                 m = EXER_3.match(ln)
                 if m and int(m.group(1)) == ch:
@@ -492,6 +595,14 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 m = ITEM_3.match(ln)
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'ITEM', '%s.%s.%s' % m.group(1, 2, 3), m.group(4).strip()))
+    # global_sec（单级节号书）的节键必为单一数字：mode 正则（SEC_CN/SEC_2…）
+    # 捕获的 "C.S" 形态在此类书里只可能是图号/页码粘连等散文误报（谷超豪
+    # 《数学物理方程》ch7 实测 "7.7 所示"），一律剔除。
+    if global_sec:
+        rows = [r for r in rows if r[1] != 'SEC' or '.' not in str(r[2])]
+    # 统一 5 元组 (p, kind, num, title, y)：SEC 行发射处已带块顶 y（页眉压制的
+    # glue 变体与同页 y 感知归都依赖它）；EXER/ITEM/SUB 行 y=None。
+    rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None) for r in rows]
     return rows
 
 
@@ -564,7 +675,8 @@ def main():
                 deduped.append(row)
         rows = deduped
         secs = []
-        for p, kind, num, title in rows:
+        for row in rows:
+            p, kind, num, title = row[0], row[1], row[2], row[3]
             if kind == 'SEC':
                 secs.append(num)
             print('%-5s %-11s p%-4d %s' % (kind, num, p, title))

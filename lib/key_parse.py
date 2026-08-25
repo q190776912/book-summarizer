@@ -43,6 +43,7 @@ from lib.regexlib import (
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
+    ORDINAL_ROSS,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -142,6 +143,30 @@ PROSE_RE_EN_C = re.compile(
 ENTRY_RE_EN_SINGLE_C = re.compile(
     r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
     re.IGNORECASE)
+
+# --- Ross（ORDINAL_ROSS = 11）：节内作用域编号，例题带字母位 ----------------
+# S. Ross《A First Course in Probability》：`**Example 2a**` / `**Axiom 1**` /
+# `**Proposition 4.1**`。点分两段形态由 ENTRY_RE_EN_C 覆盖；此处补两类：
+#   * 字母位键 `Label N<letter>`——必须先于单数字形态匹配，否则
+#     ENTRY_RE_EN_SINGLE_C 会把 "**Example 2a**" 截成 幻影键 "例2"；
+#   * 单数字键 `Label N`——负向断言同时拒绝 后随字母（那是字母键）与
+#     后随分隔符+数字（那是点分键），避免同一物理条目被重复/错形收录。
+ROSS_LAB = '|'.join(COMBINED_LABEL_KINDS)
+_SEP_CHARS = SEP_TIGHT[1:-1]      # 类内字符集（已转义）：.\-–·/．－〜
+ENTRY_RE_ROSS_LETTER_C = re.compile(
+    r'\*\*(' + ROSS_LAB + r')\s*(\d{1,2})\s*([A-Za-z])\b', re.IGNORECASE)
+ENTRY_RE_ROSS_SINGLE_C = re.compile(
+    r'\*\*(' + ROSS_LAB + r')\s*(\d{1,2})(?![\d' + _SEP_CHARS + r'A-Za-z])',
+    re.IGNORECASE)
+PROSE_RE_ROSS_LETTER = re.compile(
+    r'(?<![A-Za-z0-9])(' + ROSS_LAB + r')(?![A-Za-z])\s*(\d{1,2})\s*([A-Za-z])(?![A-Za-z0-9])')
+PROSE_RE_ROSS_SINGLE = re.compile(
+    r'(?<![A-Za-z0-9])(' + ROSS_LAB + r')(?![A-Za-z])\s*(\d{1,2})(?![' + _SEP_CHARS + r'\dA-Za-z])')
+
+
+def _ross_canon(label, num, suffix=''):
+    """Ross 规范键：规范中文标签 + 原编号（例2a / 公理1 / 命题4.1）。"""
+    return f"{_canon_label(label)}{num}{suffix}"
 
 # EN3 (ORDINAL_EN3 / type 9): English three-level, LABEL-FIRST dots (Label C.S.N),
 # e.g. Lasota & Mackey《Chaos, Fractals, and Noise》.  Items are numbered three
@@ -340,6 +365,30 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                 for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}"
                     entries.add(key); allk.add(key)
+            elif t == ORDINAL_ROSS:
+                # Ross 体例（ORDINAL_ROSS = 11）：**Example 2a** / **Axiom 1** /
+                # **Proposition 4.1**。字母位键必须先于单数字形态（SINGLE 的负向
+                # 断言已拒字母尾，二者互斥，但顺序仍按特异度排）；点分两段形态由
+                # ENTRY_RE_EN_C 覆盖。规范键 = 规范中文标签 + 原编号
+                # （例2a / 公理1 / 命题4.1），与 read_structure_items 对齐。
+                for m in ENTRY_RE_ROSS_LETTER_C.finditer(line):
+                    key = _ross_canon(m.group(1), m.group(2), m.group(3).lower())
+                    entries.add(key); allk.add(key)
+                for m in ENTRY_RE_EN_C.finditer(line):
+                    entries.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                for m in ENTRY_RE_ROSS_SINGLE_C.finditer(line):
+                    entries.add(_ross_canon(m.group(1), m.group(2)))
+                    allk.add(_ross_canon(m.group(1), m.group(2)))
+                for m in PROSE_RE_ROSS_LETTER.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(_ross_canon(m.group(1), m.group(2), m.group(3).lower()))
+                for m in PROSE_RE_EN_C.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                for m in PROSE_RE_ROSS_SINGLE.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(_ross_canon(m.group(1), m.group(2)))
             elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"

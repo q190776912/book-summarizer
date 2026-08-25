@@ -384,9 +384,28 @@ class SourceFormulaIndex:
                     data = PageJson.load(os.path.join(self.extract_dir, f'page_{pg:03d}.json')).data
             except Exception:
                 continue
+            # Bug #23 (2026-08, Ross): chapter-opening CONTENTS pages list every
+            # section title ("2.1 Introduction", ..., "2.7 ..."), and each line
+            # matched the Strogatz heading advance below — sweeping `cur` to the
+            # LAST section before any real content, so every formula number in
+            # the chapter piled into one bucket (mass false MISSING).  Detect a
+            # TOC signature page (>= 4 titled section-heading-like blocks) and
+            # skip both the advance logic and number extraction on it; genuine
+            # content pages virtually never start >= 4 sections.
+            _titled_heads = 0
+            for _b0 in data.get('text', []) or []:
+                _txt = _b0.get('text', '') if isinstance(_b0, dict) else ''
+                if not _txt or len(_txt.strip()) >= 80:
+                    continue
+                _hm0 = _HEAD_RE.match(_txt.strip())
+                if _hm0:
+                    _tail0 = _txt.strip()[_hm0.end():].strip().strip('.').strip()
+                    if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', _tail0):
+                        _titled_heads += 1
+            _is_toc_page = _titled_heads >= 4
             for block in data.get('text', []) or []:
                 txt = block.get('text', '') if isinstance(block, dict) else ''
-                if not txt:
+                if not txt or _is_toc_page:
                     continue
                 # Bug #22: skip figure-caption lines (they embed math + sub-labels
                 # that look like formula numbers, e.g. "Fig. 2.2A").
@@ -438,8 +457,12 @@ class SourceFormulaIndex:
                 # section, so behaviour is unchanged.  Without any advance
                 # signal, `cur` would stick at 0 and every book number would
                 # pile into the first section, producing mass false MISSING.
-                _hm = _HEAD_RE.match(txt.strip())
-                if _hm and len(txt.strip()) < 80 and txt.strip()[_hm.end():_hm.end() + 1] not in (')', '）', ',', '，', ';', '；'):
+                # Bug #23b (Ross): starred-section headings OCR as "* 1.6 The
+                # Number of ..." — leading bullet glyphs defeat _HEAD_RE.
+                # Strip leading non-alphanumeric markers before matching.
+                _head_src = txt.strip().lstrip('*•·◦‣-–— \t')
+                _hm = _HEAD_RE.match(_head_src)
+                if _hm and len(txt.strip()) < 80 and _head_src[_hm.end():_hm.end() + 1] not in (')', '）', ',', '，', ';', '；'):
                     # Title-text guard: a genuine section heading carries a
                     # textual title after the number ("5-11. Hilbert's
                     # Theorem").  Bare numeric tokens (dependence-table cells,

@@ -260,7 +260,14 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
     # 两级 N.M：chapter_first=True 时首数为章号（跨章前向引用过滤）；
     # chapter_first=False（节基书，如数学物理方程）时首数为节号，不做章过滤。
     lab_re = re.compile(r'(定义|定理|引理|推论|命题|注)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
-    raw = []
+    # 交叉引用守卫（谷超豪《数学物理方程》实测）：正文提及他章/他节条目时，
+    # 提及点前紧邻「第X章」「…中的」「不满足」「推出」「利用」等引用语境词
+    # （"如果初始资料不满足定理3.1中的正则性要…"、"可立即推出第一章中的引理3.1"）。
+    # 真条目头的标签前要么是块首、要么是句号/空行，不含这些词。命中即跳过。
+    _cite_ctx_re = re.compile(
+        r'第[一二三四五六七八九十0-9]+章[之中\s]*$|中的$'
+        r'|(?:不)?满足$|推出$|参见?$|^见|由$|根据$|利用$|应用$|证得$|得$|即$')
+    lab_items = []
     for p, y, txt in all_blocks:
         for m in lab_re.finditer(txt):
             c = int(m.group(2)); num = int(m.group(3))
@@ -268,16 +275,23 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
                 continue
             if c > 15 or num > 50:
                 continue
+            if m.start() > 0 and _cite_ctx_re.search(txt[:m.start()].rstrip()):
+                continue
             label = m.group(1)
             key = f"{label}{c}.{num}"
             text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
-            raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+            lab_items.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
 
     # 单级条目（推论/例/性质/习题）：块首「标签+数字」，数字后非数字/小数点
     # （排除 "定理2.1" 这类两级号），并拒绝助词紧随的引用形态（"例2和例3"）。
     single_re = re.compile(
         r'^(定义|定理|引理|推论|命题|例|性质|注|习题)\s*(\d+)(?![\d.．·])'
-        r'(?![的之中即与和或及时前后都均也是])')
+        r'(?![的之中即及时前后都均也是])'
+        # 「与/和/或」仅在构成枚举引用（"例2和例3"、"定理1或定理2"）时才拒；
+        # 后随非「标签+数字」（如 性质4 的陈述以 "与S(Rⁿ)上的情形类似…" 开头，
+        # 谷超豪《数学物理方程》ch6 §4 实测）不拒。
+        r'(?!(?:[与和或]\s*(?:定义|定理|引理|推论|命题|例|性质|注)\s*\d))')
+    single_raw = []
     for p, y, txt in all_blocks:
         m = single_re.match(txt)
         if not m:
@@ -288,13 +302,22 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
             continue
         key = f"{label}{n}"
         text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
-        raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+        single_raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
 
+    # 两级号（定理2.1…）：finditer 无块首锚定，正文交叉引用提及多，首现即定义页，
+    # 沿用 first-wins 去重。
     seen = {}
-    for it in raw:
+    for it in lab_items:
         if it['key'] not in seen:
             seen[it['key']] = it
-    items = sorted(seen.values(), key=lambda x: (x['page'], x['key']))
+    items = list(seen.values())
+    # 单级号（例N / 性质N / 推论N…scope=3 节级重置）：不同节复用同一「标签N」是
+    # 真实重起而非重复提及，旧 first-wins 会把后面各节的 例1/例2、性质1-4 整批
+    # 吞掉（谷超豪《数学物理方程》实测：ch4 §2 的例1/例2、ch5 §2/§4 的例1-3、
+    # ch6 §3/§4 的性质1-4 全部丢失）。改用共享 dedup_items 的页/名判重语义
+    # （同页合并；跨页异名保留；≥3 页同名按平行条目保留），与 en 系抽取器同源。
+    items += dedup_items(single_raw)
+    items.sort(key=lambda x: (x['page'], x['key']))
     # Continuity is verified by build_structure (book_structure.json); no B-layer gap
     # re-scan here (the three-level re-scan logic is N.S-N specific).
     return items, [], []

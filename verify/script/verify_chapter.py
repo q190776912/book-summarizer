@@ -296,7 +296,15 @@ def verify_all(ext, book_dir, extra_ignore=None):
     # Q-LAYER audit aggregation (only meaningful when a chapter enabled the `formula` map).
     q_active = False
     all_q_rows = []
-    for info in sorted(loader.chapters.values(), key=lambda c: c.ch):
+
+    def _ch_sort_key(c):
+        v = c.ch
+        try:
+            return (0, int(str(v)), "")
+        except (TypeError, ValueError):
+            return (1, 0, str(v))
+
+    for info in sorted(loader.chapters.values(), key=_ch_sort_key):
         ch = info.ch
         start, end = info.start, info.end
 
@@ -369,7 +377,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
         qf = len(r.get('q_fabricated', []) or [])
         qi = len(r.get('q_inconsistent', []) or [])
         qm = len(r.get('q_missing', []) or [])
-        print(f"  Ch{r['ch']:2d}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
+        print(f"  Ch{str(r['ch']):>2s}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
               f"FgMiss:{fgmiss} FgInv:{fginv} F:{f_n} Osub:{osub} "
               f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
 
@@ -503,7 +511,15 @@ def _main_impl():
             loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
             chapters = loader.chapters
             if chapters:
-                for info in sorted(chapters.values(), key=lambda c: c.ch):
+
+                def _ch_sort_key2(c):
+                    v = c.ch
+                    try:
+                        return (0, int(str(v)), "")
+                    except (TypeError, ValueError):
+                        return (1, 0, str(v))
+
+                for info in sorted(chapters.values(), key=_ch_sort_key2):
                     for grp in chapter_md_groups(book_dir, info.ch):
                         for md_file in grp:
                             res = fix_all_layers(md_file, book_dir=book_dir)

@@ -139,6 +139,9 @@ class StructureNode:
         先递归子节点（让子容器先定稿其页码），再用**已重算**的子节点
         page_start/page_end 取 min/max，使容器始终等于其全部末代子孙的页码跨度
         （起点 = 最小子孙页，终点 = 最大子孙页）。叶子节点返回自身 page_end。
+        容器自身的 page_start（节头所在页）参与 min：仅有晚页子项的空节
+        （谷超豪《数学物理方程》ch2 §1 等）若只取子项最小页，会把节头页
+        推迟到子项页，节区间失真。
         """
         if not self.sub_sec:
             return int(self.page_end)
@@ -149,8 +152,9 @@ class StructureNode:
             # 否则无编号条目 / 空 section 的章会被塌缩回 page_start（实测 Ch14: 377→377，
             # 应为 375–398）。章节内部子区间仍由递归决定。书根（type=-1）继续在此聚合章区间。
             return int(self.page_end)
-        self.page_start = min(c.page_start for c in self.sub_sec)
-        self.page_end = max(c.page_end for c in self.sub_sec)
+        self.page_start = min([int(self.page_start)]
+                              + [int(c.page_start) for c in self.sub_sec])
+        self.page_end = max(int(c.page_end) for c in self.sub_sec)
         return int(self.page_end)
 
 

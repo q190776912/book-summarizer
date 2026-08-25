@@ -30,7 +30,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 
 class ConfigError(Exception):
@@ -74,17 +74,28 @@ ORDINAL_CN3LAB = 10         # CN three-level, LABEL-FIRST dots (标签C.S.N), e.
                           #   标签词，天然排除三级小节标题（`2.3.1 Birkhoff遍历定理的陈述`——
                           #   数字在前）与裸 `C.S.N` 图号/公式号，避免键碰撞。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10)
+ORDINAL_ROSS = 11           # EN section-scoped LETTER-numbered (S. Ross《A First Course in
+                          #   Probability》). 条目形如 `Example 2a`（节号+小写字母，节内独立计数）、
+                          #   `Proposition 4.1` / `Theorem 7.1` / `Lemma 2.1` / `Corollary 4.1`
+                          #   （节号.节内序号）、`Axiom 1`（纯单数字）。键保留原书印刷形态
+                          #   （"Example 2a"），md/契约规范键 = 规范中文标签 + 原编号（例2a /
+                          #   命题4.1 / 公理1）。章末习题块（Problems / Theoretical Exercises /
+                          #   Self-Test Problems and Exercises）以 exercise_region_headings
+                          #   配置驱动扫描闩。
+
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab',
+    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2}
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None}
+ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
+                     11: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en', 10: 'cn'}
+ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
+                            10: 'cn', 11: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -175,7 +186,7 @@ SECTION_TYPE_DEPTH = {
 ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
-    9: [1, 2], 10: [1, 2, 3],
+    9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
 }
 
 # --- formula sequence-label (Q-LAYER) config ------------------------------
@@ -302,7 +313,7 @@ def _load_ignore_file(path: str) -> List[str]:
 
 @dataclass
 class ChapterInfo:
-    ch: int = 0
+    ch: Union[int, str] = 0
     start: int = 0
     end: int = 0
     name: str = ''
@@ -311,8 +322,14 @@ class ChapterInfo:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'ChapterInfo':
+        raw_ch = d.get('ch', d.get('num', d.get('chapter', 0)) or 0)
+        try:
+            ch: Union[int, str] = int(raw_ch)
+        except (TypeError, ValueError):
+            # 字母章号（附录 A/B…）：保留字符串，与 build_structure 的既有兼容一致
+            ch = str(raw_ch).strip() or 0
         return cls(
-            ch=int(d.get('ch', d.get('num', d.get('chapter', 0)) or 0)),
+            ch=ch,
             start=int(d.get('start', d.get('start_page', d.get('pdf_start', 0)) or 0)),
             end=int(d.get('end', d.get('end_page', d.get('pdf_end', 0)) or 0)),
             name=str(d.get('name', '') or ''),
@@ -387,6 +404,18 @@ class BookConfig:
     #     nearest preceding §N) become verifiable as role-5 subsections.
     # Default False — standard §C.S books are completely unaffected.
     sections_global: bool = False
+    # END-OF-CHAPTER exercise-block headings (Ross《A First Course in
+    # Probability》体例: "Problems" / "Theoretical Exercises" / "Self-Test
+    # Problems and Exercises").  When declared (non-empty), scan_skeleton treats
+    # an anchored heading line matching any of these as the START of the
+    # chapter-end exercise region: everything from there to the end of the
+    # chapter is exercises — SEC/ITEM detection is latched OFF (STICKY: unlike
+    # do Carmo per-section blocks, a Ross chapter never returns to prose), and
+    # numeric exercise lines ("3.11. Two cards...") are captured as EXER rows.
+    # This kills the FP class where exercise lines "C.N <long sentence>" are
+    # mistaken for genuine section headers by the universal detector (Ross ch3:
+    # 94 pseudo-sections).  Default [] — books without such blocks are untouched.
+    exercise_region_headings: List[str] = field(default_factory=list)
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
@@ -622,6 +651,10 @@ class BookConfig:
             section_scoped=bool(data.get('section_scoped', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             sections_global=bool(data.get('sections_global', False)),
+            exercise_region_headings=[
+                str(h) for h in (data.get('exercise_region_headings') or [])
+                if str(h).strip()
+            ],
             ignore=ignore,
             manual=manual,
             section_types=st,

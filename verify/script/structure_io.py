@@ -36,6 +36,9 @@ TYPE_TO_LABEL = {
     'corollary': '推论', 'proposition': '命题', 'example': '例',
     'remark': '评注', 'uncat': 'uncat',
     'algorithm': '算法', 'property': '性质',
+    # Ross 体例（ORDINAL_ROSS）：Axiom 条目独立 type，规范标签 公理，
+    # 与 key_parse._canon_label('Axiom') 对齐。
+    'axiom': '公理',
 }
 
 
@@ -71,17 +74,25 @@ def read_structure_items(ext_dir, ch):
         #   behavior ('定义1.1' / 'Remark1.1.1'), which already matches
         #   `keys_in_md`'s output for those ordinals (their keys have no dash).
         raw = (n.key or n.name or '')
-        m = re.search(r'\d+(?:[.\-－．]\d+)+', raw)
-        if not m:
-            m = re.search(r'\d+', raw)
-        num_raw = m.group(0) if m else ''
-        if '-' in num_raw:
-            # Three-level: emit bare dash form ('1.1-1'), no label.
-            _canon = _normalize_threelevel(num_raw)
+        # Ross 体例（ORDINAL_ROSS）：字母位键 "Example 2a" —— 规范键保留字母位
+        # （例2a）。通用分支的 `\d+(?:[.\-…]\d+)+` 会把字母截掉（例2），与 md 侧
+        # key_parse 的 例2a 永不交集 → 整书例题假性 truly-missing。故先试
+        # 「标签 + 数字 + 单字母」形态，命中则直接用 公理/例/命题 规范标签。
+        _ross_m = re.match(r'^[A-Za-z]+\s+(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$', raw.strip())
+        if _ross_m:
+            _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _ross_m.group(1) + _ross_m.group(2).lower()
         else:
-            _num = re.search(r'\d+(?:\.\d+)*', num_raw)
-            _number = _num.group(0) if _num else ''
-            _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
+            m = re.search(r'\d+(?:[.\-．·－–]\d+)+', raw)
+            if not m:
+                m = re.search(r'\d+', raw)
+            num_raw = m.group(0) if m else ''
+            if '-' in num_raw:
+                # Three-level: emit bare dash form ('1.1-1'), no label.
+                _canon = _normalize_threelevel(num_raw)
+            else:
+                _num = re.search(r'\d+(?:\.\d+)*', num_raw)
+                _number = _num.group(0) if _num else ''
+                _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
         items.append({
             'key': _canon,
             'label': TYPE_TO_LABEL.get(n.type, 'uncat'),

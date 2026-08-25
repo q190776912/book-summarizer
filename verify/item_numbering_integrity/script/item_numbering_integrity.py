@@ -498,11 +498,21 @@ def _md_gap_blocking(ctx):
         if not _toks:
             continue
         _tok = _toks[0].strip(':.，,；;')[:24]
-        if len(_m.group(1)) == 2 or not re.match(r'^[A-Z]$', _tok):
+        if len(_m.group(1)) == 2:
             # 两级节（或任何非单大写字母 token 的标题）：锚 = 自身 token
             _anchor = _tok
             if re.match(r'^\d', _tok):
                 _cur_num = _tok
+        elif not re.match(r'^[A-Z]$', _tok):
+            # 深层（###/####）非单字母 token。数字 token 是「节内计数器重起」
+            # 分窗标记（write-source 在印刷小节头/计数器重起处输出 "### §2"；
+            # 谷超豪《数学物理方程》ch6 §4 实测：一节内两套 性质1–4 计数器）：
+            # 锚 = 父节 + 子 token（"4-2"），避免跨节同号子块并窗成假乱序。
+            if re.match(r'^\d', _tok) and _cur_num:
+                _anchor = f"{_cur_num}-{_tok}"
+                # 父节游标不变：后续同级 ### 锚继续挂在同一 ## § 下
+            else:
+                _anchor = _tok
         else:
             # 单大写字母子块：锚 = 父节数字 + 字母（父未知时退化为裸字母）
             _anchor = f"{_cur_num}.{_tok}" if _cur_num else _tok

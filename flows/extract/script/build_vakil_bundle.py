@@ -128,7 +128,8 @@ def main():
             out.write('# Chapter %d bundle (pages %d-%d)\n' % (ch, start, end))
             out.write('# %s\n' % (next((c.get('title') for c in chapters if c['ch'] == ch), '')))
             out.write('\n# SECTIONS (%d)\n' % sum(1 for r in skel if r[1] == 'SEC'))
-            for p, kind, num, title in skel:
+        for row in skel:
+            p, kind, num, title = row[0], row[1], row[2], row[3]
                 if kind == 'SEC':
                     out.write('SEC  %s  %s\n' % (num, title))
             out.write('\n# ITEMS (%d) — every one must land in the .md\n' % len(items_dedup))

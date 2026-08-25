@@ -46,7 +46,7 @@ from audit_ignore import run_audit             # ignore 条目审核（防误用
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
-    ORDINAL_CN3LAB,
+    ORDINAL_CN3LAB, ORDINAL_ROSS,
     _canon_label, _load_ignore_file,
 )
 
@@ -94,7 +94,7 @@ LABEL_TO_TYPE = {
     '猜想': 'uncat', 'Conjecture': 'uncat',
     '算法': 'uncat', 'Algorithm': 'uncat',
     '假设': 'uncat', 'Assumption': 'uncat',
-    '公理': 'uncat', 'Axiom': 'uncat', '准则': 'uncat',
+    '公理': 'uncat', 'Axiom': 'axiom', '准则': 'uncat',
     '性质': 'property', 'Property': 'property',
     'uncat': 'uncat',
 }
@@ -240,6 +240,26 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "has_label": True,
             })
         return out
+    if primary_type == ORDINAL_ROSS:
+        # （规则5增量扩展）Ross 体例（S. Ross《A First Course in Probability》）：
+        # 标签在前 + 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。
+        # 通用 _PATTERNS 会把三级小节标题/图号误读为伪项，直接委托
+        # extract_items_ross（与 build_structure 同一抽取真源）。canon 与
+        # _canon_key(ORDINAL_ROSS, key) 逐字段一致：字母位 a..z → 1..26。
+        from extract_items_ross import extract_items_ross
+        out = []
+        for it in extract_items_ross(ext, start, end):
+            c = _canon_key(ORDINAL_ROSS, it["key"])
+            if c is None:
+                continue
+            lab = (it.get("label") or "uncat")
+            out.append({
+                "key": it["key"], "label": lab,
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "ross", "canon": c, "has_label": True,
+            })
+        return out
     if primary_type == ORDINAL_CN3LAB:
         # （规则5增量扩展）CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 /
         # 定义2.3.4，每类标签独立计数、每节重置）。委托 extract_items_cn3lab
@@ -360,6 +380,20 @@ _LABEL_RE = re.compile(r'^(定义|定理|引理|推论|命题|例|练习|习题|
 
 def _canon_key(primary_type, key):
     """把契约/源侧 key 规范化为可比较的 int 元组（按方案）。"""
+    if primary_type == ORDINAL_ROSS:
+        # Ross 体例：字母位键 "Example 2a" → (节号, 字母位 a=1..z=26)；
+        # 点分键 "Proposition 4.1" → (节号, 节内序号)；单数字键 "Axiom 1" → (序号,)。
+        # 字母必须进 canon（否则 2a..2u 全折叠成 (2,)，契约缺例时假绿）。
+        m = re.match(r'^([A-Za-z]+)\s+(\d{1,2})(?:\.(\d{1,3}))?(?:([A-Za-z]))?$',
+                     str(key).strip())
+        if not m:
+            return None
+        n1 = int(m.group(2))
+        if m.group(3):
+            return (n1, int(m.group(3)))
+        if m.group(4):
+            return (n1, ord(m.group(4).lower()) - 96)
+        return (n1,)
     if primary_type == ORDINAL_THREE_LEVEL:
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', key)
         return tuple(int(x) for x in m.groups()) if m else None
@@ -387,7 +421,7 @@ def _composite_key(primary_type, label, canon):
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
                         ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
-                        ORDINAL_CN3LAB):
+                        ORDINAL_CN3LAB, ORDINAL_ROSS):
         return (_canon_label(str(label)).lower(), canon)
     return canon
 
@@ -565,6 +599,9 @@ _TYPE_TO_LABEL = {
     "corollary": "Corollary", "proposition": "Proposition", "example": "Example",
     "remark": "Remark", "exercise": "Exercise", "uncat": "uncat",
     "algorithm": "Algorithm", "property": "Property",
+    # Ross 体例（ORDINAL_ROSS）：Axiom 条目独立 type，标签 Axiom（_canon_label
+    # 归一为 公理，与源侧 extract_items_ross 的 label 对齐）。
+    "axiom": "Axiom",
 }
 # 三级裸键（"C.S-K" / "C.S.K"，无内置标签）——这类键需补一个类型标签，B 层
 # num-first 解析才认得出是真实条目（否则尾串无标签 -> 被当 reference 丢弃）。
@@ -584,6 +621,9 @@ def synthetic_item_md(tree):
     set-difference 兜底，不影响连续性闸门）。"""
     lines = []
 
+    # 单级键（"性质4"/"例3"，标签+纯数字）→ (label, n)；其余 None。
+    _SINGLE_KEY = re.compile(r'^([^\d]+)(\d+)$')
+
     def walk(n):
         if n.type in ("chapter", "section"):
             # Emit `## §C.S` anchors so prefix-less entries (single-level
@@ -592,6 +632,30 @@ def synthetic_item_md(tree):
             # prefix-less items by the current § heading when one is active).
             if n.type == "section":
                 lines.append("## §%s" % n.key)
+                # 🔴 节内计数器重起分窗（谷超豪《数学物理方程》ch6 §4 实测：
+                # 一节内两套 性质1–4 计数器，印刷小节头各一套）。同一 ## § 窗内
+                # 单级编号回落会被 B 层判「顺序错乱」假 BLOCKING；此处按阅读序
+                # 检测单级键编号回落，在重起点就地输出 "### §k" 分窗锚（B 层数字
+                # 深层 token 锚 = 父节-k），与 write-source 在印刷小节头的分窗
+                # 约定一致。
+                _last = {}
+                _k = 1
+                for c in n.sub_sec:
+                    _t = getattr(c, "type", "")
+                    if _t == "exercise":
+                        continue
+                    if _t in ("section", "chapter"):
+                        walk(c)
+                        continue
+                    m = _SINGLE_KEY.match(str(getattr(c, "key", "")))
+                    if m and '.' not in m.group(2):
+                        lab, num = m.group(1), int(m.group(2))
+                        if lab in _last and num < _last[lab]:
+                            _k += 1
+                            lines.append("### §%d" % _k)
+                        _last[lab] = max(_last.get(lab, 0), num)
+                    walk(c)
+                return
             for k in n.sub_sec:
                 walk(k)
             return
@@ -664,6 +728,23 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
                                              groups=getattr(cfg, "ordinal", None))
                  if it["label"] not in _EXER_LABELS_RAW]
+
+    # 0) agent 已核实「非条目」的键（ignore_ch{N}.json，须附理由）：从源侧缺失集
+    #    剔除，不得回填进契约。适用形态：OCR 把公式/编号散文误读成条目号
+    #    （谷超豪《数学物理方程》ch10 实测：连乘积 1·3·5·…·(2n−1)! 被读成
+    #    三级号 1.3-5）。ignore 审计（run_audit）仍会在报告中展示该条目供复核。
+    try:
+        from key_parse import normkey as _normkey
+        _ign = _load_ignore_file(os.path.join(ext, f'ignore_ch{ch}.json'))
+    except Exception:
+        _ign = {}
+    if _ign:
+        try:
+            _ignk = {_normkey(str(k)) for k in _ign}
+            raw_items = [it for it in raw_items
+                         if _normkey(str(it.get('key', ''))) not in _ignk]
+        except Exception:
+            pass
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
     #    按 canon 取「最佳代表」去重：前向引用提及(_REF_RE 命中，如 page45

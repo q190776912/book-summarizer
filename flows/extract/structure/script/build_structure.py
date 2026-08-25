@@ -84,9 +84,10 @@ from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
+from extract_items_ross import extract_items_ross
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
-                              ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB,
+                              ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
                               ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label, normkey
@@ -112,6 +113,10 @@ _LABEL_TO_TYPE = {
     "Table": "table", "Figure": "figure",
     "评注": "remark", "Remark": "remark",
     "注": "remark",
+    # Ross 体例（ORDINAL_ROSS）：Axiom 1..4（§2.3 三公理 / §9.2 Markov 链公理）
+    # 是真实印刷条目头，type 用独立 "axiom"（structure_io TYPE_TO_LABEL 同步
+    # 映射 公理），避免误归 definition/uncat 破坏键空间对齐。
+    "公理": "axiom", "Axiom": "axiom",
     "断言": "proposition", "Assertion": "proposition",  # 近似归入命题
     "猜想": "uncat", "Conjecture": "uncat",
     "算法": "algorithm", "Algorithm": "uncat",
@@ -552,6 +557,35 @@ def _chapter_title(cm, ch):
     return ""
 
 
+def _exercise_block_pos(ext, ch, start, end, headings):
+    """Ross 体例章末习题块头位置：返回首个锚定标题行的 (page, y)，无则 None。
+
+    与 scan_skeleton._exercise_headings_re 同一匹配器（单一真源），供
+    build_chapter 把章末习题区内的条目从 ITEM 合同剔除（y 感知：同页条目须
+    位于块头上方才保留）。"""
+    rx = scan_skeleton._exercise_headings_re(headings)
+    if rx is None:
+        return None
+    for p in range(int(start), int(end) + 1):
+        fp = os.path.join(ext, 'page_%03d.json' % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding='utf-8'))
+        except Exception:
+            continue
+        for b in d.get('text', []):
+            if not isinstance(b, dict):
+                continue
+            poly = b.get('poly') or []
+            y = float(poly[1]) if len(poly) >= 8 else None
+            for ln in (b.get('text') or '').split('\n'):
+                ln = ln.rstrip('$').strip()
+                if ln and rx.match(ln):
+                    return (p, y)
+    return None
+
+
 def _exercise_region_start(ext, ch, start, end):
     """Return the page where 'EXERCISES FOR CHAPTER <ch>' begins, else None.
 
@@ -589,9 +623,20 @@ def _single_en_items(ext, start, end, book):
     键与 EN 两级分支同构：`_canon_label(label)+num`（"THEOREM 1" → "定理1"），
     使契约键标签词大小写稳定（OCR 原样大写会让 B 层 `_ENTRY_LABELS`
     大小写敏感解析失败）。单号无章/节位，不做跨章前向引用过滤。
+
+    config_setting 规则5 增量扩展：config `ordinal` 各组 `name` 里 EN_LABELS
+    没有的标签词（如 Rosen 的 Algorithm / Axiom 编号块）追加进抽取标签集；
+    Figure/Table 是图管线管辖的图表注，uncat 是兜底标记，均不作为文本契约条目。
     """
+    _non_text = {"uncat", "Figure", "Fig", "Table", "图", "表"}
+    extra = []
+    for _g in getattr(book, "ordinal", []) or []:
+        for _nm in getattr(_g, "name", []) or []:
+            if _nm and _nm not in _non_text and _nm not in extra:
+                extra.append(_nm)
     items = extract_items_en(ext, start, end, want_examples=True,
-                             section_scoped=book.section_scoped, single=True)
+                             section_scoped=book.section_scoped, single=True,
+                             extra_labels=extra)
     kept = []
     for it in items:
         lab, _, num = it["key"].partition(" ")
@@ -603,6 +648,11 @@ def _single_en_items(ext, start, end, book):
 
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
+    if primary == ORDINAL_ROSS:
+        # Ross 体例（ORDINAL_ROSS = 11，config_setting 规则5 增量扩展）：标签在前 +
+        # 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。键保留原书印刷
+        # 形态；章末习题区过滤由调用方 build_chapter 按 exercise_region_headings 做。
+        return extract_items_ross(ext, start, end)
     if primary == ORDINAL_SINGLE:
         # CN 单级编号书（如李庆扬《数值分析》第5版：定理1 / 定义3 / 例12 /
         # 算法2 / 性质4——「标签+单一数字」、章内连续或节内重置）：既有抽取器
@@ -700,15 +750,28 @@ def _extract_items(ext, ch, start, end, book, manual=None):
 # ---------------------------------------------------------------------------
 # 单章结构构建
 # ---------------------------------------------------------------------------
-def _find_numbered_heading_page(ext, num, lo, hi):
-    """在页码 (lo, hi] 内找首个「以节号 num 开头的标题行」所在页。
+def _find_numbered_heading_page(ext, num, lo, hi, min_y=None):
+    """在页码 [lo, hi] 内找首个「以节号 num 开头的标题行」所在页。
 
     用于章首目录页免疫的回扫：章扉页目录把节号的 SEC 首现页污染成章首页时，
-    从章首页之后回扫正文节头（如 `2.1. TRANSPORT EQUATION` / `2.1 Transport
+    回扫正文节头（如 `2.1. TRANSPORT EQUIATION` / `2.1 Transport
     equation`）。找不到返回 None（调用方退回原首现页，不比旧行为差）。
+
+    2026-08-26 Ross 体例实测两处误拒修正：
+      * OCR 粘连形态 `3.3Bayes'sFormula`（编号与标题间无空格）——补 glue 变体
+        （编号后直接跟字母、且不接续数字，"3.1" 不会误吞 "3.11"）；
+      * 标题含括号的真节头（`3.5 P(|F) Is a Probability`）——旧全局括号禁令
+        整行一票否决，改只要求分隔符后是字母（标题本体），括号不再否决。
+        首匹配胜出且自章首向后扫描，习题/解答行的同号行天然排在真节头之后，
+        不构成误报源。
+      * 🔴 min_y：真节头可能与目录同页（ch5 扉页即 §5.1 起始页）——此时 lo 页
+        上只接受块顶 y 严格大于污染行（目录命中）的匹配，否则回扫永远跳过
+        真节头所在的首章页、错挂到后文习题/解答行的同号行上。
     """
-    pat = re.compile(r'^%s(?:[\.．:：]|[\s\u00a0]+\S)' % re.escape(str(num)))
-    for p in range(int(lo) + 1, int(hi) + 1):
+    pat = re.compile(
+        r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?:[\.．:：]|[\s\u00a0]+)\s*[A-Za-z]')
+    pat_glue = re.compile(r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?=[A-Za-z])')
+    for p in range(int(lo), int(hi) + 1):
         fp = os.path.join(ext, 'page_%03d.json' % p)
         if not os.path.exists(fp):
             continue
@@ -716,15 +779,27 @@ def _find_numbered_heading_page(ext, num, lo, hi):
             d = scan_skeleton.PageJson.load(fp).data
         except Exception:
             continue
-        for ln in scan_skeleton.lines_of(d):
-            ln = ln.rstrip('$').strip()
-            if not ln or len(ln) > 70 or '(' in ln or ')' in ln or ln.endswith((',', ';')):
+        blocks = d.get('text', []) if isinstance(d, dict) else []
+        for b in blocks:
+            if not isinstance(b, dict):
                 continue
-            m = pat.match(ln)
-            if m:
-                rest = ln[m.end():]
-                if len(re.findall(r'[A-Za-z\u00c0-\u017f\u4e00-\u9fff]', rest)) >= 3:
-                    return p
+            poly = b.get('poly') or []
+            try:
+                by = float(poly[1]) if len(poly) >= 8 else None
+            except Exception:
+                by = None
+            for ln in (b.get('text') or '').split('\n'):
+                ln = ln.rstrip('$').strip()
+                if not ln or len(ln) > 70 or ln.endswith((',', ';')):
+                    continue
+                m = pat.match(ln) or pat_glue.match(ln)
+                if m:
+                    if (p == int(lo) and min_y is not None
+                            and (by is None or by <= float(min_y))):
+                        continue    # 目录命中本身 / 其上方的更早行，跳过
+                    rest = ln[m.end():]
+                    if len(re.findall(r'[A-Za-z\u00c0-\u017f\u4e00-\u9fff]', rest)) >= 2:
+                        return p
     return None
 
 
@@ -788,7 +863,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 1) skeleton 原始行
     rows = scan_skeleton.scan(ext, ch, start, end, mode,
                               section_depths=section_depths,
-                              chapter_first=book.chapter_first)
+                              chapter_first=book.chapter_first,
+                              exercise_headings=getattr(book, 'exercise_region_headings', None) or None)
     ex_rows = [r for r in rows if r[1] == "EXER"]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。
@@ -803,7 +879,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     if any(r[1] == "SUB" for r in rows):
         sub_rows = [r for r in rows if r[1] == "SUB"]
         rows = [r for r in rows if r[1] != "SUB"]
-        for p, _kind, num, title in sub_rows:
+        for row in sub_rows:
+            p, _kind, num, title = row[0], row[1], row[2], row[3]
             parts = num.split('.')
             L = parts[-1]
             if not (len(L) == 1 and L.isalpha() and L.isupper()):
@@ -825,7 +902,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 del letter_sub_blocks[parent]
         if _is_appendix:
             kept = _seq_filter_letter_blocks(_appendix_letter_secs)
-            _appendix_letter_secs = [(pg, 'SEC', L, t) for pg, L, t in kept]
+            _appendix_letter_secs = [(pg, 'SEC', L, t, None) for pg, L, t in kept]
 
     if getattr(book, 'chapter_local_sections', False):
         # Chapter-local sections (Karlin-style "§1" that RESET per chapter) are
@@ -847,14 +924,20 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     if _appendix_letter_secs:
         sec_rows = list(sec_rows) + _appendix_letter_secs
 
-    # 2) skeleton SEC 去重（优先非空标题，保留最佳标题）
+    # 2) skeleton SEC 去重（优先非空标题，保留最佳标题）。
+    #    行统一 5 元组 (p,'SEC',num,title,y)：y 为节头块顶（scan 发射），md 派生
+    #    /附录字母升格行 y=None。
+    sec_rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None)
+                for r in sec_rows]
     sec_best = {}
-    for p, kind, num, title in sec_rows:
+    for row in sec_rows:
+        num, title = row[2], row[3]
         if num not in sec_best or (sec_best[num][3] == "" and title != ""):
-            sec_best[num] = (p, kind, num, title)
+            sec_best[num] = row
     seen = set()
     dedup_sec = []
-    for p, kind, num, title in sec_rows:
+    for row in sec_rows:
+        num = row[2]
         if num in seen:
             continue
         seen.add(num)
@@ -885,11 +968,31 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             continue
         _exer_seen.add(num)
         title = _clean_title(it.get("text", ""), it["key"])
-        ex_rows.append((it.get("page", 0), 'EXER', num, title))
+        ex_rows.append((it.get("page", 0), 'EXER', num, title, None))
 
     items = [it for it in raw_items
              if (it.get("label") or "").strip() not in _EXERCISE_LABELS
              and (ex_start is None or it.get("page", 0) < ex_start)]
+
+    # 3a-2) Ross 体例章末习题块（exercise_region_headings 声明）：块头起至章末
+    #    的页不再进 ITEM 合同。y 感知：与块头同页的条目，仅当其块顶 y 在块头
+    #   （y 较小 = 页面上方）之前才保留；_item_pos 找不到位置时返回 -1 → 保留
+    #    （宁缺勿滥的反向：真条目不因 OCR 定位失败而丢失，漏项交源侧回填兜底）。
+    _ex_headings = getattr(book, 'exercise_region_headings', None) or None
+    if _ex_headings:
+        ex_pos = _exercise_block_pos(ext, ch, start, end, _ex_headings)
+        if ex_pos is not None:
+            _ep, _ey = ex_pos
+            _kept = []
+            for it in items:
+                pos = _item_pos(ext, it)
+                if pos is None:
+                    _kept.append(it)
+                    continue
+                ip, iy = pos
+                if ip < _ep or (ip == _ep and iy < _ey):
+                    _kept.append(it)
+            items = _kept
 
     # 3b) 同 key 去重：OCR 断行会把正文引用顶到块首，产生与真条目同号的
     #     假条目（如 §7.3 前言裸号块 "7.3.9."、§5.4 跨块拼接的第二个
@@ -940,32 +1043,52 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 正文命中；若某节只有目录命中则退回原值——与旧行为一致，不比旧差）。
     _OPENER_K = 3
     _first_hit = {}
-    for p, kind, num, title in dedup_sec:
-        _first_hit.setdefault(num, p)
+    for row in dedup_sec:
+        _first_hit.setdefault(row[2], row)
     _page_first_cnt = {}
-    for _num, _p in _first_hit.items():
+    for _num, _row in _first_hit.items():
+        _p = _row[0]
         _page_first_cnt[_p] = _page_first_cnt.get(_p, 0) + 1
     _opener_pages = {p for p, c in _page_first_cnt.items() if c >= _OPENER_K}
+    # 🔴 目录跨页续排（2026-08-26 Ross ch9 实测）：章首目录主体在扉页（≥3 个
+    # 节号首现），末尾条目（9.4）续排到次页页顶（y≈103）——该首现命中不在
+    # 扉页上，逃过上面的判据。补则：紧随某目录页之后的一页，若其全部首现
+    # 命中都贴顶（y < 350），同样视为目录污染页（回扫 min_y 会自动跳过续排
+    # 行本身；真节头唯一时退回原值，不比旧差）。
+    if _opener_pages:
+        for _op in list(_opener_pages):
+            _ys = [float(_r[4]) for _r in _first_hit.values()
+                   if _r[0] == _op + 1 and _r[4] is not None]
+            if _ys and all(y < 350.0 for y in _ys):
+                _opener_pages.add(_op + 1)
     if not getattr(book, "sections_unnumbered", False):
         # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
         # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
         # 「agent 校验识别」产物 _recognized_sections.json 的权威小节清单注入。
-        for p, kind, num, title in dedup_sec:
+        for row in dedup_sec:
+            p, num, title, y = row[0], row[2], row[3], row[4]
             _poisoned = p in _opener_pages
             if num in sec_pages:
                 if title and not sec_titles.get(num):
                     sec_titles[num] = title
                 continue
             if _poisoned:
-                # 章首目录命中：回扫章首页之后的正文节头；扫不到退回原值。
-                pg = _find_numbered_heading_page(ext, num, p, end) or p
+                # 章首目录命中：回扫正文节头；扫不到退回原值。min_y = 污染行
+                # （目录命中）块顶——真节头与目录同页时（ch5 扉页即 §5.1 起始），
+                # 只接受目录行下方的匹配。
+                pg = _find_numbered_heading_page(ext, num, p, end, min_y=y) or p
+                y = None
             elif getattr(book, 'chapter_local_sections', False):
                 # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
                 # 首现页作为真实页码，供条目按页就近归节。
                 pg = _find_chapter_local_section_page(ext, ch, int(num), start, end)
+                y = None
             else:
                 pg = p
             sec_pages[num] = pg
+            # 节头 (page, y) 进 sec_pos：同页「条目在上、节头在下」的 y 感知归并
+            # （谷超豪《数学物理方程》实测：ch6 性质4 与 §5 节头同页）。
+            sec_pos.setdefault(num, (pg, float(y) if y is not None else 0.0))
             if title and not sec_titles.get(num):
                 sec_titles[num] = title
 
@@ -998,8 +1121,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first,
                                   chapter_local=getattr(book, 'chapter_local_sections', False)),
                   it["page"])
-    for p, kind, num, title in ex_rows:
-        _note_sec(_section_of_exer(num), p)
+    for row in ex_rows:
+        _note_sec(_section_of_exer(row[2]), row[0])
 
     # 剔除「条目号派生、但 skeleton 并未检出」的幽灵小节（如 EN 两级下
     # "Theorem 20.7" 派生的 §20.7，而 §20.7 并非真小节）。skeleton 扫描现已
@@ -1085,15 +1208,23 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         else:
             chapter_bucket.append(node)
 
+    _unnumbered_book = getattr(book, "sections_unnumbered", False)
     for it in items:
         sec_key = _section_of_key(it["key"], ordinal, book.chapter_first,
                                   chapter_local=getattr(book, 'chapter_local_sections', False))
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])
-        _place(node, sec_key, it["page"], pos=_item_pos(ext, it))
+        pos = _item_pos(ext, it)
+        if (pos is not None and pos[1] < 0 and not _unnumbered_book and sec_pos):
+            # OCR 整块丢失的条目（_item_pos 找不到块）：位置未知。-1 的「排在节头
+            # 之前」语义只适用于无序号标书（Evans）；编号节书沿用旧「页码就近」
+            # 行为——视为页末，归入本页已开节的最后一节。
+            pos = (pos[0], float("inf"))
+        _place(node, sec_key, it["page"], pos=pos)
 
-    for p, kind, num, title in ex_rows:
+    for row in ex_rows:
+        p, num, title = row[0], row[2], row[3]
         sec_key = _section_of_exer(num)
         name = (title if title else num)
         node = _node(num, "exercise", name, p)
@@ -1108,7 +1239,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         kids = node.get("sub_sec")
         if not kids:
             return node["page_end"]
-        child_starts = [k["page_start"] for k in kids]
+        # 容器自身页（节头所在页）参与 page_start：仅有习题块等晚页子项的空节
+        # （谷超豪《数学物理方程》ch2 §1 等）若只取子项最小页，会把节头页
+        # 推迟到子项页，节区间失真。
+        child_starts = [node.get("page_start", 0)] + [k["page_start"] for k in kids]
         child_ends = [_fix_pages(k) for k in kids]
         node["page_start"] = min(child_starts)
         node["page_end"] = max(child_ends)

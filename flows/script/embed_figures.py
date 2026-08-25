@@ -698,10 +698,17 @@ def main():
     by_ch = {}
     for f in figs:
         c = f.get("chapter", 0)
-        if c >= 0:
+        # 数字章号取 >=0；字母章号（附录 A/B…）原样保留（2026-08-25 Evans）
+        if isinstance(c, str) or c >= 0:
             by_ch.setdefault(c, True)
 
-    chapters = [args.chapter] if args.chapter else sorted(by_ch)
+    def _ch_sort_key(ch):
+        try:
+            return (0, int(str(ch)), "")
+        except (TypeError, ValueError):
+            return (1, 0, str(ch))
+
+    chapters = [args.chapter] if args.chapter else sorted(by_ch, key=_ch_sort_key)
     total_placed = 0
     total_skip = 0
     for ch in chapters:

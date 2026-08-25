@@ -218,15 +218,71 @@ def _section_of_exer(num):
     return None
 
 
-def _find_title_page(ext, title, start, end):
-    """无序号标小节：在章节 OCR 区间 [start, end] 内查找标题文本首次出现的页码。
+def _find_title_pos(ext, title, start, end):
+    """无序号标小节：在章节 OCR 区间 [start, end] 内查找标题块，返回 ``(page, y)``。
 
-    标题在 OCR 中常与正文粘连（"Title. Body..."），故同时用「整块包含」与
-    「首个 '. ' 前缀相等」两种匹配；找不到返回 None（调用方回退到 start）。
+    y 为命中块的 poly 顶边（同页多个命中取最小 y），供「同页条目 vs 节头」
+    的先后判定（_place 的字典序 (page, y) 归并）；找不到返回 None。
+
+    三段式匹配（2026-08-24 Evans SDE 案例，增量无回归）：
+      Pass 1a —— 锚定体例头（大小写敏感）。存储标题两种形态：
+        * 字母节头 ``X. TITLE``（原书印 ``A. BASIC DEFINITIONS``）→ 锚
+          ``^X[.:．]?\\s*TITLE``；
+        * 大写 run-in 主题头 ``TITLE``（原书正文内嵌 ``RANDOM VARIABLES. We …``）
+          → 锚 ``^TITLE``。
+        原书章首自带 mini-TOC（title-case 列出全部小节）而正文节头为 ALL-CAPS
+        的书（Evans SDE 实测），旧的小写包含匹配会让所有小节都命中 TOC 页；
+        正文还有与节名同词的前置散文/子块标题（如 ``EXAMPLES OF LINEAR …``
+        先于 ``D. LINEAR …``），包含匹配同样误命中。
+      Pass 1b —— 大小写敏感包含：保留给正文头不带上述形态的书。
+      Pass 2 —— 旧行为（lowercase 包含 / 前缀相等）：任何书在 Pass 1 无命中时
+        结果与改动前完全一致（零回归）。
     """
-    t_norm = (title or "").strip().lower()
-    if not t_norm:
+    t_raw = (title or "").strip()
+    if not t_raw:
         return None
+    t_norm = t_raw.lower()
+    m0 = re.match(r'^([A-Z])\.\s+(.*)$', t_raw)
+    if m0:
+        anchor_re = re.compile(r'^' + m0.group(1) + r'[.:．]?\s*' + re.escape(m0.group(2)))
+    else:
+        anchor_re = re.compile(r'^' + re.escape(t_raw))
+    # --- Pass 1a: anchored, case-sensitive (page, min-y) ---
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, "page_%03d.json" % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        ys = []
+        for b in d.get("text", []):
+            if not isinstance(b, dict):
+                continue
+            s = (b.get("text") or "").strip()
+            if s and anchor_re.match(s):
+                poly = b.get("poly") or []
+                ys.append(poly[1] if len(poly) >= 8 else 0)
+        if ys:
+            return (p, min(ys))
+    # --- Pass 1b: exact-case containment ---
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, "page_%03d.json" % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        for b in d.get("text", []):
+            if not isinstance(b, dict):
+                continue
+            s_raw = (b.get("text") or "").strip()
+            if t_raw in s_raw:
+                poly = b.get("poly") or []
+                return (p, poly[1] if len(poly) >= 8 else 0)
+    # --- Pass 2: legacy case-insensitive (y=0) ---
     for p in range(start, end + 1):
         fp = os.path.join(ext, "page_%03d.json" % p)
         if not os.path.exists(fp):
@@ -243,8 +299,58 @@ def _find_title_page(ext, title, start, end):
                 continue
             head = s.split(". ")[0].strip()
             if t_norm == head or t_norm in s:
-                return p
+                return (p, 0)
     return None
+
+
+def _item_pos(ext, it):
+    """编号项在源页上的 (page, y)：取其 key/片段首个匹配块的 poly 顶边。
+
+    找不到时 y 取 -1（同页排序时排在任何节头之前——OCR 整块丢失的条目
+    通常位于该页节头之前的阅读流里；跨节归并不受影响）。"""
+    p = it.get("page")
+    if not p:
+        return None
+    fp = os.path.join(ext, "page_%03d.json" % p)
+    if not os.path.exists(fp):
+        return None
+    try:
+        d = json.load(open(fp, encoding="utf-8"))
+    except Exception:
+        return None
+    key = (it.get("key") or "").strip().lower()
+    snip = (it.get("text") or "").strip()
+    probe = re.sub(r"\s+", " ", snip[:48]).lower()
+    ys_head, ys_contain = [], []
+    for b in d.get("text", []):
+        if not isinstance(b, dict):
+            continue
+        s = (b.get("text") or "").strip()
+        if not s:
+            continue
+        sl = re.sub(r"\s+", " ", s.lower())
+        poly = b.get("poly") or []
+        y = poly[1] if len(poly) >= 8 else 0
+        if key and sl.startswith(key):
+            ys_head.append(y)
+        if probe and probe[:24] in sl:
+            ys_contain.append(y)
+    if ys_head:
+        return (p, min(ys_head))
+    if ys_contain:
+        return (p, min(ys_contain))
+    return (p, -1)
+
+
+def _find_title_page(ext, title, start, end):
+    """无序号标小节：返回标题首次出现的页码（兼容旧签名）。
+
+    实现委托给 :func:`_find_title_pos`（三段式锚定匹配，见其 docstring），
+    仅丢弃 y 分量。"""
+    pos = _find_title_pos(ext, title, start, end)
+    if pos is None:
+        return None
+    return pos[0]
 
 
 def _chapter_local_sections_from_markdown(ext, ch):
@@ -300,8 +406,8 @@ def _find_chapter_local_section_page(ext, ch, n, start, end):
 
 def _recognized_sections(ext, ch, start, end):
     """无序号标书（section_types 含 0）：读取「agent 校验识别」步骤产物
-    ``_recognized_sections.json`` 中本章的小节标题清单，返回 ``[(title, page), ...]``
-    （按文档顺序），``page`` 为该标题在 OCR 中首次出现的页（用于排序与条目归并）。
+    ``_recognized_sections.json`` 中本章的小节标题清单，返回 ``[(title, page, y), ...]``
+    （按文档顺序），``(page, y)`` 为该标题块的锚定位置（用于排序与条目归并）。
 
     该清单由识别步骤（agent/LLM 读原书确认「真实无序号标」后给出权威小节列表）
     产出，是**唯一可靠**的无序号标小节来源——OCR 正则靠「≥2 段数字」判节，对
@@ -319,13 +425,14 @@ def _recognized_sections(ext, ch, start, end):
     out = []
     n = len(titles)
     for i, t in enumerate(titles):
-        pg = _find_title_page(ext, t, start, end)
-        if pg is None:
+        pos = _find_title_pos(ext, t, start, end)
+        if pos is None:
             # OCR 漏识的标题（如被 PaddleOCR 吞掉的小节标题）：按文档索引在
             # [start, end] 线性插值保序，避免错排到章首（否则会破坏小节顺序
             # 与条目页码归并）。插值仅影响页排序，不编造内容。
             pg = start if n <= 1 else round(start + (end - start) * i / (n - 1))
-        out.append((t, pg))
+            pos = (pg, 0)
+        out.append((t, pos[0], pos[1]))
     return out
 
 
@@ -651,12 +758,24 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #     引用块常只有裸号或逗号续句）；同态取页码小者（书内编号单调，
     #     真标题先出现）。dedup_items 刻意保留同 key 异文（Lasota-Mackey
     #     双印），故此处按「裸号劣汰」再收一轮。
+    #     🔴 仅折叠「同页」重复（2026-08-24 Evans SDE 案例）：节内重置计数器书
+    #     （scope 3：Evans 每节 Example 1..N 重排，do Carmo 同型）会合法地在
+    #     不同节复用同一 "Label N" 键——跨页（Δpage ≥ 1）的同键项是真实重起，
+    #     必须全部保留；只有同页同键才是 OCR 双读/断行伪条目。旧逻辑按章全局
+    #     折叠同键项，把合法重起当重复删掉（实测 ch2 丢 §B 的 Example 1/2）。
+    #     分组键小写化（OCR 大小写噪声 "EXAMPLE 3"/"ExAMPLE 3" 视为同键）；
+    #     跨页保留项挂整数槽位避免覆盖。
     _by_key = {}
     for it in items:
-        prev = _by_key.get(it["key"])
+        k = (it["key"] or "").strip().lower()
+        prev = _by_key.get(k)
         if prev is None:
-            _by_key[it["key"]] = it
+            _by_key[k] = it
             continue
+        if abs((it.get("page") or 0) - (prev.get("page") or 0)) > 0:
+            _by_key[len(_by_key)] = it
+            continue
+
         def _title_len(x):
             return len(_clean_title(x.get("text", ""), x["key"]))
         # 判优：①裸号劣汰——prev 裸(<8)而 it 带标题(>=8)时替换；
@@ -667,13 +786,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         if (_lp < 8 <= _li) or \
            ((_lp >= 8) == (_li >= 8) and
             it.get("page", 0) < prev.get("page", 0)):
-            _by_key[it["key"]] = it
+            _by_key[k] = it
     items = sorted(_by_key.values(),
                    key=lambda x: ((x.get("page") or 0), _nat_key_digits(x["key"])))
 
     # 4) 章节骨架：skeleton SEC ∪ 条目/练习派生章节号
     sec_pages = {}   # num -> 最佳候选页（skeleton）
     sec_titles = {}  # num -> 标题
+    sec_pos = {}     # num -> (page, y)；仅 sections_unnumbered 路径填充（y 感知归并）
     if not getattr(book, "sections_unnumbered", False):
         # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
         # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
@@ -695,10 +815,11 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 的深度检测对无序号标标题完全失明且易编造假小节（违反保真），故此处
     # 直接消费识别产物 _recognized_sections.json，不再走 OCR 正则。
     if getattr(book, "sections_unnumbered", False):
-        for _i, (_ut, _up) in enumerate(
+        for _i, (_ut, _up, _uy) in enumerate(
                 _recognized_sections(ext, ch, start, end), 1):
             _uk = "U%d" % _i
             sec_pages.setdefault(_uk, _up)
+            sec_pos[_uk] = (_up, _uy)
             # 保留空标题（unnumbered 书常有「## §」无标题小节，如 Silverman 后段章
             # 节）。空标题在 P 层 _title_present("") 被判定为「恒存在」，不会误报
             # 缺节；若回退到 "U{n}" 键名，则会因 "u1" 不在 md 标题中而假阳缺节。
@@ -766,14 +887,22 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 5) 条目/练习挂到章节
     chapter_bucket = []  # 无章节可挂时归章级（置于最前）
 
-    def _place(node, sec_key, page):
+    def _place(node, sec_key, page, pos=None):
         if sec_key is not None and sec_key in sec_nodes:
             sec_nodes[sec_key]["sub_sec"].append(node)
             return
-        # 页码归并：最近的、起始页 <= page 的章节
+        # 归并：最近的、起始位置 <= 条目位置的章节。
+        # sec_pos 非空（sections_unnumbered 路径）且条目带 (page, y) 时按字典序
+        # (page, y) 比较——同页时 y 在节头之前的条目归前一节（2026-08-24 Evans
+        # SDE：EXAMPLE 7 与 §B 节头同页但位于其前，页码比较会错归 §B）。
+        use_pos = bool(sec_pos) and pos is not None
         cand = None
         for n in all_sec_nums:
-            if sec_pages.get(n, derived_sec_firstpage.get(n, start)) <= page:
+            sp = sec_pages.get(n, derived_sec_firstpage.get(n, start))
+            if use_pos:
+                if sec_pos.get(n, (sp, 0)) <= pos:
+                    cand = n
+            elif sp <= page:
                 cand = n
         if cand is not None:
             sec_nodes[cand]["sub_sec"].append(node)
@@ -786,7 +915,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])
-        _place(node, sec_key, it["page"])
+        _place(node, sec_key, it["page"], pos=_item_pos(ext, it))
 
     for p, kind, num, title in ex_rows:
         sec_key = _section_of_exer(num)

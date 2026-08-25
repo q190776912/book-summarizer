@@ -85,6 +85,11 @@ derive:          [translate, verify_cn]
 - `translate`：**前置硬闸**＝源语言 `verify_source` 已 `done`（即 `verify_chapter.py --all` 对源语言真实 `exit 0`）。源语言未 PASS 时 `require_flow_prereqs` 硬拒，禁止进入翻译。
 - `verify_cn`：agent 跑 `verify_chapter.py --all` 对翻译版确认 `exit 0`。
 
+> **适用范围**：`derive` 流程（translate / verify_cn）**仅适用于英文书**（源=英文
+> `ChapterN_*.md` → 派生中文）。**中文书无翻译阶段**：`write_source.verify_source`
+> 完成即为全书完成，`derive.translate / derive.verify_cn` 保持未标记即可（中文书源
+> =`第N章_*.md`，无独立翻译版；见 [`derive-translate`](derive-translate/derive-translate.md) 适用范围）。
+
 ## 标准工作流（agent 必须遵守）
 
 ```bash

@@ -338,6 +338,14 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
     # still verifies something sensible.
     section_depths = list(cfg.section_depths) or list(
         ORDINAL_SECTION_TYPES.get(cfg.primary_type, [1]))
+    # 🔴 Fully-unnumbered hierarchy (every level role 0, e.g. Evans SDE
+    # lettered sections / Silverman): numeric section continuity is meaningless —
+    # the source scan would flag OCR noise ("2 inches", page footers "85") as
+    # phantom sections since md carries no numeric § headings (md_max None ⇒
+    # everything lands in "tail"). Missing-section checking for such books is
+    # owned by the P-layer position/count gate; D returns a vacuous PASS.
+    if section_depths and all(d == 0 for d in section_depths):
+        return {'levels': {}, 'continuity_sections': [], 'missing_sections': []}
     max_level = len(section_depths)
     hi = max(section_depths) if section_depths else 3
     d_item_re = _build_item_re(hi)

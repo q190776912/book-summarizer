@@ -1207,7 +1207,12 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
             miss.append(row)
 
     # S-empty degradation: structural checks already ran; emit one WARN.
-    if s_empty:
+    # 🔴 仅当总结确有非空 \tag 而 S 为空时才告警（那才是配置错/字母编号的信号）；
+    # 若总结本章没有任何带编号的 \tag 且书源也未抽到编号——两侧一致为空，说明
+    # 该章本就无编号公式（如 Evans SDE 附录 C 的纯证明单元），静默放行。
+    # （_extract_summary_tags 会为每个 $$ 块返回空 tag 占位，须按 normalized/
+    #  raw_tag 非空判定"真 tag"。）
+    if s_empty and any(t.normalized or t.raw_tag for t in tags):
         rows.append({
             'number': '',
             'status': 'WARN',
@@ -1353,7 +1358,13 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
                 rows.append(row)
                 miss.append(row)
 
-    if all(len(src_sectioned.get(s, set())) == 0 for s in md_sections):
+    # 🔴 与 _compare 的 S-empty WARN 同一语义：仅当总结确有非空 \tag 而书源各节
+    # 全都抽不到编号时才告警（配置错信号）。总结无任何带编号 \tag 且书源为空 =
+    # 两侧一致为空（如 Evans SDE 附录 C 纯证明单元），静默放行。
+    _any_real_tag = any(t.normalized or getattr(t, 'raw_tag', '')
+                        for tags_list in md_by_sec.values() for t in tags_list)
+    if _any_real_tag and \
+            all(len(src_sectioned.get(s, set())) == 0 for s in md_sections):
         rows.append({
             'number': '',
             'status': 'WARN',

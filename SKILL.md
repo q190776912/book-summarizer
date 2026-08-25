@@ -51,7 +51,7 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
 | 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair；文本出口后跑 **config 子流程**（先建章节映射 `chapter_map.json`，再生成 `verify_config.json`）→ **figure_detection 子流程**（图检测+分配）→ **structure 子流程**（合并产出 `book_structure.json` 结构契约书对象，全书批量生成） | 防停滞（extract 规则1）；chapter_map 在 config 子流程（MM 修复后）统一生成只一次（extract/config_setting 步骤 1）；公式调参；**MM Repair 门（extract/mm_repair 流程 规则1）**；🔴 **图检测前必须 config 先行**（extract 内部顺序）；🔴 structure 为 extract 末尾 Step 5（结构契约在写源前就绪）；写源前可跑校验层 `verify/script/check_structure_completeness.py` 做源侧查漏 + 混合回填 |
 | 2 | [`write-source`](flows/write-source/write-source.md) | 按骨架契约写源语言初稿 + 嵌图，末尾（步骤 3）批量校验至 PASS | 源语言优先（write-source 规则1）；拆章（write-source 规则3）；写源期间**禁逐章 verify（write-source 规则2）** |
-| 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS | 单向修复（derive-translate 规则1）；中英 1:1 同构 |
+| 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS（**仅英文书**：英文书→派生中文 `第N章_*.md`；**中文书无翻译阶段，本阶段整体跳过**） | 单向修复（derive-translate 规则1）；中英 1:1 同构 |
 
 > 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 内部门控见 [`extract`](flows/extract/extract.md) Step 4。
 
@@ -74,7 +74,7 @@ description: Summarizes a textbook (from local PDF or the agent's knowledge base
 
 ## 退出条件
 
-**源语言 + 翻译版章数 == `chapter_map` 总章数，且两版均 `verify PASS + KaTeX OK`**。唯一退出信号是"已写章数 == 总章数"，不得提前停。
+**英文书：源语言（英文）+ 翻译版（中文）章数 == `chapter_map` 总章数，且两版均 `verify PASS + KaTeX OK`；中文书无翻译阶段，源语言（中文）章数 == `chapter_map` 总章数即达成**。唯一退出信号是"已写章数 == 总章数"，不得提前停。
 
 ## 核心脚本速查（路径相对 skill 根目录）
 

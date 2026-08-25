@@ -147,6 +147,14 @@ def assign_chapter(det_all, ch, start, end, out_dir):
     """Assign labels to one chapter's detected figures; rename crops; return
     the list of assigned entries (label-filled) for this chapter."""
     fig_dir = os.path.join(out_dir, "figure")
+    def _ch_tag(c):
+        # 章号文件名标签：数字章补零两位，字母章（附录 A/B…）原样大写
+        try:
+            return f"{int(c):02d}"
+        except (TypeError, ValueError):
+            return str(c).upper()
+
+    _tag = _ch_tag(ch)
     os.makedirs(fig_dir, exist_ok=True)
     labels = load_fig_labels(out_dir)
     fig_components = load_fig_components(out_dir)
@@ -161,7 +169,7 @@ def assign_chapter(det_all, ch, start, end, out_dir):
     existing_idx = load_figure_index(out_dir)
     protected = {e["file"] for e in existing_idx
                  if e.get("chapter") == ch and e.get("source") == "manual"}
-    for f in glob.glob(os.path.join(fig_dir, f"ch{ch:02d}_*")):
+    for f in glob.glob(os.path.join(fig_dir, f"ch{_tag}_*")):
         rel = "figure/" + os.path.basename(f)
         if rel not in protected:
             try:
@@ -188,10 +196,10 @@ def assign_chapter(det_all, ch, start, end, out_dir):
                 used_refs.add(used_refs_add)
 
         if label:
-            base = f"ch{ch:02d}_fig{label}.png"
+            base = f"ch{_tag}_fig{label}.png"
         else:
             unnamed_k += 1
-            base = f"ch{ch:02d}_unnamed_{unnamed_k:02d}.png"
+            base = f"ch{_tag}_unnamed_{unnamed_k:02d}.png"
 
         src = os.path.join(fig_dir, os.path.basename(det["file"]))
         dst = os.path.join(fig_dir, base)
@@ -207,9 +215,9 @@ def assign_chapter(det_all, ch, start, end, out_dir):
                     continue
                 # duplicate label from two detections -> _2 suffix
                 k = 2
-                while os.path.exists(os.path.join(fig_dir, f"ch{ch:02d}_fig{label}_{k}.png")):
+                while os.path.exists(os.path.join(fig_dir, f"ch{_tag}_fig{label}_{k}.png")):
                     k += 1
-                base = f"ch{ch:02d}_fig{label}_{k}.png"
+                base = f"ch{_tag}_fig{label}_{k}.png"
                 dst = os.path.join(fig_dir, base)
             os.rename(src, dst)
 
@@ -302,7 +310,14 @@ def run_book(pdf_path, out_dir):
         except Exception:
             chap_map = {}
 
-    chapters = sorted({e["chapter"] for e in det})
+    def _ch_sort_key(ch):
+        # 数字章号按数值排前，字母章号（附录 A/B…）按字符串排末尾
+        try:
+            return (0, int(str(ch)), "")
+        except (TypeError, ValueError):
+            return (1, 0, str(ch))
+
+    chapters = sorted({e["chapter"] for e in det}, key=_ch_sort_key)
     total_assigned = 0
     for ch in chapters:
         if ch in chap_map:

@@ -221,7 +221,10 @@ def run_audit(ext, chapter=None):
     # 无法归属到具体章——只混入单章报告会让 total>0 而逐章循环零命中，
     # 调用方（verify_chapter 单章 verify）据此误判「已审」。故仅全书审计呈现。
     if chapter is not None:
-        chapter = int(chapter)
+        try:
+            chapter = int(chapter)
+        except (TypeError, ValueError):
+            chapter = str(chapter).strip()  # 字母章号（附录 A/B…）
         results = []
     else:
         results = list(unparsed)

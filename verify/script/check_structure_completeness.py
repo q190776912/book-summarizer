@@ -213,6 +213,33 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "has_label": True,
             })
         return out
+    if primary_type == ORDINAL_SINGLE and language == "en":
+        # （2026-08-25 规则5增量扩展）EN 单级编号书（ORDINAL_SINGLE +
+        # language=="en"，如 Evans《Partial Differential Equations》2ed：
+        # THEOREM 1..N 按节重排、LEMMA/EXAMPLE 独立计数）：通用数字扫描会把
+        # 三级小节标题（`2.2.1. Fundamental solution.`）误读为三段裸号伪项
+        # （"2.2-1"），与 CN 单级书同型。故直接委托 extract_items_en(single=True)
+        # （与 build_structure 同一抽取真源），不再走 _PATTERNS。
+        # 键与 build_structure 的 EN 分支同构：`_canon_label(label)+num`
+        # （"THEOREM 1" → "定理1"），保证契约/源侧两侧可比较。
+        from extract_items_en import extract_items_en
+        from verify_config import _canon_label as _canon_lab
+        out = []
+        for it in extract_items_en(ext, start, end, want_examples=True,
+                                   section_scoped=False, single=True):
+            m = re.search(r"(\d+)$", it["key"])
+            if not m:
+                continue
+            lab, _, num = it["key"].partition(" ")
+            out.append({
+                "key": f"{_canon_lab(lab)}{num}",
+                "label": it.get("label") or "uncat",
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "en_single", "canon": (int(m.group(1)),),
+                "has_label": True,
+            })
+        return out
     if primary_type == ORDINAL_CN3LAB:
         # （规则5增量扩展）CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 /
         # 定义2.3.4，每类标签独立计数、每节重置）。委托 extract_items_cn3lab
@@ -878,7 +905,12 @@ def main():
         print(__doc__)
         return 2
     ext = args[0]
-    want = [int(x) for x in args[1:]]
+    want = []
+    for x in args[1:]:
+        try:
+            want.append(int(x))
+        except ValueError:
+            want.append(x.strip())  # 字母章号（附录 A/B…）
     if report_dir is None:
         report_dir = os.path.join(ext, "completeness_reports")
 
@@ -904,7 +936,11 @@ def main():
             n = c.get("num", c.get("chapter", c.get("ch")))
             if n is None:
                 continue
-            rng[int(n)] = (c.get("start"), c.get("end"))
+            try:
+                key = int(n)
+            except (TypeError, ValueError):
+                key = str(n).strip()  # 字母章号（附录 A/B…）
+            rng[key] = (c.get("start"), c.get("end"))
     elif isinstance(cm, dict):
         for kk, cc in cm.items():
             s = cc.get("start", cc.get("start_page"))
@@ -913,7 +949,13 @@ def main():
                 continue
             rng[int(kk)] = (int(s), int(e))
 
-    for ch in (want or sorted(rng)):
+    def _rng_sort_key(k):
+        try:
+            return (0, int(str(k)), "")
+        except (TypeError, ValueError):
+            return (1, 0, str(k))
+
+    for ch in (want or sorted(rng, key=_rng_sort_key)):
         if ch not in rng:
             print(f"ch{ch} SKIP (not in chapter_map)")
             continue

@@ -372,6 +372,21 @@ class BookConfig:
     # that genuinely use chapter-local sections opt in; ``§C.S`` books are
     # completely unaffected.
     chapter_local_sections: bool = False
+    # BOOK-GLOBAL single-number section numbering (Arnold《数学方法》: sections
+    # print ``§12．变分法`` and the number runs GLOBALLY across the book,
+    # §1..§52 spanning all chapters — the leading number is NOT the chapter).
+    # Orthogonal to `chapter_local_sections` (which resets per chapter); both
+    # describe a depth-1 level BELOW the chapter level in `section_types`
+    # (e.g. [1, 1] / [1, 1, 5]).  When True:
+    #   * the D-layer general path drops its `c[0] == ch` prefix requirement
+    #     (a global §12 found on ch3's pages IS ch3's section) and instead
+    #     intersects detected tokens with the structure contract's section keys
+    #     for that chapter, so OCR noise / cross-chapter references can never
+    #     fabricate phantom tail sections ("Ch2 §2." FP class);
+    #   * bare-letter sub-block heads ("A. 变分", parent = position under the
+    #     nearest preceding §N) become verifiable as role-5 subsections.
+    # Default False — standard §C.S books are completely unaffected.
+    sections_global: bool = False
     ignore: List[str] = field(default_factory=list)
     manual: Optional[str] = None
     # --- nested section hierarchy (D-layer, orthogonal to grouping) ----------
@@ -606,6 +621,7 @@ class BookConfig:
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
+            sections_global=bool(data.get('sections_global', False)),
             ignore=ignore,
             manual=manual,
             section_types=st,

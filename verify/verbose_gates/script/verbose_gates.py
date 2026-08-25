@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 from pathlib import Path
 
@@ -224,31 +224,38 @@ def _iter_nodes(node):
 
 
 def _load_contract(ext_dir, ch):
-    """返回 (sections, item_keys)。
+    """返回 (sections, item_keys, letter_sub_pairs)。
 
     sections : list[(num, title)]，title 含印刷标题（用于习题节判定）。
     item_keys: set[str]，允许出现的编号项编号集合（仅 three-level 点分格式，
                与 md 侧 ITEM_LABEL_RE 对齐）。
+    letter_sub_pairs: list[(sec_key, letter, title)]，契约声明的裸字母子块
+               （section 节点 letter_subs 元数据；无则空表 → 字母子节闸不启用）。
 
     读取单文件书对象 book_structure.json（结构树）；
     旧书须先重跑 build_structure 生成该单文件。
     """
-    sections, item_keys = [], set()
+    sections, item_keys, letter_sub_pairs = [], set(), []
     bs = BookStructure.load(ext_dir)
     if bs is None:
-        return sections, item_keys
+        return sections, item_keys, letter_sub_pairs
     ch_node = bs.find_chapter(ch)
     if ch_node is None:
-        return sections, item_keys
+        return sections, item_keys, letter_sub_pairs
     for n in _iter_nodes(ch_node.to_dict()):
         t = n.get("type")
         if t == "section":
-            sections.append((str(n.get("key", "")), str(n.get("name", ""))))
+            key = str(n.get("key", ""))
+            sections.append((key, str(n.get("name", ""))))
+            for e in (n.get("letter_subs") or []):
+                if e.get("key"):
+                    letter_sub_pairs.append(
+                        (key, str(e["key"]), str(e.get("name", ""))))
         elif t not in ("section", "chapter", "exercise"):
             k = str(n.get("key", ""))
             if re.match(r"^\d+\.\d+\.\d+$", k):
                 item_keys.add(k)
-    return sections, item_keys
+    return sections, item_keys, letter_sub_pairs
 
 
 def _norm_secnum(s):
@@ -258,17 +265,84 @@ def _norm_secnum(s):
     return re.sub(r'[.\-\u2013\u00b7\uff0e]+', '.', (s or '').strip())
 
 
-def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
-    sections, _ = _load_contract(ext_dir, ch)
-    if not sections:
+# md 侧 token（全局节号书 / 字母子节）：
+#   `## §12`      -> 数字节（首分量即节 id，全书全局编号）
+#   `## §A`       -> 字母节（附录章）
+#   `### §12.A`   -> 投影式字母子节（历史写法，显式父节优先）
+#   `### §A`      -> 纯字母子节（Karlin 体例，父节靠位置）
+_GLOBAL_SEC_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7]\d+)*)')
+_LETTER_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(?:(\d{1,2})[.\u00b7]\s*)?([A-Z])(?![A-Za-z])')
+
+
+def _md_global_section_ids(md_lines):
+    """md 已写的节 id 集合：数字节取完整序标串（'12'），字母节取字母（'A'）。"""
+    ids = set()
+    for ln in md_lines:
+        m = _GLOBAL_SEC_TOKEN_RE.match(ln.strip())
+        if m:
+            ids.add(m.group(1).replace('\u00b7', '.'))
+            continue
+        m = re.match(r'^#{2,6}\s*§\s*([A-Z])(?![A-Za-z])', ln.strip())
+        if m:
+            ids.add(m.group(1))
+    return ids
+
+
+def _md_letter_sub_pairs(md_lines):
+    """md 已写的字母子节 (parent_sec_str, 'A') 对；显式 N（`### §12.A`）优先，
+    否则挂在最近一个数字节下（`### §A` 位置定父）。"""
+    out = set()
+    cur = None
+    for ln in md_lines:
+        s = ln.strip()
+        m = re.match(r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7]\d+)*)', s)
+        if m:
+            cur = m.group(1).split('.')[0]
+            continue
+        m = _LETTER_TOKEN_RE.match(s)
+        if m:
+            parent = m.group(1) or cur
+            if parent is not None:
+                out.add((str(parent), m.group(2)))
+    return out
+
+
+def check_missing_sections(md_lines, ext_dir, ch, cfg=None):
+    sections, item_keys, letter_sub_pairs = _load_contract(ext_dir, ch)
+    if not sections and not letter_sub_pairs:
         return []
     # 习题专属节按规则可省略，不计入「骨架必写节」契约
     required = [(s, title) for (s, title) in sections
                 if not EXER_SEC_TITLE_RE.search(title)]
-    if not required:
-        return []
+    unnumbered = bool(cfg.sections_unnumbered) if cfg is not None else False
 
-    if unnumbered:
+    out = []
+    md_sec_ids = _md_global_section_ids(md_lines)
+    if required and not unnumbered:
+        # 标准书（带序标）：md `## §N` 的数字必须与契约编号逐一对齐。
+        # 原 present/present_first 集合逻辑原样保留（§C.S 标准书 +
+        # Fraleigh 型全局末级分量回退，零回归）；再并上 `_md_global_section_ids`
+        # —— 全局单序标书（Arnold：契约 '12' ↔ md `## §12`）与附录字母节
+        # （契约 'A' ↔ md `## §A`）由此命中。
+        present = set()
+        present_first = set()
+        for ln in md_lines:
+            m = SEC_HEADING_RE.match(ln)
+            if m:
+                num = _norm_secnum(m.group(1))
+                present.add(num)
+                # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
+                # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
+                # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
+                # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
+                present_first.add(num.split('.')[0])
+        present |= md_sec_ids
+        for s, title in required:
+            ns = _norm_secnum(s)
+            ok = (ns in present) or (ns.split('.')[-1] in present_first)
+            if not ok:
+                out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
+    elif required and unnumbered:
         # 无编号小节（section_types 含 role 0）：原书小节无数字序标（如 Silverman）。
         # 🔴 改用「数量」比对，不再按标题匹配：双语书（EN+CN）的 `## §` 标题是
         # 「互译」而非子串关系（EN "Solving ax+by=gcd(a,b) by the Euclidean
@@ -284,27 +358,14 @@ def check_missing_sections(md_lines, ext_dir, ch, unnumbered=False):
             out = [f"  x Ch{ch}: 结构契约要求 {contract_count} 个 `## §` 小节，"
                    f"但 md 仅 {md_count} 个（可能漏写/合并小节）"]
             return out
-        return []
 
-    # 标准书（带序标）：md `## §N` 的数字必须与契约编号逐一对齐
-    present = set()
-    present_first = set()
-    for ln in md_lines:
-        m = SEC_HEADING_RE.match(ln)
-        if m:
-            num = _norm_secnum(m.group(1))
-            present.add(num)
-            # 首级分量（如 "26.1" -> "26"），用于兼容「全书全局编号」书
-            # （Fraleigh 等：契约存 "6.26"，md 用 `## §26.1` —— 全局节号 26
-            # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
-            # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
-            present_first.add(num.split('.')[0])
-    out = []
-    for s, title in required:
-        ns = _norm_secnum(s)
-        ok = (ns in present) or (ns.split('.')[-1] in present_first)
-        if not ok:
-            out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
+    # 字母子节（role 5）：契约 letter_subs 声明的每个 (§N, A) 必须在 md 有对应标题
+    if letter_sub_pairs:
+        have = _md_letter_sub_pairs(md_lines)
+        for sec_key, L, _t in sorted(letter_sub_pairs):
+            if (str(sec_key), L) not in have:
+                out.append(f"  x Ch{ch} §{sec_key}.{L}: 结构契约要求此字母子节，"
+                           f"但 md 无对应 `## §{sec_key}.{L}` / `### §{L}` 标题")
     return out
 
 
@@ -451,7 +512,7 @@ def check_verbose_proofs(lines):
 
 def check_extra_items(md_lines, ext_dir, ch):
     """编造条目：md 出现、但结构契约编号项清单中没有的编号条目（无中生有结构）。"""
-    _, item_keys = _load_contract(ext_dir, ch)
+    _, item_keys, _ = _load_contract(ext_dir, ch)
     if not item_keys:
         return []
     out = []
@@ -484,7 +545,7 @@ class PLayer(VerifyLayer):
         noise = check_noise(lines)
         bare = check_bare_items(lines, ctx.config.primary_type)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch,
-                                         ctx.config.sections_unnumbered)
+                                         cfg=ctx.config)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
         verbose = check_verbose_paragraphs(lines)
         verbose_proof = check_verbose_proofs(lines)

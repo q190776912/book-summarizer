@@ -206,7 +206,16 @@ def merge_index(out_dir, ch, assigned):
     kept = [e for e in existing
             if not (e.get("chapter") == ch and e.get("source") != "manual")]
     merged = kept + assigned
-    merged.sort(key=lambda e: (e.get("chapter", 0), e.get("page", 0), e.get("fig_idx", 0)))
+
+    def _ch_sort_key(c):
+        # 数字章号按数值排前，字母章号（附录 A/B…）按字符串排末尾
+        try:
+            return (0, int(str(c)), 0)
+        except (TypeError, ValueError):
+            return (1, 0, str(c))
+
+    merged.sort(key=lambda e: (_ch_sort_key(e.get("chapter", 0)), e.get("page", 0),
+                               e.get("fig_idx", 0)))
     FigureIndex.from_records(merged).dump(idx_path)
     return merged
 

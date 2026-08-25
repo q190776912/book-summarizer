@@ -241,7 +241,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
 # (**定义1.1**：, **定理1.1**：). The three-level N.S-N regex is deliberately
 # NOT used here (it manufactures false-positive phantom keys for this scheme).
 # ---------------------------------------------------------------------------
-def extract_items_two_level(extract_dir, chapter, start_page, end_page):
+def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_first=True):
     all_blocks = []
     for p in range(start_page, end_page + 1):
         fpath = os.path.join(extract_dir, f"page_{p:03d}.json")
@@ -257,17 +257,38 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page):
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 
-    lab_re = re.compile(r'(定义|定理|引理|推论|命题)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
+    # 两级 N.M：chapter_first=True 时首数为章号（跨章前向引用过滤）；
+    # chapter_first=False（节基书，如数学物理方程）时首数为节号，不做章过滤。
+    lab_re = re.compile(r'(定义|定理|引理|推论|命题|注)\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
     raw = []
     for p, y, txt in all_blocks:
         for m in lab_re.finditer(txt):
             c = int(m.group(2)); num = int(m.group(3))
-            if c != chapter:
+            if chapter_first and c != chapter:
+                continue
+            if c > 15 or num > 50:
                 continue
             label = m.group(1)
             key = f"{label}{c}.{num}"
             text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
             raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
+
+    # 单级条目（推论/例/性质/习题）：块首「标签+数字」，数字后非数字/小数点
+    # （排除 "定理2.1" 这类两级号），并拒绝助词紧随的引用形态（"例2和例3"）。
+    single_re = re.compile(
+        r'^(定义|定理|引理|推论|命题|例|性质|注|习题)\s*(\d+)(?![\d.．·])'
+        r'(?![的之中即与和或及时前后都均也是])')
+    for p, y, txt in all_blocks:
+        m = single_re.match(txt)
+        if not m:
+            continue
+        label = m.group(1)
+        n = int(m.group(2))
+        if n <= 0 or n > 50:
+            continue
+        key = f"{label}{n}"
+        text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
+        raw.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
 
     seen = {}
     for it in raw:
@@ -287,7 +308,9 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
         cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_THREE_LEVEL)])
     primary = cfg.primary_type
     if primary == ORDINAL_TWO_LEVEL:
-        items, warnings, blocking = extract_items_two_level(extract_dir, chapter, start_page, end_page)
+        items, warnings, blocking = extract_items_two_level(
+            extract_dir, chapter, start_page, end_page,
+            chapter_first=getattr(cfg, 'chapter_first', True))
         if manual_overrides:
             existing = {it['key']: idx for idx, it in enumerate(items)}
             for mo in manual_overrides:

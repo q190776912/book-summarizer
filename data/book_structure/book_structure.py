@@ -34,12 +34,13 @@ class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
-                 "consolidated")
+                 "consolidated", "letter_subs")
 
     def __init__(self, key: Any = ROOT_KEY, type: Any = ROOT_TYPE, name: str = "",
-                 page_start: int = 0, page_end: int = 0,
-                 sub_sec: Optional[List["StructureNode"]] = None,
-                 consolidated: bool = False):
+                  page_start: int = 0, page_end: int = 0,
+                  sub_sec: Optional[List["StructureNode"]] = None,
+                  consolidated: bool = False,
+                  letter_subs: Optional[List[Dict[str, Any]]] = None):
         self.key = key
         self.type = type
         self.name = name
@@ -51,10 +52,16 @@ class StructureNode:
         # NOT be verified.  Preserved (interleaved) exercises stay False and
         # ARE verified when the caller opts in via include_exercise=True.
         self.consolidated = consolidated
+        # 裸字母子块头（Arnold《数学方法》体例：节内印 "A. 变分"，父节靠位置
+        # 确定）。仅 section 节点携带；元素形如 {"key": "A", "name": "A 变分",
+        # "page_start": 59}，按书中出现顺序排列。None/[] 表示本书节无字母子块
+        # （to_dict 仅在非空时写出 → 其他书 JSON 零变化）。字母子块的**条目**
+        # 仍平铺挂在 section.sub_sec 下（不引入第三层容器，_place 归并逻辑不动）。
+        self.letter_subs: Optional[List[Dict[str, Any]]] = letter_subs or None
 
     # ---- 序列化 ----------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "key": self.key,
             "type": self.type,
             "name": self.name,
@@ -63,6 +70,9 @@ class StructureNode:
             "consolidated": self.consolidated,
             "sub_sec": [c.to_dict() for c in self.sub_sec],
         }
+        if self.letter_subs:
+            d["letter_subs"] = [dict(x) for x in self.letter_subs]
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "StructureNode":
@@ -76,6 +86,7 @@ class StructureNode:
             page_end=d.get("page_end", 0),
             sub_sec=[cls.from_dict(x) for x in d.get("sub_sec", []) or []],
             consolidated=bool(d.get("consolidated", False)),
+            letter_subs=list(d.get("letter_subs") or []) or None,
         )
 
     # ---- 类型判定 --------------------------------------------------------

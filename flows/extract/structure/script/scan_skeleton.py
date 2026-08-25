@@ -126,13 +126,51 @@ from lib.regexlib import SEC_CN, SECBARE_CN, SECGLUE_CN
 # No label-word guard: Arnold's real titles legitimately contain 定理/例
 # ("§20．E.诺特定理").  Titleless running heads ("§4.") are rejected (no title).
 SEC_GLOBAL = re.compile(
-    r'^[§$S8](\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+    r'^[§$S8Ss6](\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
 # § mis-read as 9 and GLUED to the number ("99.三维空间…" = §9, "948.生成函数"
 # = §48; the only two instances in this book, found by full-book scan).  The
 # plain [§$S8] class cannot cover these (prefix '9' is itself a digit), so a
 # second alternative with the same title/separator guards.
 SEC_GLOBAL_9 = re.compile(
     r'^9(\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+# Bare-LETTER sub-block heads (Arnold《数学方法》: inside a §N the book prints
+# "A.变分" / "D. 相流" — ONE capital letter + separator + SHORT Han title,
+# parent section determined by POSITION).  Context decides the tier: under a
+# numeric global §N it is a subsection (SUB row "<N>.<L>"); in an APPENDIX
+# chapter (no numeric § heads) the same print IS the chapter's section
+# ("<appendix letter>" promoted to SEC at assembly).  Guards kill the observed
+# FP classes (full-book probe, 1059 loose candidates):
+#   * title must contain ≥1 Han char      -> kills pure-formula lines
+#     ("U=-#," / "E=" / "J Mo" / "F(Gx,G)=GF(c,).");
+#   * no math-operator chars in title     -> kills "G：R→R…”是…", "M(t)=g*M.",
+#     "RN）和初速度（c(to）∈R）…", "Mn,n=[e1,e2]…";
+#   * title must NOT start lowercase latin -> kills glued-word fragments
+#     ("Jxo", "Jan", "An中两点的距离：");
+#   * nonempty title                      -> kills titleless running heads ("§4.").
+# EN letter-headed books (Karlin) are NOT served here — they have their own
+# D_LETTER_SEC_LOCAL / extract_items_kt machinery with uppercase-title guards.
+SUB_GLOBAL = re.compile(r'^([A-Z])[．.、。:]?\s*([^\n]{0,60})$')
+_SUB_MATH_OP_RE = re.compile(r'[=<>≤≥≠±×÷→←↔⇒∫∑√∂∇∈∋⊂⊃⊆⊇∪∩∞|‖\[\]{}]')
+# 真子块头块宽实测 101–650px（长标题如附录 G 的多行头可达 ~700）；通栏散文
+# /公式行 540–1036px 与之重叠，故宽度只做粗闸（≤720px 挡掉纯公式行），精确
+# 判别靠：标题必须以汉字起始（真头全部汉字开头；杂讯如 "SDiffD上的右不变黎
+# 曼度量"/"R上的每一个k-形式…"以大写拉丁开头）+ 禁句读标点（真标题无 ，。；
+# ？！、）+ 装配期字母序列过滤兜底。
+SUB_GLOBAL_MAX_WIDTH = 720
+
+
+def _sub_global_title_ok(title):
+    """Validate a SUB_GLOBAL candidate title (see the block comment above)."""
+    t = (title or '').strip()
+    if not t:
+        return False
+    if not re.match(r'[一-鿿]', t):
+        return False
+    if _SUB_MATH_OP_RE.search(t):
+        return False
+    if re.search(r'[，。；？！、]', t):
+        return False
+    return True
 ITEM_CN = re.compile(
     r'^(?:定理|定义|引理|推论|命题|性质|例|注|表|图)\s*[（(]?(\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)]?(?!\d)\s*(.{0,90})')
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
@@ -304,6 +342,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # depth 1.  Standard books ([1, 2]...) have no such level -> branch off.
     global_sec = bool(section_depths) and any(
         isinstance(d, int) and d == 1 for d in section_depths[1:])
+    # Current global §N while scanning (for SUB letter-head parentship).
+    cur_global_sec = None
     # 🔴 Only enable the universal (depth-agnostic) detector when there is at
     # least one depth>=2 section to find.  A book whose sections are single
     # numbers (`## §N`, e.g. do Carmo) has `depths_set == set()` (empty) — the
@@ -318,10 +358,16 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             continue
         with open(fp, encoding='utf-8') as fh:
             d = PageJson.load(os.path.join(extract_dir, 'page_%03d.json' % p)).data
-        for ln in lines_of(d):
-            ln = ln.rstrip('$').strip()
-            if not ln:
-                continue
+        for it in d.get('text', []):
+            poly = it.get('poly') or []
+            try:
+                ln_w = (float(poly[2]) - float(poly[0])) if len(poly) >= 3 else None
+            except Exception:
+                ln_w = None
+            for _raw in (it.get('text') or '').split('\n'):
+                ln = _raw.rstrip('$').strip()
+                if not ln:
+                    continue
             # Exercise-region detection (case-insensitive, space-optional so it
             # survives OCR like `EXERCISESFORCHAPTER3`).  Once seen, the chapter
             # is in its exercise block through to the next genuine section
@@ -360,6 +406,19 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if m:
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip()))
                     in_exercise = False
+                    cur_global_sec = int(m.group(1))
+                    continue
+                # Bare-letter sub-block head ("A.变分"): parented under the
+                # current global §N when one is active ("<N>.<L>"), parentless
+                # (".<L>") otherwise — appendix chapters have no numeric §
+                # heads, so their letter sections scan as parentless and are
+                # promoted to SEC rows by build_structure at assembly time.
+                m = SUB_GLOBAL.match(ln)
+                if (m and _sub_global_title_ok(m.group(2))
+                        and (ln_w is None or ln_w <= SUB_GLOBAL_MAX_WIDTH)):
+                    parent = f"{cur_global_sec}." if cur_global_sec else "."
+                    rows.append((p, 'SUB', parent + m.group(1),
+                                 m.group(2).strip()))
                     continue
             if mode == 'two-level':
                 m = SEC_2.match(ln)

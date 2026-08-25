@@ -484,14 +484,30 @@ def _md_gap_blocking(ctx):
     # groups are untouched (zero regression).  The anchor id is the first token
     # after § (numbered "2-2" / appendix-style "2-A" / descriptive word for
     # unnumbered sections) so every distinct `## §` heading resets the window.
+    # 🔴 锚点层级感知（Arnold《数学方法》体例回归）：裸字母子块标题 `### §A`
+    # 的首 token 是 "A"，若直接作锚点，则不同节下的同名块 A/B/C 全部并窗
+    # （§24.B 的定理3、4 与 §25.B 的定理1 混成 seq=[3,4,1] 假错序）。故对
+    # `##`（数字节）与 `###`+（字母子块）分层维护锚点路径：子块锚 =
+    # "<最近节数字>.<字母>"，节锚 = 自身 token。纯 `## § <标题>` 无 token 时
+    # 维持旧行为（不注册新窗口）。
     _sec_pos = []   # sorted heading start offsets
     _sec_str = []   # parallel section ids
-    for _m in re.finditer(r'^#{2,4}[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
-        _tok = (_m.group(1) or '').strip().split()
-        if not _tok:
+    _cur_num = None  # 最近一个两级（数字）节的 token，供字母子块拼路径
+    for _m in re.finditer(r'^(#{2,4})[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
+        _toks = (_m.group(2) or '').strip().split()
+        if not _toks:
             continue
+        _tok = _toks[0].strip(':.，,；;')[:24]
+        if len(_m.group(1)) == 2 or not re.match(r'^[A-Z]$', _tok):
+            # 两级节（或任何非单大写字母 token 的标题）：锚 = 自身 token
+            _anchor = _tok
+            if re.match(r'^\d', _tok):
+                _cur_num = _tok
+        else:
+            # 单大写字母子块：锚 = 父节数字 + 字母（父未知时退化为裸字母）
+            _anchor = f"{_cur_num}.{_tok}" if _cur_num else _tok
         _sec_pos.append(_m.start())
-        _sec_str.append(_tok[0].strip(':.，,；;')[:24])
+        _sec_str.append(_anchor)
 
     def _cur_sec(pos):
         import bisect as _bisect

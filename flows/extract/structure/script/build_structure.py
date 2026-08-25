@@ -523,7 +523,12 @@ def _build_rng(cm):
         chs = cm
     out = {}
     for cc in chs:
-        n = _aint(cc.get("num", cc.get("ch", cc.get("chapter", cc.get("n")))))
+        raw_n = cc.get("num", cc.get("ch", cc.get("chapter", cc.get("n"))))
+        n = _aint(raw_n)
+        if n is None and raw_n is not None:
+            # 字母章号（附录 A/B…）保留为字符串键，与 _chapter_sort_key 兼容
+            sn = str(raw_n).strip()
+            n = sn or None
         s = cc.get("start", cc.get("start_page"))
         e = cc.get("end", cc.get("end_page"))
         if n is None or s is None or e is None:
@@ -577,6 +582,25 @@ def _exercise_region_start(ext, ch, start, end):
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
 # 生成 book_structure.json 后，verify 与 write-source 均消费该 JSON，不再重跑抽取器。
 # ---------------------------------------------------------------------------
+def _single_en_items(ext, start, end, book):
+    """EN 单级编号书（ORDINAL_SINGLE + language=="en"，如 Evans PDE 2ed /
+    Silverman《Friendly Introduction to Number Theory》：`Theorem 1` 单一数字）。
+
+    键与 EN 两级分支同构：`_canon_label(label)+num`（"THEOREM 1" → "定理1"），
+    使契约键标签词大小写稳定（OCR 原样大写会让 B 层 `_ENTRY_LABELS`
+    大小写敏感解析失败）。单号无章/节位，不做跨章前向引用过滤。
+    """
+    items = extract_items_en(ext, start, end, want_examples=True,
+                             section_scoped=book.section_scoped, single=True)
+    kept = []
+    for it in items:
+        lab, _, num = it["key"].partition(" ")
+        it = dict(it)
+        it["key"] = f"{_canon_label(lab)}{num}"
+        kept.append(it)
+    return kept
+
+
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
     if primary == ORDINAL_SINGLE:
@@ -587,16 +611,7 @@ def _extract_items(ext, ch, start, end, book, manual=None):
         if getattr(book, "language", "cn") == "cn":
             return extract_items_cn_single(ext, start, end, groups=book.ordinal,
                                            manual_overrides=manual)
-        # Single-level EN book (e.g. Silverman's "A Friendly Introduction to
-        # Number Theory" 4th ed — ordinal type 1): items are ONE numeric
-        # component ("Theorem 1", "Lemma 1"), no section/item split. Without an
-        # explicit branch this ordinal fell through to the Chinese three/two-level
-        # `extract_items` path, producing garbled keys like "定理1". Route to the
-        # EN extractor in single mode so it never fabricates a false second
-        # component ("Assertion 1.7"). No chapter-scoped filter is needed
-        # (single number has no chapter component).
-        return extract_items_en(ext, start, end, want_examples=True,
-                                section_scoped=book.section_scoped, single=True)
+        return _single_en_items(ext, start, end, book)
     if primary == ORDINAL_CN3LAB:
         # CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 / 定义2.3.4，每类标签
         # 独立计数、每节重置）：键内嵌规范中文标签（`定理1.1.1`，与 type 9 的
@@ -685,6 +700,85 @@ def _extract_items(ext, ch, start, end, book, manual=None):
 # ---------------------------------------------------------------------------
 # 单章结构构建
 # ---------------------------------------------------------------------------
+def _find_numbered_heading_page(ext, num, lo, hi):
+    """在页码 (lo, hi] 内找首个「以节号 num 开头的标题行」所在页。
+
+    用于章首目录页免疫的回扫：章扉页目录把节号的 SEC 首现页污染成章首页时，
+    从章首页之后回扫正文节头（如 `2.1. TRANSPORT EQUATION` / `2.1 Transport
+    equation`）。找不到返回 None（调用方退回原首现页，不比旧行为差）。
+    """
+    pat = re.compile(r'^%s(?:[\.．:：]|[\s\u00a0]+\S)' % re.escape(str(num)))
+    for p in range(int(lo) + 1, int(hi) + 1):
+        fp = os.path.join(ext, 'page_%03d.json' % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = scan_skeleton.PageJson.load(fp).data
+        except Exception:
+            continue
+        for ln in scan_skeleton.lines_of(d):
+            ln = ln.rstrip('$').strip()
+            if not ln or len(ln) > 70 or '(' in ln or ')' in ln or ln.endswith((',', ';')):
+                continue
+            m = pat.match(ln)
+            if m:
+                rest = ln[m.end():]
+                if len(re.findall(r'[A-Za-z\u00c0-\u017f\u4e00-\u9fff]', rest)) >= 3:
+                    return p
+    return None
+
+
+def _seq_filter_letter_blocks(cands):
+    """裸字母子块候选的**序列过滤**（Arnold 体例专用）。
+
+    真子块头在每节内按 A,B,C,… 连续出现；残余误报（数学变量起头的散文行如
+    "B 之体积成正比"、"V.CU与V'…"）散落在页间、不守字母序。对候选做
+    「去重(保留首现页) → 页序上从锚点字母起的最长严格递增子序列」即可保真：
+    散点杂讯必被弃，真链即使中间漏检也保持连续。锚点取 'A'（本书体例每节/
+    附录都从 A 起）；无 'A' 时退化为最小字母锚定。O(n²) DP，n≤30。
+    """
+    if not cands:
+        return []
+    seen = {}
+    for pg, L, t in cands:
+        if L not in seen:
+            seen[L] = (pg, t)
+    items = sorted(seen.items(), key=lambda kv: (kv[1][0], kv[0]))
+    letters = [k for k, _ in items]
+    n = len(items)
+    if n == 1:
+        keep = {letters[0]}
+    else:
+        idx = [ord(k) - 64 for k in letters]
+        dp = [1] * n
+        prev = [-1] * n
+        best, best_i = 1, 0
+        for i in range(n):
+            for j in range(i):
+                if idx[j] < idx[i] and dp[j] + 1 > dp[i]:
+                    dp[i] = dp[j] + 1
+                    prev[i] = j
+            if dp[i] > best:
+                best, best_i = dp[i], i
+        chain = []
+        i = best_i
+        while i != -1:
+            chain.append(letters[i])
+            i = prev[i]
+        chain.reverse()
+        # 尾修剪：链尾若与前一元素字母距 >3（如真节止于 E 而杂讯 P 续尾），
+        # 逐个丢弃——真实漏检造成的缺号在链中段不受影响。
+        while len(chain) >= 2 and (ord(chain[-1]) - ord(chain[-2])) > 3:
+            chain.pop()
+        keep = set(chain)
+        anchor = 'A' if 'A' in keep else min(keep)
+        # 锚点必须入选：从锚点重走一遍链（若锚点不在最优链里则整表存疑，
+        # 保守起见仅保留锚点到链尾的稳定段）
+        if chain[0] != anchor:
+            keep = set(chain[chain.index(anchor):]) if anchor in chain else keep
+    return [(seen[k][0], k, seen[k][1]) for k in letters if k in keep]
+
+
 def build_chapter(ext, ch, start, end, book, cm, manual=None):
     ordinal = book.primary_type
     language = book.language
@@ -696,6 +790,43 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                               section_depths=section_depths,
                               chapter_first=book.chapter_first)
     ex_rows = [r for r in rows if r[1] == "EXER"]
+
+    # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。
+    # 语境定级：附录章（无数字 § 节头）里字母头**就是节** → 升格为 SEC 行，
+    # 键取最后一个点分分量（防 OCR 把别章 "§22．…" 误当父节的粘连）；正文章里
+    # 字母头是 §N 内的子块 → 按父节聚合，稍后挂到 section 节点的 letter_subs
+    # 元数据上（条目仍平铺 sub_sec，不引入第三层容器）。其余书无 SUB 行，零回归。
+    _ch_name = _chapter_title(cm, ch)
+    _is_appendix = ('Appendix' in _ch_name) or ('附录' in _ch_name)
+    letter_sub_blocks = {}   # parent(str) -> [(page, letter, title)]
+    _appendix_letter_secs = []   # [(p, 'SEC', L, title)] 附录字母节升格行
+    if any(r[1] == "SUB" for r in rows):
+        sub_rows = [r for r in rows if r[1] == "SUB"]
+        rows = [r for r in rows if r[1] != "SUB"]
+        for p, _kind, num, title in sub_rows:
+            parts = num.split('.')
+            L = parts[-1]
+            if not (len(L) == 1 and L.isalpha() and L.isupper()):
+                continue  # 防御：SUB 键必为单个大写字母（挡 OCR 数字碎片）
+            if _is_appendix:
+                _appendix_letter_secs.append((p, L, title))
+            else:
+                letter_sub_blocks.setdefault(parts[0], []).append((p, L, title))
+        # 序列过滤：正文按父节、附录按章，剔除不守字母序的散文/公式误报行
+        for parent in list(letter_sub_blocks):
+            kept = _seq_filter_letter_blocks(letter_sub_blocks[parent])
+            if kept:
+                letter_sub_blocks[parent] = [
+                    (pg, L, t) for (pg, L, t) in kept]
+                # 转成 {L: (page,title)} 供 4b 挂载
+                letter_sub_blocks[parent] = {
+                    L: (pg, t) for pg, L, t in kept}
+            else:
+                del letter_sub_blocks[parent]
+        if _is_appendix:
+            kept = _seq_filter_letter_blocks(_appendix_letter_secs)
+            _appendix_letter_secs = [(pg, 'SEC', L, t) for pg, L, t in kept]
+
     if getattr(book, 'chapter_local_sections', False):
         # Chapter-local sections (Karlin-style "§1" that RESET per chapter) are
         # authoritative from the md `## §N` transcription — the source "N. Title"
@@ -707,6 +838,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         sec_rows = [("md", "SEC", n, title) for (n, title) in md_secs]
     else:
         sec_rows = [r for r in rows if r[1] == "SEC"]
+        if _is_appendix:
+            # 附录章的节只可能是字母头（升格 SUB 行）；数字 "§N" 行是公式/
+            # 页眉碎片（OCR "$5．…"），不得混入契约。
+            sec_rows = [r for r in sec_rows
+                        if not str(r[2]).isdigit()]
+    # 附录字母节升格行并入 SEC 去重管线（键=字母，与既有节同型参与后续流程）
+    if _appendix_letter_secs:
+        sec_rows = list(sec_rows) + _appendix_letter_secs
 
     # 2) skeleton SEC 去重（优先非空标题，保留最佳标题）
     sec_best = {}
@@ -794,19 +933,39 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     sec_pages = {}   # num -> 最佳候选页（skeleton）
     sec_titles = {}  # num -> 标题
     sec_pos = {}     # num -> (page, y)；仅 sections_unnumbered 路径填充（y 感知归并）
+    # 章首目录页免疫（2026-08-25 Evans 实测）：章扉页常印「本章小节目录」，SEC
+    # 扫描把每个节号都「首现」在章首页 → 各节 sec_pages 全等于章首页，条目按页
+    # 就近归节时全部错挂到最后一个真实节。判据：同一页上「首现」≥_OPENER_K 个
+    # 不同节号 → 该页是章首目录页，其上的 SEC 命中不计入 sec_pages（取其后首个
+    # 正文命中；若某节只有目录命中则退回原值——与旧行为一致，不比旧差）。
+    _OPENER_K = 3
+    _first_hit = {}
+    for p, kind, num, title in dedup_sec:
+        _first_hit.setdefault(num, p)
+    _page_first_cnt = {}
+    for _num, _p in _first_hit.items():
+        _page_first_cnt[_p] = _page_first_cnt.get(_p, 0) + 1
+    _opener_pages = {p for p, c in _page_first_cnt.items() if c >= _OPENER_K}
     if not getattr(book, "sections_unnumbered", False):
         # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
         # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
         # 「agent 校验识别」产物 _recognized_sections.json 的权威小节清单注入。
         for p, kind, num, title in dedup_sec:
-            if num not in sec_pages:
-                if getattr(book, 'chapter_local_sections', False):
-                    # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
-                    # 首现页作为真实页码，供条目按页就近归节。
-                    pg = _find_chapter_local_section_page(ext, ch, int(num), start, end)
-                else:
-                    pg = p
-                sec_pages[num] = pg
+            _poisoned = p in _opener_pages
+            if num in sec_pages:
+                if title and not sec_titles.get(num):
+                    sec_titles[num] = title
+                continue
+            if _poisoned:
+                # 章首目录命中：回扫章首页之后的正文节头；扫不到退回原值。
+                pg = _find_numbered_heading_page(ext, num, p, end) or p
+            elif getattr(book, 'chapter_local_sections', False):
+                # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
+                # 首现页作为真实页码，供条目按页就近归节。
+                pg = _find_chapter_local_section_page(ext, ch, int(num), start, end)
+            else:
+                pg = p
+            sec_pages[num] = pg
             if title and not sec_titles.get(num):
                 sec_titles[num] = title
 
@@ -883,6 +1042,23 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node = _node(n, "section", name, page)
         node["sub_sec"] = []
         sec_nodes[n] = node
+
+    # 4b) 字母子块挂到节节点（letter_subs 元数据；仅正文章的 SUB 聚合结果）。
+    # 父节不存在（幽灵）则丢弃；按 (page, letter) 排序保持书中出现顺序。
+    if letter_sub_blocks:
+        for parent, subs in letter_sub_blocks.items():
+            snode = sec_nodes.get(parent)
+            if snode is None:
+                continue
+            entries = []
+            for L, (pg, t) in subs.items():
+                entries.append((pg, L, {
+                    "key": L,
+                    "name": (f"{L} {t}".strip() if t else L),
+                    "page_start": pg,
+                }))
+            entries.sort(key=lambda x: (x[0], x[1]))
+            snode["letter_subs"] = [e[2] for e in entries]
 
     # 5) 条目/练习挂到章节
     chapter_bucket = []  # 无章节可挂时归章级（置于最前）
@@ -1011,7 +1187,7 @@ def main():
     if not bs.root.name and book_name:
         bs.root.name = book_name
 
-    for ch in (want or sorted(rng)):
+    for ch in (want or sorted(rng, key=_chapter_sort_key)):
         if ch not in rng:
             print("ch%-3d SKIP (not in chapter_map)" % ch)
             continue
@@ -1025,7 +1201,7 @@ def main():
         n_ex = sum(1 for _ in _iter_items(chapter) if _["type"] == "exercise")
         n_sec = sum(1 for _ in _iter_items(chapter) if _["type"] == "section")
         verb = "UPDATE" if replaced else "ADD"
-        print("ch%-3d %s | sections=%d items=%d exercises=%d"
+        print("ch%-3s %s | sections=%d items=%d exercises=%d"
               % (ch, verb, n_sec, n_item, n_ex))
 
     # 按章顺序稳定排序（chapter_map 顺序），避免增量写入导致乱序；再写回单个

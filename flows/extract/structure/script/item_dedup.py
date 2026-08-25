@@ -137,6 +137,14 @@ def dedup_items(raw_matches):
             # heading text → DISTINCT item (e.g. a source book printing the same
             # number twice).  Keep it.
             grp.append(it)
+        elif g and genuines and abs((it['page'] or 0) - (genuines[0]['page'] or 0)) >= 3:
+            # 🔴 同号同名但相距 ≥3 页（2026-08-25 Evans 实测）：scope-3 节级重置书
+            # 的「平行条目」——不同节复用同号甚至同名（Evans §7.1/§7.2 平行结构各有
+            # THEOREM 5 (Improved regularity) / THEOREM 6 (Higher regularity)），
+            # 是真实重起而非同一条的重复提及，必须保留。旧逻辑按同名合并把 §7.2 的
+            # THEOREM 5/6/7 整批吞掉。真引用提及（block-start 幸存者）几乎不带括号
+            # 名，同名概率趋零；近页（<3 页）同名仍按重复双读合并。
+            grp.append(it)
         elif g and not genuines:
             # upgrade the earliest non-genuine mention to this genuine definition
             for idx, x in enumerate(grp):

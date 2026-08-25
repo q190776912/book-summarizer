@@ -314,6 +314,223 @@ def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
     return _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)
 
 
+# ---------------------------------------------------------------------------
+# Book-GLOBAL single-number sections (Arnold《数学方法》§1..§52) + role-5
+# letter subsections / appendix letter-sections.
+# ---------------------------------------------------------------------------
+
+# md letter-subsection heading: `### §A` (positional parent) or the legacy
+# projected `### §12.A` form — both accepted, explicit N wins over position.
+_D_MD_GLOBAL_LETTER_RE = re.compile(r'^#{2,6}\s*§\s*(?:(\d{1,2})[.\u00b7]\s*)?([A-Z])(?![A-Za-z])')
+
+# md section heading for LETTER-SECTION chapters (appendices: `## §A`).
+_D_MD_LETTER_SEC_RE = re.compile(r'^#{2,6}\s*§\s*([A-Z])(?![A-Za-z])')
+
+
+def _gkey(k):
+    """Sort/compare key for a global section id: digits before letters, both
+    naturally ordered ('2' < '10', 'A' < 'B')."""
+    return (0, int(k), '') if str(k).isdigit() else (1, ord(str(k)[0]), '')
+
+
+def _load_global_contract(ext, ch):
+    """(sec_keys, letter_subs) from book_structure.json for chapter `ch`.
+
+    sec_keys    : list[str] of section keys in book order ('12' / appendix 'A')
+    letter_subs : {parent_key: [{'key':'A','name':...,'page_start':...}, ...]}
+    """
+    try:
+        from data.book_structure.book_structure import BookStructure
+        bs = BookStructure.load(ext)
+        node = bs.find_chapter(ch) if bs is not None else None
+    except Exception:
+        return [], {}
+    if node is None:
+        return [], {}
+    keys, subs = [], {}
+    for k in (node.sub_sec or []):
+        if getattr(k, 'type', '') == 'section':
+            key = str(k.key)
+            keys.append(key)
+            ls = getattr(k, 'letter_subs', None)
+            if ls:
+                subs[key] = list(ls)
+    return keys, subs
+
+
+def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
+    """sections_global path (Arnold-style global §N numbering).
+
+    The md `## §N` transcription is authoritative for what was WRITTEN; the
+    source rescan decides what EXISTS.  A raw numeric token is accepted as a
+    section head only when it is a SINGLE number that appears in the structure
+    contract for this chapter OR was written in the md — the intersection kills
+    both false-positive classes that break the generic `c[0]==ch` projection on
+    globally-numbered books (OCR junk like "2." and cross-chapter references
+    like "§22" cited inside ch3).  Letter subsections (role 5) are checked as a
+    third level when declared; appendix chapters whose contract sections are
+    all-letter verify their `## §A` headings directly.
+    """
+    depths = list(cfg.section_depths)
+    has_letter = any(getattr(cfg, 'section_types', [])[i] == 5
+                     for i in range(len(depths))) if depths else False
+    contract_secs, contract_letters = _load_global_contract(ext, ch)
+    sec_set = set(contract_secs)
+    # Appendix chapters: every contract section key is alphabetic.
+    letter_sections = bool(contract_secs) and all(not k.isdigit() for k in contract_secs)
+
+    with open(md_file, encoding='utf-8') as f:
+        md_text = f.read()
+    md_secs = set()       # written section ids ('12' / 'A')
+    md_letters = set()    # (parent_int, 'A') numeric mode only
+    cur_md = None
+    for line in md_text.split('\n'):
+        s = line.strip()
+        if letter_sections:
+            m = _D_MD_LETTER_SEC_RE.match(s)
+            if m:
+                md_secs.add(m.group(1))
+                cur_md = m.group(1)
+            continue
+        # 🔴 字母子节先于数字节判定：`### §12.A` 会被 D_MD_SEC_RE 截取 '§12'
+        # 而冒充节头（\d+ 无右边界），必须先试字母形态。
+        if has_letter:
+            lm = _D_MD_GLOBAL_LETTER_RE.match(s)
+            if lm:
+                parent = int(lm.group(1)) if lm.group(1) else cur_md
+                if parent is not None:
+                    md_letters.add((parent, lm.group(2)))
+                continue
+        m = D_MD_SEC_RE.match(s)
+        if m:
+            c = _split_num(m.group(1))
+            if c:
+                key = '.'.join(str(x) for x in c) if len(c) > 1 else str(c[0])
+                md_secs.add(key)
+                try:
+                    cur_md = int(c[-1])
+                except ValueError:
+                    cur_md = None
+                continue
+            continue
+
+    # ---- source side ------------------------------------------------------
+    raw_secs = set()      # single-number heads confirmed present in source
+    raw_letters = {}      # parent_int -> {'A','B',...}
+    cur_src = None
+    sub_re = sub_ok = None
+    gsec_res = []         # SEC_GLOBAL-shaped heads (same detector that built
+                          # the contract in scan_skeleton — keeps both sides
+                          # consistent for OCR-glued forms like "813．标题")
+    try:
+        import scan_skeleton as _ss
+        gsec_res = [_ss.SEC_GLOBAL, _ss.SEC_GLOBAL_9]
+        if has_letter and not letter_sections:
+            sub_re, sub_ok = _ss.SUB_GLOBAL, _ss._sub_global_title_ok
+    except Exception:
+        pass
+    for p in range(start, end + 1):
+        fp = os.path.join(ext, f'page_{p:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = page_json.PageJson.load(fp).data
+        except Exception:
+            continue
+        for t in data.get('text', []):
+            txt = (t.get('text') or '').strip()
+            if not txt:
+                continue
+            if letter_sections:
+                lm = D_LETTER_SEC_LOCAL.match(txt)
+                if lm and len(txt) < 75 and lm.group(2).isupper():
+                    words = txt.split()
+                    second = words[1].lower() if len(words) > 1 else ''
+                    if second not in _D_SUBSEC_SENTENCE_WORDS:
+                        raw_secs.add(lm.group(1))
+                continue
+            for rgx in (D_SEC_HEAD_A, D_SEC_HEAD_B):
+                m = rgx.match(txt)
+                if m:
+                    c = _split_num(m.group(1))
+                    if len(c) == 1:
+                        key = str(c[0])
+                        # 🔴 global-mode acceptance: contract ∩ md-written.
+                        # The generic path's c[0]==ch prefix guard is
+                        # meaningless here (§ numbers are not chapter-prefixed).
+                        if key in sec_set or key in md_secs:
+                            raw_secs.add(key)
+                            cur_src = c[0]
+                    break
+            else:
+                accepted = False
+                m = D_SEC_HEAD_C.search(txt)
+                if m and len(txt) < 60:
+                    c = _split_num(m.group(1))
+                    if len(c) == 1:
+                        key = str(c[0])
+                        if key in sec_set or key in md_secs:
+                            raw_secs.add(key)
+                            cur_src = c[0]
+                            accepted = True
+                if not accepted:
+                    for rgx in gsec_res:
+                        m = rgx.match(txt)
+                        if m:
+                            key = str(m.group(1))
+                            if key in sec_set or key in md_secs:
+                                raw_secs.add(key)
+                                try:
+                                    cur_src = int(m.group(1))
+                                except ValueError:
+                                    cur_src = None
+                            break
+            if sub_re is not None and cur_src is not None:
+                sm = sub_re.match(txt)
+                if sm and sub_ok(sm.group(2)):
+                    raw_letters.setdefault(cur_src, set()).add(sm.group(1))
+
+    # ---- partition (continuity = interior hole / missing = beyond tail) ----
+    def _partition(md_set, raw_present, render):
+        miss = sorted(raw_present - md_set, key=_gkey)
+        md_max = max(md_set, key=_gkey, default=None)
+        cont, tail = [], []
+        for k in miss:
+            (cont if md_max is not None and _gkey(k) <= _gkey(md_max) else tail).append(render(k))
+        return [k for k in cont], [k for k in tail]
+
+    sec_cont, sec_tail = ([], [])
+    if sec_set or md_secs or letter_sections:
+        sec_cont, sec_tail = _partition(md_secs, raw_secs, lambda k: str(k))
+
+    let_cont, let_tail = ([], [])
+    if has_letter and not letter_sections:
+        contract_pairs = {(int(p), e['key'])
+                          for p, subs in (contract_letters or {}).items()
+                          if str(p).isdigit()
+                          for e in subs if e.get('key')}
+        raw_pairs = {(p, L) for p, Ls in raw_letters.items() for L in Ls}
+        # A raw letter counts as "present in source" only when the contract
+        # recorded it under this §N too (guards bibliography/prose FPs); when
+        # the contract has no letter info at all, fall back to raw alone.
+        src_pairs = (raw_pairs & contract_pairs) if contract_pairs else set()
+        md_norm = {(p, L) for p, L in md_letters}
+        def _rend(pair):
+            return f"{pair[0]}.{pair[1]}"
+        let_cont, let_tail = _partition(md_norm, src_pairs, _rend)
+
+    levels = {}
+    if sec_cont or sec_tail:
+        levels[2] = {'continuity': sec_cont, 'missing': sec_tail}
+    if let_cont or let_tail:
+        levels[3] = {'continuity': let_cont, 'missing': let_tail}
+    return {
+        'continuity_sections': sec_cont + let_cont,
+        'missing_sections': sec_tail + let_tail,
+        'levels': levels,
+    }
+
+
 def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_LEVEL):
     """Common (CN/EN) section-continuity check supporting an arbitrary nesting
     depth (1–4) from ``cfg.section_depths``.
@@ -332,6 +549,11 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
     # NOT scan the source for arbitrary section headers.
     if getattr(cfg, 'chapter_local_sections', False):
         return _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg)
+    # Book-GLOBAL single-number sections (Arnold §1..§52): the generic
+    # `c[0]==ch` prefix projection below is meaningless (and FP-prone) for
+    # globally-numbered books — route to the dedicated global path.
+    if getattr(cfg, 'sections_global', False):
+        return _check_d_layer_global(ch, start, end, md_file, ext, cfg)
     # Resolve the verified hierarchy. Real configs come via ConfigLoader ->
     # from_dict (section_types populated; depth DERIVED via SECTION_TYPE_DEPTH);
     # fall back to the ordinal default so a directly-constructed BookConfig

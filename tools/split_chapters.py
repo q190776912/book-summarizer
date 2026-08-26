@@ -27,11 +27,11 @@ r"""将一个过大的章总结文件，按「节」拆分成每节一个独立�
 两种格式可共存于同一文件，按各自匹配到的顺序拆分。
   - 阈值与配对：中文总结或英文总结「只要有一个」字符数超过 60000，就把**两者都**拆分
     （即使另一个未超阈值也要拆，保证同一章的中英文保持一致的分拆状态）。
-  - 命名：中文 `第{N}章{M}{名称}.md`；英文 `Chapter{N}_{M}{名称}.md`
+  - 命名：中文 `第{N}章_{M}_{名称}.md`；英文 `Chapter{N}_{M}_{名称}.md`
     （{M} = 节号——§N 式即 N，N.M 式即 N.M；名称取自标题编号之后的文本，
-    剔除 Windows 非法字符与空白）。
+    剔除 Windows 非法字符与空白。节号与名称之间也有一个下划线）。
   - 章开头的引言/导语（第一个节标题之前的内容）并入第 1 节文件。
-  - 幂等：重复运行会跳过已拆分的节文件（第N章M.xxx / ChapterN_M.xxx），不会二次拆分；对已合并源文件则确定性覆盖已生成的节文件。
+  - 幂等：重复运行会跳过已拆分的节文件（第N章_M_... / ChapterN_M_...），不会二次拆分；对已合并源文件则确定性覆盖已生成的节文件。
   - **默认在拆分成功后删除源合并文件**（节文件已 100% 覆盖其内容，无需保留）；
     加 `--keep` 可保留源文件。
 
@@ -66,7 +66,7 @@ def chapter_num_from_filename(fn):
     m = re.match(r'^第(\d+)章', fn)
     if m:
         rest = fn[m.end():]
-        if re.match(r'^\d+', rest):        # 已拆分的节文件：第N章M.xxx / 第N章N.xxx（章后紧跟数字），跳过
+        if re.match(r'^_?\d', rest):       # 已拆分的节文件：第N章_M...（新）/ 第N章M...（旧），跳过
             return None, None
         return int(m.group(1)), 'zh'
     m = re.match(r'^Chapter(\d+)', fn)
@@ -161,7 +161,7 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
             content.extend(intro)
         content.extend(buckets[k])
         out = '\n'.join(content).rstrip('\n') + '\n'
-        fname = f"第{num}章{key}{sname}.md" if lang == 'zh' else f"Chapter{num}_{key}{sname}.md"
+        fname = f"第{num}章_{key}_{sname}.md" if lang == 'zh' else f"Chapter{num}_{key}_{sname}.md"
         outpath = os.path.join(os.path.dirname(path), fname)
         plan.append(fname)
         if not dry_run:
@@ -196,8 +196,8 @@ def main():
         if num is not None:
             (chinese if lang == 'zh' else english)[num] = os.path.join(book_dir, fn)
             continue
-        # 节文件：第N章M...（zh）/ ChapterN_M...（en），识别其章号与语言
-        m = re.match(r'^第(\d+)章\d', fn)
+        # 节文件：第N章_M...（zh，旧式无下划线亦兼容）/ ChapterN_M...（en），识别其章号与语言
+        m = re.match(r'^第(\d+)章_?\d', fn)
         lang2 = 'zh'
         if not m:
             m = re.match(r'^Chapter(\d+)_\d', fn)

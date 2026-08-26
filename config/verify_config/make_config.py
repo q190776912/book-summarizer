@@ -76,7 +76,7 @@ import re
 import glob
 
 sys.stdout.reconfigure(encoding='utf-8')
-from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT
+from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_HUM
 
 
 def _is_fig_kw(name):
@@ -905,7 +905,7 @@ def _detect_ordinal_from_pages(extract_dir):
     cm = _ordinal_from_chapter_map(extract_dir)
     cm_ord = cm[0] if cm else None
     cm_chapter_first = cm[1] if cm else True
-    if cm_ord is not None and cm_ord in (6, 8, 9):
+    if cm_ord is not None and cm_ord in (6, 8, 9, ORDINAL_HUM):
         family = cm_ord
     # language: derive from the ACTUAL label forms seen
     if seen_en:
@@ -937,6 +937,16 @@ def _detect_ordinal_from_pages(extract_dir):
         groups = _group_single_level(headings)
     else:
         groups = _group_headings_by_counter(headings, depth)
+    if family == ORDINAL_HUM:
+        # config_setting 规则5（ORDINAL_HUM = 12，Humphreys《Intro to Lie Algebras
+        # and Representation Theory》GTM 9）：正文条目头只印裸标签（"Lemma." /
+        # "Theorem (Cartan's Criterion)."）或节内大写字母号（"Lemma A"），没有
+        # 「标签+数字」形态的可分组编号头，上面的计数器分组必然落空/掺引用噪声。
+        # 按全书实测固定：每类标签独立一组（各类条目由所在小节隐式定位，
+        # 互不共享计数器；Table 同理按节重编）。Figure 单独一组（图号 "Figure 1"
+        # 单段、按小节重编 → type 1 全局整数解析）。
+        groups = [["Theorem"], ["Proposition"], ["Corollary"], ["Lemma"],
+                  ["Example"], ["Remark"], ["Table"]]
     return family, groups, lang, cm_chapter_first
 
 
@@ -1172,6 +1182,12 @@ def main():
             "name": ["练习", "习题", "Exercise", "Problem"],
             "scope": 3,
         })
+    # 🔴 ORDINAL_HUM（Humphreys GTM 9）图号体例：全书仅 "Figure 1"/"Figure 2"…
+    # 单段整数（按小节重编，§9.3 与 §21.3 各有一个 Figure 1）。Figure 组用
+    # type 1（单段全局整数解析），使 figure_io 能从 caption 解析出图号。
+    if ordinal == ORDINAL_HUM and not any(
+            any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        ordinal_arr.append({"type": 1, "name": ["Figure"], "scope": 1})
     # 🔴 Figure convention now lives INSIDE `ordinal` (no separate `figure`
     # block). make_config only regenerates text-label groups, so a `--force`
     # regeneration would otherwise DROP a pre-existing Figure group and silently
@@ -1239,7 +1255,17 @@ def main():
     # The detected depths ARE the built-in role codes (role N == depth N), so
     # write `section_types` directly.  Depth is derived via SECTION_TYPE_DEPTH
     # in verify_config.py and is never stored as a separate `section_depths`.
+    if ordinal == ORDINAL_HUM:
+        # Humphreys GTM 9：节为全书全局单序标 §1..§27（原书印裸 "9. Axiomatics"
+        # 无 § 前缀），小节 N.M 不作契约层级（条目键已内嵌小节定位）。OCR 层级
+        # 探测会把 N.M 小节头误判为二级节 → 强制覆盖为 [1,1]（章 + 全局节）。
+        sd = [1, 1]
     config["section_types"] = sd
+    # 🔴 ORDINAL_HUM：全局单序标书需 sections_global=true（D 层 global 路径 +
+    # build_structure 字母子块语境），与 Arnold 书同语义。仅在 hum 书发射，
+    # 其余书零回归。
+    if ordinal == ORDINAL_HUM:
+        config["sections_global"] = True
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)

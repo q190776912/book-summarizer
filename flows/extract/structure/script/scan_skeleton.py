@@ -149,7 +149,26 @@ SEC_GLOBAL_9 = re.compile(
 #     被宽度闸杀掉（通栏散文实测 ≥1200px）。注意不能用 SUB_GLOBAL_MAX_WIDTH=720：
 #     长标题节头（"82两个自变量的一阶线性偏微分方程组的特征理论"）达 906px。
 SEC_GLOBAL_GLUE = re.compile(
-    r'^[§$S8Ss6]?\s*(\d{1,2})([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+    r'^[§$S8Ss6*·]?\s*(\d{1,2})([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+# Plain prefix-LESS single-number section heads（Humphreys GTM 9 体例，config_setting
+# 规则5 增量扩展）：原书节头印裸 "9. Axiomatics" / "12. Construction of root
+# systems and automorphisms"——数字后一个点、无 § 前缀，上方 SEC_GLOBAL（要求
+# [§$S8Ss6] 前缀）与 SEC_GLOBAL_GLUE（无分隔符粘连）均不覆盖。仅当 scan() 收到
+# plain_sec_heads=True（build_structure 依 primary_type==ORDINAL_HUM 传入）时启用，
+# 其余书零回归。守卫：
+#   * 标题必须大写字母起始、总长 3..62——习题行 "5. Verify the assertions made in
+#     (1.2) about t(n, F)..." 超长被杀；"2. Verify Table 2." 这类短习题行靠下方
+#     「cur+1 门闩」拒绝（见 scan() 内注释）；
+#   * 标题不得以句点结尾（真标题不带尾点；引用/残句常带）；
+#   * 块顶 y ≥ _GLUE_MIN_Y：压制页眉带（本书页眉为 "Basic Concepts4" 词粘页码
+#     形态，本就不会命中，此处仍统一防线）。
+# 🔴 顺序门闩（防未来号污染）：全书 §1..§27 严格递增且每章连续。启用时只接受
+# num == cur_global_sec + 1 的命中（cur 由首个命中播种），习题区里重排的小号
+# （§8 习题 "1.".."6."）与「未来节号」的习题行（§12 习题 "13. ..." 若存在）
+# 都会被拒绝——否则 §8 习题行 "9. ..." 会抢在真 §9（下一章扫描区间）之前
+# 注册垃圾 SEC 9，下游 dedup 首现胜出 → 真节头永远丢标题。
+SEC_GLOBAL_PLAIN = re.compile(
+    r'^(\d{1,2})[．.、。:]\s*([A-Z][^\n]{2,61})$')
 _GLUE_MIN_Y = 170.0
 _GLUE_MAX_WIDTH = 1000.0
 
@@ -380,7 +399,7 @@ def lines_of(page_json):
 
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
-         exercise_headings=None):
+         exercise_headings=None, plain_sec_heads=False):
     rows = []
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
@@ -488,6 +507,22 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # belongs to this chapter.  Running heads repeat per page and are
             # deduped downstream (sec_best keeps the best title).
             if global_sec:
+                # Plain prefix-less heads（Humphreys GTM 9，plain_sec_heads=True 时）：
+                # 首个命中播种 cur_global_sec（章扉页到真节头之间无编号行，安全），
+                # 其后严格 num == cur+1 —— 习题区重排小号与未来节号的习题行一律拒绝。
+                if plain_sec_heads:
+                    _m = SEC_GLOBAL_PLAIN.match(ln)
+                    if (_m
+                            and (cur_global_sec is None
+                                 or int(_m.group(1)) == cur_global_sec + 1)
+                            and int(_m.group(1)) <= SEC_MAX_NUMBER
+                            and not _m.group(2).rstrip().endswith('.')):
+                        # 无 y 下限守卫：本书页眉为「词+粘连页码」形态（词首，
+                        # 永不匹配本正则），而真节头可起于新页顶 y≈80-90。
+                        rows.append((p, 'SEC', _m.group(1), _m.group(2).strip(), ln_y))
+                        in_exercise = False
+                        cur_global_sec = int(_m.group(1))
+                        continue
                 m = SEC_GLOBAL.match(ln) or SEC_GLOBAL_9.match(ln)
                 if m:
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))
@@ -496,7 +531,10 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     continue
                 # Glued / separator-less variant（谷超豪《数学物理方程》体例，见
                 # SEC_GLOBAL_GLUE 注释）。守卫：页眉区 y 压制 + 短行宽闸 + 标题校验。
-                m = SEC_GLOBAL_GLUE.match(ln)
+                # 🔴 plain_sec_heads 书（Humphreys GTM 9）禁用本变体：glue 正则的
+                # § 前缀可选、数字后紧跟任意字母/汉字即命中——本书权重表行
+                # "4入1 -3入2" 恰好命中并被伪造成节，还会抢走后续条目挂接。
+                m = None if plain_sec_heads else SEC_GLOBAL_GLUE.match(ln)
                 if (m and int(m.group(1)) <= SEC_MAX_NUMBER
                         and _glue_title_ok(m.group(2))
                         and (ln_y is None or ln_y >= _GLUE_MIN_Y)
@@ -533,7 +571,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # guard; legacy callers (chapter_first=None) also keep it.
                 _sec_ch_ok = ((chapter_first is False) or m is None
                               or (int(m.group(1)) == ch))
-                if (not use_universal_sec and not in_exercise and m and _sec_ch_ok
+                if (not use_universal_sec and not in_exercise and not plain_sec_heads
+                        and m and _sec_ch_ok
                         and int(m.group(1)) <= SEC_MAX_NUMBER
                         and not m.group(2).endswith('.')):
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))

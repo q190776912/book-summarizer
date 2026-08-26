@@ -83,19 +83,38 @@ ORDINAL_ROSS = 11           # EN section-scoped LETTER-numbered (S. Ross《A Fir
                           #   Self-Test Problems and Exercises）以 exercise_region_headings
                           #   配置驱动扫描闩。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11)
+ORDINAL_HUM = 12             # EN subsection-keyed BARE/LETTER items (Humphreys《Introduction
+                          #   to Lie Algebras and Representation Theory》GTM 9,
+                          #   config_setting 规则5 增量扩展). 原书正文条目头只印裸标签
+                          #   （"Lemma." / "Theorem (Cartan's Criterion)."）或节内大写字母号
+                          #   （"Lemma A" / "Corollary A (Lie's Theorem)"），编号由【所在小节】
+                          #   隐式给出——书中交叉引用写作 "Lemma 7.2"（§7.2 的那条引理）/
+                          #   "Lemma 10.2B"（§10.2 的引理 B）。契约键因此取「标签 + 所在小节 +
+                          #   字母」的唯一化形态并注入 § 记号使其【故意不可被数字解析】：
+                          #   "Lemma §10.2B" / "Lemma §7.2"（裸）/ "Example §22.4-1"
+                          #   （§22.4 的 Example 1./2.）/"Table §11.4-1"。理由：引用号继承
+                          #   小节网格、天然稀疏（§4 有 4.1 与 4.3 的定理但没有 4.2 的定理），
+                          #   若可解析 B 层会按连续计数器误报海量假断号；不可解析则与
+                          #   Ross/Karlin 字母项同路径优雅跳过（完整性靠抽取器 + 源侧回填 +
+                          #   D 层 + 计数审计兜底）。md 标签照原书印刷：**Lemma A** / **Lemma**。
+                          #   节为全书全局单序标 §1..§27（section_types=[1,1] +
+                          #   sections_global=true），节头原书印裸 "9. Axiomatics" 形态
+                          #   （无 § 前缀），由 scan_skeleton 的 SEC_GLOBAL_PLAIN 分支识别。
+
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
     4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
+    12: 'hum',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2}
+ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2}
 # Structural style per ordinal code (None = common depth-driven parsing).
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
-                     11: None}
+                     11: None, 12: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
 ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
-                            10: 'cn', 11: 'en'}
+                            10: 'cn', 11: 'en', 12: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -187,6 +206,9 @@ ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
     9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
+    # Humphreys GTM 9：章=文件一级、节=全书全局单序标 §1..§27（原书印裸
+    # "9. Axiomatics" 无 § 前缀）、小节 N.M 不作契约层级（条目键内嵌小节定位）。
+    12: [1, 1],
 }
 
 # --- formula sequence-label (Q-LAYER) config ------------------------------

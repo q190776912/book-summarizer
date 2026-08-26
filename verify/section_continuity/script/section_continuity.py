@@ -432,6 +432,12 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
         # 重扫若不认同一形态，会把契约里真实存在的节误报成缺失。
         if hasattr(_ss, 'SEC_GLOBAL_GLUE'):
             gsec_res.append(_ss.SEC_GLOBAL_GLUE)
+        # ORDINAL_HUM（Humphreys GTM 9）：节头印裸 "9. Axiomatics" 无 § 前缀，
+        # 契约侧由 scan_skeleton 的 plain 分支（plain_sec_heads=True）识别——
+        # 真值重扫必须认同一正则，否则全部契约节被误报缺失。仅 hum 书启用
+        # （其余 global 书的习题行 "5. ..." 不因此进入真值集）。
+        if hasattr(_ss, 'SEC_GLOBAL_PLAIN') and getattr(cfg, 'primary_type', None) == 12:
+            gsec_res.append(_ss.SEC_GLOBAL_PLAIN)
         if has_letter and not letter_sections:
             sub_re, sub_ok = _ss.SUB_GLOBAL, _ss._sub_global_title_ok
     except Exception:

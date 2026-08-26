@@ -260,9 +260,18 @@ def run_audit(ext, chapter=None):
                                    % (f"{parsed[0]}.{parsed[1]}-{num-1}", f"{parsed[0]}.{parsed[1]}-{num+1}"))
                         suspect += 1
                 elif noise:
-                    rec.update(verdict="SUSPECT",
-                               why="源侧存在『带标签但无编号』条头（OCR 丢号迹象）→ 建议 manual_overrides 恢复，而非 ignore 隐藏")
-                    suspect += 1
+                    # 契约中该键无前后邻居 → 不构成「序列中间洞」；若 agent 已举证
+                    # （VERIFIED-SPARSE 等证据标记 + 源页核对），按文档规则放行为
+                    # 已核实噪声，不再无条件 SUSPECT。
+                    if _is_evidenced_sparse(reason):
+                        rec.update(verdict="ACCEPTED",
+                                   why="已核实的源书噪声号（理由含 VERIFIED-SPARSE 等证据，且契约无前后邻居）→ "
+                                       "agent 已核对源页确认真噪声 / 稀疏编号，非隐藏缺项，审计通过(非阻断)")
+                        accepted += 1
+                    else:
+                        rec.update(verdict="SUSPECT",
+                                   why="源侧存在『带标签但无编号』条头（OCR 丢号迹象）→ 建议 manual_overrides 恢复，而非 ignore 隐藏")
+                        suspect += 1
                 else:
                     rec.update(verdict="SAFE",
                                why="契约无前后邻居、源侧无对应内容 → 疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）")

@@ -68,11 +68,13 @@ GM_SEP = SEP_TIGHT[:-1] + r'、]'
 # would never match — every entry then silently degrades to "mentioned-only".
 ENTRY_RE_2 = re.compile(
     r'\*\*(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
+    r'|Definition|Theorem|Lemma|Corollary|Proposition'
+    r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
 PROSE_RE_2 = re.compile(
     r'(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
+    r'|Definition|Theorem|Lemma|Corollary|Proposition'
+    r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 def normkey(s):
     """Canonicalize a key to N.S-N dash form (N.S.N -> N.S-N, N·S·N -> N.S-N).

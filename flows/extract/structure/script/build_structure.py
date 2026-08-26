@@ -85,9 +85,11 @@ from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_gm import extract_items_gm
 from extract_items_ross import extract_items_ross
+from extract_items_hum import extract_items_hum
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
+                              ORDINAL_HUM,
                               ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label, normkey
@@ -648,6 +650,13 @@ def _single_en_items(ext, start, end, book):
 
 def _extract_items(ext, ch, start, end, book, manual=None):
     primary = book.primary_type
+    if primary == ORDINAL_HUM:
+        # Humphreys GTM 9（config_setting 规则5 增量扩展）：条目头只印裸标签
+        # （"Lemma."）或节内字母号（"Lemma A"），编号由所在小节隐式给出。
+        # 专用抽取器跟踪当前小节，产出唯一化键 "Lemma §10.2B" / "Lemma §7.2"
+        # （注入 § 记号使其不可被 B 层数字解析——引用号继承小节网格、天然稀疏，
+        # 可解析会误报海量假断号；与 Ross 字母项同走优雅跳过路径）。
+        return extract_items_hum(ext, start, end)
     if primary == ORDINAL_ROSS:
         # Ross 体例（ORDINAL_ROSS = 11，config_setting 规则5 增量扩展）：标签在前 +
         # 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。键保留原书印刷
@@ -864,7 +873,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     rows = scan_skeleton.scan(ext, ch, start, end, mode,
                               section_depths=section_depths,
                               chapter_first=book.chapter_first,
-                              exercise_headings=getattr(book, 'exercise_region_headings', None) or None)
+                              exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
+                              plain_sec_heads=(ordinal == ORDINAL_HUM))
     ex_rows = [r for r in rows if r[1] == "EXER"]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。

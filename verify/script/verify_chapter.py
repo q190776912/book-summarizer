@@ -58,15 +58,17 @@ from verify.script.ignore_files import load_ignore, load_ignore_fig
 def _section_num_from_filename(fn):
     """Extract the section number (as str) from a split section filename.
 
-    Section files follow the rule-D naming: `第{N}章{M}{名称}.md` (zh) or
-    `Chapter{N}_{M}{名称}.md` (en), where {M} is the section id (digits,
-    possibly with a single dot for N.M style). Returns None if the name is
-    not a section file (e.g. the merged 第N章_*.md / ChapterN_*.md file).
+    Section files follow the rule-D naming: `第{N}章_{M}_{名称}.md` (zh) or
+    `Chapter{N}_{M}_{名称}.md` (en) — one underscore after the chapter marker,
+    another after the section id {M}. Legacy forms without the second
+    underscore (`第{N}章_{M}{名称}.md`, `第{N}章{M}{名称}.md`) still parse.
+    Returns None if the name is not a section file (e.g. the merged
+    第N章_*.md / ChapterN_*.md file).
     """
     base = os.path.basename(fn)
     m = None
     if base.startswith('第') and '章' in base:
-        m = re.match(r'^第\d+章([\d.]+)', base)
+        m = re.match(r'^第\d+章_?(\d+(?:\.\d+)*)', base)
     else:
         m = re.match(r'^Chapter\d+_([\d.]+)', base)
     if not m:

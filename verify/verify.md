@@ -56,7 +56,7 @@
 ## 本阶段规则（🔴 内联）
 - **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
   - 原因：书级配置需待全书编号形态定型后，D 层 `section_types`（深度经 `SECTION_TYPE_DEPTH` 派生）/ Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；B–Q 若干判定需整章 / 整书上下文。
-- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章M...` / `ChapterN_M...`）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
+- **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章_M_...` / `ChapterN_M_...`，旧式无第二个下划线亦兼容）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
 - **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。（🟢 例外：带 `VERIFIED-SPARSE` 等显式证据标记的序列洞 ignore 判 `ACCEPTED`，非阻断、不阻止 PASS——因其是书源真实跳号而非隐藏缺项；无证据标记则仍 SUSPECT。）
 - **规则3 控制台编码（Windows GBK 崩溃防护）**：层报告含 ⚠ · —— 等 GBK 不可编码字符，zh-CN 控制台管道输出会在收尾报告处抛 `UnicodeEncodeError`（实测 chaos-fractals：--all 全部校验完成后崩在 `audit_ignore._print_report` 的 ⚠，拿不到退出码）。防护已集中落在 `lib/boot.py::_force_utf8_stdio()`（每个入口脚本的 `_boot.setup()` 自动把 stdout/stderr 重配置为 UTF-8 + errors=replace），无需逐脚本处理；异常包装环境（IDE 捕获/非常规管道）下仍建议 `$env:PYTHONIOENCODING='utf-8'` 兜底。

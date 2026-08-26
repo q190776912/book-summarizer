@@ -43,7 +43,7 @@ from lib.regexlib import (
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
-    ORDINAL_ROSS,
+    ORDINAL_ROSS, ORDINAL_HUM,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -130,6 +130,19 @@ ENTRY_RE_EN_C = re.compile(
 ENTRY_RE_EN_NF_C = re.compile(
     r'\*\*(\d+)' + SEP_TIGHT + r'(\d+)\s*(' + '|'.join(COMBINED_LABEL_KINDS) + r')',
     re.IGNORECASE)
+
+# ORDINAL_HUM (Humphreys GTM 9): bold entries without section numbers.
+# Matches **Theorem**, **Corollary A**, **Corollary A (Lie's Theorem)**,
+# **Lemma A**, **Definition**, **Example 1**, etc.
+_HUM_LABELS = (r'Theorem|Proposition|Corollary|Lemma|Example|Remark|Definition'
+               r'|定理|命题|推论|引理|例|评注|注|定义')
+ENTRY_RE_HUM = re.compile(
+    r'\*\*(' + _HUM_LABELS + r')'
+    r'(?:\s+([A-Z]))?'   # optional letter suffix (A, B, C)
+    r'(?:\s+(\d+))?'      # optional number (for Example 1, Example 2)
+    r'(?:\.?)'            # optional trailing period
+    r'(?:\s*\([^)]*\))?'  # optional parenthetical
+    r'\s*\*\*')
 PROSE_RE_EN_C = re.compile(
     # Same CJK-aware boundaries as PROSE_RE_EN (see note there): \b fails after
     # CJK chars (「由命题 14.17」) and before digits in no-space form (命题14.17).
@@ -398,6 +411,21 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                 for m in PROSE_RE_ROMAN.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
+            elif t == ORDINAL_HUM:
+                for m in ENTRY_RE_HUM.finditer(line):
+                    label = _canon_label(m.group(1))
+                    letter = m.group(2) or ''
+                    number = m.group(3) or ''
+                    if letter:
+                        key = f"{label} {letter.upper()}"
+                    elif number:
+                        key = f"{label}{number}"
+                    else:
+                        key = label
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_2.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             else:
                 for m in ENTRY_RE.finditer(line):
                     entries.add(normkey(m.group(1)))

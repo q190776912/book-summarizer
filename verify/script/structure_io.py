@@ -28,7 +28,7 @@ from data.book_structure.book_structure import BookStructure
 
 from key_parse import keys_in_md, _first_num
 from verify.script.ordinal import int_to_roman
-from verify_config import ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN
+from verify_config import ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_HUM, _canon_label
 
 
 TYPE_TO_LABEL = {
@@ -74,25 +74,55 @@ def read_structure_items(ext_dir, ch):
         #   behavior ('定义1.1' / 'Remark1.1.1'), which already matches
         #   `keys_in_md`'s output for those ordinals (their keys have no dash).
         raw = (n.key or n.name or '')
+        # ORDINAL_HUM (Humphreys GTM 9): keys use English labels with § prefix
+        # (e.g. "Theorem §4.1", "Lemma §10.2B"). The markdown uses bare labels
+        # without numbers (**Theorem**: / **Corollary A**:), so strip the §+number
+        # and apply _canon_label to produce keys like "定理" / "推论 A" that
+        # keys_in_md's ENTRY_RE_HUM can match.
+        if '§' in raw:
+            # Extract letter suffix before stripping (e.g. "Lemma §10.2B" -> "B")
+            _letter_m = re.search(r'§\s*\d+(?:\.\d+)*([A-Za-z])', raw)
+            _letter = _letter_m.group(1) if _letter_m else ''
+            # Extract slot-suffix (e.g. "Corollary §10.2-2" -> "-2")
+            _slotsuffix_m = re.search(r'§\s*\d+(?:\.\d+)*-([\d]+)', raw)
+            _slotsuffix = f"-{_slotsuffix_m.group(1)}" if _slotsuffix_m else ''
+            # Extract number suffix for examples (e.g. "Example §22.4-1" -> "1")
+            _exnum_m = re.search(r'§\s*\d+(?:\.\d+)*-(\d+)$', raw)
+            _exnum = _exnum_m.group(1) if _exnum_m else ''
+            # Extract appendix marker (e.g. "Lemma §23.App" -> "App")
+            _app_m = re.search(r'§\s*\d+\.(App\w*)', raw)
+            _app = _app_m.group(1) if _app_m else ''
+            _label = re.sub(r'§\s*\d+(?:\.\d+)*[A-Za-z]?(?:-[\d]+)?(?:\.\w+)?', '', raw).strip()
+            _label = re.sub(r'\s+', ' ', _label)
+            _canon = _canon_label(_label)
+            if _letter:
+                _canon = f"{_canon} {_letter.upper()}"
+            elif _exnum:
+                _canon = f"{_canon}{_exnum}"
+            elif _app:
+                _canon = f"{_canon} {_app}"
+            elif _slotsuffix:
+                _canon = f"{_canon}{_slotsuffix}"
         # Ross 体例（ORDINAL_ROSS）：字母位键 "Example 2a" —— 规范键保留字母位
         # （例2a）。通用分支的 `\d+(?:[.\-…]\d+)+` 会把字母截掉（例2），与 md 侧
         # key_parse 的 例2a 永不交集 → 整书例题假性 truly-missing。故先试
         # 「标签 + 数字 + 单字母」形态，命中则直接用 公理/例/命题 规范标签。
-        _ross_m = re.match(r'^[A-Za-z]+\s+(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$', raw.strip())
-        if _ross_m:
-            _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _ross_m.group(1) + _ross_m.group(2).lower()
         else:
-            m = re.search(r'\d+(?:[.\-．·－–]\d+)+', raw)
-            if not m:
-                m = re.search(r'\d+', raw)
-            num_raw = m.group(0) if m else ''
-            if '-' in num_raw:
-                # Three-level: emit bare dash form ('1.1-1'), no label.
-                _canon = _normalize_threelevel(num_raw)
+            _ross_m = re.match(r'^[A-Za-z]+\s+(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$', raw.strip())
+            if _ross_m:
+                _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _ross_m.group(1) + _ross_m.group(2).lower()
             else:
-                _num = re.search(r'\d+(?:\.\d+)*', num_raw)
-                _number = _num.group(0) if _num else ''
-                _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
+                m = re.search(r'\d+(?:[.\-．·－–]\d+)+', raw)
+                if not m:
+                    m = re.search(r'\d+', raw)
+                num_raw = m.group(0) if m else ''
+                if '-' in num_raw:
+                    # Three-level: emit bare dash form ('1.1-1'), no label.
+                    _canon = _normalize_threelevel(num_raw)
+                else:
+                    _num = re.search(r'\d+(?:\.\d+)*', num_raw)
+                    _number = _num.group(0) if _num else ''
+                    _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
         items.append({
             'key': _canon,
             'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
@@ -135,7 +165,11 @@ def md_keys_for_chapter(md_file, cfg, ch):
     # example whose item number ≠ chapter.  Skip the filter in that case.  This
     # mirrors the correct handling in check_structure_completeness.scan_raw_items
     # (the `if chapter_first and first != ch` guard).
+    #
+    # 🔴 2026-08-26 fix: 单层键（无点分隔符，如 `例1`、`Remark 2`）的首数是
+    # 条目号而非章号，chapter_first 过滤会把它们全部误删（例1→首数1≠3→丢弃）。
+    # 仅对点分两层键（`定理3.3`、`命题3.7`）应用章过滤；单层键不过滤。
     if cfg.primary_type in (ORDINAL_EN, ORDINAL_EN3) and cfg.chapter_first:
-        entry_keys = {k for k in entry_keys if _first_num(k) == ch}
-        all_keys = {k for k in all_keys if _first_num(k) == ch}
+        entry_keys = {k for k in entry_keys if '.' not in k or _first_num(k) == ch}
+        all_keys = {k for k in all_keys if '.' not in k or _first_num(k) == ch}
     return entry_keys, all_keys

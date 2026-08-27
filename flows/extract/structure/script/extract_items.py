@@ -268,16 +268,52 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
     # 真条目头的标签前要么是块首、要么是句号/空行，不含这些词。命中即跳过。
     _cite_ctx_re = re.compile(
         r'第[一二三四五六七八九十0-9]+章[之中\s]*$|中的$'
-        r'|(?:不)?满足$|推出$|参见?$|^见|由$|根据$|利用$|应用$|证得$|得$|即$')
+        r'|(?:不)?满足$|推出$|参见?$|^见|由$|根据$|利用$|应用$|证得$|得$|即$'
+        # 🔴 齐尾锚点：冯琦《集合论》Ch1 p.31 实测——体内前向引用
+        # 「几里得定理（见定理1.32）；而…」若只用 ^见 会漏，
+        # 引起 定理1.32 被误当§1.1 内条目（后被 B 层报「顺序错乱」
+        # seq=[1,32,2,3,…]）。补齐见$ / 据$ 等齐尾锚点后正确剔除。
+        r'|见$|据$')
     lab_items = []
     for p, y, txt in all_blocks:
         for m in lab_re.finditer(txt):
             c = int(m.group(2)); num = int(m.group(3))
             if chapter_first and c != chapter:
                 continue
-            if c > 15 or num > 50:
+            # （冯琦《集合论导引》第一卷实测：Ch1 单章 1 节内条目达 125 个
+            #   「定义 1.1..1.125」「定理 1.1..1.100」，原「num > 50」会把
+            #   51–125 全部误杀，导致 80+ 条目静默缺口。
+            #   放宽到 300：仍挡住 300+ 数字内的 OCR 误识别（如「公理 312」），
+            #   且保留跨章前向引用（c > 15）与指涉语境守卫。
+            if c > 15 or num > 300:
                 continue
             if m.start() > 0 and _cite_ctx_re.search(txt[:m.start()].rstrip()):
+                continue
+            # 🔴 OCR「之N.」塌缩幻影拒绝（通用判据：非 CJK 尾符）。
+            # 本体例（冯琦《集合论》三章）在条头后接「之N.」标子句
+            # （定理1.6之1、例1.2之72、引理2.1之13），OCR 丢「之」使子句号与
+            # 条号贴合成多位数字再紧接 ASCII 点/等号/数学字母（例 1.70 =0.、
+            # 定理1.61.Va∈w、例1.272·w=w、引理2.113n∈w），成为非标识符的
+            # 残留 chunk，条目号严重偏离真实范围，撑爆 B 层缺号序列区间
+            # （如 例1.272 令 B 层以为本章 例号到 272 → 假缺号洞数百；引理2.113
+            # 令 B 层以为本章引理到 113）。
+            # 真条头后必接 CJK/全角括号/之/中文标点（如 定理1.61V=V*，…、
+            # 定理1.80（康托尔-范式、定义1.515设ழ marriage、定理1.6之4.、
+            # 例1.28（1））——于是凡「条头后 1 字符 ∈ {. · ＝ ＝ ． = }」
+            # 或「条头后拉丁/数学起头且 SIX 字符内无 unicode 中文、全角括号、之」
+            # 即判为压扁幻影 reject。
+            _tail = txt[m.end():m.end() + 12]
+            _saw_cjk_punc = False
+            for _ch_ in _tail[:6]:
+                _o = ord(_ch_)
+                if (0x4E00 <= _o <= 0x9FFF or 0x3400 <= _o <= 0x4DBF or
+                        0xFF00 <= _o <= 0xFF60 or 0x3000 <= _o <= 0x3040):
+                    _saw_cjk_punc = True
+                    break
+            _tail_bracket = any(_ch_ in '（（）之.,；：！？' for _ch_ in _tail[:6])
+            if (_tail[:1] in '.·＝＝.＝=' or
+                (bool(_tail) and re.match(r'[A-Za-z0-9∈∞≠≤≥><\[\]\-，湮]', _tail[:1])
+                 and not _saw_cjk_punc and not _tail_bracket)):
                 continue
             label = m.group(1)
             key = f"{label}{c}.{num}"

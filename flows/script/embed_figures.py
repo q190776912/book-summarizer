@@ -5,8 +5,8 @@ cropped figure is referenced by some summary item (definition / theorem / lemma 
 corollary / example / proof) and, if so, embed it next to that item. Figures with no item
 reference are skipped (per the skill's 图片嵌入规则).
 
-This is a MANDATORY step of the summary workflow (Step 3.5 in SKILL.md), and must run
-BEFORE `verify_chapter.py` (Step 4).
+This is a MANDATORY step of the summary workflow (step 3 of the write-source flow),
+and must run BEFORE `verify_chapter.py` (write-source step 4).
 
 Design:
 - Caption -> item anchor matching via OCR-noise-tolerant heuristic (parse_ref).

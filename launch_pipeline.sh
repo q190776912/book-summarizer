@@ -15,7 +15,7 @@
 #   [flags]     any flag understood by extract_pipeline.py is passed through (--force, --deskew ...)
 set -e
 
-# --- resolve the conda env path: BKS_CONDA_ENV_PATH > user_config.json > example ---
+# --- resolve the conda env path: BKS_CONDA_ENV_PATH > user_config.json > builtin defaults ---
 SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 resolve_env_path() {

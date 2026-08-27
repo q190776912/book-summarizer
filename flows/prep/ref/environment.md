@@ -10,7 +10,7 @@ This skill uses **PDF-Extract-Kit** for formula detection (MFD), formula recogni
 
 ## 配置与路径（参数化，见 `user_config.json`）
 
-所有机器特定路径集中在 skill 根目录 `user_config.json`（缺失时回退到提交的 `user_config.example.json`，也可用 `BKS_*` 环境变量覆盖）。脚本不硬编码任何路径；权重子路径由 `lib/user_config.py::weight_paths()` 从 `model_root` 派生。下文用 `<key>` 表示 config 取值：
+所有机器特定路径集中在 skill 根目录 `user_config.json`（缺失时回退到 `lib/user_config.py` 内置 `_DEFAULTS`，也可用 `BKS_*` 环境变量覆盖）。脚本不硬编码任何路径；权重子路径由 `lib/user_config.py::weight_paths()` 从 `model_root` 派生。下文用 `<key>` 表示 config 取值：
 
 | 配置项（user_config 键） | 含义 |
 |--------------------------|------|

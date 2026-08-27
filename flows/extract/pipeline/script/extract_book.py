@@ -60,7 +60,7 @@ import gc
 
 logging.disable(logging.CRITICAL)
 
-# --- model paths (from user_config; see lib/user_config.py + user_config.example.json) ---
+# --- model paths (from user_config; see lib/user_config.py, _DEFAULTS fallback) ---
 from lib.user_config import weight_paths
 _WP = weight_paths()
 PEK_ROOT = _WP["pek_root"]

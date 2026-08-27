@@ -39,5 +39,5 @@ env/
 .DS_Store
 Thumbs.db
 
-# 注意：本 skill 的 _fig_common.py / _template_layer.py 是必需源码（_ 前缀但非缓存），
-# 上面的规则只忽略字节码（*.py[cod]）与 __pycache__/，不会误伤这些文件，可正常提交。
+# 注意：verify/script/fig_common.py 等均为必需源码（下划线开头 ≠ 缓存文件），
+# 上面的规则只忽略字节码（*.py[cod]）与 __pycache__/，不会误伤这些源码，可正常提交。

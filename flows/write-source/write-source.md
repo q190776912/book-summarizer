@@ -3,7 +3,7 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-依据已修复的 `page_*.json`，按原书结构逐条写出**源语言**章节总结（英文书 = 英文 `ChapterN_*.md`；中文书 = 中文 `第N章_*.md`）。本阶段产出源语言初稿 + 嵌图，并在末尾（步骤 3）统一批量校验所有总结文件。
+依据已修复的 `page_*.json`，按原书结构逐条写出**源语言**章节总结（英文书 = 英文 `ChapterN_*.md`；中文书 = 中文 `第N章_*.md`）。本阶段产出源语言初稿 + 嵌图，并在末尾（步骤 4）统一批量校验所有总结文件。
 ## 前置
 - 🔴 **写源硬闸（不可绕过）**：该章页码区间对应的 `page_*.json` **必须已经过 `mm_repair_apply` 写回**（条目含 `mm_repaired`/`mm_reviewed` 标记、`_mm_repair/manifest.json` 中该章对应页的**每条目 `resolved == true`**），该章无未 resolved 的待修条目，否则**严禁写任何章节**。"`_mm_repair/repairs.json` 有 resolved 条目" ≠ "apply 已写回"——前者只是 agent 视觉补全的**中间产物**，后者才是出口。`manifest.status == "applied"` **不可信**（apply 无条件设置），验证须看 `page_*.json` 标记 + 条目级 resolved 计数，详见 [`extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) 出口条件。启动 write-source 前**必须先用**该文档的「如何验证 apply 已写回」命令确认写回真实发生。
 - 已知该书的源语言（英文书源语言为英文版，中文书源语言为中文版）。
@@ -19,7 +19,7 @@
    - **(a) 先写章首序言（preamble）**：在 `.md` 开头先落 `## §` 之前的所有章级内容——章标题（`# 第N章 …` / `# Chapter N …`）、章导语 / 动机段落、章内**全局记号约定**（如全章统一使用的算子符号、空间定义）、章级 TOC / "四块基石"式摘要列表、以及任何不属于任一具体 `## §` 小节的引子文字。取数边界：**章节点的 `page_start` 至"首个 `## §` 节点 `page_start` 之前"的原文页段**（章 `page_start..page_end` 覆盖整章，首个 `## §` 之前的页即章首序言）。用 `page_json.PageJson.load(fp).page_text()` 逐页取这段、剔除页眉页脚版权噪声后照写。⚠️ 即便后续按节切片调用子代理，**每次切片都必须把这段章首序言作为公共前缀注入**，确保任何小节写作都能看到章级上下文（尤其全局记号），不会因切片而丢信息。
    - **(b) 逐节切片**：按 `book_structure.json` 的 `## §` 节点把该章切成「一节一上下文」的单元；每节单元只加载该节自身的 `page_start..page_end` 原文切片（不重复加载全章 JSON），再携 (a) 的章首序言前缀落笔该节。超大章（字符 > 60000）仍按规则 3 文件级拆分到「节」一级。
    - **(c) 拼接**：各节切片写完后按原顺序拼回整章 `.md`，节与节之间以 `---` + 空行分隔；章首序言置于全章最前、首个 `## §` 之前。
-3. 跑 `flows/script/embed_figures <book_dir>` 嵌入本章图片（见子流程 figures，Step 3.5，强制）。
+3. 跑 `flows/script/embed_figures <book_dir>` 嵌入本章图片（见子流程 figures，强制）。
 4. **使用 `verify/verify.md` 批量校验所有总结文件**（源语言全部章节初稿写完 + 已嵌图后执行，🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
    ```bash
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
@@ -29,7 +29,7 @@
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动 write-source 前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
 - **🔴 规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
-- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 已嵌图后、由步骤 3 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
+- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 已嵌图后、由步骤 4 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
 - **🔴 规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件，命名 `第{N}章_{M}_{名称}.md` / `Chapter{N}_{M}_{名称}.md`（章号后、节号后各一个下划线）；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。
 - **🔴 规则4 — 写源唯一规则文档 = `writing-rules.md`**：本步骤格式与保真约束**只来自 [`docs/writing-rules.md`](../../docs/writing-rules.md)**（含其末尾「verify 规则 ↔ 写作规则映射表」）。verify 各子文档（`verify/<snake>/<snake>.md`、含 `format_verify.md`）仅承载机器判定 / `--fix` 实现，写源阶段**不必读**；校验失败时再查对应子文档。此举收敛 skill 的 token 开销——写源上下文不再重复注入整组 verify 规则文档。
 - **🔴 规则5 — 章首序言保全（切片不丢章级信息）**：按步骤 1.2 逐节切片时，**章标题、章导语、章内全局记号约定、章级 TOC / 摘要列表等「`## §` 之前的所有章级内容」必须先于任何小节写出，且作为公共前缀注入每一次节切片**。禁止把章首信息并入「第一节」或丢弃——否则会丢失跨节共享的记号定义与章级动机。
@@ -46,13 +46,13 @@
 - `flows/extract/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/extract/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 写源时按节点 `page_start..page_end` 取 OCR 原文（双源 (b) 内容来源；步骤 1.2 逐节切片只加载该节 `page_start..page_end` 切片）。
-- `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **H 层 `h_mbq` + G 层** 在步骤 3 `verify --fix` 自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
-- `../../verify/script/audit_counts.py`：逐节条数核对（原由 write-source 步骤 2 调用；该步骤取消后须在 cli 入口或 write-source 步骤 3 前另行挂接，否则源版缺失逐节条数核对）。
+- `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer**（原「H 层 + G 层」，已并入 F 层）在步骤 4 `verify --fix` 自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
+- `../../verify/script/audit_counts.py`：逐节条数核对（原由 write-source 步骤 2 调用；该步骤取消后须在 cli 入口或 write-source 步骤 4 前另行挂接，否则源版缺失逐节条数核对）。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
-- `flows/script/embed_figures`：嵌图（Step 3.5）。
-- `verify/script/verify_chapter.py`：步骤 3 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
+- `flows/script/embed_figures`：嵌图（步骤 3；figures 子流程旧称 Step 3.5）。
+- `verify/script/verify_chapter.py`：步骤 4 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 
 ## 子流程
 - [`写作规则`](../../docs/writing-rules.md) — **写源阶段唯一必读规则文档（SSOT）**，已含 verify 全部写作期规则收敛（末尾映射表）
-- [`write-source/figures`](figures/figures.md) — 嵌入图片（Step 3.5）
-- [`verify`](../../verify/verify.md) — 批量校验关卡（步骤 3 引用；写源阶段不必读各子文档，校验失败排查时再查）
+- [`figures`](figures/figures.md) — 嵌入图片（步骤 3）
+- [`verify`](../../verify/verify.md) — 批量校验关卡（步骤 4 引用；写源阶段不必读各子文档，校验失败排查时再查）

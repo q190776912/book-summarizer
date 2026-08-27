@@ -7,8 +7,9 @@ and the shared ``verify`` engine is a proper package at the skill root level
 
 Each intermediate-product JSON lives in its **own directory** under ``data/<json_name>/``
 (for example ``data/chapter_map/``, ``data/figure_index/``),
-each containing a ``<json_name>.md`` (the spec) and ``<json_name>.py`` (the model class,
-a subclass of the shared base ``data/lib/json_data.py``).  Each config JSON lives in
+each containing a ``<json_name>.md`` (the spec) and ``<json_name>.py`` (the model class;
+some subclass the shared base ``data/lib/json_data.py``, others are plain classes).
+Each config JSON lives in
 its **own directory** under ``config/<json_name>/`` (for example
 ``config/verify_config/``, ``config/ignore_chN/``), each containing a specific-named
 ``<json_name>.md`` doc and its model / instantiation script.  To keep

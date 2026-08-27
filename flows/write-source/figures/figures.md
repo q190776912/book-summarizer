@@ -22,7 +22,7 @@
 
 > 本子流程不重复描述检测 / 命名细节（不伸手进 extract 阶段），只消费其产物。
 
-### 阶段 1：嵌入（Embedding，write-source / Step 3.5）
+### 阶段 1：嵌入（Embedding，write-source / Step 3）
 ```bash
 python flows/script/embed_figures "<book_dir>"            # 整本书（已嵌入自动跳过）
 python flows/script/embed_figures "<book_dir>" --chapter 3 # 只嵌某章
@@ -82,7 +82,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 
 ## 命令速查
 ```bash
-# 嵌入（write-source / Step 3.5）——本子流程核心命令
+# 嵌入（write-source / Step 3）——本子流程核心命令
 python flows/script/embed_figures "<book_dir>"
 python flows/script/embed_figures "<book_dir>" --chapter 3
 python flows/script/embed_figures "<book_dir>" --dry-run

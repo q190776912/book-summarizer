@@ -299,7 +299,7 @@ Common patterns (after correction):
 - **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](figure/ch01_...png)` 漏 `_extract/` 前缀。
 
 - **机器兜底与已知坑**（写源避坑即可，无需手跑）：
-  - `figure/embed_figures.py`（Step 3.5 强制脚本）会自动：块内缩进（顶层 `<img>` 补 `>`）、连续性修复（块内裸空行转 `> `）、flex 包装；三步幂等。
+  - `flows/script/embed_figures.py`（write-source 步骤 3 强制脚本）会自动：块内缩进（顶层 `<img>` 补 `>`）、连续性修复（块内裸空行转 `> `）、flex 包装；三步幂等。
   - **已知遗留**：顶层图片 `</div>` 后不会自动补空行，会导致 C 层报 "missing blank line after `</div>`"——手动在 `</div>` 与 `---` 间补一个空行即可（块内 `> </div>` 形态无需处理）。
 
 ### V-M OCR 漏标条目处理

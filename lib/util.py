@@ -17,3 +17,18 @@ def chapter_of_page(page, chaps):
         if c["start"] <= page <= c["end"]:
             return c.get("ch", c.get("num", c.get("chapter")))
     return None
+
+
+def blk_text(block):
+    """Normalise one ``page_*.json`` text-block entry to a plain string.
+
+    MM-repaired pages occasionally store the repaired line as a nested
+    object (``{"text": {"text": ...}}``); consumers only ever want the
+    final string, so unwrap one level and coerce anything else to "".
+    """
+    if not isinstance(block, dict):
+        return str(block)
+    t = block.get("text", "")
+    if isinstance(t, dict):
+        t = t.get("text", "")
+    return t if isinstance(t, str) else ""

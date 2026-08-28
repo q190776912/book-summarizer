@@ -353,9 +353,26 @@ def _ensure_proof_separator(lines):
     return out, changes
 
 
+def _fences_balanced(md_file):
+    """🔒 PREFLIGHT guard (2026-08 复盘落地).  An unpaired `$$` fence flips the
+    parity of every later block, so the adjacency heuristics below would
+    "repair" against a wrong block map — the exact mechanism behind the
+    2026-08 Ch1 pollution incident (top-level prose swallowed into `>`
+    blocks).  Fail fast: refuse to touch the file instead."""
+    try:
+        from verify.script.preflight import preflight_md
+        return preflight_md(md_file)['balanced']
+    except Exception:
+        return True  # checker unavailable → never block the legacy path
+
+
 def apply_fix(ctx) -> LayerFixResult:
     """Run the full G auto-fix and return the byte-compatible fix dict {g}."""
     md = ctx.md_file
+    if not _fences_balanced(md):
+        print(f"[G-FIXER] BLOCKED: {os.path.basename(md)} 的 $$ 围栏不配对，"
+              f"跳过引用块连续性修复（先修围栏再跑 fixer）。")
+        return LayerFixResult(fix_dict={'g': 0})
     try:
         with open(md, encoding='utf-8') as f:
             orig = f.read()

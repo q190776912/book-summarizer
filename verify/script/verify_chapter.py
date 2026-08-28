@@ -53,7 +53,47 @@ from verify.script.register_all import LAYER_REGISTRY
 from verify.script.report import print_result
 # --ignore / --ignore-figure loaders.
 from verify.script.ignore_files import load_ignore, load_ignore_fig
+# 🔒 PREFLIGHT（2026-08 复盘落地）：围栏/公式块前置检查表（只读）。
+from verify.script.preflight import print_preflight
 
+
+def _preflight_gate(md_file):
+    """🔒 PREFLIGHT 门（--fix 启用前必跑）：输出围栏/公式块检查表。
+
+    返回 True 时才允许进入 fixer 管线（围栏配对且无 \\tag 落在块外）。
+    只读，永不修改文件。
+    """
+    from verify.script.preflight import preflight_md
+    pf = preflight_md(md_file)
+    print('[PREFLIGHT] %s: fences=%d balanced=%s blocks=%d tags=%d (in=%d)'
+          % (os.path.basename(md_file), pf['fences'],
+             'YES' if pf['balanced'] else 'NO', pf['blocks'],
+             pf['tags_total'], pf['tags_in']))
+    if not pf['balanced']:
+        print('  !! 围栏不配对：禁止 --fix（含 --fix-force）。先修复 $$ 围栏'
+              '（步骤见 verify/format_verify/format_verify.md「前置守卫」）。')
+        return False
+    if pf['tags_outside']:
+        print('  !! 有 \\tag 落在配对块外（%s）：先以公式行/\\tag 为锚点整体重建'
+              '公式块，再跑 fixer。'
+              % ','.join(pf['tags_outside'][:8]))
+        return False
+    return True
+
+
+def _fix_disabled_hint(md_file):
+    """全层 --fix 默认禁用提示（2026-08-28 用户裁定）。"""
+    print('[FIX] 全层 --fix 已默认禁用（防止 G 层在内容未归位时污染正文，'
+          '2026-08 Ch1/Ch6 事故）。请改为：')
+    print('      1) 单层修复：按需选择性调用对应 fixer 或手工定点修改；')
+    print('      2) 整章自动修复：确认文件围栏配对后，显式加 --fix-force 越过。')
+    print('      （--fix-force 仅在围栏配对 + 无块外 \\tag 时生效；'
+          '不配对时即使 --fix-force 也拒绝运行。）')
+
+
+def _fix_requested(argv):
+    """True when the caller asked for the full-layer fix pipeline."""
+    return '--fix' in argv and '--fix-force' in argv
 
 def _section_num_from_filename(fn):
     """Extract the section number (as str) from a split section filename.
@@ -416,9 +456,28 @@ def _strip_flags(argv, flags_with_value):
     return out
 
 
-def fix_all_layers(md_file, book_dir=None):
+def _fences_balanced(md_file):
+    """🔒 PREFLIGHT guard: True when the file's `$$` fences are even (paired).
+
+    An unpaired fence flips the parity of every later block, so any
+    block-scope fixer would "repair" against a wrong map (2026-08 Ch1/Ch6
+    incidents).  Read-only check via verify/script/preflight.py."""
+    from verify.script.preflight import preflight_md
+    return preflight_md(md_file)['balanced']
+
+
+def fix_all_layers(md_file, book_dir=None, force=False):
     """Deprecated shim → VerifyManager.fix. Kept for backward-compatible callers
-    (main / --fix). Returns the same change dict as the old fix_all_layers."""
+    (main / --fix). Returns the same change dict as the old fix_all_layers.
+
+    🔒 前置守卫（2026-08 复盘落地）：`$$` 围栏不配对时**拒绝运行全部 fixer**
+    （fail fast 优于静默污染），并返回 {'preflight_blocked': 1}。CLI 需显式
+    `--fix-force` 越过；编程调用传 force=True。"""
+    if not force and not _fences_balanced(md_file):
+        print(f"[PREFLIGHT] BLOCKED: {os.path.basename(md_file)} 的 $$ 围栏不配对，"
+              f"已拒绝运行 --fix（按块作用域修复在错位配对下会污染正文）。"
+              f"先修围栏，或显式使用 --fix-force 越过本守卫。")
+        return {'preflight_blocked': 1}
     ext = os.path.join(book_dir, '_extract') if book_dir else os.path.dirname(md_file)
     book_dir = book_dir or os.path.dirname(md_file)
     loader = _make_loader(ext, book_dir)
@@ -472,23 +531,56 @@ def _main_impl():
 
     # Apply --fix flag (auto-correct format-layer fixers: H/G/I/J/K/L/M/N, etc.) before verification
     if '--fix' in sys.argv:
-        if '--all' not in sys.argv:
-            # `--fix` is a NO-VALUE flag (like in the --all path below): strip it
-            # separately so _strip_flags does NOT consume the next positional
-            # (the chapter number) as a "value" and shift every argument.
+        if not _fix_requested(sys.argv):
+            if '--all' not in sys.argv:
+                args_fix = _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure'))
+                args_fix = [a for a in args_fix if a != '--fix']
+                if len(args_fix) >= 4:
+                    _fix_disabled_hint(args_fix[3])
+        elif '--all' not in sys.argv:
+            # `--fix --fix-force` (NO-VALUE flags): strip them separately so
+            # _strip_flags does NOT consume the next positional (the chapter
+            # number) as a "value" and shift every argument.
             args_fix = _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure'))
-            args_fix = [a for a in args_fix if a != '--fix']
+            args_fix = [a for a in args_fix if a not in ('--fix', '--fix-force')]
             if len(args_fix) >= 4:
                 md_file = args_fix[3]
                 ext_fix = args_fix[4] if len(args_fix) > 4 else None
                 book_dir_fix = os.path.dirname(ext_fix) if ext_fix else None
-                print(f"[FIX] Auto-correcting layers on {os.path.basename(md_file)}...")
-                res = fix_all_layers(md_file, book_dir=book_dir_fix)
-                parts = [f"{k}={v}" for k, v in res.items() if v > 0]
-                if parts:
-                    print(f"[FIX] Applied: {', '.join(parts)}")
+                if _preflight_gate(md_file):
+                    print(f"[FIX] Auto-correcting layers on {os.path.basename(md_file)}...")
+                    res = fix_all_layers(md_file, book_dir=book_dir_fix, force=True)
+                    parts = [f"{k}={v}" for k, v in res.items() if v > 0]
+                    if parts:
+                        print(f"[FIX] Applied: {', '.join(parts)}")
+                    else:
+                        print(f"[FIX] No changes needed")
                 else:
-                    print(f"[FIX] No changes needed")
+                    print("[FIX] 未执行：PREFLIGHT 门未通过。")
+
+    # 🔒 PREFLIGHT mode: print the read-only fence/tag checklist and exit.
+    # Covers both single-chapter (`--preflight ch start end md ext`) and
+    # `--all --preflight ext book_dir`.  Never modifies files.
+    if '--preflight' in sys.argv:
+        if '--all' in sys.argv:
+            pos_pf = [a for a in _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure'))
+                      if a not in ('--all', '--preflight', '--fix', '--fix-force')]
+            if len(pos_pf) < 2:
+                print("Usage: verify_chapter.py --all --preflight <extract_dir> <book_dir>")
+                sys.exit(2)
+            ext_pf, book_pf = _norm_win(pos_pf[0]), _norm_win(pos_pf[1])
+            files = []
+            for fn in sorted(glob.glob(os.path.join(book_pf, '*.md'))):
+                files.append(fn)
+            ok = print_preflight(files, label='--all')
+        else:
+            pos_pf = [a for a in _strip_flags(sys.argv[1:], ('--manual', '--ignore', '--ignore-figure'))
+                      if a not in ('--preflight', '--fix', '--fix-force')]
+            if len(pos_pf) < 5:
+                print("Usage: verify_chapter.py --preflight <ch> <start> <end> <md_file> <extract_dir>")
+                sys.exit(2)
+            ok = print_preflight([_norm_win(pos_pf[3])], label='ch%s' % pos_pf[0])
+        sys.exit(0 if ok else 1)
 
     # --all mode: verify all chapters
     if '--all' in sys.argv:
@@ -508,8 +600,12 @@ def _main_impl():
         ext = _norm_win(pos[i + 1])
         book_dir = _norm_win(pos[i + 2])
 
-        # Apply --fix to all chapters before verification
-        if '--fix' in sys.argv:
+        # Apply --fix --fix-force to all chapters before verification
+        # (plain --fix is disabled by default; see _fix_disabled_hint)
+        if '--fix' in sys.argv and not _fix_requested(sys.argv):
+            print("[FIX] 全层 --fix 已默认禁用（--all 批处理同理）；"
+                  "如确需整书自动修复，改用 --fix --fix-force（仍受 PREFLIGHT 门约束）。")
+        if _fix_requested(sys.argv):
             loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
             chapters = loader.chapters
             if chapters:
@@ -524,14 +620,16 @@ def _main_impl():
                 for info in sorted(chapters.values(), key=_ch_sort_key2):
                     for grp in chapter_md_groups(book_dir, info.ch):
                         for md_file in grp:
-                            res = fix_all_layers(md_file, book_dir=book_dir)
+                            res = fix_all_layers(md_file, book_dir=book_dir,
+                                                 force='--fix-force' in sys.argv)
                             parts = [f"{k}={v}" for k, v in res.items() if v > 0]
                             if parts:
                                 print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
             else:
                 for grp in _all_md_files(book_dir):
                     for md_file in grp:
-                        res = fix_all_layers(md_file, book_dir=book_dir)
+                        res = fix_all_layers(md_file, book_dir=book_dir,
+                                             force='--fix-force' in sys.argv)
                         parts = [f"{k}={v}" for k, v in res.items() if v > 0]
                         if parts:
                             print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
@@ -555,7 +653,9 @@ def _main_impl():
         print("  --manual: path to manual_overrides_ch{N}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
-        print("  --fix: auto-correct format-layer fixer issues (H/G/I/J/K/L/M/N) before verification")
+        print("  --fix: 已默认禁用（2026-08-28）。须与 --fix-force 同用才执行全层自动修复")
+        print("  --fix-force: 显式启用全层修复（仍受 PREFLIGHT 围栏门约束；不配对文件即使 force 也拒绝运行）")
+        print("  --preflight: read-only fence/tag checklist (fences/blocks/tags in-out), no fix")
         print("  ordinal(数组) / language / strict / ignore / manual are")
         print("  configured in <book>/_extract/verify_config.json (see verify/verify.md).")
         print("  ordinal / section_types 必须在 <book>/_extract/verify_config.json")
@@ -570,10 +670,15 @@ def _main_impl():
     book_dir_single = os.path.dirname(ext) if ext else None
 
     if fix_requested:
-        res = fix_all_layers(md, book_dir=book_dir_single)
-        parts = [f"{k}={v}" for k, v in res.items() if v > 0]
-        if parts:
-            print(f"[FIX] Ch{ch}: {', '.join(parts)}")
+        if not _fix_requested(sys.argv):
+            _fix_disabled_hint(md)
+        elif _preflight_gate(md):
+            res = fix_all_layers(md, book_dir=book_dir_single, force=True)
+            parts = [f"{k}={v}" for k, v in res.items() if v > 0]
+            if parts:
+                print(f"[FIX] Ch{ch}: {', '.join(parts)}")
+        else:
+            print("[FIX] 未执行：PREFLIGHT 门未通过。")
     r = verify_one(ch, start, end, md, ext, book_dir_single, extra_ignore=extra_ignore)
     status = print_result(r)
     # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。

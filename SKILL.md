@@ -84,10 +84,11 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 | 配置（extract 子流程） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（extract 子流程） | `flows/script/extract_figures` · `…/assign_figures.py` |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供，`verify --fix` 自动调用）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
+| 写作 | 消费 extract 阶段由 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供；注：2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 围栏门才执行）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
 | 嵌图 | `flows/script/embed_figures` |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖序标集合成员 + 序列顺序(ORDER_MISMATCH) + 小节定位(MISPLACED)；公式内容保真人工核对 |
+| 结构修复（写源后 remediation） | `tools/restructure_by_ocr.py`：B 层报 ORDERING BLOCKING（条目被放错 §）时，以 OCR `page_*.json` 派生 item→section 真值图 + 贪心单调门把条目归位到源书真实 §（逐字保真、不编造）；先 report 模式核对移动项，确认后 `--apply` 写回（自动备份）。与 write-source「不得重排」规则互补：仅纠正确定性错节，不动正确顺序 |
 
 各脚本的详细用途与各层 `--fix` 范围见 [`flows`](flows) 对应流程文档；通用校验文档（层级语义 / 顺序 / 字节契约）见 [`verify`](verify)。
 

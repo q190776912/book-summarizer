@@ -320,53 +320,75 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     accepted.  `max_depth` bounds the hierarchy search (default 6 = chapter +
     5 nested levels).
     """
-    m = _SEC_HEAD_RE.match(ln)
-    if not m:
-        return None
-    comps = [x for x in _SEC_SEP_RE.split(m.group(1)) if x]
-    if len(comps) < 2 or len(comps) > max_depth:
-        return None
-    if ch is not None and comps[0].isdigit() and int(comps[0]) != ch:
-        return None
-    depth = len(comps)
-    if depths is not None and depth not in depths:
-        return None
-    rest = ln[m.end():].lstrip()
-    # Tolerate an optional dot right after the number ("1-2. Parametrized
-    # Curves", do Carmo) — a real header may print `C.S. Title`; strip the
-    # punctuation run before the alnum check below.
-    rest = rest.lstrip('.．。').lstrip()
-    if not rest or not (rest[0].isalnum() or rest[0] in _SEC_TITLE_SYMBOLS):
-        return None  # number with no following title -> not a header
-    title = rest[:20]
-    # 标签词只有后随数字才是条目标题（"2.1 Definition of ..."）；纯含标签词的
-    # 章节标题（"4.4 Examples"、"5.11 Axiom A and Structural Stability"）是
-    # 真小节，不得据此拒绝（Brin & Stuck 实测整节漏检根因）。
-    # 🔴 锚定改为「标题起始」：条目标题的标签词必在编号紧后（标题起点），
-    # 而真小节标题中部的「定理+页码粘连」（孙文祥《遍历论》实测
-    # "82.4Poincaré回复定理43"——页眉页码 43 粘在「定理」后构成
-    # "定理43" 假条目形态）不应触发拒绝，否则整节漏检。
-    if _SEC_TITLE_LABEL_NUM_RE.match(title.lstrip()):
-        return None  # labeled item / figure / table, not a section
-    # 短标题守卫：拉丁字母 1-3 字（"A"/"B" OCR 图示残粒）拒；含 CJK 的
-    # 2-3 字真标题（孙文祥《遍历论》"熵映射"/"平衡态"）保留。
-    _rest_stripped = rest.strip()
-    if len(_rest_stripped) < 4 and not re.search(r'[一-鿿]', _rest_stripped):
-        return None  # too short to be a title ("A"/"B" junk from OCR'd
-        # section-dependency diagrams like "5-6.A") — real titles have words
-    if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
-        return None
-    # A genuine section title is Title-Case / Han / starts with a digit — reject
-    # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
-    # "14-1-0359 and W911NF..." grant numbers glued to text).  Only a leading
-    # lowercase ASCII letter is rejected; Han / digit / uppercase are kept.
-    first = next((c for c in rest if c.isalnum()), None)
-    if first is not None and 'a' <= first <= 'z':
-        # 容忍「小写符号变量 + 连字 + 大写词」型标题：Brin & Stuck §5.3
-        # "∈-Orbits" 被 OCR 读成 'e-Orbits'——首字符小写但非散文。
-        if not re.match(r"[a-z][-–—][A-Z]", rest):
+    def _validate(num_str, m_end):
+        comps = [x for x in _SEC_SEP_RE.split(num_str) if x]
+        if len(comps) < 2 or len(comps) > max_depth:
             return None
-    return m.group(1), depth, rest.strip()
+        if ch is not None and comps[0].isdigit() and int(comps[0]) != ch:
+            return None
+        depth = len(comps)
+        if depths is not None and depth not in depths:
+            return None
+        rest = ln[m_end:].lstrip()
+        # Tolerate an optional dot right after the number ("1-2. Parametrized
+        # Curves", do Carmo) — a real header may print `C.S. Title`; strip the
+        # punctuation run before the alnum check below.
+        rest = rest.lstrip('.．。').lstrip()
+        if not rest or not (rest[0].isalnum() or rest[0] in _SEC_TITLE_SYMBOLS):
+            return None  # number with no following title -> not a header
+        title = rest[:20]
+        # 标签词只有后随数字才是条目标题（"2.1 Definition of ..."）；纯含标签词的
+        # 章节标题（"4.4 Examples"、"5.11 Axiom A and Structural Stability"）是
+        # 真小节，不得据此拒绝（Brin & Stuck 实测整节漏检根因）。
+        # 🔴 锚定改为「标题起始」：条目标题的标签词必在编号紧后（标题起点），
+        # 而真小节标题中部的「定理+页码粘连」（孙文祥《遍历论》实测
+        # "82.4Poincaré回复定理43"——页眉页码 43 粘在「定理」后构成
+        # "定理43" 假条目形态）不应触发拒绝，否则整节漏检。
+        if _SEC_TITLE_LABEL_NUM_RE.match(title.lstrip()):
+            return None  # labeled item / figure / table, not a section
+        # 短标题守卫：拉丁字母 1-3 字（"A"/"B" OCR 图示残粒）拒；含 CJK 的
+        # 2-3 字真标题（孙文祥《遍历论》"熵映射"/"平衡态"）保留。
+        _rest_stripped = rest.strip()
+        if len(_rest_stripped) < 4 and not re.search(r'[一-鿿]', _rest_stripped):
+            return None  # too short to be a title ("A"/"B" junk from OCR'd
+            # section-dependency diagrams like "5-6.A") — real titles have words
+        if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
+            return None
+        # A genuine section title is Title-Case / Han / starts with a digit — reject
+        # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
+        # "14-1-0359 and W911NF..." grant numbers glued to text).  Only a leading
+        # lowercase ASCII letter is rejected; Han / digit / uppercase are kept.
+        first = next((c for c in rest if c.isalnum()), None)
+        if first is not None and 'a' <= first <= 'z':
+            # 容忍「小写符号变量 + 连字 + 大写词」型标题：Brin & Stuck §5.3
+            # "∈-Orbits" 被 OCR 读成 'e-Orbits'——首字符小写但非散文。
+            if not re.match(r"[a-z][-–—][A-Z]", rest):
+                return None
+        rest = rest.strip()
+        # 印刷页码右缘粘连清尾：「…极限点25」型——CJK 后紧跟 1–3 位数字收尾，
+        # 是页眉/页脚页码粘进节标题的 OCR 形态（周民强《实变函数论》实测），
+        # 去掉尾部数字恢复干净标题。
+        _glue_pg = re.match(r'^(.*[一-鿿])(\d{1,3})$', rest)
+        if _glue_pg and len(_glue_pg.group(1)) > 4:
+            rest = _glue_pg.group(1)
+        return num_str, depth, rest
+
+    m = _SEC_HEAD_RE.match(ln)
+    if m:
+        v = _validate(m.group(1), m.end())
+        if v:
+            return v
+    # Fallback: § glyph OCR'd into a GLUED LEADING DIGIT (周民强《实变函数论》
+    # 实测 §5.1 → "55.1单调函数的可微性"，§→5 重复首数)。形态＝一个散落数字
+    # （可再夹一个 §/8/S/s/$ 垃圾符）后跟真正的 C.S 头。该变体只在捕捉到的
+    # 首分量 == 当前章号时才放行（_validate 内强制），且普通正文行极少以
+    # 「重复章号+小节号」开头，误报风险低。
+    m2 = re.match(r'^\s*\d\s*[§8Ss$\*]?\s*(\d{1,2}(?:[.\-–·/．－〜]\d{1,3})*)', ln)
+    if m2:
+        v = _validate(m2.group(1), m2.end())
+        if v:
+            return v
+    return None
 
 
 # Map an integer `ordinal` (config) to scan_skeleton's parsing mode.

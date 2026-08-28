@@ -68,6 +68,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+from lib.util import blk_text  # noqa: E402
 
 import os
 import sys
@@ -219,7 +220,7 @@ def _detect_section_hierarchy(extract_dir, max_depth=4):
         except Exception:
             continue
         for b in data.get('text', []):
-            txt = b.get('text', '').strip() if isinstance(b, dict) else ''
+            txt = blk_text(b).strip() if isinstance(b, dict) else ''
             if not txt:
                 continue
             d = _section_header_depth(txt, max_depth=max_depth)
@@ -475,7 +476,7 @@ def detect_formula(extract_dir):
                 data = json.load(f)
         except Exception:
             continue
-        texts = [b.get('text', '') for b in data.get('text', [])
+        texts = [blk_text(b) for b in data.get('text', [])
                  if isinstance(b, dict)]
         for text in texts:
             if not text:
@@ -831,7 +832,7 @@ def _detect_ordinal_from_pages(extract_dir):
         # Scan PER BLOCK (not the whole page joined into one string) so we can
         # tell whether a "Label N.M" sits at a block boundary — the strongest
         # signal that it is a real heading rather than a mid-prose reference.
-        blocks = [b.get('text', '') for b in data.get('text', [])
+        blocks = [blk_text(b) for b in data.get('text', [])
                   if isinstance(b, dict)]
         for block in blocks:
             if not block:
@@ -986,7 +987,7 @@ def _detect_exercise_counter(extract_dir):
             continue
         pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
         for b in data.get('text', []):
-            if isinstance(b, dict) and b.get('text', '') and EXER_HEAD_RE.search(b['text']):
+            if isinstance(b, dict) and blk_text(b) and EXER_HEAD_RE.search(blk_text(b)):
                 zone.update(range(pno - 2, pno + 3))
                 break
     # Pass 2: look for bare consecutive ordinal runs on NON-zone pages.
@@ -1002,7 +1003,7 @@ def _detect_exercise_counter(extract_dir):
         for b in data.get('text', []):
             if not isinstance(b, dict):
                 continue
-            text = b.get('text', '')
+            text = blk_text(b)
             if not text:
                 continue
             nums = [int(x) for x in BARE_RE.findall(text)]

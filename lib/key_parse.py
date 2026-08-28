@@ -67,13 +67,21 @@ GM_SEP = SEP_TIGHT[:-1] + r'、]'
 # [定义定理...] matches a SINGLE cjk char, so `**定义1.1**` (label is 2 chars)
 # would never match — every entry then silently degrades to "mentioned-only".
 ENTRY_RE_2 = re.compile(
-    r'\*\*(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition'
+    r'\*\*(定义|定理|引理|推论|命题|例|示例'
+    r'|Definition|Theorem|Lemma|Corollary|Proposition|Example'
+    r'|公理|Axiom'
+    r'|问题|Problem'
     r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
+# 2026-08-27 补齐 例/Example/公理/Axiom/问题/Problem/示例 的 ENTRY_RE_2+PROSE_RE_2 覆盖
+# （之前仅含 定义|定理|引理|推论|命题|注记|评注|注|Remark，中文书籍的
+# 例1.X 等条目长期被静默略过成 missing，与 verify_config 里已配置的
+# type=example/example ordinal group 完全脱节）。
 PROSE_RE_2 = re.compile(
-    r'(定义|定理|引理|推论|命题'
-    r'|Definition|Theorem|Lemma|Corollary|Proposition'
+    r'(定义|定理|引理|推论|命题|例|示例'
+    r'|Definition|Theorem|Lemma|Corollary|Proposition|Example'
+    r'|公理|Axiom'
+    r'|问题|Problem'
     r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 def normkey(s):

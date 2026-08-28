@@ -32,12 +32,20 @@
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](formula_tag/formula_tag.md) |
 
 ## 步骤（有序）
+0. **🔒 前置检查表 PREFLIGHT（2026-08 复盘落地，凡要跑 `--fix` 前必做）**：先跑只读检查表确认 `$$` 围栏配对（fences 为偶）且无 `\\tag` 落在配对块外，才允许进入任何块作用域修复：
+   ```powershell
+   python verify/script/verify_chapter.py --preflight <ch> <start> <end> <md> <extract>
+   python verify/script/verify_chapter.py --all --preflight <extract_dir> <book_dir>
+   ```
+   - **机制**：Q 层 `_BLOCK_RE = \$\$(.*?)\$\$` 为顺序非贪婪配对——一个落单 `\$\$` 会使其后所有块的奇偶归属整体翻转，`\\tag` 全部被挤出块外；此时邻接启发式 fixer（G 层等）按错误的块图“修复”会静默污染正文（2026-08 实测两起：Ch1 顶层正文被吞进引用块、Ch6 补围栏越补 OUTSIDE 越多 12→18）。
+   - **三数不变量**：`fences`（须偶）/ `blocks`（配对块数）/ `tags in vs OUTSIDE`（\\tag 应全部在块内）。OUTSIDE 非空时先以公式行/`\\tag` 为锚点**整体确定性重建**公式块（引用块内保留 `> ` 前缀），禁止逐处补围栏。
+   - **CLI 守卫（🔴 2026-08-28 用户裁定升级）**：**全层 `--fix` 已默认禁用**——裸 `--fix` 只输出禁用提示，不运行任何 fixer（防止内容未归位时 G 层等邻接启发式修复污染正文，2026-08 Ch1/Ch6 事故）。确需整章自动修复时用 `--fix --fix-force`：仍须先过 PREFLIGHT 门（围栏配对且无块外 `\tag`，任一不满足即使 force 也拒绝）；G 层 fixer 另有独立内置守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）双保险。
 1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 4`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
 2. 批量校验：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
    ```
-3. 未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。
+3. 未过时的修复纪律（🔴 2026-08-28 起**全层 `--fix` 默认禁用**）：默认走**选择性单层修复 / 手工定点修改**（裸 LaTeX 包数学模式、围栏重建等本就不在 fixer 范围内）；确需整章自动修复时，先跑步骤 0 的 `--preflight` 确认围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受 PREFLIGHT 门约束），随后**不带 fix 旗标复验**确认 `exit 0`；至多 2 轮仍不过则继续定点修，**严禁停下来问用户**。
 4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/<snake>/script/<snake>.py`，文档 `verify/<snake>/<snake>.md`，各自 SSOT）。
 5. 公式序标保真（序列顺序 `ORDER_MISMATCH` + 小节定位 `MISPLACED`）已由 Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖；公式**内容**保真仍靠人工核对（机器不判内容对错）。
 6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对所有 17 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
@@ -57,6 +65,7 @@
 - **规则1 批量纪律（最高优先级）**：🚫 **禁止逐章校验**（含"用第 1 章做 pilot 提前 verify"的变体）。唯一正确顺序：**先写完全书某语言初稿 → 全书配置定型 → 本阶段用 `verify_chapter.py --all` 一次性批量校验**。全书完成后最终汇报一次性给出。
   - 原因：书级配置需待全书编号形态定型后，D 层 `section_types`（深度经 `SECTION_TYPE_DEPTH` 派生）/ Q 层 `formula` 序标映射 / ordinal 分组都依赖全书编号形态，单章 verify 结果失真、属无效功；B–Q 若干判定需整章 / 整书上下文。
 - **`--all` 自动发现章节文件**：合并文件（`第N章_*` / `ChapterN_*`）存在直接校验；否则按节拆分文件（`第N章_M_...` / `ChapterN_M_...`，旧式无第二个下划线亦兼容）每语言一组，临时合并回整章校验（B 层完整性需整章一次通过），中英文各计一条结果；`--fix --all` 逐节文件单独修复。
+- **规则5 修复顺序闸门（2026-08 复盘落地）**：安全顺序 = 基线还原 → 围栏审计（一次性、从后往前，禁止边修边重扫——迭代重扫曾致死循环）→ 公式块确定性重建（保留引用块 `> ` 前缀）→ 引用连续性 → 风格收尾 → 每步 verify。每步之间跑 verify + PREFLIGHT 三数比对，异常立即从备份回滚，绝不在损坏状态上叠加修改；并行手工编辑纪律见规则4。
 - **失败处理**：任何一条不通过都算失败，必须修正后重验；修正方向严格单向（先源后译）。
 - **规则2 ignore 审计铁律（防误用隐藏真实缺项 · 仅限 B 层编号域 / D-B 结构完整性域）**：只要被验证章节存在「编号 ignore」条目（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` 或 `ignore_ch{N}.json` 非空），**该 D/B 校验流程的收尾强制包含一步 agent 审计**（`audit_ignore.py`，`verify_chapter.py` 已自动执行）。SUSPECT（退出码 1）即判定该 ignore 在隐藏真实缺项，校验**不得 PASS**——先经 `manual_overrides_ch{N}.json` 补回真实缺项，或确认确为书本身稀疏编号 / 真噪点并补举证，再重验。绝不允许为求 PASS 把序列洞塞进 ignore。注：Q 层 `formula.ignore`、E 层 `ignore_fig` 不在此审计范围内。（🟢 例外：带 `VERIFIED-SPARSE` 等显式证据标记的序列洞 ignore 判 `ACCEPTED`，非阻断、不阻止 PASS——因其是书源真实跳号而非隐藏缺项；无证据标记则仍 SUSPECT。）
 - **规则3 控制台编码（Windows GBK 崩溃防护）**：层报告含 ⚠ · —— 等 GBK 不可编码字符，zh-CN 控制台管道输出会在收尾报告处抛 `UnicodeEncodeError`（实测 chaos-fractals：--all 全部校验完成后崩在 `audit_ignore._print_report` 的 ⚠，拿不到退出码）。防护已集中落在 `lib/boot.py::_force_utf8_stdio()`（每个入口脚本的 `_boot.setup()` 自动把 stdout/stderr 重配置为 UTF-8 + errors=replace），无需逐脚本处理；异常包装环境（IDE 捕获/非常规管道）下仍建议 `$env:PYTHONIOENCODING='utf-8'` 兜底。

@@ -275,6 +275,22 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
         # seq=[1,32,2,3,…]）。补齐见$ / 据$ 等齐尾锚点后正确剔除。
         r'|见$|据$')
     lab_items = []
+    _pdf_truth = None
+    try:
+        _tp = os.path.join(extract_dir, '_pdf_truth.json')
+        if os.path.exists(_tp):
+            _pdf_truth = json.load(open(_tp, encoding='utf-8'))
+    except Exception:
+        _pdf_truth = None
+    _backfill_whitelist = set()
+    try:
+        for _ov_ch in sorted(os.listdir(extract_dir)):
+            if _ov_ch.startswith('manual_overrides_ch') and _ov_ch.endswith('.json'):
+                for _ov in json.load(open(os.path.join(extract_dir, _ov_ch), encoding='utf-8')):
+                    _backfill_whitelist.add(str(_ov.get('key')))
+    except Exception:
+        _backfill_whitelist = set()
+
     for p, y, txt in all_blocks:
         for m in lab_re.finditer(txt):
             c = int(m.group(2)); num = int(m.group(3))
@@ -287,9 +303,26 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
             #   且保留跨章前向引用（c > 15）与指涉语境守卫。
             if c > 15 or num > 300:
                 continue
-            if m.start() > 0 and _cite_ctx_re.search(txt[:m.start()].rstrip()):
-                continue
-            # 🔴 OCR「之N.」塌缩幻影拒绝（通用判据：非 CJK 尾符）。
+            # PDF 真实参煦标准（本 skill 2026-08-27 立）：当 <extract>/_pdf_truth.json
+            # 存在时，将逐 ch/label 的「真书 PDF 得到的断续编号列表」作为先验
+            # 校验：凡 OCR 产出、但真书 PDF 中不存在的条头号一律 drop。这些是
+            # OCR「之N. 塌缩」幻影（例 2.14、2.16、2.21、定语 2.34、3.1/2/19、
+            # 3.5/6/9 …）。但 explicit 写入 manual_overrides_chN.json 的 key 会
+            # 跳过取保留（用于 OCR 错误遗遗的真实条目录（回填时称白名单）。**
+            if _pdf_truth is not None:
+                _skip_x = False
+                for _lt, _lt_cn in (('theorem','定理'),('definition','定义'),
+                                    ('lemma','引理'),('proposition','命题'),
+                                    ('example','例'),('corollary','推论'),
+                                    ('axiom','公理')):
+                    if _lt_cn in m.group(1):
+                        _t = _pdf_truth.get(f'{c}/{_lt}', set())
+                        _kp = f'{m.group(1)}{c}.{num}' in _backfill_whitelist
+                        if not _kp and num not in _t:
+                            _skip_x = True
+                        break
+                if _skip_x:
+                    continue
             # 本体例（冯琦《集合论》三章）在条头后接「之N.」标子句
             # （定理1.6之1、例1.2之72、引理2.1之13），OCR 丢「之」使子句号与
             # 条号贴合成多位数字再紧接 ASCII 点/等号/数学字母（例 1.70 =0.、

@@ -45,6 +45,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import lib.boot as _boot
+from lib.util import blk_text
 _boot.setup()
 
 from data.book_structure.book_structure import BookStructure
@@ -142,7 +143,7 @@ def _scan_ocr_noise(ext, start, end):
         except Exception:
             continue
         for b in d.get("text", []):
-            t = b.get("text", "").strip()
+            t = blk_text(b).strip()
             if not t:
                 continue
             if _LABEL_RE.search(t) and not _NUM_RE.search(t):

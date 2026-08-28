@@ -58,9 +58,17 @@ _ROMAN_VALID = re.compile(
 _ROMAN_VALUES = {'i': 1, 'v': 5, 'x': 10, 'l': 50, 'c': 100, 'd': 500, 'm': 1000}
 
 def _o_match_line(line):
-    """Try to extract an ordinal label from a line. Returns the raw label
-    string (e.g. '3', 'ii', 'b') or None if the line is not a numbered item.
-    
+    """Try to extract ordinal label(s) from a line. Returns a LIST of raw
+    label strings (e.g. ['3'], ['ii'], ['b']) or [] if the line is not a
+    numbered item.
+
+    A line is treated as a sub-item sequence when it BEGINS with a sub-item
+    marker (paren / bold-dot / plain-dot). On such lines we capture EVERY
+    `(n)` / `**n.**` marker in the line, not just the first — this correctly
+    handles inline sequences like `引理 (1) a；(2) b；(3) c；` where the
+    numbers share one physical line (previously only the leading number was
+    seen, producing a false "missing (2)(3)" warning).
+
     Excludes blockquote lines (`>` prefix) from plain-dot matching to avoid
     false positives on proof steps (1. 2. 3. inside > **证明思路**).
     Parenthesized and bold patterns are allowed inside blockquotes since
@@ -69,17 +77,25 @@ def _o_match_line(line):
     # Pattern A: parenthesized (works anywhere, including inside blockquotes)
     m = _O_PAREN_RE.match(line)
     if m:
-        return m.group(1)
+        labels = [mm.group(1) for mm in
+                  re.finditer(r'[（(]([0-9]+|[a-z]+)[)）]', line)]
+        if labels:
+            return labels
+        return [m.group(1)]
     # Pattern B: bold with dot (works anywhere)
     m = _O_BOLD_DOT_RE.match(line)
     if m:
-        return m.group(1)
+        labels = [mm.group(1) for mm in
+                  re.finditer(r'\*\*([0-9]+|[a-z]+)[.)]\*\*', line)]
+        if labels:
+            return labels
+        return [m.group(1)]
     # Pattern C: plain with dot (top-level only, exclude blockquotes)
     if not line.lstrip().startswith('>'):
         m = _O_PLAIN_DOT_RE.match(line)
         if m:
-            return m.group(2)
-    return None
+            return [m.group(2)]
+    return []
 
 def _roman_to_int(s):
     """Convert a roman numeral string to integer. Returns 0 if invalid."""
@@ -200,9 +216,9 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
     # Phase 1: find all numbered/lettered lines
     item_lines = []  # (line_idx, raw_label)
     for i, ln in enumerate(lines):
-        label = _o_match_line(ln)
-        if label:
-            item_lines.append((i, label))
+        labels = _o_match_line(ln)
+        for lb in labels:
+            item_lines.append((i, lb))
 
     if not item_lines:
         return []
@@ -220,8 +236,19 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
             cur_block = [item_lines[k]]
     blocks.append(cur_block)
 
+    # Precompute per-block ordinal sets + line spans for cross-block
+    # continuation detection (e.g. 定理1.7 的 (5)(6)(7) 承接 定理1.6 的 (1)–(4)):
+    # a gap is NOT a real omission when the missing leading/internal numbers
+    # already appear in a NEARBY preceding block (same item sequence).
+    block_meta = []
+    for blk in blocks:
+        st, oi = _classify_block(blk)
+        ords = set() if st == 'mixed' else {v for _, v in oi if v > 0}
+        block_meta.append({'ords': ords,
+                           'first': blk[0][0], 'last': blk[-1][0]})
+
     # Phase 2: check each block for gaps
-    for block in blocks:
+    for bi, block in enumerate(blocks):
         if len(block) < 3:
             continue  # too few items — likely cross-references, not a sequence
 
@@ -237,6 +264,15 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         first_line = ordinal_items[0][0] + 1  # 1-indexed for display
         min_ord, max_ord = ordinals[0], ordinals[-1]
         ord_set = set(ordinals)
+
+        # Cross-block continuation: gather ordinals from nearby preceding blocks
+        # (within 120 lines). If the "missing" numbers already appear there, the
+        # current block is a legitimate continuation, not an omission.
+        prev_ords = set()
+        for pj in range(bi - 1, -1, -1):
+            if block_meta[pj]['last'] < block_meta[bi]['first'] - 120:
+                break
+            prev_ords |= block_meta[pj]['ords']
 
         # Find context header (look up to 5 lines above first item)
         ctx_label = ""
@@ -264,25 +300,29 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
 
         type_tag = {'numeric': 'num', 'roman': 'roman', 'alpha': 'alpha'}[seq_type]
 
-        # HEAD gap: sequence starts above 1
+        # HEAD gap: sequence starts above 1 — suppress if the leading numbers
+        # already appear in a nearby preceding block (cross-theorem continuation)
         if min_ord > 1:
-            head_missing = [_fmt(v) for v in range(1, min_ord)]
-            out.append(
-                f"  x L{first_line}: [{ctx_label}] HEAD gap ({type_tag}) — "
-                f"sequence starts at ({_fmt(min_ord)}), "
-                f"missing ({', '.join(head_missing)}) before first item"
-            )
+            if not set(range(1, min_ord)).issubset(prev_ords):
+                head_missing = [_fmt(v) for v in range(1, min_ord)]
+                out.append(
+                    f"  x L{first_line}: [{ctx_label}] HEAD gap ({type_tag}) — "
+                    f"sequence starts at ({_fmt(min_ord)}), "
+                    f"missing ({', '.join(head_missing)}) before first item"
+                )
 
-        # INTERNAL gaps: missing ordinals between min and max
+        # INTERNAL gaps: missing ordinals between min and max — suppress if the
+        # missing numbers already appear in a nearby preceding block
         expected = set(range(min_ord, max_ord + 1))
         internal_missing = sorted(expected - ord_set)
         if internal_missing:
-            present_str = ', '.join(_fmt(v) for v in ordinals)
-            missing_str = ', '.join(_fmt(v) for v in internal_missing)
-            out.append(
-                f"  x L{first_line}: [{ctx_label}] INTERNAL gap ({type_tag}) — "
-                f"present: ({present_str}), missing: ({missing_str})"
-            )
+            if not set(internal_missing).issubset(prev_ords):
+                present_str = ', '.join(_fmt(v) for v in ordinals)
+                missing_str = ', '.join(_fmt(v) for v in internal_missing)
+                out.append(
+                    f"  x L{first_line}: [{ctx_label}] INTERNAL gap ({type_tag}) — "
+                    f"present: ({present_str}), missing: ({missing_str})"
+                )
 
         # TAIL gap: cross-reference OCR JSON for higher numbers (numeric only)
         if seq_type == 'numeric' and ext_dir and ch is not None and start is not None and end is not None:

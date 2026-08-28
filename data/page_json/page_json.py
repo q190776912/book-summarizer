@@ -21,6 +21,7 @@ class PageJson:
     def __init__(self, data: Dict[str, Any]):
         # Raw engine output. We do not own this schema; keep it intact.
         self.data: Dict[str, Any] = data
+        self._normalize()
 
     # ---- construction / (de)serialisation ----
     @classmethod
@@ -32,6 +33,17 @@ class PageJson:
     def load(cls, path: str) -> "PageJson":
         with open(path, encoding="utf-8") as f:
             return cls(json.load(f))
+
+    def _normalize(self) -> None:
+        """Ingestion-boundary normalisation: MM-repaired pages occasionally
+        nest the repaired line one level deeper (``{"text": {"text": ...}}``);
+        unwrap so every consumer sees a plain string."""
+        for b in self.data.get("text", []):
+            if isinstance(b, dict):
+                t = b.get("text")
+                if isinstance(t, dict):
+                    inner = t.get("text", "")
+                    b["text"] = inner if isinstance(inner, str) else ""
 
     def dump(self, path: str) -> None:
         # Compact: page_*.json is large OCR output; no indent keeps it small,

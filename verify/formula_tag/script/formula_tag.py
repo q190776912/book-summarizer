@@ -1071,8 +1071,10 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     #    are single-component -> every \tag{N} would be mis-judged cross-chapter
     #    INCONSISTENT.  Decide single- vs multi-component by OCCURRENCE counts
     #    (robust to the per-section restart), NOT by the distinct-number set.
+    #    🔴 同①口径：仅当总结确有 \tag 时才可能误判——总结无编号公式（如纯证明
+    #    附录章，其单分量号已登记 formula.ignore / 不打算打 tag）时静默放行。
     scope = formula.get('scope', 2)
-    if scope == 2:
+    if scope == 2 and _summary_has_tags(ctx.md_file):
         s, d = _count_shapes(ctx.ext_dir, ctx.start, ctx.end)
         if s > d and s > 0:
             return (f"书源公式为单分量编号（如 (N)，单分量 {s} ≫ 多分量 {d}），"

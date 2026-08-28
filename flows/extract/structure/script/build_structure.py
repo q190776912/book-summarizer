@@ -69,6 +69,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+from lib.util import blk_text
 
 import json
 import re
@@ -267,7 +268,7 @@ def _find_title_pos(ext, title, start, end):
         for b in d.get("text", []):
             if not isinstance(b, dict):
                 continue
-            s = (b.get("text") or "").strip()
+            s = blk_text(b).strip()
             if s and anchor_re.match(s):
                 poly = b.get("poly") or []
                 ys.append(poly[1] if len(poly) >= 8 else 0)
@@ -285,7 +286,7 @@ def _find_title_pos(ext, title, start, end):
         for b in d.get("text", []):
             if not isinstance(b, dict):
                 continue
-            s_raw = (b.get("text") or "").strip()
+            s_raw = blk_text(b).strip()
             if t_raw in s_raw:
                 poly = b.get("poly") or []
                 return (p, poly[1] if len(poly) >= 8 else 0)
@@ -301,7 +302,7 @@ def _find_title_pos(ext, title, start, end):
         for b in d.get("text", []):
             if not isinstance(b, dict):
                 continue
-            s = (b.get("text") or "").strip().lower()
+            s = blk_text(b).strip().lower()
             if not s:
                 continue
             head = s.split(". ")[0].strip()
@@ -332,7 +333,7 @@ def _item_pos(ext, it):
     for b in d.get("text", []):
         if not isinstance(b, dict):
             continue
-        s = (b.get("text") or "").strip()
+        s = blk_text(b).strip()
         if not s:
             continue
         sl = re.sub(r"\s+", " ", s.lower())
@@ -404,7 +405,7 @@ def _find_chapter_local_section_page(ext, ch, n, start, end):
         except Exception:
             continue
         for b in data.get("text", []):
-            txt = (b.get("text") or "").strip()
+            txt = blk_text(b).strip()
             m = SEC_LOCAL.match(txt)
             if m and int(m.group(1)) == n:
                 return p
@@ -581,7 +582,7 @@ def _exercise_block_pos(ext, ch, start, end, headings):
                 continue
             poly = b.get('poly') or []
             y = float(poly[1]) if len(poly) >= 8 else None
-            for ln in (b.get('text') or '').split('\n'):
+            for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
                 if ln and rx.match(ln):
                     return (p, y)
@@ -606,7 +607,7 @@ def _exercise_region_start(ext, ch, start, end):
             d = json.load(open(fp, encoding='utf-8'))
         except Exception:
             continue
-        txt = " ".join(b.get('text', '') if isinstance(b, dict) else str(b)
+        txt = " ".join(blk_text(b) if isinstance(b, dict) else str(b)
                        for b in d.get('text', []))
         m = head.search(txt)
         if m and m.group(1) == pat:
@@ -797,7 +798,7 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None):
                 by = float(poly[1]) if len(poly) >= 8 else None
             except Exception:
                 by = None
-            for ln in (b.get('text') or '').split('\n'):
+            for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
                 if not ln or len(ln) > 70 or ln.endswith((',', ';')):
                     continue

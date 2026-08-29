@@ -1,6 +1,6 @@
 # `verify_config.json` 配置说明
 
-> 书级配置文件，位于本书 `_extract/verify_config.json`。是 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 的**唯一配置源**（配置缺失时 verify 硬失败，见 `config_setting` 流程 规则1；scan 仅告警安全网）。半自动生成脚本见 [`./make_config.py`](./make_config.py)（**需人工核对**，不声称自动正确）。
+> 书级配置文件，位于本书 `_extract/verify_config.json`。是 `verify_chapter.py` / `flows/write-source/structure/script/scan_skeleton` 的**唯一配置源**（配置缺失时 verify 硬失败，见 `config_setting` 流程 规则1；scan 仅告警安全网）。半自动生成脚本见 [`./make_config.py`](./make_config.py)（**需人工核对**，不声称自动正确）。
 
 ## 字段总览
 

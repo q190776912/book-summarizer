@@ -170,7 +170,7 @@ Common patterns (after correction):
    - **引用检测**：若编号前 25 个字符内有"见""由""根据""参考""参见""Cf."等词，则标记为引用，不收录。
 5. **检查边界头丢失**：对每节，如果检测到的第一个编号 > 1，怀疑更小编号被页边界吞掉，回 JSON 上下页确认。
 6. **检查内部密集性**：对每节编号进行跨度分析，空缺编号回 JSON 对应页确认是否存在。
-7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`，运行 `flows/extract/structure/script/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
+7. **人工补漏**（针对 OCR 完全吃掉编号的条目）：在 `manual_overrides_ch{N}.json` 中写好漏项的 `key` / `label` / `page` / `text`，运行 `flows/write-source/structure/script/extract_items` 配合 `--manual` 合并输出。**尾部缺漏必须迭代检查**，直到 WARN 消失。
 8. 将确认后的条目录入清单，确认每条都有对应标签后，再动笔写正文。
 9. 写完后对照清单检查一遍，确认无遗漏。
 

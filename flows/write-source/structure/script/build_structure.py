@@ -5,7 +5,7 @@
 全书只产出一个 ``<extract_dir>/book_structure.json``，顶层是一个「书」对象（**不是数组**）：
     {"key": -1, "type": -1, "name": "<书名>", "page_start": <书起始页>,
      "page_end": <书终止页>, "sub_sec": [ <章节对象...> ]}
-章节 / 条目节点递归嵌套，schema 见 ``flows/extract/structure/structure.md``
+章节 / 条目节点递归嵌套，schema 见 ``flows/write-source/structure/structure.md``
 （key / type / name / page_start / page_end / sub_sec）。
 
 增量合并：已存在 book_structure.json 时，替换/追加指定章（``build_structure <ext> [ch ...]``），

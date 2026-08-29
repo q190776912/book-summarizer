@@ -5,7 +5,7 @@
 - 单文件 ``<extract_dir>/book_structure.json``，顶层是一个「书」对象（**不是数组**）。
 - 书对象：``key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>,
   sub_sec=[章节对象...]``。
-- 章节 / 条目节点复用 ``flows/extract/structure/structure.md`` 的 schema：
+- 章节 / 条目节点复用 ``flows/write-source/structure/structure.md`` 的 schema：
   ``key / type / name / page_start / page_end / sub_sec``（递归）；
   定理 / 定义 / 例等叶节点 ``sub_sec=[]``。``sub_sec`` 顺序即书中实际顺序。
 

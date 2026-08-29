@@ -4,7 +4,7 @@
 提取阶段每章的抽取结果 JSON 序列化，是 verify 与 write-source 的**输入源**之一。
 
 ## 生成脚本
-- `flows/extract/structure/script/extract_items*.py` 的 `write_outputs(extract_dir, ch, data)`
+- `flows/write-source/structure/script/extract_items*.py` 的 `write_outputs(extract_dir, ch, data)`
   （如 `extract_items_kt.py` 写 `ch<N>_extract.json`）。
 - 该构造逻辑属于 **extract 编排流程**的一部分，按用户约定**留 `../../flows`**，未抽入 `..`
   （其"构造方法"即各 `extract_items*.py` 的 `write_outputs`）。

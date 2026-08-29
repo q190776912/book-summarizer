@@ -12,7 +12,7 @@
   1. `p_exer_block`：独立 `### 练习/习题/Exercises` 归拢块——专拦「无中生有新建归拢块」的违规（见 SKILL.md 🔴 规则与 [`../../docs/writing-rules.md`](../../docs/writing-rules.md) 习题规则）。策略为：**穿插在小节中的习题原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`），**章末整块习题省略不写**；无论哪种，都禁止把原书穿插内容抽出来归拢成块。
   2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
-  4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见 `book_structure.json` 书对象，由 `build_structure` 生成，SSOT 见 `flows/extract/structure/structure.md`）。
+  4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见 `book_structure.json` 书对象，由 `build_structure` 生成，SSOT 见 `flows/write-source/structure/structure.md`）。
      - `section_types` 不含 `0`（标准书，原书小节带序标）：该层级 `## §N[.M...]` 的数字须**逐一对齐**契约 `sub_sec` 编号（`present` 集合包含契约每个非习题节号）。
      - `section_types` 含 `0`（无序号标书，如 Silverman，对应 `type 0` / `depth 0`）：md 该层级写 `## § <标题>`（数字留空），闸门**不依赖数字**，改为按「位置/数量」比对——只查契约要求的每一节是否都在 md 中（按 `## §` 出现顺序位置对齐），**不报 md 多出契约未记的小节**（原书 subsection 可能多于稀疏契约，且 md 忠实于原书，多出的 `## §` 是合理的、不阻断）。仅当 md 的 `## §` 数**少于**契约必写节数时才报「缺节」。（`section_types` 是逐层级列表、**章层级计入元素 0**：Silverman 为 `[0, 0]`——元素 0 的 `0` 即「章无 `## §` 序号标」（章是文件 `# 第N章`，序号来自文件名），元素 1 的 `0` 才是「`## §` 小节无序号标」。两个 `0` 分别对应章与小节两个层级，不可合并。）
   5. `p_extra_item`：编造条目（md 出现骨架 ITEM 清单没有的编号条目）。

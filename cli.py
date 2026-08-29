@@ -21,8 +21,8 @@ SKILL_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # subcommand name -> script path relative to SKILL_ROOT
 DISPATCH = {
-    "extract-items": "flows/extract/structure/script/extract_items.py",
-    "extract-items-hom": "flows/extract/structure/script/extract_items_hom.py",
+    "extract-items": "flows/write-source/structure/script/extract_items.py",
+    "extract-items-hom": "flows/write-source/structure/script/extract_items_hom.py",
     "write-chapter-map": "data/chapter_map/chapter_map.py",
     "check-katex": "verify/format_verify/script/check_katex.py",
     "fmt-proofs": "tools/fmt_proofs.py",

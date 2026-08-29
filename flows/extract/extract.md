@@ -3,7 +3,10 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair；文本提取全部完成后，依次跑 **config 子流程**（生成 `verify_config.json`）、**figure_detection 子流程**（图检测 + 分配），最后跑 **structure 子流程**（生成全书单一的 `book_structure.json` 书对象）。本阶段最终产出修复后的 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一），**不做任何校验**。
+把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair。本阶段最终产出**修复后的 `page_*.json`**（以 `_extraction_done.json` 完成标记收尾），**不做任何校验**。
+
+> 🔴 **2026-08-29 流程重构**：本阶段**终于 MM Repair**。原 Step 4–6（config 子流程 / figure_detection 子流程 / structure 子流程 + 内容化分章契约）全部**移入 write-source 源总结流程**（见 [`flows/write-source/write-source.md`](../write-source/write-source.md) 步骤 1–4）——结构完整性闸门与基本总结草稿都在写作阶段内完成。
+
 ## 前置
 - `prep` 完成，环境 OK。
 - 已知待提取 PDF 的路径 `P`（工作目录由 Step 1 的「目录决策」按分支 A–D 自动确定，必要时归一目录；不要求 PDF 预先就位于 `<corpus_root>\<书名>\`）。
@@ -18,7 +21,7 @@
    - **分支 A — 已有 `_extract`**：若 `D` 内已存在 `_extract/` → 工作目录 = `D`，**直接在 `D` 提取，不移动 PDF、不新建目录**。
    - **分支 B — 无 `_extract`，且目录名 ≈ PDF 名（或译名对应）**：若 `D` 的目录名与 `N` 相似（含译名对应，如目录 `Evans 偏微分方程` 对应 PDF `Evans-PDE.pdf`），或 `D` 本身即以书名命名 → 工作目录 = `D`，**在当前目录提取，不新建目录、不移动 PDF**。
    - **分支 C — 无 `_extract`，且目录名与 PDF 名差别较大**：在 `D` 内新建目录 `D/<N>/`，把 PDF 移入 `D/<N>/<N>.pdf` → 工作目录 = `D/<N>`。
-   - **分支 D — 上下册 / 多册书（PDF 原位不动，`_extract` 内分册）**：书级目录 `D` 即 `<书名>` 目录；**PDF 保持原位、保留原名**（如 `D/<书名>/常庚哲 史济怀 数学分析教程3ed上册.pdf`），总结 md 同样写在书级目录。提取输出按册落在 `D/<书名>/_extract/<册>/`（如 `_extract/上册/`、`_extract/下册/`），由 `extract_pipeline.py` 的 `--extract-dir` 指定（见「启动方式」）。逐册提取：前一册 `PIPELINE OK` 后再启动下一册（见本阶段规则2 多册串行）。后续各子流程（MM Repair / config / figure / structure）与 flow 账本均以 `<书目录>/_extract/<册>` 为该册的 extract_dir；flow_runner 每册操作须传 `--extract <书目录>/_extract/<册>`（账本分册隔离，见 flows/_flow_gate.md）。
+   - **分支 D — 上下册 / 多册书（PDF 原位不动，`_extract` 内分册）**：书级目录 `D` 即 `<书名>` 目录；**PDF 保持原位、保留原名**（如 `D/<书名>/常庚哲 史济怀 数学分析教程3ed上册.pdf`），总结 md 同样写在书级目录。提取输出按册落在 `D/<书名>/_extract/<册>/`（如 `_extract/上册/`、`_extract/下册/`），由 `extract_pipeline.py` 的 `--extract-dir` 指定（见「启动方式」）。逐册提取：前一册 `PIPELINE OK` 后再启动下一册（见本阶段规则2 多册串行）。后续 MM Repair 与 flow 账本均以 `<书目录>/_extract/<册>` 为该册的 extract_dir；flow_runner 每册操作须传 `--extract <书目录>/_extract/<册>`（账本分册隔离，见 flows/_flow_gate.md）。
 
    > 约定：提取输出 `_extract/` 始终建在「工作目录」同级（即 `<book_dir>/_extract/`）；`<书名>` 即最终确定的工作目录名。若 `<book_dir>` 不在 `<corpus_root>\` 下，提取与产物仍只在 `<book_dir>` 内进行，不影响其它书籍。
 
@@ -48,21 +51,10 @@
    - **提取与 MM 修复门可并行**：MM Repair 只针对已落盘页码，绝不与提取进程写同一文件冲突。
    - **视觉审读是瓶颈（仅当视觉识别启用，`VISION = yes`）**：每多一个稳定批次，主 Agent 必须立即读 `page_NNN_sheet.png` 做视觉识别，可拆给多个子代理并行（子代理须继承 `VISION` 决策）；`VISION = no` 时无此瓶颈，跳过读图，仅跑模式 B / 记 `MM_UNAVAILABLE`。
 
-4. **MM Repair 完成后 → 跑 config 子流程（chapter_map + 书级配置）**
-   - 🔴 **真正的门控是「MM Repair 完成」，不是「文本 100% 落盘」**：主 Agent 必须跑完 Step 3 轮询循环——即文本提取 100% **且**全部稳定批次经 MM Repair（模式 A 视觉审读——若 `VISION = yes`——+ 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json`——之后，才运行 **config 子流程** [`extract/config_setting`](config_setting/config_setting.md)：先建章节映射 `_extract/chapter_map.json`（步骤 1，全书只此一份、不重复生成），再依据 `page_*.json` 一次性生成 `_extract/verify_config.json`（编号形态 / 语言 / `formula` map / `ordinal` 里的 Figure 组）。`formula` map 与乱码文本依赖模式 A（若启用）校正后的 `page_*.json`；仅观察到文本 100% 落盘（或后台 `Pipeline finished.` 日志 / 仅靠 `_extraction_done.json` 存在）就提前跑 config，会得到基于未修复页的错误配置。
+4. **MM Repair 全部写回 → 阶段收尾**
+   - 全部稳定批次经 MM Repair（模式 A 视觉审读——若 `VISION = yes`——+ 模式 B 自动补偿）已 `mm_repair_apply` 写回 `page_*.json` 后，`_extraction_done.json` 完成标记落盘，本阶段出口达成。
    - `_extraction_done.json` 是本阶段收尾**由主 Agent 在 MM Repair 完成后**写出的完成标记（不是后台文本流水线发出的中间信号）；它的存在应等价于「MM Repair 完成」，若它早于 MM Repair 完成（含模式 A，若启用）写出则属误用（参见 Kreyszig 书 `_extraction_done.json` 的 `sample_pending` 反例）。
-   - 🔴 **图检测之前必须完成此步**：图检测严格读 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`），缺 Figure 组则退化默认前缀，自定义图号书（Scheme / Illustration 等）会漏识。
-
-5. **config 完成后 → 跑 figure_detection 子流程（图检测 + 分配）**
-   - 运行 **figure_detection 子流程** [`extract/figure_detection`](figure_detection/figure_detection.md)：全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配，产出 `figure_detect.json` + `figure_index.json` + `figure/` 裁剪图。书若无图可跳过本步。
-
-6. **figure_detection 完成后 → 跑 structure 子流程（统一结构骨架，全书批量）**
-   - 运行 **structure 子流程** [`extract/structure`](structure/structure.md)：生成单一 `book_structure.json` 书对象（章节 → 条目/练习递归，`sub_sec` 内按章顺序嵌套，含 `key`/`type`/`name`/页码），作为 write-source 的写作契约与 verify 的编号项基准（合一）。文本提取 100% 且 config 已出 `verify_config.json` 后批量跑：
-   ```powershell
-   python flows/extract/structure/script/build_structure <extract_dir>
-   # 不传 <ch> 即全书；也可指定章：build_structure.py <extract_dir> 1 2 3
-   ```
-   - 至此 extract 阶段完成：`page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json` 均已就绪，供 write-source 消费、verify 读取。
+   - 🔴 **后续步骤在 write-source**：config（chapter_map + verify_config）→ figure_detection → structure（完整性闸门）→ 基本总结草稿，全部见 [`flows/write-source/write-source.md`](../write-source/write-source.md)。`make_config.py` / `build_structure.py` 缺 `_extraction_done.json` 均硬拒。
 
 ## 启动方式（统一 PowerShell 后台启动，唯一写法）
 
@@ -145,19 +137,20 @@ bash launch_pipeline.sh "<corpus_root>/<书名>/<书名>.pdf" --force         # 
 - **规则3 — 视觉识别询问式（全书仅一次）**：视觉识别（MM Repair 模式 A）的启用与否，在 Step 2 启动后台提取**前询问用户一次**并写入 `vision_decision.json`，全书不再问第二次（若中途续跑时该文件缺失，由 [`extract/mm_repair`](mm_repair/mm_repair.md) Step 1 补问一次）。用户拒绝（`VISION = no`）后：**严禁** agent 自行读图视觉识别、**严禁**按批次重复询问；只有用户**主动要求**恢复时才临时启用，且只覆盖其要求范围。防停滞（规则1）不受此影响——`VISION = no` 时轮询循环照常推进（仅模式 B / `MM_UNAVAILABLE`）。
 
 ## 出口条件
-- 出口：全书页面提取 100% 且每页过 MM Repair，config + figure_detection + structure 子流程均已跑完，产出 `page_*.json` + `figure_index.json` + 全书单一的 `book_structure.json`（写作契约 + verify 基准合一）。
+- 出口：全书页面提取 100% 且每页过 MM Repair，`_extraction_done.json` 已写出（MM Repair 真完成的唯一标记）。config / figure / structure / 草稿等后续产物在 write-source 流程内产出。
 
 ## 🔒 阶段门控（flow_gate 强制顺序，死命令）
 
-本 flow 的 Step 1→6 是**硬有序**，且作为 `flows/_flow_gate.md` 定义的 `extract`
+本 flow 的 Step 1→4 是**硬有序**，且作为 `flows/_flow_gate.md` 定义的 `extract`
 flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_flow_gate.md)）：
 
-- **顺序铁律**：`extract_text → mm_repair → config（含 chapter_map 建映射）→ figure_detection →
-  structure` 依次进行；任一步未完成，下一步被 flow_runner 顺序闸 + 下游加载器双拦截。
+- **顺序铁律**：`extract_text → mm_repair` 依次进行；`_extraction_done.json` 未写出前，
+  extract 阶段不算完成，write-source 全流程（含 config / structure）被 flow_runner
+  顺序闸 + 下游加载器双拦截。
 - 🔴 **`_extraction_done.json` 是 MM Repair 真完成的唯一标记**：只能由
-  `mm_repair_apply.py` 在「条目全 resolved + 每页有 mm 标记」时写出。本 flow 的
-  Step 4（config）/ Step 5（figure）/ Step 6（structure）都依赖它——`make_config.py`
-  缺它硬拒、`build_structure.py` 缺它硬拒、`ConfigLoader` 缺它拒绝加载 config。
+  `mm_repair_apply.py` 在「条目全 resolved + 每页有 mm 标记」时写出。write-source 的
+  config（`make_config.py`）/ structure（`build_structure.py`）都依赖它——缺它硬拒、
+  `ConfigLoader` 缺它拒绝加载 config。
 - ❌ **禁止清单（本 flow 特别相关）**：
   - ❌ 在 `_extraction_done.json` 不存在时跑 `make_config.py` / `build_structure.py`
     （会硬拒；你不应试图绕过）。
@@ -172,14 +165,9 @@ flow 被顺序闸守护。机制要点（完整见 [`flows/_flow_gate.md`](../_f
 ## 相关代码（路径相对 skill 根目录）
 - `flows/extract/pipeline/script/extract_pipeline.py`：后台**文本**流水线驱动（自动断点续跑，纯文本提取）。参数：`<pdf> [--start N] [--end N] [--force] [--deskew …]`；`--end` 省略时取 PDF 自动识别总页（全本），`--start` 默认 1；每批 50 页；自动续跑；一批失败即停。图检测不在本脚本内。
 - `launch_pipeline.sh`：bash 启动器（空格路径安全）。
-- `../../data/chapter_map/chapter_map.py`（数据结构见 [data/chapter_map/chapter_map.md](../../data/chapter_map/chapter_map.md)）：chapter_map 模板工具。
-- `flows/extract/structure/script/build_structure`：统一结构骨架生成（structure 子流程，Step 6），生成全书单一的 `book_structure.json` 书对象。
-- `flows/extract/structure/script/scan_skeleton`：章节/练习（`SEC`/`EXER`）扫描，build_structure 的内部依赖（不再作为独立子流程暴露）。
-- `flows/extract/structure/script/extract_items` + 变体（`extract_items_en` / `_gm` / `_hom` / `_kt` / `_vakil`）：编号项抽取，按 `ordinal` 被 build_structure 调用（内部依赖）。
 
 ## 子流程
 - [`extract/pipeline`](pipeline/pipeline.md) — 后台**文本**提取流水线（Step 2 启动：断点续跑 + 分批 MFD→MFR→OCR；不含图检测）
-- [`extract/mm_repair`](mm_repair/mm_repair.md) — MM Repair 链路（Step 2 轮询）
-- [`extract/config_setting`](config_setting/config_setting.md) — chapter_map 建映射 + 书级配置生成（Step 4，MM Repair 之后、图检测之前）
-- [`extract/figure_detection`](figure_detection/figure_detection.md) — 图检测 + 分配（Step 5，config 之后）
-- [`extract/structure`](structure/structure.md) — 统一结构骨架（Step 6，生成 `book_structure.json` 书对象；写作契约 + verify 基准合一）
+- [`extract/mm_repair`](mm_repair/mm_repair.md) — MM Repair 链路（Step 3 轮询）
+
+> config / figure_detection / structure 三个子流程已移入 write-source：见 [`flows/write-source/write-source.md`](../write-source/write-source.md) 与 `flows/write-source/` 下对应子目录。

@@ -1,4 +1,4 @@
-# Flow: config_setting（生成书级配置 / extract 子流程）
+# Flow: config_setting（生成书级配置 / write-source 子流程）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
@@ -6,7 +6,7 @@
 在 extract 的 **MM Repair 全部完成**后（文本提取 100% 且全部稳定批次经模式 A+B 已 `mm_repair_apply` 写回 `page_*.json`；若用户拒绝视觉识别则模式 A 由模式 B / `MM_UNAVAILABLE` 替代，见 [`extract/mm_repair`](../mm_repair/mm_repair.md) Step 1；完成标记 `_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性完成两件事：
 
 1. **建章节映射** `_extract/chapter_map.json`（Step 1，统一在本阶段生成，不再轮询期间早建）；
-2. **生成书级配置** `_extract/verify_config.json`（Step 2–3）——它是 `verify_chapter.py` / `flows/extract/structure/script/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。
+2. **生成书级配置** `_extract/verify_config.json`（Step 2–3）——它是 `verify_chapter.py` / `flows/write-source/structure/script/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。
 
 图检测子流程依赖本书 `ordinal` 里的 **Figure 组**（`{"type":<段数>,"name":[图号前缀词],"scope":<段数>}`；`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号段数 components）来确定图号前缀与段数；缺 Figure 组时回落默认前缀 `["图","Figure","Fig"]`，自定义前缀书须在 Figure 组 `name` 显式列出。🔴 仅文本 100% 落盘但未完成 MM Repair（尤其模式 A 视觉审读，若用户拒绝视觉识别则以模式 B / `MM_UNAVAILABLE` 替代）时不得跑本步——`chapter_map` 章边界与 `formula` map 都依赖校正后的页面。
 

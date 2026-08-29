@@ -31,7 +31,7 @@ from data.book_structure.book_structure import BookStructure
   - 必须逐条读懂重写，剔除页眉/页脚/版权行，不得照抄 OCR 文本流。
   - number-first 体例（编号在前、标题在后）：条目标签必须是
     `**N.M.K（标题）：**` 或 `**定义 N.M.K**：`，禁止裸 `**N.M.K**` 把标题甩到正文。
-  - 结构契约 `book_structure.json`（SSOT 见 `flows/extract/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON。
+  - 结构契约 `book_structure.json`（SSOT 见 `flows/write-source/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON。
 
 检测七类缺陷（全部 BLOCKING，不可 --fix，需重写）：
   p_exer_block  — 练习归拢块：独立的 `### 练习`/`### 习题`/`### Exercises` 标题，

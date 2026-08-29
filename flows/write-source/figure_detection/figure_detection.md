@@ -1,4 +1,4 @@
-# Flow: figure_detection（图检测 + 分配 / extract 子流程）
+# Flow: figure_detection（图检测 + 分配 / write-source 子流程）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 

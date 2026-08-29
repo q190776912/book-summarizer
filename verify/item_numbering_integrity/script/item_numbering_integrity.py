@@ -100,8 +100,8 @@ def _numpath_regexes(levels):
 _ENTRY_LABELS = (
     r'定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
     r'|算法|性质'
-    r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Remark'
-    r'|Exercise|Problem|Note|Axiom'
+    r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Examples|Remark|Remarks'
+    r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology'
 )
 # Label-first:  LABEL  NUMPATH   (e.g. "定理 4.1", "Definition 2.1")
 

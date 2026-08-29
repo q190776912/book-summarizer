@@ -1,4 +1,4 @@
-"""verify/script/gm_scan.py — Gelfand–Manin / Roman 体例的 OCR 标题扫描（从 flows/extract/structure/script/extract_items_gm.py 解耦复制）。
+"""verify/script/gm_scan.py — Gelfand–Manin / Roman 体例的 OCR 标题扫描（从 flows/write-source/structure/script/extract_items_gm.py 解耦复制）。
 
 D 层（section_continuity）对 GM / ROMAN 书做章节连续性校验时，需复用抽取器的标题扫描
 `scan_gm_blocks` / `_load_sections`。本文件为这些纯函数（及依赖的 OCR 正则、roman 互转、label
@@ -6,7 +6,7 @@ D 层（section_continuity）对 GM / ROMAN 书做章节连续性校验时，需
 `_load_sections` 直接读取 `chapter_map.json`，不依赖 flows 的 `chapter_map` 模块。
 `page_json`（data/）为共享数据读取器（非 flows），继续复用。
 
-本文件中的 `scan_gm_blocks` / `_load_sections` 为**解耦副本**，函数实现与源文件 `flows/extract/structure/script/extract_items_gm.py` **逐字符一致**；**单一真源在 `extract_items_gm.py`，修改须同步两处**（`int_to_roman` 见 `verify/script/ordinal.py`，同源）。
+本文件中的 `scan_gm_blocks` / `_load_sections` 为**解耦副本**，函数实现与源文件 `flows/write-source/structure/script/extract_items_gm.py` **逐字符一致**；**单一真源在 `extract_items_gm.py`，修改须同步两处**（`int_to_roman` 见 `verify/script/ordinal.py`，同源）。
 """
 import os
 import sys

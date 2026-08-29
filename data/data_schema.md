@@ -15,7 +15,7 @@
 | `figure_index.json` | [figure_index/](figure_index) | `FigureIndex` | 构造器（同时产出 `figure_embed_overrides.json`） |
 | `figure_embed_overrides.json` | [figure_embed_overrides/](figure_embed_overrides) | `FigureEmbedOverrides` | 构造器（由 `figure_index` 生成器写入） |
 | `repairs.json` | [repairs/](repairs) | `Repairs` | 构造器 |
-| `book_structure.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/extract/structure/script/build_structure.py` 调用；书对象，全文件单 JSON 结构） |
+| `book_structure.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/write-source/structure/script/build_structure.py` 调用；书对象，全文件单 JSON 结构）。另有 structure 第 5 步产出的**内容化分章契约** `<extract_dir>/book_structure/book_structure_{N}.json`（`sub_sec` 混合内容块 `{"text"}` / `{"formula","display"}`，详见 [book_structure.md §7](book_structure/book_structure.md)） |
 
 ## 外部 / 流程产物（无 in-skill 构造器）
 

@@ -1,3 +1,5 @@
+> 🔴 **本子流程已废弃（2026-08-29）**：图片经内容化分章契约的 image 块随基本总结草稿继承到最终 md（内容完整性闸门 `verify/script/check_content_completeness.py` 保证齐备），write-source 不再单独嵌图。本文档保留供参考。
+
 # Sub-flow: write-source / figures（图片嵌入 SSOT · write-source 阶段）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程

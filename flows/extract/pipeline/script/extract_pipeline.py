@@ -17,7 +17,7 @@ each volume keeps its own page_*.json (see flows/extract/extract.md branch D).
 
 IMPORTANT — this driver produces ONLY text + formula ``page_*.json`` (the "raw
 material"). Figure detection + assignment is a SEPARATE phase — the
-``figure_detection`` sub-flow of `extract` (see flows/extract/figure_detection/
+``figure_detection`` sub-flow of `extract` (see flows/write-source/figure_detection/
 figure_detection.md) — which runs AFTER the book config (``verify_config.json``)
 has been generated. This ordering guarantees detection reads the book's own
 figure-label convention (the `ordinal` Figure group) instead of the default fallback.

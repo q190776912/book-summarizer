@@ -39,9 +39,10 @@ GATE_FILE = ".flow_gate.json"
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {
     "prep": ["env"],
-    "extract": ["place_pdf", "extract_text", "mm_repair",
-                "config", "figure_detection", "structure"],
-    "write_source": ["write_chapters", "embed_figures", "verify_source"],
+    # 2026-08-29 流程重构：extract 终于 MM Repair，后续步骤移入 write_source。
+    "extract": ["place_pdf", "extract_text", "mm_repair"],
+    "write_source": ["config", "figure_detection", "structure", "draft",
+                     "write_chapters", "verify_source"],
     "derive": ["translate", "verify_cn"],
 }
 
@@ -235,4 +236,20 @@ def bootstrap(book_dir, extract_dir):
                 }, open(marker, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
             except Exception:
                 pass
+    # write_source（2026-08-29 流程重构后 config / figure_detection / structure /
+    # draft 归入此 flow）：只增不改——账本已 done 的步骤保持原样（verify_source
+    # 等重跑型证据不在此重跑，避免历史书误清账）；仅对未 done 的步骤依物理证据
+    # 回填，遇缺口即停（依赖链：config → figure → structure → draft → …）。
+    flow2 = "write_source"
+    for s in FLOW_ORDER.get(flow2, []):
+        if is_done(book_dir, flow2, s, extract_dir):
+            continue
+        ok, detail = check_evidence(flow2, s, book_dir, extract_dir)
+        if ok:
+            mark(book_dir, flow2, s,
+                 evidence={"bootstrap": True, "detail": detail},
+                 extract_dir=extract_dir)
+        else:
+            gaps.append((f"{flow2}.{s}", detail))
+            break
     return (len(gaps) == 0), gaps

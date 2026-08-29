@@ -1,6 +1,6 @@
 # `manual_overrides_ch{N}.json` 配置说明
 
-> 每章一个的抽取覆盖配置文件，位于本书 `_extract/manual_overrides_ch{N}.json`。当 OCR 完全吃掉某条目标题、且调参 / 归一化均无法识别时，agent 凭知识库补写该条目并登记本文件，使 `flows/extract/structure/script/extract_items` 承认其存在、解除 B 层序列缺口 BLOCKING。覆盖项会被抽取器打 `agent_recovered` 标记（与"真 OCR 识别"区分）。
+> 每章一个的抽取覆盖配置文件，位于本书 `_extract/manual_overrides_ch{N}.json`。当 OCR 完全吃掉某条目标题、且调参 / 归一化均无法识别时，agent 凭知识库补写该条目并登记本文件，使 `flows/write-source/structure/script/extract_items` 承认其存在、解除 B 层序列缺口 BLOCKING。覆盖项会被抽取器打 `agent_recovered` 标记（与"真 OCR 识别"区分）。
 
 ## 结构
 

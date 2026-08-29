@@ -26,7 +26,7 @@
 - 缺失项比对、查漏、阻断（`truly_missing` / `mentioned_only` / `extra` / 提取侧 `blocking` / `warnings` / `ignored_hit`）**全部由 B 层计算并写 `ctx`**，本层不再参与——B 与 EXTRACT 解耦：EXTRACT 只供水，B 只查漏。
 
 ## 子流程
-无独立子流程；依赖抽取管线产出的 `page_*.json` / `book_structure.json`（由 `flows/extract/structure/script/` 下的抽取器生成）。
+无独立子流程；依赖抽取管线产出的 `page_*.json` / `book_structure.json`（由 `flows/write-source/structure/script/` 下的抽取器生成）。
 
 ## 需 agent 手工修复（manual fix）
 本层 `auto_fixable = False`，且本身不是 pass/fail 判定层——它是**数据供给层**

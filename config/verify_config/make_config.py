@@ -1152,7 +1152,7 @@ def main():
     # ⚠️ Coupling: this only works if the STRUCTURE types these nodes as
     # "Table"/"Figure" (not "uncat"), so `group_for_label` maps them into this
     # merged group.  build_structure must assign those types (see
-    # flows/extract/structure/script/extract_items_en.py SECTION_LABELS).
+    # flows/write-source/structure/script/extract_items_en.py SECTION_LABELS).
     if not cm_chapter_first and ordinal_arr:
         # Collapse multiple detected label groups into one shared counter.
         if len(ordinal_arr) > 1:

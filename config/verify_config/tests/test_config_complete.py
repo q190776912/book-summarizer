@@ -71,7 +71,7 @@ from verify_config import (ConfigLoader, ConfigError, BookConfig, GroupConfig)  
 
 PY = sys.executable
 VERIFY_CLI = os.path.join(_ROOT, "verify/script/verify_chapter.py")
-SCAN_CLI = os.path.join(_ROOT, "flows/extract/structure/script/scan_skeleton.py")
+SCAN_CLI = os.path.join(_ROOT, "flows/write-source/structure/script/scan_skeleton.py")
 MAKE_CLI = os.path.join(_ROOT, "config/verify_config/make_config.py")
 
 # Real corpus books are discovered at runtime (the corpus changes); we do not

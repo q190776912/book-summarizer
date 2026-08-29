@@ -1,4 +1,4 @@
-# Sub-flow: extract / structure（统一结构骨架 / extract 末尾强制生成）
+# Sub-flow: write-source / structure（统一结构骨架 + 完整性闸门 / write-source 内强制生成）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
@@ -16,13 +16,13 @@
 
 ## 步骤（有序）
 
-> 四步顺序：**第 1 步生成基线契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核**。
-> 四步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
+> 五步顺序：**第 1 步生成基线契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核 → 第 5 步 `attach_content` 正文内容化 + 按章拆分**。
+> 五步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
 > 第 2 / 3 步都建议先 `--backfill` 之前的 dry-run 报告 review，确认 `readable` 项无误后再写回。
 
 **第 1 步 · 生成结构契约（必做，先跑，作为查漏基线）**
 ```powershell
-python flows/extract/structure/script/build_structure <extract_dir>
+python flows/write-source/structure/script/build_structure <extract_dir>
 # 不传 <ch> 即扫全部章；也可指定章：build_structure.py <extract_dir> 1 2 3
 # 编号模式（三级/两级/en/vakil/gm/roman）由 <extract_dir>/verify_config.json
 # 的 ordinal 自动判定，无需 --scheme
@@ -58,7 +58,18 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 **第 4 步 · 完整 + 连续 闸门（收尾保证）**
 回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source。
 
-> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步必须在 **write-source 之前**完成。回填后的编号项才会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。
+**第 5 步 · 正文内容化 + 按章拆分（`attach_content`，闸门通过后执行）**
+```powershell
+python flows/write-source/structure/script/attach_content.py <extract_dir> [ch ...] [--force]
+# 不传 <ch> 即全部章；--force 跳过结构指纹比对强制重挂
+```
+把**描述信息（章首序言 / 节导语 / 证明后尾随段落 → `description` 节点，与定理同级）+ 每个编号项 / 练习的文字、公式内容块 + 条目内证明（`proof` 子节点）**按文档顺序挂进 `sub_sec`，并**按章拆分**落盘为**内容化分章契约** `<extract_dir>/book_structure/book_structure_{N}.json`（N=章号，附录为字母）——全书内容化单文件过大的解法。要点：
+- 🔴 与 `build_structure` 同一硬闸：缺 `_extraction_done.json`（MM Repair 未真完成）拒绝运行。
+- **单文件 `book_structure.json` 保持纯结构 schema 不变**：verify 编号项基准 / completeness 回填 / restructure 等全部既有消费方零改动，仍以单文件为准；内容与 description / proof 派生节点只进分章文件。
+- 内容块自动处理：页眉 / 页脚 / 版权行 / 页码噪声过滤；行内公式（MFD `cls=0`）按 x 位置拼回宿主文本行恢复阅读序；条目 / 小节正文开头按序匹配契约 `name` 的归一化前缀时剥离印刷标题（宁重复不误删）；证明标记 / QED 识别失败不拆（宁整不碎）。
+- **新鲜度**：结构指纹（全部结构节点 type/key/page 序列，忽略内容块与 description / proof 派生节点）比对单文件与分章文件；`check_structure_completeness --backfill` 或 `restructure_by_ocr --apply` 之后**必须重跑本步**（或直接跑 write-source 的 `render_draft`，其对过期章自动续挂）。
+
+> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**本流程步骤 4（渲染基本总结草稿）之前**完成，第 5 步（内容化）紧随闸门执行。回填后的编号项才会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。
 
 ## 源侧完整性校验与回填（写书前兜底）
 
@@ -106,6 +117,19 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：叶子 `== page_start`；容器（chapter/section）取**末代子孙页**。
 
+### 内容块与派生节点（第 5 步产出，仅分章内容契约）
+
+分章文件顶层即该章 `chapter` 节点；其 `sub_sec`（含章 / 节的 `sub_sec`）在**文档顺序**下混合四类元素：① 结构节点（与单文件同 schema）、② `description` 节点（描述信息，与定理同级）、③ `proof` 节点（证明，条目子节点）、④ 内容块（`text` / `formula`+`display` / `image`）。
+
+> 🔴 **节点与内容块的完整 Schema、实书样例、字段语义（`line_start` / `indent` / `display` 等）的 SSOT 见 [`data/book_structure/book_structure.md`](../../../data/book_structure/book_structure.md) §2–§5**——本节只承载产出规则与流程语义，不重复 schema。
+
+- **产生规则**：章 / 节的描述散文聚合为 `description` 节点置于各自 `sub_sec` 最前；条目正文内容块与 `proof` 子节点按陈述 → 证明的阅读序挂在条目节点 `sub_sec`；条目末个 proof 之后的尾随散文聚合为与该条目**同级**的 description 节点（插在其后）。
+- **proof 拆分**：证明标记（`PROOF` / `Proof` / `Solution` / `证明` / `证：` / `解：`，块首匹配；中文与陈述同行被 OCR 合并时按句末标点 + 「证」边界内联拆分）开启，至 QED（`口` / `□` / `∎` / `证毕` / `Q.E.D.` / 纯 `\square` 型公式）或块流末尾收束；识别失败**不拆**（宁整不碎）；练习（exercise）的「证明：…」属题干任务不拆。
+- **图片**：取自 `figure_index.json`（page/bbox 并入阅读序，路径**相对书根**）；无图管线则零图片块；渲染按原嵌图格式（flex div + `<img>`），**无单独嵌图步骤**。
+- **已知近似（调整步骤兜底）**：无证明条目之后的游离段落仍留在该条目正文内（无边界信号不做切分）；证明无 QED 收尾时收束到该条目块流末尾（可能并入条目后段讨论，调整时拆出）；OCR 文本行与其行内公式的校正 latex 天然并存（内容重复，调整时保留公式、清理乱码）；图注文字 / 证明结尾框等残余噪声由调整清理。
+- **完整性闸门**：第 5 步之后由 `verify/script/check_content_completeness.py` 校验（确定性复算比对 + 图片独立真值 + 证明覆盖审计），FAIL 严禁渲染草稿（write-source 步骤 4）。
+- 消费方：`flows/write-source/script/render_draft.py`（渲染基本总结草稿）；`_is_block` 判定与派生节点指纹排除见 `attach_content.py`。
+
 ## 构建逻辑（与 `verify/data_provider` 同一套抽取分派）
 1. **章节骨架**优先来自 `scan_skeleton` 的 `SEC` 扫描（含印刷标题）；当某方案 `SEC` 捕获不全（en 两级、vakil）时，用「条目键派生章节号」补齐缺失章节。
 2. **条目节点权威来自抽取器**（`extract_items` / `extract_items_en` / `extract_items_vakil` / `extract_items_gm` 等，按 `ordinal` 选路，与 data_provider 一致），`label → type`：
@@ -123,7 +147,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **写完后自查**：非 exercise 的 `section` 数应等于总结 `## §` 标题数（`section_types` 含 `0` 时按位置/数量对齐，允许 md 小节多于契约未记的小节）；非 exercise 节点 `key` 集合应与总结编号一致。
 
 ## 出口条件
-- 出口：全书单一的 `book_structure.json` 已生成（书对象，`sub_sec` 内按章顺序嵌套全部章节），作为 write-source 的写作契约与 verify 的编号项基准采用。
+- 出口：全书单一的 `book_structure.json` 已生成（书对象，`sub_sec` 内按章顺序嵌套全部章节），且第 2–4 步查漏回填闸门通过；第 5 步产出全部章的内容化分章契约 `<extract_dir>/book_structure/book_structure_{N}.json`（结构指纹与单文件一致）。单文件作为 write-source 的写作契约与 verify 的编号项基准采用；分章内容契约作为 write-source 草稿渲染（`render_draft`）的输入采用。
 
 ## 已知局限（实现层，非契约缺陷）
 - **en 两级（ordinal=4）章节检测为近似**：skeleton 的 `SEC` 行对部分 en 书乱匹配，章节号由条目键派生，可能多出空章节（条目仍正确捕获、按序归位）。写章时以「派生章节 + 源书实际节标题」为准。
@@ -131,9 +155,10 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **配置错配书**（如 `language=cn` 但正文为英文的 Evans）：cn 解析器抓不到章节标题，section `name` 缺标题（仅派生章节号），结构/条目仍正确。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/extract/structure/script/build_structure`：统一结构骨架生成（本子流程）。
-- `flows/extract/structure/script/scan_skeleton`：`SEC` / `EXER` 扫描（被 build_structure 调用）。
-- `flows/extract/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` 等）：编号项抽取（被 build_structure 按 `ordinal` 调用）。
+- `flows/write-source/structure/script/build_structure`：统一结构骨架生成（本子流程）。
+- `flows/write-source/structure/script/attach_content`：第 5 步正文内容化 + 按章拆分（分章内容契约 `book_structure_{N}.json`；含噪声过滤 / 行内公式拼接 / 标题剥离 / 结构指纹新鲜度）。
+- `flows/write-source/structure/script/scan_skeleton`：`SEC` / `EXER` 扫描（被 build_structure 调用）。
+- `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` 等）：编号项抽取（被 build_structure 按 `ordinal` 调用）。
 
 ## 子流程
 无（`scan_skeleton` 与 `extract_items*` 为 build_structure 的内部依赖模块，不单独作为子流程）。

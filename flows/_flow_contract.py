@@ -25,9 +25,11 @@ import sys
 # --------------------------------------------------------------------------
 FLOW_ORDER = {
     "prep": ["env"],
-    "extract": ["place_pdf", "extract_text", "mm_repair",
-                "config", "figure_detection", "structure"],
-    "write_source": ["write_chapters", "embed_figures", "verify_source"],
+    # 🔴 2026-08-29 流程重构：extract 终于 MM Repair；config / figure_detection /
+    # structure / 基本总结草稿全部移入 write_source（草稿前须过 structure 完整性闸门）。
+    "extract": ["place_pdf", "extract_text", "mm_repair"],
+    "write_source": ["config", "figure_detection", "structure", "draft",
+                     "write_chapters", "verify_source"],
     "derive": ["translate", "verify_cn"],
 }
 
@@ -55,19 +57,26 @@ RUN_COMMANDS = {
     "extract.mm_repair": ("agent",
         "完整链路 audit → 模式B(--hybrid) → 模式A(视觉) → apply 写回 page_*.json；"
         "见 mm_repair.md。apply 真完成才出 _extraction_done.json。"),
-    "extract.config": ("agent",
+    "write_source.config": ("agent",
         "先按 config_setting.md 步骤 1 建章节映射 _extract/chapter_map.json"
         "（MM Repair 完成后统一生成，只建一次），再跑 "
         "python config/verify_config/make_config.py \"{extract_dir}\"；两者都完成才算 done。"),
-    "extract.figure_detection": ("cmd",
+    "write_source.figure_detection": ("cmd",
         "python flows/script/extract_figures.py \"{pdf}\" --out \"{extract_dir}\" --book && "
         "python flows/script/assign_figures.py \"{pdf}\" --out \"{extract_dir}\" --book"),
-    "extract.structure": ("cmd",
-        # 再跑 check_structure_completeness --backfill + 闸门
-        "python flows/extract/structure/script/build_structure.py \"{extract_dir}\""),
+    "write_source.structure": ("cmd",
+        # 结构完整性（章节/条目查漏回填 + gate.passed 闸门）是本步内的硬闸，见 structure.md 第 2-4 步
+        "python flows/write-source/structure/script/build_structure.py \"{extract_dir}\""),
+    "write_source.draft": ("cmd",
+        # 基本总结草稿：内容化分章契约 + 完整性闸门 + 渲染（structure 完整性闸门
+        # 通过后才可执行；图片经契约 image 块随草稿继承，不再单独嵌图）
+        "python flows/write-source/structure/script/attach_content.py \"{extract_dir}\" && "
+        "python verify/script/check_content_completeness.py \"{extract_dir}\" && "
+        "python flows/write-source/script/render_draft.py \"{extract_dir}\""),
     "write_source.write_chapters": ("agent",
-        "按 book_structure.json 契约逐节点双源写作（内容回归 page_*.json），"
-        "源语言初稿 ChapterN_*.md / 第N章_*.md。"),
+        "步骤1 render_draft.py 由 book_structure_{N}.json 渲染基本总结草稿 draft_ch{N}.md；"
+        "步骤2 基于草稿逐章调整（公式逐条重写校正、Tier 压缩、writing-rules 格式，"
+        "存疑回查 page_*.json），写出源语言 ChapterN_*.md / 第N章_*.md。"),
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
     "write_source.verify_source": ("cmd",
@@ -232,6 +241,15 @@ class physical_evidence:
 
     @staticmethod
     def structure_ok(book_dir, extract_dir):
+        """structure 完成证据 = 契约文件存在 **且** 每章完整性闸门 PASS。
+
+        🔴 仅"book_structure.json 存在"不足以落账——章节 / 定理定义等缺项的
+        查漏回填闸门（structure.md 第 2–4 步，`check_structure_completeness.py`）
+        必须对全部章节跑过且 `gate.passed == true`（报告落
+        `<extract_dir>/completeness_reports/ch{N}_completeness_report.json`），
+        防止 `flow_runner run write_source structure` 只跑 build_structure 就
+        跳过闸门落账。
+        """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         p = os.path.join(ex, "book_structure.json")
         if not os.path.exists(p):
@@ -243,7 +261,61 @@ class physical_evidence:
         subs = d.get("sub_sec") or []
         if not subs:
             return False, "book_structure.json 无章节节点"
-        return True, f"book_structure.json 含 {len(subs)} 章"
+        missing, not_passed = [], []
+        for c in subs:
+            k = str(c.get("key"))
+            rp = os.path.join(ex, "completeness_reports",
+                              f"ch{k}_completeness_report.json")
+            if not os.path.exists(rp):
+                missing.append(k)
+                continue
+            try:
+                r = json.load(open(rp, encoding="utf-8"))
+            except Exception:
+                missing.append(k)
+                continue
+            if not (r.get("gate") or {}).get("passed"):
+                not_passed.append(k)
+        if missing:
+            return False, (f"缺完整性报告 {len(missing)} 章（未跑 structure 第 2–4 步"
+                           f"查漏闸门）: {missing[:4]}")
+        if not_passed:
+            return False, f"完整性闸门未通过 {len(not_passed)} 章: {not_passed[:4]}"
+        return True, f"book_structure.json 含 {len(subs)} 章，完整性闸门全部 PASS"
+
+    @staticmethod
+    def draft_ok(book_dir, extract_dir):
+        """基本总结草稿证据：每个结构章节都有内容化分章契约 + 渲染出的草稿文件。"""
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        p = os.path.join(ex, "book_structure.json")
+        if not os.path.exists(p):
+            return False, "缺 book_structure.json（structure 步未完成）"
+        try:
+            d = json.load(open(p, encoding="utf-8"))
+        except Exception as e:
+            return False, f"book_structure.json 非法 JSON: {e}"
+        keys = [str(c.get("key")) for c in (d.get("sub_sec") or [])
+                if isinstance(c, dict) and "key" in c]
+        if not keys:
+            return False, "book_structure.json 无章节节点"
+        missing, stale = [], []
+        for k in keys:
+            jp = os.path.join(ex, "book_structure", f"book_structure_{k}.json")
+            dp = os.path.join(ex, "book_structure", f"draft_ch{k}.md")
+            if not os.path.exists(jp):
+                missing.append(k)
+                continue
+            if not os.path.exists(dp):
+                missing.append(k)
+                continue
+            # 新鲜度：草稿必须晚于契约（attach 重跑后必须重渲，否则草稿过期）
+            if os.path.getmtime(dp) < os.path.getmtime(jp):
+                stale.append(k)
+        if missing:
+            return False, f"缺内容化分章契约 / 草稿: {missing[:4]}"
+        if stale:
+            return False, f"草稿早于契约（attach 后未重渲）: {stale[:4]}"
+        return True, f"{len(keys)} 章内容化契约 + 草稿齐备且新鲜"
 
     @staticmethod
     def _count_md(book_dir, prefix):
@@ -370,11 +442,11 @@ EVIDENCE = {
     "extract.place_pdf": None,
     "extract.extract_text": physical_evidence.pages_all_landed,
     "extract.mm_repair": physical_evidence.mm_repair_complete,
-    "extract.config": physical_evidence.config_ok,
-    "extract.figure_detection": physical_evidence.figure_ok,
-    "extract.structure": physical_evidence.structure_ok,
+    "write_source.config": physical_evidence.config_ok,
+    "write_source.figure_detection": physical_evidence.figure_ok,
+    "write_source.structure": physical_evidence.structure_ok,
+    "write_source.draft": physical_evidence.draft_ok,
     "write_source.write_chapters": physical_evidence.write_chapters_ok,
-    "write_source.embed_figures": physical_evidence.embed_figures_ok,
     "write_source.verify_source": physical_evidence.verify_source_ok,
     "derive.translate": physical_evidence.translate_ok,
     "derive.verify_cn": physical_evidence.verify_cn_ok,

@@ -128,8 +128,12 @@ def main():
             out.write('# Chapter %d bundle (pages %d-%d)\n' % (ch, start, end))
             out.write('# %s\n' % (next((c.get('title') for c in chapters if c['ch'] == ch), '')))
             out.write('\n# SECTIONS (%d)\n' % sum(1 for r in skel if r[1] == 'SEC'))
-        for row in skel:
-            p, kind, num, title = row[0], row[1], row[2], row[3]
+            # ⚠️ 以下全部写出必须留在 `with` 块内：原先整段落在 with 之外，既让
+            # `if kind == 'SEC'` 多缩一级触发 IndentationError（本文件根本无法被
+            # import），又会让 out 在文件关闭后继续写入（ValueError: I/O on
+            # closed file），且 ITEMS/FIGURES/RAW 段会随 skel 行数重复输出。
+            for row in skel:
+                p, kind, num, title = row[0], row[1], row[2], row[3]
                 if kind == 'SEC':
                     out.write('SEC  %s  %s\n' % (num, title))
             out.write('\n# ITEMS (%d) — every one must land in the .md\n' % len(items_dedup))

@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from verify.script.base import VerifyLayer, LayerResult
+from lib.numbering import formula_num_core
 
 
 # Neutral no-op metadata returned when `formula` is None.  Mirrors the
@@ -186,7 +187,10 @@ def build_formula_patterns(ncomp: int) -> List[str]:
     # side but the source side drops it, producing FALSE FABRICATED for every
     # lettered sub-equation.  The suffix is optional, so plain `8.11` still
     # matches unchanged.
-    group = r'(\d+' + (r'[.\-·,]\d+') * (ncomp - 1) + r'(?:[a-zA-Z])?)'
+    # 🔴 编号 token 的正则核与 `lib.numbering.formula_num_core` 同源（唯一真源）：
+    # attach_content 挂 tag、本层抽书源编号、完整性闸门做独立真值，三处必须读
+    # 同一套形态（段数 / 分隔符 / 字母后缀），否则口径漂移会互相判对方"漏/编造"。
+    group = '(' + formula_num_core(ncomp) + ')'
     if ncomp == 1:
         # Per-section bare numbering (Kreyszig): genuine formula numbers appear
         # as a STANDALONE `(N)` / `（N）` attached to a displayed equation.

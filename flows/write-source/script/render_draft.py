@@ -2,6 +2,13 @@
 
 职责（2026-08-29 用户需求）
 --------------------------
+🔴 **全量保真，零压缩（硬契约）**：草稿是「调整与校验」的底稿，承载的是**内容
+全集**——证明与描述信息**逐块原样输出，一律不得摘要化、不得跳步、不得按 Tier
+压缩、不得因长度截断**。Tier 1/2/3 只压缩**表述**，且只发生在最终 md 的调整
+步骤（唯一规则源 `docs/writing-rules.md`），**不在本渲染器内**。契约里有多少
+内容块，草稿就写多少内容块（唯一例外：章末集中习题块 ``consolidated=true`` 按
+习题收录规则省略）。
+
 读取 ``<extract_dir>/book_structure/book_structure_{N}.json``（attach_content 产出的
 内容化分章契约），按 **writing-rules 书写格式**机械渲染出对应章的**基本总结草稿**
 ``draft_ch{N}.md``：
@@ -11,9 +18,13 @@
   * 条目：``**name**：正文``——粗体标签与首段同行（冒号随语种：CN ``：`` / EN ``: ``）；
   * 例块：``type:"example"`` 整段 ``> `` 包裹，例内证明与陈述同一连续 blockquote
     （块内空行为 ``> ``、公式为 ``> $$…$$``，符合 V-F 例块连续性）；
-  * 证明：proof 子节点 → ``> **证明思路**：…`` / ``> **Proof sketch**: …`` 块引用
-    （草稿不压缩步骤编号，调整时改写为 1. 2. …）；
+  * 证明：proof 子节点 → ``> **证明**：…`` / ``> **Proof**: …`` 块引用——**完整
+    证明原文逐块输出，不压缩**（故用「证明」而非「证明思路」：后者是最终 md
+    压成 `1. 2. …` 步骤后的标签，用在草稿上会误导调整者以为可以删内容。
+    两个标签 F 层 fixer 都识别，写成 ``**Proof**`` 不影响后续校验）；
   * 习题收录规则：章末集中习题块（``consolidated=true``）**省略**，穿插练习保留；
+  * 带编号的行间公式：契约公式块的 ``tag`` 以 KaTeX ``\\tag{...}`` 独立一行写入
+    ``$$`` 块内（书无号不编造；草稿据此保留序标供调整与 Q 层对账）；
   * 描述信息（description 节点）为无标题纯段落；图片块按原嵌图格式（flex div + ``<img>``）输出；
   * 分段：``line_start`` + ``indent``（首行缩进带）另起一段。
 
@@ -65,6 +76,12 @@ from embed_figures import short_caption as _fig_short_caption, page_px_width as 
 from lib.figure_io import load_fig_labels as _load_fig_labels, fig_label_alt as _fig_label_alt
 
 _CJK = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
+
+
+def _tag_body(tag):
+    """契约公式块的 ``tag`` 带外层括号（``"(5.1)"``）→ 取裸编号供 ``\\tag{}`` 使用。"""
+    t = (tag or "").strip()
+    return t[1:-1] if len(t) > 2 and t.startswith("(") and t.endswith(")") else t
 
 
 def _is_cjk(ch):
@@ -149,7 +166,10 @@ def _item_header_name(name, lang):
 
 
 def _proof_label(lang):
-    return "证明思路" if lang == "cn" else "Proof sketch"
+    """草稿的证明标签 —— **完整证明**，故用「证明」/「Proof」而非「证明思路」/
+    ``Proof sketch``。后者是最终 md 把证明压成 `1. 2. …` 步骤后的标签（见
+    writing-rules V-F），用在草稿上会暗示"可以压缩"。两者 F 层 fixer 均识别。"""
+    return "证明" if lang == "cn" else "Proof"
 
 
 def _blank(out, quote):
@@ -193,6 +213,8 @@ def _emit_blocks(blocks, out, buf, quote=False, lang="cn"):
                 _flush(buf, out, quote)
                 out.append("$$")
                 out.append(latex)
+                if _tag_body(blk.get("tag")):
+                    out.append("\\tag{%s}" % _tag_body(blk["tag"]))
                 out.append("$$")
                 _blank(out, quote)
             else:

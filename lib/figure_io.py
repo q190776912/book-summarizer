@@ -24,14 +24,11 @@ FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]
 _NEVER_RE = re.compile(r"[^\s\S]")
 
 
-# Mirrors config/verify_config/verify_config.py::ORDINAL_DEPTH so figure_io
-# stays import-clean (no config-module import). A figure group's `type`
-# encodes its numbering depth (= number of numeric components = the former
-# `figure.components`).  🔴 `components` IS `depth`.
-# Keep in sync with the config map (10: 3 = ORDINAL_CN3LAB) — a missing entry
-# makes a CN-三段标 figure group silently fall through to the legacy/default
-# components below.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3}
+# A figure group's `type` encodes its numbering depth (= number of numeric
+# components = the former `figure.components`).  🔴 `components` IS `depth`.
+# 🔴 取自 `lib.numbering` 的唯一真源（2026-08-29 去重，原此处为手工镜像副本）：
+# 副本会与 config 侧漂移，缺条目会让 CN-三段标 figure group 静默回落默认值。
+from lib.numbering import ORDINAL_DEPTH
 
 # Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
 # is matched separately (it carries no ASCII letters).

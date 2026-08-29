@@ -41,6 +41,8 @@
   - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。支持两种键形态：裸编号（全章生效）与 `'<sec>#<num>'` 作用域键（仅该节生效，见上）。
 - **scope/depth 耦合不变量（由 `type` 决定，配置必守）**：scope:3⇒`type 1`(depth 1，节级裸`(N)`)；scope:2⇒`type≥4`(depth≥2，章级带 C. 前缀)；scope:1 通常 `type 1` 全局连续。违反即非法，`require_complete` 应拒。
 - **书源编号抽取**：`SourceFormulaIndex.build()` 遍历 `page_{start:03d}.json .. page_{end:03d}.json`，对每页 `text[].text` 用**由 `type` 派生的 `depth`** 正则抽编号（`build_formula_patterns(ncomp)` 覆盖 `（1.17）`/`(1.17)`/`Eq. 1.17`/`Equation 1.17`/`式（1.17）`/裸 `1.17` 六种变体，每式单捕获组），`norm()` 归一后归入本章集合 S。**只读 text，不读被扫花的 `formulas[].latex`**。
+  - 🔴 **编号 token 的正则核属于 `lib.numbering.formula_num_core`（唯一真源）**：本层抽书源编号、`attach_content` 给公式挂 `tag`、`check_content_completeness` 做序标独立真值，三处共用同一套形态（段数由 `formula.type` 经 `ORDINAL_DEPTH` 派生；分隔符 `. - · ,`；可选字母后缀）。**改形态只改 `lib/numbering.py`**，否则三处口径漂移会互相判对方"漏/编造"。
+  - 实测形态差异极大，**不可假设 `(C.N)`**：约半数书右缘编号**不带括号**（Kreyszig / Evans SDE / PDE / Ross / 随机过程 / 解析数论），另有 `11.1-1` 连字符三段、`8.11a` 字母后缀等。编号还可能排在公式**左缘**（Kreyszig / 解析数论 / PDE）而非右缘。
 - **序标校验（自动 FAIL）**：
   - `q_fabricated`(FABRICATED)：总结 `\tag` 编号归一后**不在 S**（编造/串号）→ 始终 FAIL。
   - `q_inconsistent`(INCONSISTENT)：编号**重复**，或**跨章**（`scope == 2` 时首分量 ≠ 当前章号）→ 始终 FAIL。

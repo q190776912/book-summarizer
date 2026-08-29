@@ -131,6 +131,91 @@ def test_splice_inline_keeps_unmatched_and_display_untouched():
 
 
 # ---------------------------------------------------------------------------
+# _attach_formula_tags（行间公式编号挂接；2026-08-29 Koopman 书实测两种版式）
+# ---------------------------------------------------------------------------
+def test_attach_formula_tag_inside_full_width_bbox():
+    # 居中多行公式：MFD bbox 横跨整行、把右缘编号列一并圈入，编号落在 bbox 内右侧
+    # （tag.x0=1015 < fx1-5=1025）——旧判据「编号必须在 bbox 右缘之外」漏挂。
+    fx = _fx(1, "\\begin{array}{rl}a&=b\\end{array}", 161.0, 300.0, 1030.0, 382.0,
+             display=True)
+    tag = _txt(1, "(5.1)", 1015.0, 320.0, 1074.0, 357.0)
+    out = ac._attach_formula_tags([fx, tag])
+    assert fx["tag"] == "5.1"                  # 存**裸编号**（三处口径统一）
+    assert all(b is not tag for b in out)      # 编号块从散文流剔除（纯版面锚点）
+
+
+def test_attach_formula_tag_below_tall_formula():
+    # MFD bbox 偏上（带上下限 / 多行公式）：编号落在 bbox 下缘甚至略下方，
+    # 与公式中心距超过 0.6 行高——靠「垂直与公式带有交集」补命中。
+    fx = _fx(1, "\\lim_{t\\to\\infty}", 191.0, 1364.0, 1027.0, 1445.0, display=True)
+    tag = _txt(1, "(5.15)", 1000.0, 1440.0, 1074.0, 1469.0)
+    ac._attach_formula_tags([fx, tag])
+    assert fx["tag"] == "5.15"
+
+
+def test_attach_formula_tag_ignores_inline_and_far_blocks():
+    fx = _fx(1, "a=b", 150.0, 300.0, 650.0, 400.0, display=True)
+    far = _txt(1, "(2.1)", 900.0, 900.0, 990.0, 935.0)      # 垂直远离
+    ac._attach_formula_tags([fx, far])
+    assert "tag" not in fx                                   # 宁缺勿滥
+    fx2 = _fx(1, "a=b", 150.0, 300.0, 650.0, 400.0, display=True)
+    pro = _txt(1, "(2.2) is used later", 900.0, 320.0, 990.0, 355.0)  # 非整块编号
+    ac._attach_formula_tags([fx2, pro])
+    assert "tag" not in fx2
+    # 行内公式不参与编号挂接
+    fx3 = _fx(1, "a=b", 150.0, 300.0, 650.0, 400.0, display=False)
+    t3 = _txt(1, "(2.3)", 900.0, 320.0, 990.0, 355.0)
+    ac._attach_formula_tags([fx3, t3])
+    assert "tag" not in fx3
+
+
+def test_attach_formula_tag_shapes_across_books():
+    """编号形态按书各异——段数由 `formula.type` 派生，括号/分隔符/后缀全量支持。
+
+    全语料实测形态（绝不可只支持 `(C.N)` 一种）：
+      (1) 节级重置 / (2.17) 章.号 / (11.1-1) 章.节-号 / (8.11a) 字母后缀
+      / 裸排 2.17（近半数书右缘编号不带括号）/ （2.17）全角括号
+    """
+    from lib.numbering import formula_tag_number
+
+    def attach(raw, ncomp, x0=900.0):
+        fx = _fx(1, "a=b", 150.0, 300.0, 650.0, 400.0, display=True)
+        ac._attach_formula_tags([fx, _txt(1, raw, x0, 320.0, x0 + 70, 355.0)], ncomp)
+        return fx.get("tag")
+
+    assert attach("(2.17)", 2) == "2.17"          # 章.号（半角括号）
+    assert attach("（2.17）", 2) == "2.17"        # 全角括号
+    assert attach("(6)", 1) == "6"                # 节级重置单段
+    assert attach("(11.1-1)", 3) == "11.1-1"      # 连字符三段
+    assert attach("(8.11a)", 2) == "8.11a"        # 字母后缀子式
+    assert attach("2.17", 2) == "2.17"            # 裸排编号（右缘无括号）
+    assert attach("17", 1) == "17"                # 裸排单段
+    # 段数不符 → 不挂（配置说了算，防止把引用号当公式号）
+    assert attach("(2.17)", 1) is None
+    # 裸排编号必须严格在公式右缘之外：落在公式 bbox 内的裸数字不认
+    # （防列表号 / 脚注号 / 页码被误挂）
+    fx = _fx(1, "a=b", 150.0, 300.0, 1050.0, 400.0, display=True)
+    ac._attach_formula_tags([fx, _txt(1, "17", 500.0, 320.0, 530.0, 355.0)], 1)
+    assert "tag" not in fx
+    # 工具函数：整块恰为编号才返回裸编号
+    assert formula_tag_number("(2.17)") == "2.17"
+    assert formula_tag_number("see (2.17)") is None
+    assert formula_tag_number("(A.3)") is None    # 字母开头暂不支持（Q 层同源）
+
+
+def test_filter_noise_keeps_formula_tag_at_page_bottom():
+    # 公式编号归一化后同为纯数字短串：排在页面下缘时不得被当作页码丢弃
+    # （2026-08-29 Koopman ch7 (7.13) 实测 y=[1548,1577]，页高 1672）
+    tag = _txt(1, "(7.13)", 1000.0, 1548.0, 1072.0, 1577.0)
+    assert ac._filter_noise([tag], 1672.0, 30) == [tag]
+    # 真页码仍须被丢弃；裸排编号不享受豁免（与页码无法区分）
+    pno = _txt(1, "99", 1000.0, 1640.0, 1030.0, 1670.0)
+    assert ac._filter_noise([pno], 1672.0, 30) == []
+    bare = _txt(1, "7.13", 1000.0, 1548.0, 1072.0, 1577.0)
+    assert ac._filter_noise([bare], 1672.0, 30) == []
+
+
+# ---------------------------------------------------------------------------
 # _split_proofs（证明子节点拆分）
 # ---------------------------------------------------------------------------
 def _blk(page, kind, **kw):
@@ -257,6 +342,23 @@ def test_to_content_carries_line_geometry():
     c = _txt(1, "续行。", 100.0, 140.0, 500.0, 170.0)
     c["line_start"] = True
     assert ac._to_content(c) == {"text": "续行。", "line_start": True}
+
+
+def test_render_display_formula_emits_tag():
+    # 带编号的行间公式：\tag{} 独立一行落在 $$ 块内（书无号不编造）
+    for stored, want in (("2.17", "\\tag{2.17}"), ("(2.17)", "\\tag{2.17}"),
+                         ("11.1-1", "\\tag{11.1-1}"), ("8.11a", "\\tag{8.11a}"),
+                         ("6", "\\tag{6}")):
+        out, buf = [], []
+        rd._emit_blocks([{"formula": "a=b", "display": True, "tag": stored}], out, buf)
+        rd._flush(buf, out)
+        assert out[:4] == ["$$", "a=b", want, "$$"], stored
+    # 无编号公式不带 \tag；行内公式永不带 \tag
+    out2, buf2 = [], []
+    rd._emit_blocks([{"formula": "a=b", "display": True},
+                     {"formula": "x", "display": False, "tag": "2.18"}], out2, buf2)
+    rd._flush(buf2, out2)
+    assert "\\tag" not in "\n".join(out2)
 
 
 def test_render_breaks_paragraph_on_indent_band():
@@ -449,8 +551,56 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
     assert 'height="auto">' in md                                  # bbox 比例 width
     assert "This chapter introduces the basic notions." in md   # 章首序言纯段落
     assert "In this section we study the basic notions." in md  # 节导语纯段落
-    assert "> **Proof sketch**:" in md                          # 证明思路块引用（EN）
     assert "Immediate from the definitions." in md
+    # 证明：完整原文逐块输出（草稿零压缩 → 标签是「Proof」而非「Proof sketch」）
+    assert "> **Proof**:" in md
+    assert "Proof sketch" not in md
+
+
+def test_render_draft_keeps_full_proof_and_description():
+    """草稿零压缩：证明与描述信息的**每一块**都必须原样出现在 md 里。
+
+    Tier 压缩只发生在最终 md 的调整步骤（且只压表述不删内容），渲染器**不得**
+    摘要化 / 跳步 / 截断。此测试钉死该契约，防后续"优化"悄悄丢内容。
+    """
+    tmp = tempfile.mkdtemp(prefix="bks_nocompress_")
+    ext = os.path.join(tmp, "_extract")
+    os.makedirs(os.path.join(ext, "book_structure"), exist_ok=True)
+    proof_body = ["Step one of a long derivation.",
+                  "Step two uses the substitution above.",
+                  "Step three concludes the argument."]
+    desc_body = ["Motivation for the whole section.",
+                 "Second descriptive paragraph, kept verbatim."]
+    node = {
+        "key": "1", "type": "chapter", "name": "1 Intro",
+        "page_start": 1, "page_end": 1, "sub_sec": [
+            {"type": "description", "key": "D1", "name": "",
+             "page_start": 1, "page_end": 1,
+             "sub_sec": [{"text": t} for t in desc_body]},
+            {"key": "1.1-1", "type": "theorem", "name": "1.1-1 Theorem",
+             "page_start": 1, "page_end": 1, "sub_sec": [
+                 {"text": "Statement of the theorem."},
+                 {"type": "proof", "key": "1.1-1-P1", "name": "PROOF",
+                  "page_start": 1, "page_end": 1,
+                  # QED 用 ASCII 形态：英文书草稿会剔除 CJK 字形（双语铁律），
+                  # 写「口」会被清掉、测不出"QED 是否保留"
+                  "sub_sec": ([{"text": "PROOF."}]
+                              + [{"text": t} for t in proof_body]
+                              + [{"formula": "a=b", "display": True},
+                                 {"text": "Q.E.D."}])},
+             ]}]}
+    json.dump(node, open(ac.chapter_json_path(ext, "1"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    md = open(rd.render_chapter(ext, "1", "en"), encoding="utf-8").read()
+    # 描述信息：每个源段都在
+    for t in desc_body:
+        assert t in md
+    # 证明：每一步、每个公式、QED 都在，且顺序不改
+    pos = [md.find(t) for t in proof_body]
+    assert all(p >= 0 for p in pos) and pos == sorted(pos)
+    assert "a=b" in md and "Q.E.D." in md       # 公式与 QED 一块不少
+    # 零压缩 → 不出现省略号式截断标记
+    assert "…" not in md and "..." not in md
 
 # ---------------------------------------------------------------------------
 # check_content_completeness（内容完整性闸门）
@@ -517,3 +667,54 @@ def test_content_gate_pass_fail_roundtrip():
     assert drop_text(ch)
     json.dump(ch, open(per, "w", encoding="utf-8"), ensure_ascii=False)
     assert cc.main([ext, "1"]) == 1                    # 丢文字块 → FAIL
+
+
+def test_content_gate_detects_dropped_formula_tags():
+    """内容完整性闸门必须感知公式序标丢失（2026-08-29 Koopman 盲区修复）。
+
+    旧实现的公式块签名只含 latex+display，且校验①是「同管线自复算 vs 磁盘」的
+    自证比对——把契约里全部 tag 抹掉后两侧同样缺失，闸门仍报 PASS。
+    """
+    tmp = tempfile.mkdtemp(prefix="bks_gate_tag_")
+    ext = os.path.join(tmp, "_extract")
+    os.makedirs(ext)
+    p1 = {"page": 1, "text": [
+        {"poly": [100, 100, 700, 100, 700, 135, 100, 135],
+         "text": "1.1 Basics", "score": .9},
+        {"poly": [100, 160, 700, 160, 700, 195, 100, 195],
+         "text": "1.1-1 Definition (Metric). A metric orders a set.", "score": .9},
+        # 右缘独立编号块：须挂到下面的行间公式上
+        {"poly": [800, 318, 900, 318, 900, 353, 800, 353],
+         "text": "(1.1)", "score": .9}],
+        "formulas": [{"bbox": [150, 300, 650, 400], "cls": 1, "conf": .9,
+                      "latex": "d(x,y)\\ge 0"}], "deskew": 0}
+    json.dump(p1, open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    json.dump({"ok": 1}, open(os.path.join(ext, "_extraction_done.json"), "w"))
+    os.makedirs(os.path.join(ext, "book_structure"), exist_ok=True)
+    json.dump({"key": "1", "type": "chapter", "name": "1 Intro",
+               "page_start": 1, "page_end": 1, "sub_sec": [
+                   {"key": "1.1", "type": "section", "name": "1.1 Basics",
+                    "page_start": 1, "page_end": 1, "sub_sec": [
+                        {"key": "1.1-1", "type": "definition",
+                         "name": "1.1-1 Definition (Metric).",
+                         "page_start": 1, "page_end": 1, "sub_sec": []}]}]},
+              open(ac.chapter_json_path(ext, "1"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+
+    ac.attach(ext)
+    per = ac.out_path(ext, "1")
+    ch = json.load(open(per, encoding="utf-8"))
+    tagged = [b for b in ac._iter_blocks(ch) if b.get("tag")]
+    assert [b["tag"] for b in tagged] == ["1.1"]          # 编号已挂上（裸编号）
+    assert cc.main([ext, "1"]) == 0                       # 齐备 → PASS
+
+    # 独立真值：书源有 1.1 这块编号（裸编号口径）
+    assert cc._source_formula_tags(ext, 1, 1, "1") == {"1.1"}
+
+    # 抹掉全部 tag（等价旧盲区场景）→ 闸门必须 FAIL
+    ch = json.load(open(per, encoding="utf-8"))
+    for b in ac._iter_blocks(ch):
+        b.pop("tag", None)
+    json.dump(ch, open(per, "w", encoding="utf-8"), ensure_ascii=False)
+    assert cc.main([ext, "1"]) == 1

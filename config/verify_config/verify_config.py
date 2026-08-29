@@ -108,7 +108,9 @@ ORDINAL_NAME = {
     12: 'hum',
 }
 # Numbering depth (numeric components) per ordinal code.
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2}
+# 🔴 唯一真源在 `lib.numbering`（2026-08-29 去重）：此处只做再导出，禁止就地改
+# 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
+from lib.numbering import ORDINAL_DEPTH  # noqa: F401  (re-exported)
 # Structural style per ordinal code (None = common depth-driven parsing).
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
                      11: None, 12: None}

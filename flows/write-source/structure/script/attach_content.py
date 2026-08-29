@@ -87,6 +87,8 @@ from data.book_structure.book_structure import (chapter_json_path,
                                                 list_chapter_keys,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
+from lib.numbering import (ORDINAL_DEPTH, formula_paren_tag_re,
+                           formula_tag_number, formula_tag_re)
 
 OUT_DIR_NAME = "book_structure"
 
@@ -243,6 +245,7 @@ def _collect_blocks(ext, start, end):
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
+    ncomp = formula_cfg(ext)[0]
     blocks = []
     for p in range(int(start), int(end) + 1):
         fp = os.path.join(ext, "page_%03d.json" % p)
@@ -316,30 +319,81 @@ def _collect_blocks(ext, start, end):
         page_blocks = _splice_inline(texts, disp)
         page_blocks.extend(_figure_blocks(ext, p))
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
-        page_blocks = _attach_formula_tags(page_blocks)
+        page_blocks = _attach_formula_tags(page_blocks, ncomp)
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
 
 
-_TAG_RE = re.compile(r"^\((\d{1,3}(?:\.\d{1,3})*)\)$")
+_FORMULA_CFG_CACHE = {}
 
 
-def _attach_formula_tags(page_blocks):
-    """把行间公式同行右缘的编号 tag（"(2.17)" 独立文本块）挂到公式块的
-    ``tag`` 键上，并从散文流剔除该文本块（纯版面锚点，不是正文）。
+def formula_cfg(ext):
+    """本书公式序标配置 → ``(ncomp, scope)``；未配置时为 ``(None, None)``。
 
-    判定（宁缺勿滥）：tag 文本块整块恰为 ``(<num>)``、位于公式块右侧
-    （x0 ≥ 公式 x1 - 容差）、与公式行垂直中心相近（≤ 行高 0.6 倍）。
+    🔴 **编号段数必须由 `verify_config.json` 的 `formula.type` 经
+    `ORDINAL_DEPTH` 派生，不得硬编码**。各书形态差异极大（全语料实测）：
+    ``(1)`` 节级重置 / ``(2.17)`` 章.号 / ``(11.1-1)`` 章.节-号 / ``(8.11a)``
+    字母后缀 / 大量书右缘编号**不带括号**。段数错 → 整章编号一个都挂不上。
+    """
+    if ext not in _FORMULA_CFG_CACHE:
+        ncomp = scope = None
+        try:
+            with open(os.path.join(ext, "verify_config.json"),
+                      encoding="utf-8-sig") as f:
+                fc = json.load(f).get("formula") or {}
+            ncomp = ORDINAL_DEPTH.get(fc.get("type"))
+            s = fc.get("scope")
+            if isinstance(s, int):
+                scope = s
+        except Exception:
+            ncomp = scope = None
+        _FORMULA_CFG_CACHE[ext] = (ncomp, scope)
+    return _FORMULA_CFG_CACHE[ext]
+
+
+def tag_re(ext, bare=True):
+    """本书「独立成块的公式编号」锚定正则（供 attach 与完整性闸门共用）。"""
+    return formula_tag_re(formula_cfg(ext)[0], bare=bare)
+
+
+def _attach_formula_tags(page_blocks, ncomp=None):
+    """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
+    并从散文流剔除该文本块（纯版面锚点，不是正文）。
+
+    编号形态（段数 / 括号 / 分隔符 / 字母后缀）由 ``ncomp`` 经
+    :func:`lib.numbering.formula_tag_re` 决定，调用方从 ``formula_cfg(ext)``
+    取得——**绝不在此硬编码某一种编号样式**。
+
+    判定（宁缺勿滥）：整块恰为一个编号，且同时满足两个几何条件：
+
+      * **水平**：编号排在公式行的**右侧或左侧**——🔴 两种版式都实测存在，
+        **不可只认一侧**：Koopman / 随机过程 / 实变函数等书编号在右缘，而
+        Kreyszig / Introduction to Analytic Number Theory / PDE 等书编号在
+        **左缘**（这批书用「只认右缘」的旧判据整章 0 命中）。
+          - **右侧**：``x0 ≥ min(公式 x1 - 容差, 公式水平中点)``。MFD 对居中
+            多行公式（``\\begin{array}`` 等）的 bbox 会横跨整行、把右缘编号列
+            一并圈入，此时编号在 bbox 内部右侧而非其右方（Koopman 实测 18/80
+            因此漏挂）。**裸排编号**要求更靠右（右侧 1/4）——裸数字与列表号 /
+            脚注号无形态区别，只在"确实排在公式行最右端"时才认。
+          - **左侧**：编号须**整块在公式 bbox 左缘之外**（``x1 ≤ 公式 x0 +
+            容差``）。左缘正是这批书放编号的位置，但也正是列表号 / 小节号的
+            位置，故只认"确实排在公式行左端外侧"的块。
+      * **垂直**：与公式带**垂直有交集**（含相切，容差 0.2 倍行高的外扩），
+        **或**垂直中心距 ≤ 行高 0.6 倍。中心距判据对居中编号有效；交集判据补上
+        MFD bbox 偏上（带上下限 / 多行公式）导致编号落在下缘甚至略下方的情况。
+
     纯几何 + 文本判定，无状态，保证 check_content_completeness 的
     确定性复算两侧一致。
     """
     tags = []
     for b in page_blocks:
-        if b["kind"] == "text":
-            m = _TAG_RE.match(b["text"].strip())
-            if m:
-                tags.append(b)
+        if b["kind"] != "text":
+            continue
+        raw = (b["text"] or "").strip()
+        num = formula_tag_number(raw, ncomp)
+        if num is not None:
+            tags.append((b, num, raw[:1] in "（("))
     if not tags:
         return page_blocks
     consumed = set()
@@ -348,20 +402,32 @@ def _attach_formula_tags(page_blocks):
             continue
         cy = (b["y"] + b["bottom"]) / 2.0
         hh = max(b["bottom"] - b["y"], 1.0)
+        fw = max(b["x1"] - b["x"], 1.0)
+        # 带括号：落在公式 bbox 右半侧即可（bbox 常横跨整行、把编号列圈进去）。
+        # 裸排：要求更靠右（右侧 1/4）——裸数字与列表号 / 脚注号无形态区别，只在
+        # 「确实排在公式行最右端」时才认；宽松到 1/4 是因为 MFD 对居中公式的 bbox
+        # 常常横跨整行，此时右缘编号在 bbox 之内而非其右方（Kreyszig 实测：严格
+        # 「bbox 右缘之外」判据下整章 0 命中）。
+        x_paren = min(b["x1"] - 5.0, b["x"] + 0.5 * fw)
+        x_bare = min(b["x1"] - 5.0, b["x"] + 0.75 * fw)
+        x_left = b["x"] + 5.0
         best = None
-        for t in tags:
+        for t, num, paren in tags:
             if id(t) in consumed:
                 continue
             tcy = (t["y"] + t["bottom"]) / 2.0
-            if abs(tcy - cy) > 0.6 * hh:
+            ov = min(t["bottom"], b["bottom"]) - max(t["y"], b["y"])
+            if abs(tcy - cy) > 0.6 * hh and ov < -0.2 * hh:
                 continue
-            if t["x"] < b["x1"] - 5.0:
+            on_right = t["x"] >= (x_paren if paren else x_bare)
+            on_left = t["x1"] <= x_left
+            if not (on_right or on_left):
                 continue
-            if best is None or t["x"] < best["x"]:
-                best = t
+            if best is None or t["x"] < best[0]["x"]:
+                best = (t, num)
         if best is not None:
-            b["tag"] = _TAG_RE.match(best["text"].strip()).group(0)
-            consumed.add(id(best))
+            b["tag"] = best[1]
+            consumed.add(id(best[0]))
     if consumed:
         page_blocks = [b for b in page_blocks if id(b) not in consumed]
     return page_blocks
@@ -420,7 +486,7 @@ def _strip_furniture(texts, disp, page):
     return kept_texts, disp
 
 
-def _filter_noise(blocks, page_height, n_pages):
+def _filter_noise(blocks, page_height, n_pages, ncomp=None):
 
     def _edge(b):
         h = page_height
@@ -449,10 +515,16 @@ def _filter_noise(blocks, page_height, n_pages):
                 continue          # 页眉/页脚/版权行：跨页边缘重复
             if len(all_pages.get(n, ())) >= max(3, int(0.5 * n_pages)):
                 continue          # running head 变体：全章过半页重复
+            # 页码：极端边缘纯数字短行。⚠️ 公式编号归一化后同为纯数字短串，
+            # 排在页面下缘时会被误判为页码整块丢弃（2026-08-29 Koopman ch7
+            # (7.13) 实测）→ 对**带括号**的编号豁免。裸排编号不豁免：它与页码
+            # 无法区分（页码永远是裸数字），豁免会让页码重新漏进正文。
             h = page_height
             if (h and n.isdigit() and len(n) <= 3
+                    and not formula_paren_tag_re(ncomp).match(
+                        (b.get("text") or "").strip())
                     and (b["y"] < 0.06 * h or b["bottom"] > 0.94 * h)):
-                continue          # 页码：极端边缘纯数字短行
+                continue
         kept.append(b)
     return kept
 
@@ -803,7 +875,8 @@ def build_chapter_contract(ext, node):
     n_noise = [0]
 
     blocks, page_height = _collect_blocks(ext, start, end)
-    kept = _filter_noise(blocks, page_height, max(1, end - start + 1))
+    kept = _filter_noise(blocks, page_height, max(1, end - start + 1),
+                         formula_cfg(ext)[0])
     n_noise[0] = len(blocks) - len(kept)
     blocks = kept
     _mark_line_geometry(blocks)

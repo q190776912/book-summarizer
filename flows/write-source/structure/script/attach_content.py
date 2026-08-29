@@ -177,14 +177,14 @@ def _splice_inline(texts, formulas):
                     pos = min(cands, key=lambda i: abs(i - pos))
             pos = max(pos, prev)
             segs.append({"page": t["page"], "y": t["y"], "x": t["x"],
-                         "bottom": t["bottom"], "kind": "text",
+                         "x1": t["x1"], "bottom": t["bottom"], "kind": "text",
                          "text": txt[prev:pos].strip()})
             segs.append({"page": t["page"], "y": t["y"], "x": t["x"],
-                         "bottom": t["bottom"], "kind": "formula",
+                         "x1": t["x1"], "bottom": t["bottom"], "kind": "formula",
                          "latex": latex, "display": False})
             prev = pos
         segs.append({"page": t["page"], "y": t["y"], "x": t["x"],
-                     "bottom": t["bottom"], "kind": "text",
+                     "x1": t["x1"], "bottom": t["bottom"], "kind": "text",
                      "text": txt[prev:].strip()})
         out.extend(s for s in segs if s.get("text") or "latex" in s)
     out.extend(inline)

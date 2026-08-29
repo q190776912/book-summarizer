@@ -355,13 +355,16 @@ def _source_item_comps_label(it, cfg):
     return None
 
 
-def _md_tail_warnings(ctx, cfg, groups):
-    """B-LAYER 尾部校验（SSOT b.md §尾部校验，非阻断）.
+def _md_tail_blocking(ctx, cfg, groups):
+    """B-LAYER 尾部校验（阻断）.
 
     对每个 md 编号组，取 .md 内最大号 `last`；再在提取契约（源, ctx.items）中
     按同一分组方案（levels/scope/separate_types）找该组最大号 `smax`。若
-    `smax > last` 且中间号源有而 md 无 -> 疑似尾部漏项，写进 `b_tail_warnings`
-    （仅提示，请人工核实章/节是否即止）。
+    `smax > last` 且中间号源有而 md 无 -> 疑似尾部漏项，报 blocking。
+
+    agent 核实后确认该节确实到此为止，可在 ignore_ch{N}.json 中登记
+    ``"TAIL:{gk}"``（如 ``"TAIL:0:1.7"``）标记尾部已检查通过，suppress 该组
+    所有尾部阻断。
 
     OCR 幻影可能抬高 smax，故差距过大(>_TAIL_GAP_CAP)时只给一条汇总提示而非
     逐号轰炸；已知稀疏号(known_gaps)/已忽略键(ignore_keys)跳过。
@@ -393,7 +396,7 @@ def _md_tail_warnings(ctx, cfg, groups):
         if num > src_max.get(key, 0):
             src_max[key] = num
 
-    warnings = []
+    blocking = []
     for gk, pairs in sorted(groups.items()):
         # `gk` is "{gi}:<body>" where <body> is the numeric prefix string,
         # "file" (uncat), or "file:<label>".
@@ -416,11 +419,15 @@ def _md_tail_warnings(ctx, cfg, groups):
         smax = src_max.get((gi, prefix), 0)
         if smax <= last:
             continue
+        # TAIL:{gk} in ignore -> agent verified section ends here, suppress all
+        if f"TAIL:{gk}" in ignore or f"TAIL:{gk}" in known:
+            continue
         gap = smax - last
         if gap > _TAIL_GAP_CAP:
-            warnings.append(
-                f"  ~ TAIL {gk}: 源最大 {smax} 远大于 md 最大 {last}（差距 {gap}）"
-                f"— 疑似 OCR 幻影或异源编号，请重点核实该组是否即止")
+            blocking.append(
+                f"  WARN (BLOCKING): TAIL {gk}: 源最大 {smax} 远大于 md 最大 {last}（差距 {gap}）"
+                f"— 疑似 OCR 幻影或异源编号，请核实该组是否即止；"
+                f"确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json")
             continue
         for n in range(last + 1, smax + 1):
             full = (prefix_str + '-' if prefix_str else '') + str(n)
@@ -429,10 +436,26 @@ def _md_tail_warnings(ctx, cfg, groups):
             if (token in known or token_norm in known
                     or f"{gk}:{n}" in known or f"{gk}:{n}" in ignore):
                 continue
-            warnings.append(
-                f"  ~ TAIL {gk} 缺尾部号 {n}（md 最大 {last}，源最大 {smax} — "
-                f"请核实章/节是否即止；疑似尾部漏项）")
-    return warnings
+            blocking.append(
+                f"  WARN (BLOCKING): TAIL {gk} 缺尾部号 {n}（md 最大 {last}，源最大 {smax} — "
+                f"请核实章/节是否即止；确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json）")
+    return blocking
+
+
+def _ignored_num(gk, prefix_str, n, label_candidates, known, ignore):
+    """True if item number `n` in group `gk` is a confirmed ignore / known_gap
+    entry (same token logic as the gap-emit check, so a single --ignore entry
+    suppresses both 缺号 and 顺序错乱 for a confirmed book-order anomaly)."""
+    full = (prefix_str + '-' if prefix_str else '') + str(n)
+    for lab in label_candidates:
+        token = f"{lab} {full}" if lab and lab != 'uncat' else full
+        token_norm = f"{_norm_label(lab)} {full}" if lab and lab != 'uncat' else full
+        if (_norm_sep(token) in known or _norm_sep(token_norm) in known
+                or _norm_sep(f"{gk}:{n}") in known
+                or f"{gk}:{n}" in ignore
+                or _norm_sep(full) in known or full in ignore):
+            return True
+    return False
 
 
 # ------------------------------------------------------------------ grouping
@@ -723,14 +746,31 @@ def _md_gap_blocking(ctx):
         pref = _parts[1] if len(_parts) > 1 else gk_key
         if pref == 'file' or pref.startswith('file:') or pref == '':
             pref = '<章级>'
+        # 还原本组的标签候选（与 缺号 emit 同口径），供 ignore 令牌匹配
+        # 「Theorem 1.23 / 定理 1.23 / 1.23」等写法。
+        label_candidates = ['uncat']
+        try:
+            gi = int(gk_key.split(':', 1)[0])
+            g = cfg.ordinal[gi]
+            if not g.is_uncat:
+                label_candidates = list(g.name)
+        except (ValueError, IndexError):
+            pass
+        # 🔴 对照契约已知非单调编号：若某编号属已登记 ignore/known_gaps（即已
+        # 经 agent 核实确为源书真实印刷顺序，而非我方错位），从本组序列剔除后再
+        # 做单调校验——只抑制"确认的书异"，真实错位（未被 ignore 的号）仍照常
+        # 报 BLOCKING。这与 缺号 emit 共用同一 _ignored_num 令牌逻辑，保证单条
+        # ignore 同时压制 缺号 与 顺序错乱 两类告警。
+        seq_f = [n for n in seq
+                 if not _ignored_num(gk_key, pref, n, label_candidates, known, ignore)]
         last_pos = {}
-        for i, num in enumerate(seq):
+        for i, num in enumerate(seq_f):
             last_pos[num] = i
         ordered = [num for num, _ in sorted(last_pos.items(), key=lambda kv: kv[1])]
         for i in range(1, len(ordered)):
             if ordered[i] < ordered[i - 1]:
                 blocking.append(
-                    f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq}]: 编号 {ordered[i]} "
+                    f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq_f}]: 编号 {ordered[i]} "
                     f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
                     f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
                     f"将 {pref}-{ordered[i]} 移到正确位置。")
@@ -740,9 +780,10 @@ def _md_gap_blocking(ctx):
     if os.environ.get('BKS_DEBUG'):
         for gk_key, seq in sorted(section_order.items()):
             print(f"  [DEBUG] order {gk_key}: {seq}", file=sys.stderr)
-    tail_warnings = _md_tail_warnings(ctx, cfg, groups)
+    # 尾部校验已在 run() 层通过 _md_tail_blocking 统一处理，此处不再重复调用
+    tail_warnings = []
 
-    return blocking, warnings, present_md, tail_warnings
+    return blocking, warnings, present_md, tail_warnings, groups
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +816,17 @@ def _norm_ch(s):
 _CH = r'([0-9A-Za-z])'
 _BOOK_LABEL_RES = [
     re.compile(r'^\s*(定义|定理|引理|推论|命题)\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\b'),          # 定义4.7-1
-    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)(?:' + SEP_TIGHT + r'(\d+))?\b', re.IGNORECASE),  # Definition 4.7[-N]
+    # EN: third component REQUIRED + `(?![0-9])` tail (not `\b`).  Leinster
+    # 2014 measured: OCR glues the trailing word onto the number
+    # ("Definition 1.2.1Let", "Definition 1.3.17A functor"); the old optional
+    # third group + `\b` backtracked to a TWO-component match and recorded a
+    # phantom item number 0, which _merged_category_first_missing then
+    # reported as a fake "first item 0 missing" BLOCKING.  Requiring the third
+    # component and replacing `\b` with a digit negative-lookahead keeps glued
+    # letter forms intact and drops bare two-number mentions ("Definition 4.7")
+    # instead of registering them as number-0 items.  Heuristic only (Q-into-B
+    # category-first gate); strictly fewer false positives, zero regression.
+    re.compile(r'^\s*(Definition|Theorem|Lemma|Corollary|Proposition)\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)(?![0-9])', re.IGNORECASE),  # Definition 4.7.N (glue-tolerant)
     re.compile(r'^\s*' + _CH + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)\s*(定义|定理|引理|推论|命题)'),            # 4.7-1 定义
 ]
 
@@ -926,7 +977,11 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             blocking = kept
 
         # Authoritative missing-number detection on the written .md.
-        md_blocking, md_warnings, present_md, md_tail = _md_gap_blocking(ctx)
+        md_blocking, md_warnings, present_md, _md_tail_unused, groups = _md_gap_blocking(ctx)
+
+        # Tail warnings are now BLOCKING: agent must verify each section's tail
+        # and register "TAIL:{gk}" in ignore if the section truly ends there.
+        md_tail = _md_tail_blocking(ctx, ctx.config, groups)
 
         # 提取侧误报过滤：OCR 漏检但 .md 已正确写出的条目不应 hard-block。
         # 仅当被报缺的键在 .md 中也确实缺失时，才保留为 blocking（此时 MD 与
@@ -959,7 +1014,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
                 kept.append(msg)
             blocking = kept
 
-        blocking = blocking + md_blocking
+        blocking = blocking + md_blocking + md_tail
 
         ctx.ignored_hit = ignored_hit
         ctx.extraction_blocking = blocking
@@ -968,7 +1023,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             'blocking': blocking,
             'warnings': warnings,
             'b_gap_warnings': md_warnings,
-            'b_tail_warnings': md_tail,
+            'b_tail_warnings': [],  # tail items already in blocking above
             'ignored_hit': ignored_hit,
             'truly_missing': truly_missing,
             'mentioned_only': mentioned_only,

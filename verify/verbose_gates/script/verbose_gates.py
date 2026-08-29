@@ -47,7 +47,10 @@ from data.book_structure.book_structure import BookStructure
   p_verbose     — 过度照抄（非核心内容未摘要）：顶层长散文段（不含 `**` 标签条目/例/练习/
                  注记的忠实内容，这些属 Tier 1 高保真豁免）超过 ~350 字/段的段落数 ≥ 6
                  （VERBOSE_PARA_GATE），判为把动机/导语等非核心内容整段搬自原书，须压缩为
-                 核心要点或省略（Tier 2）。
+                 核心要点（Tier 2）。
+                 🔴 注意「压缩」≠「删除」：Tier 2 只压修辞性铺陈，变量 / 公式 / 概念名**一个
+                 都不能少**，且不得整段删除源段落——删光描述段属 p_undercover（覆盖下限，
+                 见 docs/writing-rules.md V-P 第 3 条与 tools/coverage_gate.py）。
   p_proof_verbose — 证明/解答块过长且未分条：单个 `> **证明/解答/Proof/Solution**` 块引用内
                  文本 > 700 字（VERBOSE_PROOF_CHARS）且**未写成核心步骤式**（即没有 ≥2 个
                  `1.` / `（1）` / `(a)` 这类步骤标号）的块数 ≥ 2（VERBOSE_PROOF_GATE），判为
@@ -378,10 +381,20 @@ PROOF_OPEN_RE = re.compile(
     r'>\s*\*\*(?:证明|证明思路|证明梗概|证明概要|Proof|Proof sketch|Proof Sketch|'
     r'梗概|概要|解答|Solution)\b', re.I)
 
-# 顶层长散文段的最小字符数（超过即疑似整段照抄非核心内容）
+# 顶层长散文段的最小字符数（超过才进入「疑似照抄」观察区）
 # 注：含公式($...$/$$/\begin{})的段落视为「内容承载的描述性内容」，豁免本闸门
 # （忠实保留公式/概念的描述本就该较长，不应被误杀；见 SKILL.md Tier 2）。
+#
+# 🔴 2026-08-28 用户裁决：**优先保证可读性，不以纯字数论处**。
+# 纯长度只是代理指标，会与 Tier 2「保留全部变量/公式/概念 + 基本描述」直接冲突
+# ——忠实但已改写的密集数学散文天然偏长，被纯长度闸门误杀后 agent 只能删内容。
+# 因此长散文段必须与源书做**字面重合率**比对：
+#   · 长度 > VERBOSE_PARA_HARD_CHARS → 墙式散文， readability 硬顶，无条件报；
+#   · 长度 > VERBOSE_PARA_CHARS 且 8-gram 重合率 ≥ VERBOSE_OVERLAP_MIN → 判照抄；
+#   · 长度介于两者之间且已改写（重合率低）→ 放行（Tier 2 忠实描述）。
 VERBOSE_PARA_CHARS = 450
+VERBOSE_PARA_HARD_CHARS = 1200   # 可读性硬顶：超过即无论重合率都报
+VERBOSE_OVERLAP_MIN = 0.60       # 与源书的 8-gram 字面重合率 ≥ 此值判为照抄
 # 单证明块过长的字符阈值
 VERBOSE_PROOF_CHARS = 700
 # 触发 FAIL 的聚合阈值（report.py 读取）
@@ -408,15 +421,75 @@ def _para_has_math(text):
     return ('$' in text) or ('\\begin{' in text) or ('\\(' in text)
 
 
-def check_verbose_paragraphs(lines):
-    """顶层长散文段（非核心内容未摘要）。
+# ── 与源书的字面重合率（判定「照抄」而非「写得长」） ─────────────────────
+_WORD_RE = re.compile(r"[a-zA-Z]{2,}|[\u4e00-\u9fff]")
+_DEHYPHEN_RE = re.compile(r"([A-Za-z])-\s*\n\s*")
+_SRC_NGRAM_CACHE = {}
+
+
+def _source_ngrams(ext_dir, ch, n=8):
+    """该章 page_*.json 正文的 word n-gram 集合（按章缓存）。
+
+    取不到（无 chapter_map / 无 page_*.json）时返回空集——此时重合率恒为 0，
+    闸门退化为「只拦硬顶长度」，不会误伤。
+    """
+    key = (str(ext_dir), str(ch), n)
+    if key in _SRC_NGRAM_CACHE:
+        return _SRC_NGRAM_CACHE[key]
+    grams = set()
+    try:
+        from chapter_map import find_chapter
+        info = find_chapter(ext_dir, ch)
+        start, end = int(info["start"]), int(info["end"])
+        chunks = []
+        for pg in range(start, end + 1):
+            fp = os.path.join(str(ext_dir), "page_%03d.json" % pg)
+            if not os.path.exists(fp):
+                continue
+            with open(fp, encoding="utf-8") as fh:
+                d = json.load(fh)
+            blocks = [t for t in (d.get("text") or [])
+                      if (t.get("text") or "").strip()]
+            blocks.sort(key=lambda t: (float((t.get("poly") or [0, 0])[1]),
+                                       float((t.get("poly") or [0, 0])[0])))
+            chunks.append("\n".join(t["text"].strip() for t in blocks))
+        raw = _DEHYPHEN_RE.sub(r"\1", "\n".join(chunks))
+        ws = _WORD_RE.findall(raw.lower())
+        grams = set(tuple(ws[i:i + n]) for i in range(len(ws) - n + 1))
+    except Exception:
+        grams = set()
+    _SRC_NGRAM_CACHE[key] = grams
+    return grams
+
+
+def _verbatim_overlap(text, src_grams, n=8):
+    """段落与源书的 word n-gram 字面重合率 ∈ [0,1]。"""
+    if not src_grams:
+        return 0.0
+    ws = _WORD_RE.findall(text.lower())
+    if len(ws) < n:
+        return 0.0
+    grams = [tuple(ws[i:i + n]) for i in range(len(ws) - n + 1)]
+    hit = sum(1 for g in grams if g in src_grams)
+    return hit / len(grams)
+
+
+def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
+    """顶层长散文段（非核心内容未摘要 / 整段照抄）。
 
     豁免：块引用(`>`)内、标题(`#`)、`**` 标签条目/例/练习的忠实陈述、$$ 公式、
-    `---` 分隔线、表格行。只统计「无标签的顶层散文」——即动机/直观/注记非核心
-    阐述/导语等 Tier 2 内容；这些若被整段搬自原书（>450 字/段）即违规。
+    `---` 分隔线、表格行。只统计「无标签的顶层散文」——即动机/直观/导语等
+    Tier 2 内容；这些若被整段搬自原书即违规。
+
     ⚠️ **含公式的段落豁免**：凡承载数学（`$...$`/`$$`/`\\begin{}`/`\\(`）的段落视为
-    忠实保留公式的描述性内容（SKILL.md Tier 2 要求保留公式），不计入长散文闸门，
-    避免「忠实描述」被误杀。纯散文（无公式）仍按 450 字阈值约束。
+    忠实保留公式的描述性内容（Tier 2 要求保留公式），不计入本闸门，避免「忠实
+    描述」被误杀。
+
+    🔴 **判定「照抄」而非「写得长」**（2026-08-28，用户裁决：优先可读性，不以纯字数
+    论处）：纯散文段需同时满足「长度 > VERBOSE_PARA_CHARS」与「与源书 8-gram 字面
+    重合率 ≥ VERBOSE_OVERLAP_MIN」才判违规；长度超过 VERBOSE_PARA_HARD_CHARS
+    的墙式散文则无条件判违规（可读性硬顶）。传 `ext_dir`+`ch` 才会做重合率比对；
+    不传时退化为只拦硬顶长度。
     """
     out = []
     n = len(lines)
@@ -458,8 +531,16 @@ def check_verbose_paragraphs(lines):
                 i = j
                 continue
             if len(text) > VERBOSE_PARA_CHARS:
-                out.append(f"  x L{i+1}: 顶层散文段过长（{len(text)} 字，疑似整段照抄非核心内容）"
-                           f"— 动机/导语须精简表述但保留公式与概念(Tier 2)：{text[:60]}…")
+                hard = len(text) > VERBOSE_PARA_HARD_CHARS
+                ov = 0.0
+                if not hard and ext_dir is not None and ch is not None:
+                    ov = _verbatim_overlap(text, _source_ngrams(ext_dir, ch))
+                if hard or ov >= VERBOSE_OVERLAP_MIN:
+                    why = (f"墙式散文（>{VERBOSE_PARA_HARD_CHARS} 字）"
+                           if hard else
+                           f"与源书字面重合率 {ov:.0%} ≥ {VERBOSE_OVERLAP_MIN:.0%}（整段照抄）")
+                    out.append(f"  x L{i+1}: 顶层散文段 {len(text)} 字，{why}"
+                               f"— 须改写表述（保留全部变量/公式/概念，Tier 2）：{text[:60]}…")
         i = j
     return out
 
@@ -547,7 +628,7 @@ class PLayer(VerifyLayer):
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch,
                                          cfg=ctx.config)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
-        verbose = check_verbose_paragraphs(lines)
+        verbose = check_verbose_paragraphs(lines, ctx.ext_dir, ctx.ch)
         verbose_proof = check_verbose_proofs(lines)
         return LayerResult(code=self.code, metadata={
             'p_exer_block': exer,

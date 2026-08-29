@@ -30,7 +30,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import lib.boot  # noqa: E402
+lib.boot.setup()
 from data.page_json.page_json import PageJson  # noqa: E402
+from chapter_map import find_chapter  # noqa: E402
 
 
 def _top_y(poly_str):
@@ -47,20 +50,8 @@ def _top_y(poly_str):
 
 
 def dump_chapter(extract_dir, chapter, out=None):
-    cmap_path = os.path.join(extract_dir, "chapter_map.json")
-    with open(cmap_path, encoding="utf-8") as f:
-        cmap = json.load(f)
-    key = str(chapter)
-    if key not in cmap:
-        # maybe integer keys
-        key = None
-        for k in cmap:
-            if str(k) == str(chapter):
-                key = k
-                break
-    if key is None:
-        raise SystemExit(f"chapter {chapter} not found in chapter_map.json")
-    info = cmap[key]
+    # 归一化读取：兼容 {"chapters":[...]} 与 {"1":{...}} 两种 on-disk 形态
+    info = find_chapter(extract_dir, chapter)
     start, end = int(info["start"]), int(info["end"])
 
     lines = []

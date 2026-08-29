@@ -323,12 +323,23 @@ def chap_mds(book_dir, ch):
 
 
 def load_overrides(book_dir):
+    # 优先查找 _extract/figure_embed_overrides.json，如不存在则查找子目录（支持多卷结构）
     p = os.path.join(book_dir, "_extract", "figure_embed_overrides.json")
     if os.path.exists(p):
         try:
             return figure_embed_overrides.FigureEmbedOverrides.load(p).to_dict()
         except Exception:
             return {}
+    # 检查 _extract 下的子目录
+    extract_dir = os.path.join(book_dir, "_extract")
+    if os.path.isdir(extract_dir):
+        for sub in os.listdir(extract_dir):
+            sub_path = os.path.join(extract_dir, sub, "figure_embed_overrides.json")
+            if os.path.isfile(sub_path):
+                try:
+                    return figure_embed_overrides.FigureEmbedOverrides.load(sub_path).to_dict()
+                except Exception:
+                    return {}
     return {}
 
 
@@ -674,10 +685,18 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
 
 
 def load_figures(book_dir):
+    # 优先查找 _extract/figure_index.json，如不存在则查找子目录（支持多卷结构）
     p = os.path.join(book_dir, "_extract", "figure_index.json")
-    if not os.path.exists(p):
-        return []
-    return figure_index.FigureIndex.load(p).to_dict()
+    if os.path.exists(p):
+        return figure_index.FigureIndex.load(p).to_dict()
+    # 检查 _extract 下的子目录
+    extract_dir = os.path.join(book_dir, "_extract")
+    if os.path.isdir(extract_dir):
+        for sub in os.listdir(extract_dir):
+            sub_path = os.path.join(extract_dir, sub, "figure_index.json")
+            if os.path.isfile(sub_path):
+                return figure_index.FigureIndex.load(sub_path).to_dict()
+    return []
 
 
 def main():

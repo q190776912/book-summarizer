@@ -19,6 +19,11 @@ import os
 import sys
 import glob
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import lib.boot  # noqa: E402
+lib.boot.setup()
+from chapter_map import find_chapter  # noqa: E402
+
 
 def sort_key(block):
     poly = block.get("poly") or block.get("bbox") or [0, 0, 0, 0, 0, 0, 0, 0]
@@ -30,16 +35,8 @@ def sort_key(block):
 
 def load_pages(book_dir, chapter):
     extract_dir = os.path.join(book_dir, "_extract")
-    cmap_path = os.path.join(extract_dir, "chapter_map.json")
-    with open(cmap_path, encoding="utf-8") as f:
-        cmap = json.load(f)
-    ch = None
-    for c in cmap.get("chapters", []):
-        if str(c.get("ch")) == str(chapter):
-            ch = c
-            break
-    if ch is None:
-        raise SystemExit(f"chapter {chapter} not found in chapter_map.json")
+    # 归一化读取：兼容 {"chapters":[...]} 与 {"1":{...}} 两种 on-disk 形态
+    ch = find_chapter(extract_dir, chapter)
     return ch.get("start"), ch.get("end")
 
 

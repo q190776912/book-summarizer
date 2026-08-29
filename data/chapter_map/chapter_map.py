@@ -104,6 +104,53 @@ def load_chapter_map_raw(path: str) -> dict:
         return json.load(f)
 
 
+# ── 双形态归一化（🔴 消费方统一走这里，不要裸 json.load） ─────────────────
+# on-disk 存在两种形态：
+#   A（canonical，chapter_map.md 记载）：{"chapters": [{"ch":1,"name":…,…}]}
+#   B（legacy flat dict，ChapterMap.to_dict() 产出）：{"1": {"name":…,…}, …}
+# 只认其一的工具会在另一形态上直接报 "chapter N not found"
+# （实测：dump_chapter_source.py 只认 B、dump_chapter_ocr.py 只认 A）。
+def iter_chapter_records(raw: dict) -> List[dict]:
+    """把任一形态的 chapter_map 归一化成 `[{ch,name,name_en,start,end}, …]`。"""
+    if not isinstance(raw, dict):
+        return []
+    out: List[dict] = []
+    if isinstance(raw.get("chapters"), list):
+        for c in raw["chapters"]:
+            if not isinstance(c, dict):
+                continue
+            out.append({"ch": c.get("ch"), "name": c.get("name", ""),
+                        "name_en": c.get("name_en", ""),
+                        "start": c.get("start"), "end": c.get("end")})
+        return out
+    for k, v in raw.items():
+        if not isinstance(v, dict):
+            continue
+        out.append({"ch": k, "name": v.get("name", ""),
+                    "name_en": v.get("name_en", ""),
+                    "start": v.get("start"), "end": v.get("end")})
+    return out
+
+
+def load_chapter_records(path_or_dir) -> List[dict]:
+    """从文件路径或 extract_dir 读 chapter_map.json，返回归一化记录列表。"""
+    p = str(path_or_dir)
+    if os.path.isdir(p):
+        p = os.path.join(p, "chapter_map.json")
+    if not os.path.exists(p):
+        raise SystemExit(f"chapter_map.json not found: {p}")
+    return iter_chapter_records(load_chapter_map_raw(p))
+
+
+def find_chapter(path_or_dir, chapter) -> dict:
+    """按章号取一条归一化记录；找不到直接 SystemExit。"""
+    recs = load_chapter_records(path_or_dir)
+    for c in recs:
+        if str(c.get("ch")) == str(chapter):
+            return c
+    raise SystemExit(f"chapter {chapter} not found in {path_or_dir}")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python chapter_map.py <extract_dir>")

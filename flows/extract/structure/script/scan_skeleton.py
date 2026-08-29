@@ -270,7 +270,11 @@ def _exercise_headings_re(headings):
 # 章末习题块内的数字题号行："3.11. Two cards are ..." / "3.7 The king ..."。
 # 仅当本书声明了 exercise_region_headings（opt-in）且闩锁已激活时捕获为 EXER。
 STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?:\s+\S|$)')
-EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\b')
+# (?![0-9]) tail (was \b): OCR/print glues the title onto the number
+# ('2.2.10Let A', '2.3.9State the dual') - \b fails digit->letter, losing
+# whole exercises (Leinster 2014 measured). Inside the exercise-region
+# latch, requiring only not-a-digit is safe.
+EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})(?![0-9])')
 
 # ---------------------------------------------------------------------------
 # Universal, DEPTH-AGNOSTIC section-header detection.
@@ -428,6 +432,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # two-level mode we also suppress SEC_2 / ITEM_2 so single-number "N. Problem"
     # exercise lines (do Carmo) are NOT mistaken for sections/items.
     in_exercise = False
+    # 锥点时的当前节号（'universal 节检测同号守卫'用）：由于 scan()
+    # 逐页扫描时不知道当前节，用最近一次发出的 SEC 行号维护。
+    cur_exer_sec = None
     # Ross-style STICKY chapter-end exercise region（exercise_region_headings 声明）：
     # 一旦进入章末习题块就直到章末——SEC 检测不再解除闩锁（习题行
     # "3.11 Two cards..." 恰好长得像节头，绝不能把它当「新节」重置）。
@@ -489,6 +496,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 continue
             if not in_exercise and EXER_HEADING.match(ln):
                 in_exercise = True
+                # 记录锥点时当前节：同号节的 running-header 复本
+                # （如 Leinster 2014 p48 '1.3Naturaltransformations'）不应解锁
+                # 习题区（见下方 universal 检测处的同号守卫）。
                 # 编号习题节标题（"2.6 Exercises"）同时是真实小节：在声明了
                 # section_types 的书里补发 SEC 行进骨架，避免该节从骨架中消失。
                 # （P 层对习题专属节本就豁免必写，但 D 层连续性/骨架仍需要它。）
@@ -510,7 +520,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 sec = _section_header_info(ln, ch=ch, depths=depths_set)
                 if sec is not None:
                     num_str, _depth, title = sec
+                    if in_exercise and num_str == cur_exer_sec:
+                        # 同号节 running-header 复本：不发 SEC 行、不解锁
+                        # 习题区（真正的新节号必不同于锥点时的节号）。
+                        continue
                     rows.append((p, 'SEC', num_str, title, ln_y))
+                    cur_exer_sec = num_str
                     in_exercise = False  # new section ends the exercise region
                     continue
             # --- sticky exercise-region numeric problem lines -----------------

@@ -128,10 +128,7 @@ def print_result(r):
         print("\nExtraction warnings (non-blocking, re-scan clean):")
         for w in r['warnings']:
             print(f"  {w}")
-    if r.get('b_tail_warnings'):
-        print("\nB-LAYER TAIL CHECK (non-blocking, verify chapter/section end):")
-        for w in r['b_tail_warnings']:
-            print(f"  ~ {w.strip()}")
+    # b_tail_warnings are now in blocking (above), no separate section needed
     if r.get('b_gap_warnings'):
         print("\nB-LAYER NUMBERING GAP CHECK (non-blocking, verify against source):")
         for w in r['b_gap_warnings']:
@@ -392,9 +389,13 @@ def print_result(r):
             print(g)
     if len(p_verbose) >= VERBOSE_PARA_GATE:
         problems += 1
-        print(f"\nP-LAYER VERBOSE TOP-LEVEL PROSE ({len(p_verbose)} ≥ {VERBOSE_PARA_GATE}): non-core "
-              f"content must be SUMMARIZED to core points (Tier 2) or omitted, not copied verbatim "
-              f"from the book. Condense motivation/intros to 2–4 sentences or omit them; "
+        print(f"\nP-LAYER VERBOSE TOP-LEVEL PROSE ({len(p_verbose)} ≥ {VERBOSE_PARA_GATE}): "
+              f"these paragraphs are either copied verbatim from the book (high literal "
+              f"overlap with page_*.json) or are unreadable walls of prose (>1200 chars). "
+              f"REWORD them — do NOT delete content: keep every variable / formula / "
+              f"concept name (see docs/writing-rules.md 保真分级 Tier 2). "
+              f"Long-but-reworded paragraphs are NOT a violation (readability first, "
+              f"not raw length); "
               f"definitions/theorems/examples/exercises AND remarks (Remark/Aside, Tier 1: kept "
               f"complete with only OCR fixes) are exempt:")
         for g in p_verbose:

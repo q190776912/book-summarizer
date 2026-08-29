@@ -30,6 +30,12 @@ import re
 
 import os
 
+# Inline math must never contribute ordinal labels: notation like $f(x)$ or
+# $g(t)$ contains parenthesized letters that are NOT sub-item markers
+# ((x) would be read as roman 10, (t) as alpha 20, producing phantom
+# INTERNAL gaps in theorem statements). Strip before matching.
+_INLINE_MATH_RE = re.compile(r'\$[^$]*\$')
+
 _O_PAREN_RE = re.compile(
     r'^\s*(?:[-*–]\s+)?'          # optional list marker (-, *, –)
     r'(?:\*\*)?'                  # optional bold open
@@ -74,6 +80,9 @@ def _o_match_line(line):
     Parenthesized and bold patterns are allowed inside blockquotes since
     `> **(1)**` is a valid sub-item inside an example block.
     """
+    # Strip inline math BEFORE matching: $f(x)$ / $g(t)$ contain
+    # parenthesized letters that are function arguments, not ordinals.
+    line = _INLINE_MATH_RE.sub(' MATH ', line)
     # Pattern A: parenthesized (works anywhere, including inside blockquotes)
     m = _O_PAREN_RE.match(line)
     if m:
@@ -215,7 +224,16 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
 
     # Phase 1: find all numbered/lettered lines
     item_lines = []  # (line_idx, raw_label)
+    in_math = False
     for i, ln in enumerate(lines):
+        # Skip display-math ($$) blocks entirely: formula content lines may
+        # begin with `(x-a)^2...` etc. and are never ordinal sequences.
+        n_fence = ln.count('$$')
+        if n_fence % 2 == 1:
+            in_math = not in_math
+            continue
+        if in_math or n_fence:
+            continue
         labels = _o_match_line(ln)
         for lb in labels:
             item_lines.append((i, lb))

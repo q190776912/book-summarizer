@@ -5,12 +5,11 @@
 把「描述信息 + 每个定理/定义/练习等条目的文字与公式内容」按**文档顺序**挂进结构契约的
 ``sub_sec``，并**按章拆分**落盘，解决全书单文件内容化后过大的问题：
 
-  * 单文件 ``<extract_dir>/book_structure.json`` **保持纯结构 schema 不变**——
-    verify（data_provider / B/D 层）、completeness 回填、restructure_by_ocr 等
-    全部既有消费方**零改动**，仍以单文件为编号项基准与回填目标。
-  * 新增**内容化分章契约** ``<extract_dir>/book_structure/book_structure_{N}.json``
-    （N=章号，附录为字母）：顶层即该章 ``chapter`` 节点，``sub_sec`` 内按文档顺序
-    混合三类元素——
+  * **分章契约 = 结构契约唯一真源**（2026-08-29 起：``ch{N}.json`` /
+    ``appendix{X}.json``，全书单文件已废弃）：``build_structure`` 产出纯骨架后，
+    本脚本读入骨架、挂入正文内容并**写回同一文件**——verify（data_provider / B/D
+    层）经 ``BookStructure.load`` 聚合读取分章文件为编号项基准。
+  * 分章契约 ``sub_sec`` 内按文档顺序混合三类元素——
       * 结构节点：与单文件同 schema（key/type/name/page_start/page_end/sub_sec）；
       * ``description`` 节点：**与定理同级的描述信息**——书中大段不属于定义/定理、
         没有序标的散文（章首序言 / 节导语 / 条目证明后的尾随段落），聚合为一个节点
@@ -24,8 +23,8 @@
         （``display: true`` = 行间公式 / 独立占一行或多行；``false`` = 行内公式）、
         ``{"image": "<裁剪图路径>"}``（图检测产物，路径相对 ``<extract_dir>``；
         按 ``figure_index.json`` 的 page/bbox 并入阅读序，无图管线则为零图片块）。
-    description / proof 为**派生节点**：仅存在于分章内容契约，结构基线不含，
-    verify 不消费（结构指纹亦排除，见 :func:`_structural_fp`）。
+    description / proof 为**派生节点**：非编号项，verify 展平编号项基准时
+    排除（``StructureNode.iter_items`` / :func:`_structural_fp`）。
 
 数据来源与门控
 --------------
@@ -84,10 +83,12 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 from page_json import PageJson
+from data.book_structure.book_structure import (chapter_json_path,
+                                                list_chapter_keys,
+                                                _DERIVED_TYPES)
 import build_structure as _bs
 
 OUT_DIR_NAME = "book_structure"
-FILE_PREFIX = "book_structure_"
 
 # 内容块判定：块 dict 只含这些键（无 key/type），与结构节点天然可区分
 _BLOCK_KEYS = ("text", "formula", "display")
@@ -630,69 +631,37 @@ def _split_proofs(item_key, blocks):
 # ---------------------------------------------------------------------------
 # 主流程：单文件契约 + page json → 分章内容契约
 # ---------------------------------------------------------------------------
-def load_book(ext):
-    """读单文件结构契约（裸 dict；attach 只读它、把内容块写进分章文件）。"""
-    p = os.path.join(ext, "book_structure.json")
-    if not os.path.exists(p):
-        return None
-    try:
-        with open(p, encoding="utf-8") as f:
-            d = json.load(f)
-    except Exception:
-        return None
-    return d if isinstance(d, dict) else None
-
-
 def out_path(ext, ch_key):
-    return os.path.join(ext, OUT_DIR_NAME, "%s%s.json" % (FILE_PREFIX, ch_key))
+    """分章契约路径（命名单点：数字章 ch{N}.json / 附录 appendix{X}.json）。"""
+    return chapter_json_path(ext, ch_key)
 
 
-def _structural_fp(node):
-    """结构指纹：全部结构节点的 (type, key, page_start, page_end) 文档序序列。
-
-    description / proof 为 attach 的派生节点（结构基线不含），排除在指纹外，
-    否则指纹比对会因分章文件多出派生节点而永远「过期」。
-    """
-    if node.get("type") in ("description", "proof"):
-        return []
-    out = [(node.get("type"), str(node.get("key")),
-            node.get("page_start"), node.get("page_end"))]
-    for c in node.get("sub_sec") or []:
-        if _is_block(c):
-            continue
-        out.extend(_structural_fp(c))
-    return out
-
-
-def fingerprint_matches(ext, ch_key):
-    """分章文件是否与单文件契约结构一致（不一致 = 过期，须重挂）。"""
-    book = load_book(ext)
-    if book is None:
-        return False
-    node = next((c for c in book.get("sub_sec") or []
-                 if str(c.get("key")) == str(ch_key)), None)
-    if node is None:
-        return False
-    p = out_path(ext, ch_key)
-    if not os.path.exists(p):
-        return False
-    try:
-        with open(p, encoding="utf-8") as f:
-            saved = json.load(f)
-    except Exception:
-        return False
-    if not isinstance(saved, dict):
-        return False
-    return _structural_fp(saved) == _structural_fp(node)
+def _to_skeleton(node):
+    """把内容化契约还原为纯骨架（attach 的逆操作）：剥内容块与
+    description / proof 派生节点，条目 sub_sec 清空——使 attach 幂等
+    （对已挂内容的文件重复 attach 结果不变）。"""
+    def walk(n):
+        kids = []
+        for c in n.get("sub_sec") or []:
+            if _is_block(c) or c.get("type") in _DERIVED_TYPES:
+                continue
+            walk(c)
+            if c.get("type") not in ("chapter", "section"):
+                c["sub_sec"] = []          # 条目：正文由重建管线重新填充
+            kids.append(c)
+        n["sub_sec"] = kids
+    walk(node)
+    return node
 
 
 def build_chapter_contract(ext, node):
-    """纯函数：由单文件契约的章节点 + page_*.json 构建该章内容化契约（含 stats）。
+    """纯函数：由骨架章节点 + page_*.json 构建该章内容化契约（含 stats）。
 
     返回 ``(chapter_dict, stats)``——stats 含 text/formula/image/proof/description
     计数与被噪声过滤丢弃的块数，供 `verify/script/check_content_completeness.py`
     复算比对（脚本确定性输出 => 可校验完整性）。
     """
+    node = _to_skeleton(node)          # 幂等：已挂内容（重复 attach）先还原为骨架
     start, end = int(node.get("page_start") or 0), int(node.get("page_end") or 0)
     n_noise = [0]
 
@@ -760,6 +729,12 @@ def build_chapter_contract(ext, node):
     def _count(n):
         for c in n.get("sub_sec") or []:
             if _is_block(c):
+                if "text" in c:
+                    stats["text"] += 1
+                elif "formula" in c:
+                    stats["formula"] += 1
+                elif "image" in c:
+                    stats["image"] += 1
                 continue
             t = c.get("type")
             if t in stats:
@@ -767,47 +742,41 @@ def build_chapter_contract(ext, node):
             _count(c)
 
     _count(node)
-    for b in _iter_blocks(node):
-        if "text" in b:
-            stats["text"] += 1
-        elif "formula" in b:
-            stats["formula"] += 1
-        elif "image" in b:
-            stats["image"] += 1
     return node, stats
 
 
-def attach(ext, chapters=None, force=False):
-    """对指定章（缺省全部）生成/刷新分章内容契约。返回写出的文件路径列表。"""
-    book = load_book(ext)
-    if book is None:
-        raise SystemExit("[attach_content] 找不到 %s——先跑 build_structure。"
-                         % os.path.join(ext, "book_structure.json"))
-    ch_nodes = [c for c in book.get("sub_sec") or [] if not _is_block(c)]
+def attach(ext, chapters=None):
+    """对指定章（缺省全部分章骨架）挂入正文内容并**写回同一文件**。
+
+    输入 = ``build_structure`` 产出的纯骨架 ``ch{N}.json``；输出 = 同路径的
+    内容化契约（骨架 + description / proof / 内容块）。重跑 attach 会以页面
+    原文重建内容（幂等）；build_structure 重跑会覆盖为骨架，须随后重跑本脚本。
+    返回写出的文件路径列表。
+    """
+    keys = list_chapter_keys(ext)
     if chapters:
         want = {str(c) for c in chapters}
-        ch_nodes = [c for c in ch_nodes if str(c.get("key")) in want]
+        keys = [k for k in keys if k in want]
+    if not keys:
+        raise SystemExit("[attach_content] 无分章骨架文件（%s/ch*.json）——"
+                         "先跑 build_structure。" % os.path.join(ext, OUT_DIR_NAME))
 
-    out_dir = os.path.join(ext, OUT_DIR_NAME)
-    os.makedirs(out_dir, exist_ok=True)
     written = []
-    for node in ch_nodes:
-        ch_key = str(node.get("key"))
-        if not force and fingerprint_matches(ext, ch_key):
-            print("ch%-4s SKIP (fingerprint fresh)" % ch_key)
-            continue
+    for ch_key in keys:
+        path = chapter_json_path(ext, ch_key)
+        with open(path, encoding="utf-8") as f:
+            node = json.load(f)
         node, stats = build_chapter_contract(ext, node)
-        out = out_path(ext, ch_key)
-        with open(out, "w", encoding="utf-8") as f:
+
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(node, f, ensure_ascii=False, separators=(",", ":"))
             f.write("\n")
         print("ch%-4s ATTACH -> %s | text=%d formula=%d image=%d proof=%d "
               "description=%d noise_dropped=%d"
-              % (ch_key, os.path.basename(os.path.dirname(out)) + "/"
-                 + os.path.basename(out), stats["text"], stats["formula"],
-                 stats["image"], stats["proof"], stats["description"],
-                 stats["noise_dropped"]))
-        written.append(out)
+              % (ch_key, OUT_DIR_NAME + "/" + os.path.basename(path),
+                 stats["text"], stats["formula"], stats["image"],
+                 stats["proof"], stats["description"], stats["noise_dropped"]))
+        written.append(path)
     return written
 
 
@@ -819,22 +788,8 @@ def _iter_blocks(node):
             yield from _iter_blocks(c)
 
 
-def ensure_fresh(ext, chapters=None):
-    """供 render_draft 调用：保证请求章的分章内容契约存在且指纹新鲜（过期自动重挂）。"""
-    book = load_book(ext)
-    if book is None:
-        raise SystemExit("[attach_content] 找不到 book_structure.json——先跑 build_structure。")
-    all_keys = [str(c.get("key")) for c in book.get("sub_sec") or [] if not _is_block(c)]
-    want = {str(c) for c in chapters} if chapters else set(all_keys)
-    stale = [k for k in all_keys if k in want and not fingerprint_matches(ext, k)]
-    if stale:
-        attach(ext, stale)
-    return [k for k in all_keys if k in want]
-
-
 def main():
-    argv = [a for a in sys.argv[1:] if a != "--force"]
-    force = "--force" in sys.argv[1:]
+    argv = sys.argv[1:]
     if not argv:
         print(__doc__)
         return 2
@@ -847,7 +802,7 @@ def main():
         chapters = [int(x) for x in argv[1:]]
     except ValueError:
         chapters = argv[1:]
-    attach(ext, chapters or None, force=force)
+    attach(ext, chapters or None)
     return 0
 
 

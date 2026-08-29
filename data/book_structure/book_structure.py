@@ -1,17 +1,23 @@
-"""book_structure.json — 全书结构骨架的类型化数据模型（中间产物）。
+"""book_structure — 书结构契约的类型化数据模型（中间产物）。
 
-设计（2026-08-12 用户最终确认）
+设计（2026-08-29 用户最终确认，替代 2026-08-12 的全书单文件方案）
 ------------------------------
-- 单文件 ``<extract_dir>/book_structure.json``，顶层是一个「书」对象（**不是数组**）。
-- 书对象：``key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>,
-  sub_sec=[章节对象...]``。
-- 章节 / 条目节点复用 ``flows/write-source/structure/structure.md`` 的 schema：
-  ``key / type / name / page_start / page_end / sub_sec``（递归）；
-  定理 / 定义 / 例等叶节点 ``sub_sec=[]``。``sub_sec`` 顺序即书中实际顺序。
+- **按章分文件，是结构契约的唯一真源**：
+  ``<extract_dir>/book_structure/ch{N}.json``（数字章，如 ``ch1.json``）与
+  ``<extract_dir>/book_structure/appendix{X}.json``（附录章，如 ``appendixA.json``），
+  顶层即该章 ``chapter`` 节点（**无书根包装**）。
+- 两阶段写同一文件：``build_structure`` 产出**纯骨架**（叶子 ``sub_sec=[]``），
+  ``attach_content`` 挂入正文内容（description / proof 派生节点与
+  text / formula / image 内容块）后**写回同一文件**。
+- 节点 schema：``key / type / name / page_start / page_end / sub_sec``（递归）；
+  ``sub_sec`` 顺序即书中实际顺序。全书单文件 ``book_structure.json`` 已废弃
+  （历史书由 :meth:`BookStructure.load` 只读兼容回退）。
 
 本模块是结构 JSON 的**唯一权威模型**：所有读写 / 遍历 / 回填都经本类，
 脚本不再裸操作 json 字典（见 ``verify/script/structure_io.py``、
 ``verify/verbose_gates``、``verify/script/check_structure_completeness.py``）。
+``load()`` 聚合各分章文件为内存书对象（root = 书根包装，供逐章消费的
+verify / 回填使用）；``save()`` 拆分写回各分章文件。
 
 序列化契约（对齐 data/data_schema.md 描述的 JsonData 基类）：
 ``to_dict()`` / ``from_dict()`` / ``dump()`` / ``load()``。
@@ -29,9 +35,55 @@ ROOT_TYPE = -1
 # 容器节点类型（递归 sub_sec，本身不作为编号项）
 _CONTAINER_TYPES = ("chapter", "section")
 
+# 派生节点类型（attach_content 产出，仅存在于分章内容契约；非编号项，
+# verify 展平编号项基准时必须排除）
+_DERIVED_TYPES = ("description", "proof")
+
+# 分章契约的落位子目录与命名（数字章 ch{N}.json / 附录章 appendix{X}.json）
+OUT_SUBDIR = "book_structure"
+LEGACY_JSON_NAME = "book_structure.json"      # 旧版全书单文件（只读兼容）
+
+
+def chapter_json_name(key: Any) -> str:
+    """章号 → 分章契约文件名：数字章 ``ch{N}.json`` / 附录章 ``appendix{X}.json``。"""
+    k = str(key)
+    return f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json"
+
+
+def chapter_json_path(ext_dir: str, key: Any) -> str:
+    return os.path.join(ext_dir, OUT_SUBDIR, chapter_json_name(key))
+
+
+def _chapter_sort_key_fn(key: str):
+    return (0, int(key), "") if key.isdigit() else (1, 0, key)
+
+
+def list_chapter_keys(ext_dir: str) -> List[str]:
+    """列出分章契约的章号（数字章在前按数值、附录字母章在后按字母）。"""
+    sub = os.path.join(ext_dir, OUT_SUBDIR)
+    keys = []
+    if os.path.isdir(sub):
+        for fn in os.listdir(sub):
+            if not fn.endswith(".json"):
+                continue
+            if fn.startswith("ch") and fn[2:-5].isdigit():
+                keys.append(((0, int(fn[2:-5]), ""), fn[2:-5]))
+            elif fn.startswith("appendix") and len(fn) > len("appendix.json"):
+                keys.append(((1, 0, fn[8:-5]), fn[8:-5]))
+    return [k for _, k in sorted(keys)]
+
+
+def _default_book_dir(ext_dir: str) -> str:
+    """由 extract_dir 推书根目录（多册书 ext=_extract/<册> 时上溯两级）。"""
+    d = os.path.abspath(ext_dir)
+    parent = os.path.dirname(d)
+    if os.path.basename(parent) == "_extract":
+        return os.path.dirname(parent)
+    return parent
+
 
 class StructureNode:
-    """结构树节点（书 / 章 / 节 / 条目）。避免脚本裸操作 json。"""
+    """结构树节点（书 / 章 / 节 / 条目 / 派生节点）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
                  "consolidated", "letter_subs")
@@ -97,6 +149,10 @@ class StructureNode:
     def is_exercise(self) -> bool:
         return self.type == "exercise"
 
+    def is_derived(self) -> bool:
+        """派生节点（description / proof，attach_content 产出）——非编号项。"""
+        return self.type in _DERIVED_TYPES
+
     # ---- 遍历 / 查询 -----------------------------------------------------
     def iter_items(self, include_exercise: bool = False):
         """深度优先遍历，yield 非容器的编号项节点。
@@ -105,8 +161,11 @@ class StructureNode:
         被保留的练习节点（consolidated=False）仅在 include_exercise=True 时产出、
         纳入编号项校验。默认 include_exercise=False → 排除全部练习（保持旧行为，
         待 extract 打 consolidated 标记后由 read_structure_items 切到 True）。
+        派生节点（description / proof，仅存在于分章内容契约）不是编号项，恒不产出。
         """
         for child in self.sub_sec:
+            if child.is_derived():
+                continue
             if child.is_container():
                 yield from child.iter_items(include_exercise=include_exercise)
             elif child.is_exercise():
@@ -150,7 +209,12 @@ class StructureNode:
         if self.type == "chapter":
             # 章级区间已按 chapter_map 权威值回填（build_chapter 末尾），不从子节点重算，
             # 否则无编号条目 / 空 section 的章会被塌缩回 page_start（实测 Ch14: 377→377，
-            # 应为 375–398）。章节内部子区间仍由递归决定。书根（type=-1）继续在此聚合章区间。
+            # 应为 375–398）。章节内部子区间仍由递归决定。
+            return int(self.page_end)
+        if self.key == ROOT_KEY or self.type == ROOT_TYPE:
+            # 书根：自身页码是占位值（0,0），不参与聚合——书根页码 = 章区间的 min/max。
+            self.page_start = min(int(c.page_start) for c in self.sub_sec)
+            self.page_end = max(int(c.page_end) for c in self.sub_sec)
             return int(self.page_end)
         self.page_start = min([int(self.page_start)]
                               + [int(c.page_start) for c in self.sub_sec])
@@ -159,15 +223,20 @@ class StructureNode:
 
 
 class BookStructure:
-    """book_structure.json 的加载 / 保存 / 查询门面。"""
+    """书结构契约的加载 / 保存 / 查询门面。
 
-    JSON_NAME = "book_structure.json"
+    ``load`` 聚合分章文件 ``ch{N}.json`` / ``appendix{X}.json`` 为内存书对象；
+    ``save`` 拆分写回各分章文件。历史书无分章文件时回退读旧单文件
+    ``book_structure.json``（只读兼容；此时 save 会拒绝——旧书须先迁移，
+    对其重跑 ``build_structure`` + ``attach_content`` 生成分章文件）。
+    """
 
     def __init__(self, root: StructureNode, book_dir: Optional[str] = None,
-                 source_path: Optional[str] = None):
+                 source_path: Optional[str] = None, legacy: bool = False):
         self.root = root
         self.book_dir = book_dir
         self.source_path = source_path
+        self.legacy = legacy          # True = 回退自旧单文件（save 拒绝）
 
     # ---- 构造辅助 --------------------------------------------------------
     @classmethod
@@ -180,7 +249,27 @@ class BookStructure:
     # ---- 加载 / 保存 -----------------------------------------------------
     @classmethod
     def load(cls, ext_dir: str, book_dir: Optional[str] = None) -> Optional["BookStructure"]:
-        p = os.path.join(ext_dir, cls.JSON_NAME)
+        """聚合加载分章契约；无分章文件时回退旧单文件（legacy，只读）。"""
+        keys = list_chapter_keys(ext_dir)
+        if keys:
+            bd = book_dir or _default_book_dir(ext_dir)
+            chapters = []
+            for k in keys:
+                with open(chapter_json_path(ext_dir, k), encoding="utf-8") as f:
+                    chapters.append(json.load(f))
+            ps = min(int(c.get("page_start") or 0) for c in chapters)
+            pe = max(int(c.get("page_end") or 0) for c in chapters)
+            name = os.path.basename(os.path.normpath(bd)) if bd else ""
+            root = StructureNode(key=ROOT_KEY, type=ROOT_TYPE, name=name,
+                                 page_start=ps, page_end=pe,
+                                 sub_sec=[StructureNode.from_dict(c) for c in chapters])
+            return cls(root=root, book_dir=bd,
+                       source_path=os.path.join(ext_dir, OUT_SUBDIR))
+        return cls._load_legacy(ext_dir, book_dir)
+
+    @classmethod
+    def _load_legacy(cls, ext_dir: str, book_dir: Optional[str] = None) -> Optional["BookStructure"]:
+        p = os.path.join(ext_dir, LEGACY_JSON_NAME)
         if not os.path.exists(p):
             return None
         try:
@@ -191,20 +280,33 @@ class BookStructure:
         if not isinstance(d, dict):
             return None
         root = StructureNode.from_dict(d)
-        return cls(root=root, book_dir=book_dir, source_path=p)
+        return cls(root=root, book_dir=book_dir, source_path=p, legacy=True)
 
-    def save(self, ext_dir: Optional[str] = None) -> str:
-        """写回 book_structure.json（保存前重算书根页码）。返回写出路径。"""
-        out_dir = ext_dir or (os.path.dirname(self.source_path) if self.source_path else None)
+    def save(self, ext_dir: Optional[str] = None) -> List[str]:
+        """拆分写回各分章文件（保存前重算书根页码）。返回写出的路径列表。
+
+        legacy（回退自旧单文件、且书根无分章文件）时拒绝保存——旧书须先对其
+        重跑 ``build_structure`` + ``attach_content`` 迁移为分章格式。
+        """
+        out_dir = ext_dir or (self.book_dir if self.book_dir else None)
+        if self.legacy and not list_chapter_keys(out_dir or ""):
+            raise ValueError(
+                "legacy book_structure.json（旧单文件）不可写回；"
+                "请对其重跑 build_structure + attach_content 迁移为分章契约。")
         if not out_dir:
             raise ValueError("save() requires ext_dir or a prior source_path")
         # 保存前重算书根页码（容器取末代子孙页）
         self.root.recompute_pages()
-        p = os.path.join(out_dir, self.JSON_NAME)
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(self.root.to_dict(), f, ensure_ascii=False, indent=2)
-        self.source_path = p
-        return p
+        out_sub = os.path.join(out_dir, OUT_SUBDIR)
+        os.makedirs(out_sub, exist_ok=True)
+        written = []
+        for c in self.root.sub_sec:
+            p = chapter_json_path(out_dir, str(c.key))
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(c.to_dict(), f, ensure_ascii=False, indent=2)
+            written.append(p)
+        self.source_path = out_sub
+        return written
 
     def dump_dict(self) -> Dict[str, Any]:
         return self.root.to_dict()

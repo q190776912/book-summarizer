@@ -235,8 +235,8 @@ def _load_contract(ext_dir, ch):
     letter_sub_pairs: list[(sec_key, letter, title)]，契约声明的裸字母子块
                （section 节点 letter_subs 元数据；无则空表 → 字母子节闸不启用）。
 
-    读取单文件书对象 book_structure.json（结构树）；
-    旧书须先重跑 build_structure 生成该单文件。
+    读取分章契约（``BookStructure.load`` 聚合 ``ch{N}.json`` / ``appendix{X}.json``；
+    历史书无分章文件时回退旧单文件，只读）。
     """
     sections, item_keys, letter_sub_pairs = [], set(), []
     bs = BookStructure.load(ext_dir)

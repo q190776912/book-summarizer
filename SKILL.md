@@ -20,13 +20,13 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 <corpus_root>\<书名>\       ← 每个书一个文件夹（corpus_root 见 user_config.json / README 配置章节）
   ├─ <书名>.pdf            ← 源 PDF（必须在此专属目录内，保留原名）
   ├─ _extract\              ← 提取目录：所有后台数据（page_*.json / chapter_map.json / figure_* / _mm_repair/）
-  │   └─ book_structure\    ← 内容化分章契约 book_structure_{N}.json + 草稿 draft_ch{N}.md（structure 第 5 步 / write-source 步骤 1）
+  │   └─ book_structure\    ← 内容化分章契约 ch{N}.json（附录 appendix{X}.json）+ 草稿 draft_ch{N}.md（write-source 步骤 4）
   ├─ 第1章_章名.md           ← 中文版
   ├─ Chapter1_Name.md       ← 英文版（仅英文/他语种书时有）
   └─ ...
 ```
 
-> **附录单元命名**：原书后部附录（结构契约 `book_structure.json` 章节点 `name` 含 `Appendix X`）按附录命名——英文 `AppendixX_Name.md`、中文 `附录X_中文名.md`（X=A..Z，取自契约名，不重排号）；`chapter_md_groups` / flow 物理证据均已识别该形态。内部标题体系照旧用原书序标（如 `## §E.5`、`**Proposition E.1**`）。
+> **附录单元命名**：原书后部附录（结构契约章节点 `name` 含 `Appendix X`）按附录命名——英文 `AppendixX_Name.md`、中文 `附录X_中文名.md`（X=A..Z，取自契约名，不重排号）；`chapter_md_groups` / flow 物理证据均已识别该形态。内部标题体系照旧用原书序标（如 `## §E.5`、`**Proposition E.1**`）。
 
 > **上下册 / 多册书**：PDF 与总结 md 均留在书级目录（`<书名>.pdf` 保持原位**原名不动**）；`_extract\` 内按册分子目录（`_extract\上册\`、`_extract\下册\`），各册提取数据（page_*.json / chapter_map.json / figure_* / _mm_repair/ 及 flow 账本 `.flow_gate.json`）落在对应册目录，由流水线 `--extract-dir` 指定（见 `flows/extract/extract.md` 分支 D）；每册的后续子流程与 flow_runner 操作均以 `<书目录>/_extract/<册>` 为该册 extract_dir。
 
@@ -51,7 +51,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 |-------|------|--------|---------|
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
 | 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair，以 `_extraction_done.json` 收尾 | 防停滞（extract 规则1）；多册书逐册串行（extract 规则2）；视觉识别询问式全书一次（extract 规则3）；**MM Repair 门（extract/mm_repair 流程 规则1）** |
-| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（生成 `book_structure.json` 结构契约 + 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行）→ 步骤 4 **基本总结草稿**（`attach_content` 内容化分章契约 `book_structure_{N}.json` + 内容完整性闸门 `check_content_completeness` + `render_draft` 渲染 `draft_ch{N}.md`，按 writing-rules 基本格式排版）→ 步骤 5 基于草稿逐章调整写源语言初稿 → 步骤 6 批量校验至 PASS | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是草稿的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；草稿公式是 OCR 原样**严禁照抄**（步骤 5a 重写校正）；草稿不经 verify（初版全量保真） |
+| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（按章生成分章骨架 `ch{N}.json` 结构契约 + 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行）→ 步骤 4 **基本总结草稿**（`attach_content` 在分章契约上挂内容 + 内容完整性闸门 `check_content_completeness` + `render_draft` 渲染 `draft_ch{N}.md`，按 writing-rules 基本格式排版）→ 步骤 5 基于草稿逐章调整写源语言初稿 → 步骤 6 批量校验至 PASS | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是草稿的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；草稿公式是 OCR 原样**严禁照抄**（步骤 5a 重写校正）；草稿不经 verify（初版全量保真） |
 | 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS（**仅英文书**：英文书→派生中文 `第N章_*.md`；**中文书无翻译阶段，本阶段整体跳过**） | 单向修复（derive-translate 规则4）；中英 1:1 同构（规则3） |
 
 > 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 出口 = `_extraction_done.json`（见 [`extract`](flows/extract/extract.md) 出口条件）。
@@ -84,9 +84,9 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 | 提取（文本） | `flows/extract/pipeline/script/extract_pipeline.py` · `launch_pipeline.sh` |
 | 配置（write-source 步骤 1） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（write-source 步骤 2） | `flows/script/extract_figures` · `…/assign_figures.py` |
-| 内容化 + 草稿（write-source 步骤 4） | `flows/write-source/structure/script/attach_content.py` + `flows/write-source/script/render_draft.py`（描述信息 `description` 节点 + 条目文字/公式/图片内容块 + 证明 `proof` 子节点按 `sub_sec` 文档顺序挂入，按章拆分 `book_structure_{N}.json` 至 `_extract/book_structure/`；噪声过滤 / 行内公式拼接 / 标题剥离 / 结构指纹新鲜度） |
+| 内容化 + 草稿（write-source 步骤 4） | `flows/write-source/structure/script/attach_content.py` + `flows/write-source/script/render_draft.py`（描述信息 `description` 节点 + 条目文字/公式/图片内容块 + 证明 `proof` 子节点按 `sub_sec` 文档顺序挂入，写回分章契约 `_extract/book_structure/ch{N}.json`（附录 `appendix{X}.json`），幂等可重跑；噪声过滤 / 行内公式拼接 / 标题剥离） |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 `build_structure` 生成的 `book_structure.json` 书对象（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供；注：2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 围栏门才执行）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
+| 写作 | 消费 `build_structure` 产出、`attach_content` 内容化的分章契约 `ch{N}.json`（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供；注：2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 围栏门才执行）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
 | ~~嵌图~~ | **已删除**（2026-08-29）：图片经内容化分章契约 image 块随草稿继承（内容完整性闸门保证齐备）；`flows/script/embed_figures.py` 保留为其格式逻辑的来源参考 |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖序标集合成员 + 序列顺序(ORDER_MISMATCH) + 小节定位(MISPLACED)；公式内容保真人工核对 |

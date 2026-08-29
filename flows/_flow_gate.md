@@ -78,8 +78,8 @@ derive:          [translate, verify_cn]
 - `config`：`chapter_map.json` 存在且含章节 **且** `verify_config.json` 存在且
   含 `ordinal` 数组。
 - `figure_detection`：`figure_index.json` 存在。
-- `structure`：`book_structure.json` 存在且含章节节点（🔴 完整性闸门 gate.passed 由 structure.md 第 2–4 步 agent 流程保证）。
-- `draft`：每章 `book_structure/book_structure_{N}.json` + `draft_ch{N}.md` 齐备（内容化分章契约 + 基本总结草稿）。
+- `structure`：`chapter_map` 全部章节均有分章骨架 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）**且** 每章完整性报告 `completeness_reports/ch{N}_*.json` 的 `gate.passed == true`（🔴 structure.md 第 2–4 步闸门）。
+- `draft`：每章 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）+ `draft_ch{N}.md` 齐备且草稿不早于契约（内容化分章契约 + 基本总结草稿；内容完整性闸门 `check_content_completeness.py` PASS）。
 - `write_chapters`：已写源语言章数 == chapter_map 章数 **且** 每章含完整条目（非空壳）。
 - `draft` 证据补充：内容完整性闸门（`verify/script/check_content_completeness.py`）PASS——描述信息 / 证明 / 图片 / 文字公式块齐备。
 - `verify_source`：agent 跑 `verify_chapter.py --all` 对**源语言版**确认 `exit 0`（`verify PASS + KaTeX OK`）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**——未嵌图 / 未复验 PASS 不得视为完成。

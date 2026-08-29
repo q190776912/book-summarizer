@@ -18,7 +18,7 @@
 2. **figure_detection 子流程（图检测 + 分配）**
    - 运行 **figure_detection 子流程** [`figure_detection`](figure_detection/figure_detection.md)：全本书 DocLayout-YOLO 检测 + `图X.X.X` 分配，产出 `figure_detect.json` + `figure_index.json` + `figure/` 裁剪图。书若无图可跳过本步。
 3. **structure 子流程（结构契约生成 + 🔴 完整性闸门）**
-   - 运行 **structure 子流程** [`structure`](structure/structure.md)：生成单一 `book_structure.json` 书对象（章节 → 条目/练习递归，`sub_sec` 内按章顺序嵌套，含 `key`/`type`/`name`/页码），作为写作契约与 verify 的编号项基准（合一）。
+   - 运行 **structure 子流程** [`structure`](structure/structure.md)：按章产出分章骨架 `ch{N}.json`（附录 `appendix{X}.json`；章节 → 条目/练习递归，`sub_sec` 内按章顺序嵌套，含 `key`/`type`/`name`/页码），作为写作契约与 verify 的编号项基准（合一）。
    - 随后按 structure 子流程第 2–4 步做**章节 / 定理定义等缺项的查漏回填与闸门**：章节漏用 D 层、条目漏用 B 层检，`readable` 项自动回填、`needs_agent` 项人工回填，**重跑至 `gate.passed == true`**。
    - 🔴 **本步是步骤 4 的硬闸**：`gate.passed != true` 严禁渲染草稿——否则漏抓的编号项不会出现在总结里。只有 `gate.passed == true` 才允许进入步骤 4。
 4. **输出基本总结草稿（全书批量，机械执行）**
@@ -26,7 +26,7 @@
      ```bash
      python flows/write-source/structure/script/attach_content.py "<extract_dir>" [ch ...] [--force]
      ```
-     产出 `<extract_dir>/book_structure/book_structure_{N}.json`——`sub_sec` 内按文档顺序携带描述信息（`description` 节点，与定理同级）、条目 / 练习的文字（`text`）与公式（`formula`，`display` 区分行内 / 行间）内容块、图片（`image` 路径）块及条目内证明（`proof` 子节点）。
+     产出 `<extract_dir>/book_structure/ch{N}.json`（附录 `appendix{X}.json`）——`sub_sec` 内按文档顺序携带描述信息（`description` 节点，与定理同级）、条目 / 练习的文字（`text`）与公式（`formula`，`display` 区分行内 / 行间）内容块、图片（`image` 路径）块及条目内证明（`proof` 子节点）。
    - 🔴 **内容完整性闸门**：
      ```bash
      python verify/script/check_content_completeness.py "<extract_dir>" [ch ...]
@@ -67,9 +67,9 @@
 - 出口：源语言全部章节初稿写完（图片由内容化分章契约随草稿继承），且 `verify/script/verify_chapter.py --all` 对全书 `exit 0`（`verify PASS + KaTeX OK`）；格式修复经 verify 的 `--fix` 自动进行。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/write-source/structure/script/build_structure`：统一结构契约生成器（步骤 3，产出 `book_structure.json` 书对象，内部调用 `scan_skeleton` / `extract_items` 系列）。
+- `flows/write-source/structure/script/build_structure`：统一结构契约生成器（步骤 3，按章产出分章骨架 `ch{N}.json`，内部调用 `scan_skeleton` / `extract_items` 系列）。
 - `flows/write-source/structure/script/attach_content`：structure 第 5 步正文内容化 + 按章拆分（步骤 4 草稿数据源；见 `flows/write-source/structure/structure.md`）。
-- `flows/write-source/script/render_draft.py`：步骤 4 草稿渲染（`book_structure_{N}.json` → `draft_ch{N}.md`；结构指纹过期自动重跑 attach_content）。
+- `flows/write-source/script/render_draft.py`：步骤 4 草稿渲染（`ch{N}.json` → `draft_ch{N}.md`）。
 - `flows/write-source/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `config/verify_config/make_config.py`：步骤 1 书级配置生成（`verify_config.json`）。

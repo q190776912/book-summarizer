@@ -312,7 +312,7 @@ def render_chapter(ext, ch_key, language):
     """渲染单章草稿；返回输出路径。"""
     p = _ac.out_path(ext, ch_key)
     if not os.path.exists(p):
-        raise SystemExit("[render_draft] 缺 %s——先跑 attach_content。" % p)
+        raise SystemExit("[render_draft] 缺 %s——先跑 build_structure + attach_content。" % p)
     with open(p, encoding="utf-8") as f:
         node = json.load(f)
     # 原嵌图格式上下文：figure_index 按文件名索引 + 图号标签（verify_config Figure 组）
@@ -357,8 +357,9 @@ def main():
     except ValueError:
         chapters = argv[1:]
     if force:
-        _ac.attach(ext, chapters or None, force=True)
-    keys = _ac.ensure_fresh(ext, chapters or None)
+        _ac.attach(ext, chapters or None)
+    keys = [k for k in _ac.list_chapter_keys(ext)
+            if not chapters or k in {str(c) for c in chapters}]
     language = _book_language(ext)
     for k in keys:
         out = render_chapter(ext, k, language)

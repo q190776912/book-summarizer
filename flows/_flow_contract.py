@@ -251,57 +251,72 @@ class physical_evidence:
         跳过闸门落账。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        p = os.path.join(ex, "book_structure.json")
-        if not os.path.exists(p):
-            return False, "缺 book_structure.json"
-        try:
-            d = json.load(open(p, encoding="utf-8"))
-        except Exception as e:
-            return False, f"book_structure.json 非法 JSON: {e}"
-        subs = d.get("sub_sec") or []
-        if not subs:
-            return False, "book_structure.json 无章节节点"
-        missing, not_passed = [], []
-        for c in subs:
-            k = str(c.get("key"))
+        sub = os.path.join(ex, "book_structure")
+        # 章节清单以 chapter_map 为准（骨架分章文件应覆盖全部章节）
+        cm = os.path.join(ex, "chapter_map.json")
+        keys = []
+        if os.path.exists(cm):
+            try:
+                d = json.load(open(cm, encoding="utf-8"))
+                chs = d.get("chapters") or d.get("ch") or []
+                for c in chs:
+                    n = c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
+                    if n is not None:
+                        keys.append(str(n))
+            except Exception:
+                pass
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        missing = [k for k in keys
+                   if not os.path.exists(os.path.join(
+                       sub, ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k))]
+        if missing:
+            return False, f"缺分章骨架 {len(missing)} 章: {missing[:4]}"
+        reports_missing, not_passed = [], []
+        for k in keys:
             rp = os.path.join(ex, "completeness_reports",
                               f"ch{k}_completeness_report.json")
             if not os.path.exists(rp):
-                missing.append(k)
+                reports_missing.append(k)
                 continue
             try:
                 r = json.load(open(rp, encoding="utf-8"))
             except Exception:
-                missing.append(k)
+                reports_missing.append(k)
                 continue
             if not (r.get("gate") or {}).get("passed"):
                 not_passed.append(k)
-        if missing:
-            return False, (f"缺完整性报告 {len(missing)} 章（未跑 structure 第 2–4 步"
-                           f"查漏闸门）: {missing[:4]}")
+        if reports_missing:
+            return False, (f"缺完整性报告 {len(reports_missing)} 章（未跑 structure 第 2–4 步"
+                           f"查漏闸门）: {reports_missing[:4]}")
         if not_passed:
             return False, f"完整性闸门未通过 {len(not_passed)} 章: {not_passed[:4]}"
-        return True, f"book_structure.json 含 {len(subs)} 章，完整性闸门全部 PASS"
+        return True, f"{len(keys)} 章分章骨架齐备，完整性闸门全部 PASS"
 
     @staticmethod
     def draft_ok(book_dir, extract_dir):
         """基本总结草稿证据：每个结构章节都有内容化分章契约 + 渲染出的草稿文件。"""
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        p = os.path.join(ex, "book_structure.json")
-        if not os.path.exists(p):
-            return False, "缺 book_structure.json（structure 步未完成）"
-        try:
-            d = json.load(open(p, encoding="utf-8"))
-        except Exception as e:
-            return False, f"book_structure.json 非法 JSON: {e}"
-        keys = [str(c.get("key")) for c in (d.get("sub_sec") or [])
-                if isinstance(c, dict) and "key" in c]
+        sub = os.path.join(ex, "book_structure")
+        cm = os.path.join(ex, "chapter_map.json")
+        keys = []
+        if os.path.exists(cm):
+            try:
+                d = json.load(open(cm, encoding="utf-8"))
+                chs = d.get("chapters") or d.get("ch") or []
+                for c in chs:
+                    n = c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
+                    if n is not None:
+                        keys.append(str(n))
+            except Exception:
+                pass
         if not keys:
-            return False, "book_structure.json 无章节节点"
+            return False, "缺 chapter_map.json（config 步未完成）"
         missing, stale = [], []
         for k in keys:
-            jp = os.path.join(ex, "book_structure", f"book_structure_{k}.json")
-            dp = os.path.join(ex, "book_structure", f"draft_ch{k}.md")
+            fname = (f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json")
+            jp = os.path.join(sub, fname)
+            dp = os.path.join(sub, f"draft_ch{k}.md")
             if not os.path.exists(jp):
                 missing.append(k)
                 continue

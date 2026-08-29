@@ -1,16 +1,19 @@
-"""Regression tests for the single-file book_structure.json refactor (2026-08-12).
+"""Regression tests for the per-chapter contract format (2026-08-29).
 
 Covers the typed model (data.book_structure.book_structure: BookStructure /
-StructureNode) and its three structural consumers:
+StructureNode) over the SPLIT per-chapter files
+(`<extract_dir>/book_structure/ch{N}.json`, appendix `appendix{X}.json`) and its
+structural consumers:
   - verify.script.structure_io.read_structure_items   (data_provider source)
   - verify.verbose_gates._load_contract         (P-LAYER contract)
   - verify.script.check_structure_completeness backfill path (save round-trip)
 
-This replaces the old per-chapter structure-file design; every reader
-now loads the single <extract_dir>/book_structure.json book object.
+The legacy single-file `book_structure.json` remains read-only compatible
+(`BookStructure.load` falls back to it when no split files exist).
 """
 import os
 import sys
+import shutil
 import tempfile
 import json
 from pathlib import Path
@@ -71,17 +74,20 @@ def test_book_save_load_roundtrip():
     bs = _make_book()
     d = tempfile.mkdtemp(prefix="bstest_")
     try:
-        p = bs.save(d)
-        assert os.path.exists(p)
-        assert os.path.basename(p) == "book_structure.json"
+        written = bs.save(d)
+        # 拆分写回：数字章 ch1.json（附录为 appendix{X}.json）
+        assert len(written) == 1 and os.path.basename(written[0]) == "ch1.json"
+        assert os.path.exists(written[0])
         bs2 = BookStructure.load(d)
         assert bs2 is not None
-        assert bs2.name == "Test Book"
+        # 聚合书根 name 取自书目录名（分章文件不存书名；装饰性字段）
+        assert isinstance(bs2.name, str) and bs2.name
         assert [c.key for c in bs2.chapters] == ["1"]
-        assert bs2.dump_dict() == bs.dump_dict()
+        # 书根 name/页码为派生值（目录名 / 章区间聚合），比较章节内容
+        assert [c.to_dict() for c in bs2.chapters] == [c.to_dict() for c in bs.chapters]
     finally:
-        os.unlink(p)
-        os.rmdir(d)
+        import shutil
+        shutil.rmtree(d)
 
 
 def test_recompute_pages_recursive():
@@ -96,9 +102,11 @@ def test_recompute_pages_recursive():
     ch = bs.find_chapter("1")
     # 章级保留权威区间 (1,10)，不被子节点重算覆盖（关键：≠ 子节点派生的 1..5）
     assert ch.page_start == 1 and ch.page_end == 10, (ch.page_start, ch.page_end)
-    # section/item 子节点仍按末代子孙页递归重算：§1.2 仅含定理 p5 -> (5,5)
+    # section/item 子节点仍按末代子孙页递归重算，且容器自身页参与 min
+    # （2026-08 修复：谷超豪 ch2 §1 节头页不被子项推迟）：§1.2 节头 p4、定理 p5
+    # -> (4,5)
     sec12 = next(s for s in ch.sub_sec if s.key == "1.2")
-    assert sec12.page_start == 5 and sec12.page_end == 5, (sec12.page_start, sec12.page_end)
+    assert sec12.page_start == 4 and sec12.page_end == 5, (sec12.page_start, sec12.page_end)
     # 书根聚合章区间
     assert bs.root.page_start == 1 and bs.root.page_end == 10
 
@@ -129,7 +137,7 @@ def test_chapter_items_excludes_exercise():
     assert "1.1.A" in [i.key for i in items_all]
 
 
-def test_structure_io_read_from_single_file():
+def test_structure_io_read_from_split_files():
     bs = _make_book()
     d = tempfile.mkdtemp(prefix="bstest_")
     try:
@@ -150,8 +158,8 @@ def test_structure_io_read_from_single_file():
         # missing chapter -> empty list (not None)
         assert read_structure_items(d, "99") == []
     finally:
-        os.unlink(os.path.join(d, "book_structure.json"))
-        os.rmdir(d)
+        import shutil
+        shutil.rmtree(d)
 
 
 def test_structure_io_missing_file_returns_none():
@@ -167,18 +175,20 @@ def test_verbose_gates_contract_load():
     d = tempfile.mkdtemp(prefix="bstest_")
     try:
         bs.save(d)
-        sections, item_keys = _load_contract(d, "1")
+        sections, item_keys, letter_sub_pairs = _load_contract(d, "1")
         sec_keys = [k for k, _ in sections]
         assert "1.1" in sec_keys and "1.2" in sec_keys
         # three-level dotted key is accepted as an item key; dashed is not
         assert "1.2.3" in item_keys
         assert "1.1-1" not in item_keys
+        # 无 letter_subs 元数据 → 字母子节闸不启用
+        assert letter_sub_pairs == []
         # missing chapter -> empty
-        s2, k2 = _load_contract(d, "99")
-        assert s2 == [] and k2 == set()
+        s2, k2, ls2 = _load_contract(d, "99")
+        assert s2 == [] and k2 == set() and ls2 == []
     finally:
-        os.unlink(os.path.join(d, "book_structure.json"))
-        os.rmdir(d)
+        import shutil
+        shutil.rmtree(d)
 
 
 def test_check_structure_backfill_roundtrip():
@@ -207,8 +217,8 @@ def test_check_structure_backfill_roundtrip():
         keys = [i.key for i in items]
         assert "1.1-9" in keys
     finally:
-        os.unlink(os.path.join(d, "book_structure.json"))
-        os.rmdir(d)
+        import shutil
+        shutil.rmtree(d)
 
 
 def _main():

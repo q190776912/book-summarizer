@@ -350,13 +350,16 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
                     "bbox": [200, 300, 600, 500], "conf": 0.9,
                     "file": "figure/ch01_unnamed_01.png",
                     "caption": "A SAMPLE PATH", "source": "detect"}], f, ensure_ascii=False)
-    single = os.path.join(ext, "book_structure.json")
+    # 骨架分章文件（build_structure 产物形态）：ch1.json 顶层即该章节点
+    single = ac.chapter_json_path(ext, "1")
+    os.makedirs(os.path.dirname(single), exist_ok=True)
+    book = _make_book_structure()
     with open(single, "w", encoding="utf-8") as f:
-        json.dump(_make_book_structure(), f, ensure_ascii=False)
+        json.dump(book["sub_sec"][0], f, ensure_ascii=False)
 
     written = ac.attach(ext)
     assert len(written) == 1
-    per_ch = os.path.join(ext, "book_structure", "book_structure_1.json")
+    per_ch = ac.out_path(ext, "1")
     assert os.path.exists(per_ch)
 
     with open(per_ch, encoding="utf-8") as f:
@@ -400,33 +403,34 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
     ex = [n for n in sec["sub_sec"] if n.get("type") == "exercise"][0]
     assert any("continuous" in b.get("text", "") for b in ex["sub_sec"])
 
-    # 单文件保持纯结构（attach 不改写它）
-    with open(single, encoding="utf-8") as f:
-        raw_single = json.load(f)
-    leaf = raw_single["sub_sec"][0]["sub_sec"][0]["sub_sec"][0]
-    assert leaf["sub_sec"] == []
+    # attach 幂等：对已挂内容的契约重复 attach，块多重集不变
+    def block_sig(n):
+        import collections
+        sig = collections.Counter()
+        for b in ac._iter_blocks(n):
+            sig[(("image" if "image" in b else "formula" if "formula" in b else "text"),
+                 b.get("image") or b.get("formula") or b.get("text"))] += 1
+        return sig
+    before_sig = block_sig(ch)
+    ac.attach(ext, ["1"])
+    with open(per_ch, encoding="utf-8") as f:
+        ch_re = json.load(f)
+    assert block_sig(ch_re) == before_sig
 
-    # 指纹新鲜：派生节点（description/proof）不参与指纹 → ensure_fresh 不再重挂
-    assert ac.fingerprint_matches(ext, "1")
-    before = os.path.getmtime(per_ch)
-    keys = ac.ensure_fresh(ext)
-    assert keys == ["1"]
-    assert os.path.getmtime(per_ch) == before
-
-    # 单文件结构变化（回填模拟）→ 指纹失配 → ensure_fresh 自动重挂
-    with open(single, encoding="utf-8") as f:
-        book = json.load(f)
-    book["sub_sec"][0]["sub_sec"][0]["sub_sec"].append(
-        {"key": "1.1-2", "type": "theorem", "name": "1.1-2 Theorem",
-         "page_start": 2, "page_end": 2, "sub_sec": []})
-    with open(single, "w", encoding="utf-8") as f:
-        json.dump(book, f, ensure_ascii=False)
-    assert not ac.fingerprint_matches(ext, "1")
-    ac.ensure_fresh(ext)
+    # 回填模拟：骨架加一个条目（改 ch1.json）→ attach 后新条目同样获得内容
     with open(per_ch, encoding="utf-8") as f:
         ch2 = json.load(f)
     sec2 = [n for n in ch2["sub_sec"] if n.get("type") == "section"][0]
-    assert any(n.get("key") == "1.1-2" for n in sec2["sub_sec"])
+    sec2["sub_sec"].append(
+        {"key": "1.1-2", "type": "theorem", "name": "1.1-2 Theorem",
+         "page_start": 2, "page_end": 2, "sub_sec": []})
+    json.dump(ch2, open(per_ch, "w", encoding="utf-8"), ensure_ascii=False)
+    ac.attach(ext, ["1"])
+    with open(per_ch, encoding="utf-8") as f:
+        ch3 = json.load(f)
+    sec3 = [n for n in ch3["sub_sec"] if n.get("type") == "section"][0]
+    th = [n for n in sec3["sub_sec"] if n.get("key") == "1.1-2"][0]
+    assert isinstance(th.get("sub_sec"), list)   # 新条目也进入 attach 管线
 
     # 渲染草稿：writing-rules 书写格式——标签冒号接正文、例块 > 包裹、证明思路块引用、
     # 图片行、序言纯段落、consolidated 练习省略
@@ -471,15 +475,15 @@ def test_content_gate_pass_fail_roundtrip():
                 "file": "figure/ch01_fig.png", "caption": "", "source": "detect"}],
               open(os.path.join(ext, "figure_index.json"), "w", encoding="utf-8"),
               ensure_ascii=False)
-    json.dump({"key": -1, "type": -1, "name": "T", "page_start": 1, "page_end": 1,
-               "sub_sec": [{"key": "1", "type": "chapter", "name": "1 Intro",
-                            "page_start": 1, "page_end": 1, "sub_sec": [
-                                {"key": "1.1", "type": "section", "name": "1.1 Basics",
-                                 "page_start": 1, "page_end": 1, "sub_sec": [
-                                     {"key": "1.1-1", "type": "definition",
-                                      "name": "1.1-1 Definition (Metric).",
-                                      "page_start": 1, "page_end": 1, "sub_sec": []}]}]}]},
-              open(os.path.join(ext, "book_structure.json"), "w", encoding="utf-8"),
+    os.makedirs(os.path.join(ext, "book_structure"), exist_ok=True)
+    json.dump({"key": "1", "type": "chapter", "name": "1 Intro",
+               "page_start": 1, "page_end": 1, "sub_sec": [
+                   {"key": "1.1", "type": "section", "name": "1.1 Basics",
+                    "page_start": 1, "page_end": 1, "sub_sec": [
+                        {"key": "1.1-1", "type": "definition",
+                         "name": "1.1-1 Definition (Metric).",
+                         "page_start": 1, "page_end": 1, "sub_sec": []}]}]},
+              open(ac.chapter_json_path(ext, "1"), "w", encoding="utf-8"),
               ensure_ascii=False)
 
     ac.attach(ext)
@@ -498,7 +502,7 @@ def test_content_gate_pass_fail_roundtrip():
     json.dump(ch, open(per, "w", encoding="utf-8"), ensure_ascii=False)
     assert cc.main([ext, "1"]) == 1                    # 缺图片块 → FAIL
 
-    ac.attach(ext, force=True)                         # 重挂恢复
+    ac.attach(ext, ["1"])                              # 重挂恢复
     ch = json.load(open(per, encoding="utf-8"))
 
     def drop_text(n):

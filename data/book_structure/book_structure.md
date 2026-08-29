@@ -1,27 +1,22 @@
-# 书结构契约（结构基线 + 内容化分章契约）
+# 书结构契约（内容化分章契约 `ch{N}.json` / `appendix{X}.json`）
 
 > 🔴 **本文件是该 JSON 数据结构的唯一权威说明（SSOT）**。模型类见同目录 `book_structure.py`；
-> 结构基线生成入口 `flows/write-source/structure/script/build_structure.py`；正文内容化
-> `flows/write-source/structure/script/attach_content.py`（structure 第 5 步）；草稿渲染
-> `flows/write-source/script/render_draft.py`（write-source 步骤 1）。契约语义
+> 骨架生成 `flows/write-source/structure/script/build_structure.py`；正文内容化
+> `flows/write-source/structure/script/attach_content.py`（structure 子流程第 5 步）；草稿渲染
+> `flows/write-source/script/render_draft.py`（write-source 步骤 4）。契约语义
 > （步骤 / 命令 / 已知近似）的流程侧 SSOT 见 `flows/write-source/structure/structure.md`。
 
-## 1. 格式总览（2026-08-29 新格式生效）
+## 1. 格式总览（2026-08-29 用户最终确认：**分章契约是唯一真源，全书单文件已废弃**）
 
 | 产物 | 位置 | 承载 | 消费方 |
 |------|------|------|--------|
-| **结构基线** | `<extract_dir>/book_structure.json` | 纯结构书对象：章 → 节 → 条目骨架、印刷标题、页码；叶子 `sub_sec=[]`，**无**内容块 / description / proof 节点 | verify 全部层（编号项基准）、completeness 回填、restructure_by_ocr |
-| **内容化分章契约（主格式）** | `<extract_dir>/book_structure/book_structure_{N}.json`（N=章号，附录为字母） | 该章完整树 + **全部正文内容**：`text` / `formula` 内容块、`description` 描述节点、`proof` 证明子节点 | `render_draft`（write-source 步骤 1）→ 基本总结草稿 `draft_ch{N}.md` |
+| **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `render_draft`（write-source 步骤 4）→ 基本总结草稿 `draft_ch{N}.md`；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
 
-新格式要点：
+- **两阶段写同一文件**：`build_structure` 产出**纯骨架**（叶子 `sub_sec=[]`，无 description / proof / 内容块）→ structure 完整性闸门 → `attach_content` 挂入正文内容写回同一文件。
+- **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 仅作历史书**只读兼容回退**（且对其 `save` 拒绝——须重跑 build + attach 迁移）。
+- 命名单点：`chapter_json_name` / `chapter_json_path` / `list_chapter_keys`（`book_structure.py`）——数字章按数值排序在前、附录字母章按字母排后。
 
-- **`sub_sec` 是文档顺序的混合列表**：结构节点、`description` / `proof` 节点、内容块交错，顺序即书中阅读顺序。
-- **描述信息与定理同级**：书中大段不属于定义/定理、没有序标的散文（章首序言、节导语、条目证明后的尾随段落）聚合为 `description` 节点，与定理/定义并列挂在章/节 `sub_sec` 下。
-- **证明是条目的子节点**：定理/定义/例等条目正文中的证明（`PROOF` / `证明` / `解` 标记起、QED 收束）聚合为条目内的 `proof` 子节点。
-- **公式区分行内/行间**：内容块 `{"formula": …, "display": true|false}`——`true`=行间公式（独立占一行/多行），`false`=行内公式。
-- **结构基线为何仍是纯结构**：verify 编号项基准 / B·D 层 / completeness 回填 / restructure 全部消费单文件，且全书内容化单文件体积过大；分章文件由 `attach_content` 从结构基线 + `page_*.json` 派生，以结构指纹（§2.3）保证与基线一致。
-
-## 2. 结构节点 Schema（两产物共用）
+## 2. 结构节点 Schema
 
 ```jsonc
 {
@@ -47,11 +42,11 @@
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：结构基线中叶子 `== page_start`；容器取**末代子孙页**（`BookStructure.save()` 递归重算）。分章契约中 `description` / `proof` 节点的页码 = 所含内容块的最小/最大页。
 
-### 2.1 完整迷你示例（内容化分章契约，新格式）
+### 2.1 完整迷你示例（`ch2.json`，顶层即该章节点；无书根包装）
 
 ```jsonc
-// 顶层即该章 chapter 节点（无书根包装）；结构基线 = 同一棵树去掉内容块与
-// description / proof 派生节点（此时叶子 sub_sec 恒为 []）
+// 纯骨架阶段（build_structure 产出）：叶子 sub_sec=[]、无 description / proof /
+// 内容块；attach_content 后即下方完整形态
 {
   "key": "2", "type": "chapter", "name": "2 A Crash Course in Basic Probability Theory",
   "page_start": 7, "page_end": 32,
@@ -166,50 +161,61 @@
 - **verify 不消费**（同 description，仅分章契约中存在）。
 - **渲染**：`render_draft` 输出 `**{name}**` 标记头 + 证明内容块；agent 调整时按 writing-rules 改写为 `> **证明思路**：1. 2. …` 块引用（OCR 公式逐条重写校正）。
 
-## 6. 模型类 API（结构基线 `book_structure.py`）
+## 6. 模型类 API（`book_structure.py`）
 
-> 模型类只服务**结构基线**单文件；分章内容契约由 `attach_content` 以裸 dict 读写
-> （混合 `sub_sec` 含内容块/派生节点，不经 `StructureNode` 模型）。
+> 模型服务分章契约的聚合读写：`load` 把各分章文件聚合成内存书对象（root = 书根包装），
+> `save` 把书根下的章节点拆分写回各自 `ch{N}.json` / `appendix{X}.json`；
+> `attach_content` / `render_draft` / checker 直接按章读写单文件（经
+> `chapter_json_path` 命名单点）。
 
 ### `StructureNode`
 - `__slots__ = (key, type, name, page_start, page_end, sub_sec, consolidated, letter_subs)`。
 - `to_dict()` / `from_dict(cls, d)`：序列化 / 反序列化（容错缺字段，默认回退根占位）。
 - `is_container()`：书根 / `chapter` / `section` → `True`。
 - `is_exercise()`：`type == "exercise"`。
-- `iter_items(include_exercise=False)`：深度优先 yield 非容器编号项节点。
-- `find_chapter(ch)`：按章号（字符串/整数均可）在 `sub_sec` 定位章节节点。
-- `replace_chapter(node)`：用 `node` 替换同 `key` 章节；不存在则追加；返回是否替换。
-- `recompute_pages()`：递归重算容器 `page_start/page_end`（容器取末代子孙页），返回自身 `page_end`。
+- `is_derived()`：`type ∈ {description, proof}` → True（非编号项，verify 展平时排除）。
+- `iter_items(include_exercise=False)`：深度优先 yield 非容器编号项节点（跳过派生节点）。
+- `find_chapter(ch)` / `replace_chapter(node)` / `recompute_pages()`：同前。
 
 ### `BookStructure`
-- `JSON_NAME = "book_structure.json"`。
-- `new_book(name, book_dir=None)`：构造空书对象（根 `key=-1, type=-1, name=书名`）。
-- `load(ext_dir, book_dir=None)`：读 `<ext_dir>/book_structure.json`；缺失/解析失败返回 `None`；否则返回 `BookStructure`（根经 `StructureNode.from_dict`）。
-- `save(ext_dir=None)`：保存前 `root.recompute_pages()`，写回 `book_structure.json`，返回路径。
-- `dump_dict()`：返回根 `to_dict()`。
-- 属性 `name`（`root.name`）、`chapters`（`root.sub_sec`）。
-- `find_chapter(ch)` / `chapter_items(ch, include_exercise=False)`：便捷查询。
+- `load(ext_dir, book_dir=None)`：**聚合** `book_structure/ch{N}.json` + `appendix{X}.json`
+  为内存书对象（root.name = 书目录名；root 页码 = 各章 min/max）；无分章文件时回退读
+  旧单文件 `book_structure.json`（`legacy=True`，只读）。
+- `save(ext_dir=None)`：把 root 下各章节点**拆分写回** `ch{N}.json` / `appendix{X}.json`
+  （保存前 `recompute_pages`）；`legacy=True` 且书根无分章文件时拒绝（旧书须先迁移）。
+- 其余（`new_book` / `dump_dict` / `name` / `chapters` / `find_chapter` /
+  `chapter_items`）同前。
 
-> 注意：本模型类**未继承** `data/lib/json_data.py`（`data/data_schema.md` 描述的 `JsonData` 基类当前未实现），序列化契约以本模块 `to_dict()/from_dict()/dump()/load()` 为准。其字段与方法签名与 `JsonData` 约定（`to_dict/dump/load/from_dict`）一致，后续若实现基类可直接挂接。
+### 分章命名单点（模块级函数）
+- `chapter_json_name(key)`：数字章 `ch{N}.json` / 附录 `appendix{X}.json`。
+- `chapter_json_path(ext_dir, key)`：分章契约完整路径。
+- `list_chapter_keys(ext_dir)`：列出章号（数字章按数值在前、附录按字母在后）。
+
+> 注意：本模型类**未继承** `data/lib/json_data.py`（`JsonData` 基类未实现），序列化契约
+> 以本模块 `to_dict()/from_dict()/dump()/load()` 为准。
 
 ## 7. 消费者（只读，不裸操作 json）
 
-**结构基线**（`book_structure.json`）：
+全部经 `BookStructure.load` **聚合读取分章契约**（历史书回退旧单文件）：
 
-- `verify/script/structure_io.py`：`read_structure_items(ext_dir, ch)` → 经 `BookStructure.load` + `chapter_items` 返回编号项列表（被 `data_provider` 消费）。
-- `verify/verbose_gates/script/verbose_gates.py`：`_load_contract` 经 `BookStructure.load` + `find_chapter` 取契约。
-- `verify/script/check_structure_completeness.py`：`check_chapter` 经 `BookStructure.load` + `find_chapter` 取章节节点做查漏——章节漏用 `section_continuity`（D 层 `check_d_layer`）检、条目漏用 `item_numbering_integrity`（B 层）检，回填后 `root.replace_chapter(tree)` + `save()` 写回，并以「完整 + 连续」闸门收尾。
-- `verify/script/report.py`：P-LAYER 提示串已指向 `book_structure.json`。
-
-**内容化分章契约**（`book_structure_{N}.json`）：
-
-- `flows/write-source/script/render_draft.py`：渲染基本总结草稿 `draft_ch{N}.md`（write-source 步骤 1）；渲染前经 `attach_content.fingerprint_matches` 检查新鲜度，过期自动重挂。
-- verify 层**不读**分章文件。
+- `verify/script/structure_io.py`：`read_structure_items(ext_dir, ch)` → `chapter_items` 返回编号项列表（被 `data_provider` 消费；派生节点 description / proof 已在 `iter_items` 排除）。
+- `verify/verbose_gates/script/verbose_gates.py`：`_load_contract` 取契约。
+- `verify/script/check_structure_completeness.py`：章节 / 条目查漏回填（`replace_chapter` + `save` 拆分写回）。
+- `verify/script/audit_ignore.py`：编号 ignore 审计。
+- `tools/restructure_by_ocr.py`：B 层 ORDERING 修复（聚合读、写回 md）。
+- `flows/write-source/script/render_draft.py`：按章直读单文件（`chapter_json_path`）渲染草稿；内容完整性闸门 `verify/script/check_content_completeness.py` 同。
 
 ## 8. 构建 / 回填 / 内容化 / 渲染约定
 
-1. **结构基线生成**：`build_structure <extract_dir> [ch ...]`，增量合并（按 `key` 替换或追加章节），章序按数字排。
-2. **查漏回填 + 闸门**（structure 第 2–4 步）：`check_structure_completeness.py <extract_dir> [ch ...] --backfill` 写回结构基线（先备份），闸门 `gate.passed == true` 后放行。
-3. **正文内容化**（structure 第 5 步）：`attach_content <extract_dir> [ch ...] [--force]` → 按章写出内容化分章契约（description / proof 派生节点在此产生）。
-4. **草稿渲染**（write-source 步骤 1）：`render_draft <extract_dir> [ch ...]` → `draft_ch{N}.md`。
-5. **新鲜度**：分章文件与结构基线以结构指纹（全部结构节点的 type/key/page 序列，忽略内容块与 description / proof 派生节点，`attach_content._structural_fp`）比对；**回填或 restructure 后必须重跑 `attach_content`**（或直接跑 `render_draft`，由其自动续挂过期章）。
+1. **骨架生成**（write-source 步骤 3 前半）：`build_structure <extract_dir> [ch ...]`
+   → 按章写 `book_structure/ch{N}.json`（纯骨架）。每章文件独立，重跑只覆盖指定章
+   **并清除其已挂内容**——重跑后必须随后执行第 4 步 attach。
+2. **查漏回填 + 闸门**（structure 第 2–4 步）：`check_structure_completeness.py
+   <extract_dir> [ch ...] --backfill` 经聚合 load 定位章节点、`replace_chapter` +
+   `save` 拆分写回（先备份）；闸门 `gate.passed == true` 后放行。
+3. **正文内容化**（structure 第 5 步）：`attach_content <extract_dir> [ch ...]` 读入
+   骨架、挂 description / proof / 内容块后**写回同一文件**（幂等可重跑）。
+4. **草稿渲染**（write-source 步骤 4）：`render_draft <extract_dir> [ch ...]` →
+   `draft_ch{N}.md`。
+5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
+   图片真值 + 证明覆盖审计），FAIL 严禁渲染。

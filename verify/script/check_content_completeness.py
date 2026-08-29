@@ -87,7 +87,8 @@ def check_chapter(ext, ch_node):
     lines = []
     ok = True
 
-    # ① 确定性复算比对（块多重集）
+    # ① 确定性复算比对（块多重集）：build_chapter_contract 幂等
+    # （内部先还原骨架），可直接对磁盘契约重建。
     built, stats = ac.build_chapter_contract(ext, ch_node)
     built_sig = _collect_contract_blocks(built)
     p = ac.out_path(ext, ch_key)
@@ -172,19 +173,17 @@ def main(argv=None):
     if not os.path.exists(os.path.join(ext, "_extraction_done.json")):
         print("[check_content_completeness] BLOCKED: 缺 _extraction_done.json。")
         return 2
-    book = ac.load_book(ext)
-    if book is None:
-        print("[check_content_completeness] 缺 book_structure.json。")
-        return 2
-    ch_nodes = [c for c in book.get("sub_sec") or [] if not ac._is_block(c)]
+    keys = ac.list_chapter_keys(ext)
     if chapters:
         want = {str(c) for c in chapters}
-        ch_nodes = [c for c in ch_nodes if str(c.get("key")) in want]
-    if not ch_nodes:
-        print("[check_content_completeness] 无可校验章节。")
+        keys = [k for k in keys if k in want]
+    if not keys:
+        print("[check_content_completeness] 无分章契约（ch*.json / appendix*.json）。")
         return 2
     all_ok = True
-    for node in ch_nodes:
+    for k in keys:
+        with open(ac.out_path(ext, k), encoding="utf-8") as f:
+            node = json.load(f)
         ok, lines = check_chapter(ext, node)
         all_ok = all_ok and ok
         for ln in lines:

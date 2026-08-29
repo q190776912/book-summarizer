@@ -104,7 +104,7 @@ class ItemNumberingIntegrityLabelRecoveryTest(unittest.TestCase):
         """
         cfg = self._per_type_cfg(['Theorem 12.3', 'Theorem 12.4'])
         ctx = _ctx_with_md(self.MD, cfg)
-        blocking, _warnings, _present, _tail = _md_gap_blocking(ctx)
+        blocking, _warnings, _present, _tail, _groups = _md_gap_blocking(ctx)
         blocking_text = '\n'.join(blocking)
         self.assertNotIn(
             '缺号 3', blocking_text,
@@ -121,7 +121,7 @@ class ItemNumberingIntegrityLabelRecoveryTest(unittest.TestCase):
         """
         cfg = self._per_type_cfg(['Theorem 12.3', 'Theorem 12.4'])
         ctx = _ctx_with_md(self.MD, cfg)
-        blocking, _warnings, _present, _tail = _md_gap_blocking(ctx)
+        blocking, _warnings, _present, _tail, _groups = _md_gap_blocking(ctx)
         blocking_text = '\n'.join(blocking)
         self.assertIn(
             '缺号 7', blocking_text,

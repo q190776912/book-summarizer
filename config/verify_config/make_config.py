@@ -206,7 +206,7 @@ def _detect_section_hierarchy(extract_dir, max_depth=4):
     was exactly 3 — that wrongly forced every EN-two-level / Kreyszig-shaped
     book to at most two section levels and missed genuine deeper subsections
     (e.g. Koopman's ``20.5.1``), feeding phantom sections derived from item
-    numbers into ``book_structure.json``.
+    numbers into the per-chapter contract (``book_structure/ch{N}.json``).
 
     `max_depth` bounds the hierarchy (default 4, matching the SECTION_ROLE_CODES
     cap); roles 5/6 are not emitted (never observed in the corpus).
@@ -241,7 +241,7 @@ EN_TWO_RE = re.compile(
 # 前两段（"Definition 1.5-3" → 匹配到 "Definition 1.5"），从而把 EN 三级书
 # 误判为 EN 两级（type 4），导致每个 "C.S-N" 项塌缩成 "Label C.S" 两级 key、
 # 丢弃段/项计数器——这正是 Kreyszig 类书被 make_config 错误生成配置后
-# 重建 book_structure.json 出现「大量遗漏」的根因。
+# 重建分章契约出现「大量遗漏」的根因。
 EN_THREE_RE = re.compile(
     r'(?:\b(?:Theorem|Lemma|Definition|Proposition|Corollary)\s+\d+\.\d+[\.\-]\d+'
     r'|\b\d+\.\d+[\.\-]\d+\s+(?:Theorem|Lemma|Definition|Proposition|Corollary)\b)')
@@ -299,6 +299,7 @@ LABEL_FORMS = [
     ("Example",     ["Example", "例", "例题", "例子"]),
     ("Remark",      ["Remark", "评注", "注", "注记", "附注", "Note", "Commentary"]),
     ("Axiom",       ["Axiom", "公理"]),
+    ("Assumption",  ["Assumption", "假设", "假定"]),
     ("Question",    ["Question", "问题"]),
 ]
 

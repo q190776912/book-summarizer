@@ -5,16 +5,16 @@
 > **注册机制**：本层脚本位于 `verify/data_provider/script/data_provider.py`，由 `verify/script/register_all.py` 用 `importlib` 按裸名扫描 `verify/*/script/` 自动发现并注册。`code = 'EXTRACT'` 是稳定字母代号（被 SKILL.md 与 per-book 记忆广泛引用，**不可更改**）；新增层无需改 `register_all.py` / `VerifyManager` / CLI。
 
 ## 目的
-**纯数据供给层（provider 模式）**：从「书的真相集」(book_structure.json) 与「md 写入集」(keys_in_md) 取值，挂到 `ctx` 上供下游所有层使用。**本层不做任何缺失项比对 / 查漏**——那些职责已统一归 B 层 (item_numbering_integrity)：B 是查漏的唯一权威，EXTRACT 只供水、不做事。
+**纯数据供给层（provider 模式）**：从「书的真相集」(分章契约 book_structure/ch{N}.json) 与「md 写入集」(keys_in_md) 取值，挂到 `ctx` 上供下游所有层使用。**本层不做任何缺失项比对 / 查漏**——那些职责已统一归 B 层 (item_numbering_integrity)：B 是查漏的唯一权威，EXTRACT 只供水、不做事。
 
 ## 步骤（语义与检查内容）
-- 读统一结构 JSON（book_structure.json，SSOT 书对象，无旧书回退）→ `ctx.items`（非 exercise/chapter/section 节点）。
+- 读分章契约（`book_structure/ch{N}.json` / `appendix{X}.json`，SSOT，经 `BookStructure.load` 聚合）→ `ctx.items`（非 exercise/chapter/section 节点）。
 - 解析 md 得 `ctx.entry_keys`（加粗独立条目 `**标签N.N**`）与 `ctx.all_keys`（md 中出现过的一切键，含正文/交叉引用里的 mention）。
 - EN 书分支（`ctx.config.ordinal == ORDINAL_EN`）：md 侧 `entry_keys`/`all_keys` 限制到当前章（`_first_num(k) == ctx.ch`）。
 - 标签一致性检查 `check_label_consistency` → `ctx.label_warns`（标签(定义/定理)与正文前 60 字不符告警，report 打印、非阻断）。
 
 ## 本阶段规则（阻断性 / 可修复）
-- 本身不是 pass/fail 判定层，但 `book_structure.json` 缺失 / 无 `page_*.json` → 数据缺失 → 下游 FAIL。
+- 本身不是 pass/fail 判定层，但分章契约缺失 / 无 `page_*.json` → 数据缺失 → 下游 FAIL。
 - **必跑**（Every layer ALWAYS runs；不存在 `code != 'EXTRACT'` 特判或 disable 机制）。
 
 ## 出口条件
@@ -26,7 +26,7 @@
 - 缺失项比对、查漏、阻断（`truly_missing` / `mentioned_only` / `extra` / 提取侧 `blocking` / `warnings` / `ignored_hit`）**全部由 B 层计算并写 `ctx`**，本层不再参与——B 与 EXTRACT 解耦：EXTRACT 只供水，B 只查漏。
 
 ## 子流程
-无独立子流程；依赖抽取管线产出的 `page_*.json` / `book_structure.json`（由 `flows/write-source/structure/script/` 下的抽取器生成）。
+无独立子流程；依赖抽取管线产出的 `page_*.json` / 分章契约（由 `flows/write-source/structure/script/build_structure.py` 生成）。
 
 ## 需 agent 手工修复（manual fix）
 本层 `auto_fixable = False`，且本身不是 pass/fail 判定层——它是**数据供给层**
@@ -34,11 +34,11 @@
 `ctx.items` / `entry_keys` / `all_keys` / `label_warns`。数据源缺失须由 agent 回到
 抽取 pipeline 重跑，**脚本不修数据**。
 
-- **触发门（report.py）**：`book_structure.json` 缺失或无 `page_*.json`（OCR 抽取产物）/
+- **触发门（report.py）**：分章契约缺失或无 `page_*.json`（OCR 抽取产物）/
 无 `figure_index.json`（图片提取产物）→ 下游依赖数据的层整章 FAIL 或 SKIP；
 本层不产出独立 BLOCKING，但数据缺失会经由各下游层表现为 FAIL。
 - **修复步骤**：
-  1. 确认 `<book>/_extract/` 存在且含 `page_*.json`、`figure_index.json`、`book_structure.json`。
+  1. 确认 `<book>/_extract/` 存在且含 `page_*.json`、`figure_index.json`、`book_structure/ch{N}.json`。
   2. 若缺失：回到抽取 pipeline（PDF-Extract-Kit：MFD / UniMERNet / PaddleOCR，
 且抽取后必须先跑 `mm修复` pre-step），重跑该章抽取补齐产物。
   3. 数据源齐备后再跑 verify；缺数据时空跑 verify 无意义。

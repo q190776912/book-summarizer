@@ -25,7 +25,7 @@ registered in `verify/script/register_all.py` and orchestrated by
 Exit 0 only when there is NO truly-missing item AND NO B-layer blocking issue
 AND NO KaTeX error AND (if figure_index.json present) NO missing-figure gap AND
 NO invalid figure AND NO quote-block continuity gap (G-layer).
-Referenced by Step 4 校验 #0.
+Referenced by write-source 步骤 6（批量校验硬闸）。
 """
 import os
 import sys
@@ -123,28 +123,23 @@ def _appendix_letter(book_dir, ch):
     """Return 'A'..'Z' when the structure contract names chapter `ch`
     ``Appendix <L> ...`` (math-textbook back-matter units), else None.
 
-    SSOT for the letter is `_extract/book_structure.json` (written by
+    SSOT for the letter is the per-chapter contract
+    `_extract/book_structure/{ch{N},appendix{X}}.json` (written by
     build_structure from the PDF headings) — never guessed from filenames.
     """
-    fp = os.path.join(book_dir, '_extract', 'book_structure.json')
+    ext = os.path.join(book_dir, '_extract')
     try:
-        with open(fp, encoding='utf-8') as f:
-            data = json.load(f)
+        from data.book_structure.book_structure import BookStructure
+        bs = BookStructure.load(ext, book_dir)
     except Exception:
         return None
-
-    def _walk(node):
-        for k in node.get('sub_sec', []) or []:
-            if str(k.get('key')) == str(ch):
-                m = re.search(r'\bAppendix\s+([A-Z])\b', str(k.get('name', '')))
-                if m:
-                    return m.group(1)
-            r = _walk(k)
-            if r:
-                return r
+    if bs is None:
         return None
-
-    return _walk(data)
+    node = bs.find_chapter(str(ch))
+    if node is None:
+        return None
+    m = re.search(r'\bAppendix\s+([A-Z])\b', str(node.name or ''))
+    return m.group(1) if m else None
 
 
 def chapter_md_groups(book_dir, ch):
@@ -222,14 +217,17 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     ``require_complete(allow_absent=True)`` warn+default safety net — that is a
     deliberate carve-out, not a verify path.)
     """
-    # 🔒 上游闸补充：verify 依赖 book_structure.json 作为编号项基准。缺失说明
-    # extract 阶段 structure 子流程未跑完（或跳步），禁止校验——否则 data_provider
+    # 🔒 上游闸补充：verify 依赖分章契约（book_structure/ch{N}.json / appendix{X}.json）
+    # 作为编号项基准（2026-08-29 重构后为唯一格式，旧版全书单文件已废弃）。
+    # 缺失说明 structure 子流程未跑完（或跳步），禁止校验——否则 data_provider
     # 无基准、编号项查漏失效。这是"上一步没做完不能进下一步"在 verify 端的落地。
-    bs = os.path.join(ext, "book_structure.json")
-    if not os.path.exists(bs):
+    from data.book_structure.book_structure import list_chapter_keys
+    if not list_chapter_keys(ext):
+        bs = os.path.join(ext, "book_structure")
         raise ConfigError(
-            f"[verify] BLOCKED: 缺 {bs}（structure 子流程未产出 book_structure.json）。"
-            f"须先完成 extract 阶段 structure 子流程（build_structure + 完整性闸门）"
+            f"[verify] BLOCKED: 缺分章契约 {bs}{os.sep}ch{{N}}.json / appendix{{X}}.json"
+            f"（structure 子流程未产出，或产出为零章）。"
+            f"须先完成 structure 子流程（build_structure + 完整性闸门）"
             f"再跑 verify。严禁跳步。"
         )
     loader = ConfigLoader(ext, book_dir or os.path.dirname(ext) or ext,

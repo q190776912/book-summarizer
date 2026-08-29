@@ -64,6 +64,23 @@ def _ocr_int(tok):
     return int(s) if s.isdigit() else None
 
 
+def _ocr_int_glue(tok, nxt):
+    """OCR 容错取号，带「粘连散文剥离」守卫。
+
+    EN_OCR_NUM 字符类含易混字母，OCR 粘连会把散文首词粘到编号上：
+    "Proposition 2.1The…" → 第二段 token 匹配成 "1T"（T→7 → 幻影 2.17）、
+    "Theorem 12.5System…" → "5S"（S→5 → 幻影 12.55）。判据：token 混有
+    数字与字母、且紧跟 token 的仍是字母（粘连词在继续，如 "1T|he"）→
+    尾部字母是散文，剥离后取号。纯字母 token（如 "7.l" 的 "l"）是真
+    OCR 数字混淆，原样保留。
+    """
+    s = tok
+    if s and any(c.isdigit() for c in s) and any(c.isalpha() for c in s) \
+            and nxt and nxt.isalpha():
+        s = re.sub(r'[A-Za-z]+$', '', s)
+    return _ocr_int(s)
+
+
 def _levenshtein(a, b):
     """Standard Levenshtein edit distance (case-insensitive already applied
     by callers). Small, dependency-free; only used on short label words."""
@@ -266,14 +283,14 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     continue
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.
-                n1 = _ocr_int(m.group(2))
+                n1 = _ocr_int_glue(m.group(2), txt[m.end(2):m.end(2) + 1])
                 if n1 is None:
                     continue
                 # single-mode regex has only 2 groups (label + number); the
                 # optional second component (group 3) exists ONLY in two-level
                 # mode. Guard every group(3) access with `not single`.
                 if (not single) and m.group(3) is not None:
-                    n2 = _ocr_int(m.group(3))
+                    n2 = _ocr_int_glue(m.group(3), txt[m.end(3):m.end(3) + 1])
                     if n2 is None:
                         continue
                     key = f"{label} {n1}.{n2}"

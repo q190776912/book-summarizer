@@ -97,7 +97,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 - Gelfand–Manin 风格 §2 标题 + 条目从 1 起号（gm，两级、章内本地）→ `{"type":6,"name":["uncat"],"scope":2}`
 - 节基 EN 两级（如 Fraleigh：按节编号、首数是节号、无章号位）→ **并入 type 4**，并设 `"chapter_first": false` + `"section_scoped": true`：`{"ordinal":[{"type":4,"name":[...合并后的文本标签...],"scope":2}],"chapter_first":false,"section_scoped":true,"language":"en"}`。`chapter_first:false` 让抽取/结构/校验把 key 首数当作「节」而非「章」；`section_scoped:true` 让抽取器额外捕获「数字在前」标题（`26.4 Lemma`）与编号图表（`Table 1.20` / `Figure 3.6`）。
 - Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"scope":3}`
-- 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费 `book_structure.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
+- 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费分章契约 `book_structure/ch{N}.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
 
 > 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"scope":2},{"type":4,"name":["Theorem"],"scope":2},…,{"type":4,"name":["uncat"],"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
 
@@ -203,4 +203,4 @@ EN 两级：
 | §2.5 | `S2.5` | Ch2 | D 层 `section_continuity`（`D_SEC_HEAD_A`）统一容忍 §/S/8 OCR 变形 |
 | 普通 § | `§ 6.6`（中间有空格） | 多章 | D 层 `D_SEC_HEAD_C` 处理短块 |
 
-> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在 `book_structure.json` 扫描结果中缺失，先用 `--verbose` 看原始文本，再人工确认是否又是一种新的 OCR 变形。
+> 注意：D 层 `section_continuity` 的 `sec_re`（`D_SEC_HEAD_A` 等）只容错 `§/S/8` 三种开头；若某节在分章契约（`book_structure/ch{N}.json`）扫描结果中缺失，先用 `--verbose` 看原始文本，再人工确认是否又是一种新的 OCR 变形。

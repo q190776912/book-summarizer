@@ -278,24 +278,24 @@ def find_after(lines, start):
 
 
 def _appendix_letter(book_dir, ch):
-    """'A'..'Z' when book_structure names chapter `ch` "Appendix <L> ...". """
-    fp = os.path.join(book_dir, "_extract", "book_structure.json")
+    """'A'..'Z' when the structure contract names chapter `ch` "Appendix <L> ...".
+
+    契约唯一来源 = 分章契约 `<extract>/book_structure/`（2026-08-29 起，
+    旧版全书单文件已废弃不再读取）。
+    """
+    ext = os.path.join(book_dir, "_extract")
     try:
-        import json
-        with open(fp, encoding="utf-8") as f:
-            data = json.load(f)
+        from data.book_structure.book_structure import BookStructure
+        bs = BookStructure.load(ext, book_dir)
     except Exception:
         return None
-    stack = [data]
-    while stack:
-        node = stack.pop()
-        for k in node.get("sub_sec", []) or []:
-            if str(k.get("key")) == str(ch):
-                m = re.search(r"\bAppendix\s+([A-Z])\b", str(k.get("name", "")))
-                if m:
-                    return m.group(1)
-            stack.append(k)
-    return None
+    if bs is None:
+        return None
+    node = bs.find_chapter(str(ch))
+    if node is None:
+        return None
+    m = re.search(r"\bAppendix\s+([A-Z])\b", str(node.name or ""))
+    return m.group(1) if m else None
 
 
 def chap_mds(book_dir, ch):

@@ -336,7 +336,7 @@ class TestVerifyChapterEntry(unittest.TestCase):
     def test_all_missing_config_exits_2(self):
         # config_setting 流程 规则1: a book WITHOUT verify_config.json must
         # HARD-FAIL (exit 2). verify is the strict gate. NOTE: on a synthetic
-        # book that also lacks book_structure.json, the extract-stage STRUCTURE
+        # book that also lacks the per-chapter contract, the extract-stage STRUCTURE
         # gate fires BEFORE the config gate — both are hard blocks with rc=2,
         # so assert the exit code + a BLOCKED diagnostic rather than the exact
         # gate that tripped.

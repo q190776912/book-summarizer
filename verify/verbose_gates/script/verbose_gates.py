@@ -31,7 +31,7 @@ from data.book_structure.book_structure import BookStructure
   - 必须逐条读懂重写，剔除页眉/页脚/版权行，不得照抄 OCR 文本流。
   - number-first 体例（编号在前、标题在后）：条目标签必须是
     `**N.M.K（标题）：**` 或 `**定义 N.M.K**：`，禁止裸 `**N.M.K**` 把标题甩到正文。
-  - 结构契约 `book_structure.json`（SSOT 见 `flows/write-source/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成 JSON。
+  - 结构契约（分章契约 `book_structure/ch{N}.json`，SSOT 见 `flows/write-source/structure/structure.md`）是写作契约：几节写几节、顺序照抄、条目不增不减。旧书须先重跑 build_structure 生成分章契约。
 
 检测七类缺陷（全部 BLOCKING，不可 --fix，需重写）：
   p_exer_block  — 练习归拢块：独立的 `### 练习`/`### 习题`/`### Exercises` 标题，
@@ -102,11 +102,11 @@ DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 
 # md 中的节标题（兼容 `## §1.2` / `## 1.2`（两级）与 `### §1.2.3`（三级）、
 # `#### §1.2.3.4`（四级，子节规范写法，头部 # 数 = 嵌套层级）。
-# 注意：契约（book_structure.json）的小节号支持任意层级（如 18.3.1 / 16.3.4.1），
+# 注意：契约（分章契约 book_structure/ch{N}.json）的小节号支持任意层级（如 18.3.1 / 16.3.4.1），
 # 故此处用 `(?:\.\d+)*` 而非 `(?:\.\d+)?`，且头部取 `#{2,4}` 而非 `##`，
 # 否则三级小节号会被截断为两级、或三级 `###`/四级 `####` 标题根本不被扫描，
 # 导致 p-layer-missing-sec 把真实存在的小节误报为缺失（回归：commit 5390e5d
-# 把契约源切到 book_structure.json 后未同步放宽此正则）。
+# 把契约源切到分章契约后未同步放宽此正则）。
 SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*(\d+(?:\.\d+)*(?:-[A-Za-z])?)')
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」

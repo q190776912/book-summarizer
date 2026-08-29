@@ -13,7 +13,7 @@
 | **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `render_draft`（write-source 步骤 4）→ 基本总结草稿 `draft_ch{N}.md`；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
 
 - **两阶段写同一文件**：`build_structure` 产出**纯骨架**（叶子 `sub_sec=[]`，无 description / proof / 内容块）→ structure 完整性闸门 → `attach_content` 挂入正文内容写回同一文件。
-- **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 仅作历史书**只读兼容回退**（且对其 `save` 拒绝——须重跑 build + attach 迁移）。
+- **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 已废弃（2026-08-29），不再读取（无兼容回退）。
 - 命名单点：`chapter_json_name` / `chapter_json_path` / `list_chapter_keys`（`book_structure.py`）——数字章按数值排序在前、附录字母章按字母排后。
 
 ## 2. 结构节点 Schema
@@ -179,10 +179,10 @@
 
 ### `BookStructure`
 - `load(ext_dir, book_dir=None)`：**聚合** `book_structure/ch{N}.json` + `appendix{X}.json`
-  为内存书对象（root.name = 书目录名；root 页码 = 各章 min/max）；无分章文件时回退读
-  旧单文件 `book_structure.json`（`legacy=True`，只读）。
+  为内存书对象（root.name = 书目录名；root 页码 = 各章 min/max）；无分章文件时返回 None
+  （旧单文件 `book_structure.json` 已废弃，不再读取）。
 - `save(ext_dir=None)`：把 root 下各章节点**拆分写回** `ch{N}.json` / `appendix{X}.json`
-  （保存前 `recompute_pages`）；`legacy=True` 且书根无分章文件时拒绝（旧书须先迁移）。
+  （保存前 `recompute_pages`）。
 - 其余（`new_book` / `dump_dict` / `name` / `chapters` / `find_chapter` /
   `chapter_items`）同前。
 

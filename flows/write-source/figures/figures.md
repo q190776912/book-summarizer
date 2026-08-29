@@ -3,9 +3,9 @@
 # Sub-flow: write-source / figures（图片嵌入 SSOT · write-source 阶段）
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
-> 🔴 **本文件是该领域规则的唯一权威详细说明（SSOT）。** `SKILL.md` 与代码注释只引用此处、不重复描述；新增/修改该领域规则只改本文件。工作流步骤见 `SKILL.md`，格式规则见 [`../../../docs/writing-rules.md`](../../../docs/writing-rules.md)，校验关卡见 [`../../../verify/verify.md`](../../../verify/verify.md)。
+> 🔴 **本子流程已废弃，以下历史内容不再承载任何现行规则**——现行图片规则 SSOT 是 `docs/writing-rules.md` 的 V-E 小节（图片经内容化分章契约 image 块随草稿继承）。本文件仅作格式逻辑参考保留。
 
-> 🔴 **嵌入是强制步骤，不是可选建议。** 图像未嵌入会导致校验阶段的图片完整性检查不过。
+> 🔴 **（已废弃的旧行为）** 嵌图不再是 write-source 的步骤；图片由内容完整性闸门（`check_content_completeness.py`）保证随草稿继承。
 
 ## 目的
 把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目（定义/定理/引理/命题/推论/例/证明）引用到的图，嵌入到该条目处；未引用的图不写入。本子流程（write-source 阶段）**只负责嵌图**；其上游的检测 / 命名由 extract 阶段的 `figure_detection` 子流程完成，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**（检测 / 命名规则由 extract 阶段文档承载，本文件不重复）。手动补图作为命名环节的 remediation 也在此说明。

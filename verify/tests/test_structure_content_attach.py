@@ -10,7 +10,7 @@ Covers the structure Step-5 content attach + write-source draft rendering:
       <extract_dir>/book_structure/)
   - flows/write-source/script/render_draft.py  (draft_ch{N}.md rendering)
 
-The single-file book_structure.json contract stays structure-only; these tests
+The per-chapter contract (book_structure/ch{N}.json) stays structure-only; these tests
 also pin that attach() never rewrites it and that derived nodes (description /
 proof) are excluded from the structural fingerprint.
 """

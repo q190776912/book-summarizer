@@ -399,6 +399,16 @@ class BookConfig:
     # section-based books whose source prints these (e.g. Fraleigh).  Normal
     # chapter-first EN books keep their exact prior behavior (False).
     section_scoped: bool = False
+    # CHAPTER-SCOPED item counters (edited volumes like Springer's "Koopman
+    # Operator": "Theorem 2.6" = the 6th theorem of CHAPTER 2, NOT an item of
+    # §2.6 — each label counts through the whole chapter).  When True,
+    # build_structure derives an item's section ONLY from its page (nearest
+    # preceding section heading) and never from its number: number→section
+    # binding would misplace items onto number-coincidence sections (e.g.
+    # Example 2.6 printed on p71 lands in "§2.6 Conclusion" and breaks B-layer
+    # ordering).  Default False — books whose item number's second component
+    # IS the section number keep the number-derived placement.
+    chapter_scoped_items: bool = False
     # Chapter-LOCAL section numbering (e.g. Karlin: sections are ``§1, §2, §3``
     # that RESET every chapter, NOT global ``§C.S``).  The whole structure /
     # verify tooling assumes globally-prefixed ``§C.S`` section numbers, so a
@@ -671,6 +681,7 @@ class BookConfig:
             strict=bool(data.get('strict', True)),
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
+            chapter_scoped_items=bool(data.get('chapter_scoped_items', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             sections_global=bool(data.get('sections_global', False)),
             exercise_region_headings=[

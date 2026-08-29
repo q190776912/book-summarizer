@@ -12,11 +12,11 @@
 用法:
   python tools/restructure_by_ocr.py <chkey> <pg0> <pg1> <src_md> [--apply]
     chkey : 章 key，如 "2" / "3"
-    pg0,pg1: OCR 页码区间（含），取该章在 book_structure.json 的 page_start..page_end
+    pg0,pg1: OCR 页码区间（含），取该章在分章契约 book_structure/ch{N}.json 的 page_start..page_end
     src_md: 当前真书 md 路径
     --apply: 若给定，自动备份后写回 src_md；否则只写 <extract>/_restructure_<chkey>.out.md 并报告。
 
-依赖: <book>/_extract/ 下须有 book_structure.json 与 page_*.json（脚本按 src_md 同目录的
+依赖: <book>/_extract/ 下须有分章契约 book_structure/ch{N}.json（附录 appendix{X}.json）与 page_*.json（脚本按 src_md 同目录的
       _extract 自动定位；找不到时回退脚本同目录，可用 BKS_EXTRACT_DIR 覆盖）。
 
 保险:
@@ -45,7 +45,7 @@ import re
 import shutil
 
 
-# ---- 定位 _extract（book_structure.json / page_*.json 所在）----
+# ---- 定位 _extract（分章契约 book_structure/ 与 page_*.json 所在）----
 # 优先：src_md 同目录下的 _extract；其次：脚本同目录（skill 模式）；再其次：BKS_EXTRACT_DIR。
 SRC = sys.argv[4]
 SRC_DIR = os.path.dirname(os.path.abspath(SRC))
@@ -62,18 +62,23 @@ APPLY = "--apply" in sys.argv[5:]
 OUT = os.path.join(EX, "_restructure_%s.out.md" % chkey)
 
 # ---------- 1) OCR 真值图 (label,num) -> section ----------
-HEADER_RE = re.compile(r'^(定义|定理|引理|推论|命题|例)\s*%s?\.?(\d+)' % chkey)
-struct = json.load(open(os.path.join(EX, "book_structure.json"), encoding="utf-8"))
+# 契约唯一来源 = 分章契约 <extract>/book_structure/（2026-08-29 起，旧版全书
+# 单文件 book_structure.json 已废弃，不再读取）。
+from data.book_structure.book_structure import BookStructure
+_bs = BookStructure.load(EX)
+if _bs is None:
+    raise SystemExit("[restructure_by_ocr] BLOCKED: 分章契约缺失（%s/book_structure/）。"
+                     "请先跑 build_structure 生成结构契约。" % EX)
+_ch_node = _bs.find_chapter(chkey)
 secs = []
 def walk(node, level):
     if node.get("type") == "section":
-        secs.append((str(node.get("key")), node.get("page_start"), node.get("page_end"), level))
-    for v in node.get("sub_sec", []):
+        secs.append((str(node.key), int(node.page_start or 0), int(node.page_end or 0), level))
+    for v in (node.sub_sec or []):
         walk(v, level + 1)
-for ch in struct.get("sub_sec", []):
-    if ch.get("key") == chkey:
-        for v in ch.get("sub_sec", []):
-            walk(v, 1)
+if _ch_node is not None:
+    for v in (_ch_node.sub_sec or []):
+        walk(v, 1)
 def page_to_sec(pg):
     best = None; bestlv = -1
     for key, ps, pe, lv in secs:

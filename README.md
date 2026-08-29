@@ -5,7 +5,7 @@
 ## 能力一览
 
 - PDF 文本提取（MFD 公式检测 → MFR 公式识别 → OCR 正文）→ MM Repair 修复 OCR 噪声
-- 章节骨架扫描 + 编号条目抽取 → `book_structure.json` 书对象（写作契约）
+- 章节骨架扫描 + 编号条目抽取 + 内容挂载 → 分章契约 `book_structure/ch{N}.json`（写作契约）
 - 按契约写源语言初稿 → 派生翻译版 → 多层校验（结构 / 编号 / 格式 / KaTeX / 公式对账）至 PASS
 - 图检测 + 分配 + 嵌图（DocLayout-YOLO）
 
@@ -56,9 +56,13 @@
 # 2. 跑流程（严格顺序，flow_runner 机械把关）
 python tools/flow_runner.py run "<corpus_root>/<书名>" prep env
 python tools/flow_runner.py run "<corpus_root>/<书名>" extract place_pdf
-python tools/flow_runner.py run "<corpus_root>/<书名>" extract extract_text   # 后台提取（launch_pipeline.sh）
-# ... extract.mm_repair → extract.config（含 chapter_map 建映射）→ extract.figure_detection → extract.structure
-# 3. 写源语言初稿 → 派生翻译版 → 校验至 PASS
+python tools/flow_runner.py run "<corpus_root>/<书名>" extract extract_text   # 后台提取（Windows 用 PowerShell 启动写法，见 extract.md）
+# ... extract.mm_repair → write_source: config（chapter_map + verify_config）→ figure_detection → structure（完整性闸门）→ draft（基本总结草稿）
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source config
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source figure_detection
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source structure
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source draft
+# 3. 写源语言初稿 → 批量校验至 PASS →（仅英文书）派生翻译版 → 校验至 PASS
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source write_chapters
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source verify_source
 python tools/flow_runner.py run "<corpus_root>/<书名>" derive translate

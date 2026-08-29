@@ -9,7 +9,7 @@ book that deliberately OMITS:
 Then runs the dry-run and --backfill paths and asserts:
   1. dry-run: D-layer finds missing section 1.3; B-layer blocks on the 1.1-2
      interior gap; set-difference finds the 3 readable missing items; gate FAILS.
-  2. backfill: book_structure.json gains section 1.3 + items 1.1-2 / 1.2-2 /
+  2. backfill: per-chapter contract gains section 1.3 + items 1.1-2 / 1.2-2 /
      1.3-1; re-run gate PASSES (zero residual sections / readable items /
      B-layer blocking) -> completeness + continuity guaranteed.
 
@@ -48,17 +48,17 @@ CHAPTER_MAP = {"chapters": [{"chapter": CH, "start": START, "end": END}]}
 # D-layer treats it as "present". EN labels so en3_nf captures has_label.
 # (1.1-1, 1.1-2, 1.1-3, 1.2-1, 1.2-2, 1.3-1 are ALL present in source.)
 PAGES = {
-    1: ["1.1 Metric Spaces", "1.1-1 Definition (Metric space.)"],
-    2: ["1.1-2 Theorem (Banach fixed point.)"],
-    3: ["1.1-3 Example (Open ball.)"],
-    4: ["1.2 Completeness", "1.2-1 Definition (Cauchy sequence.)"],
-    5: ["1.2-2 Theorem (Completeness of R^n.)"],
-    6: ["1.3 Compactness", "1.3-1 Lemma (Compactness lemma.)"],
+    1: ["1.1 Metric Spaces", "Definition 1.1-1 (Metric space.)"],
+    2: ["Theorem 1.1-2 (Banach fixed point.)"],
+    3: ["Example 1.1-3 (Open ball.)"],
+    4: ["1.2 Completeness", "Definition 1.2-1 (Cauchy sequence.)"],
+    5: ["Theorem 1.2-2 (Completeness of R^n.)"],
+    6: ["1.3 Compactness", "Lemma 1.3-1 (Compactness lemma.)"],
     7: ["Proof. Let (x_n) be a Cauchy sequence."],
     8: ["Hence the space is complete."],
 }
 
-# Contract = book_structure.json deliberately MISSING section 1.3 and items
+# Contract = per-chapter contract (book_structure/ch{N}.json) deliberately MISSING section 1.3 and items
 # 1.1-2 / 1.2-2 / 1.3-1.
 BOOK_STRUCTURE = {
     "key": -1, "type": -1, "name": "Test Book", "page_start": 1, "page_end": 8,
@@ -94,8 +94,12 @@ def _write_fixture(ext):
         json.dump(VERIFY_CONFIG, f, ensure_ascii=False, indent=2)
     with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
         json.dump(CHAPTER_MAP, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(ext, "book_structure.json"), "w", encoding="utf-8") as f:
-        json.dump(BOOK_STRUCTURE, f, ensure_ascii=False, indent=2)
+    # 2026-08-29 分章契约：书对象按章拆成 book_structure/ch{N}.json（附录 appendix{X}.json）
+    os.makedirs(os.path.join(ext, "book_structure"), exist_ok=True)
+    _ch_key = str(CH)
+    _ch_file = ("ch%s.json" if _ch_key[:1].isdigit() else "appendix%s.json") % _ch_key
+    with open(os.path.join(ext, "book_structure", _ch_file), "w", encoding="utf-8") as f:
+        json.dump(BOOK_STRUCTURE["sub_sec"][0], f, ensure_ascii=False, indent=2)
     for p, blocks in PAGES.items():
         data = {"text": [{"text": b} for b in blocks]}
         with open(os.path.join(ext, "page_%03d.json" % p), "w", encoding="utf-8") as f:
@@ -159,7 +163,7 @@ def main():
         _assert(not g["residual_readable_items"], "no residual readable items")
         _assert(not g["residual_b_blocking"], "no residual B-layer blocking")
 
-        print("[3] book_structure.json now complete & continuous")
+        print("[3] per-chapter contract now complete & continuous")
         bs = BookStructure.load(ext)
         ch_node = bs.find_chapter(CH)
         sec_keys = {n.key for n in ch_node.sub_sec if n.type == "section"}

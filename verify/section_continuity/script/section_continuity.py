@@ -336,7 +336,7 @@ def _gkey(k):
 
 
 def _load_global_contract(ext, ch):
-    """(sec_keys, letter_subs) from book_structure.json for chapter `ch`.
+    """(sec_keys, letter_subs) from the per-chapter contract for chapter `ch`.
 
     sec_keys    : list[str] of section keys in book order ('12' / appendix 'A')
     letter_subs : {parent_key: [{'key':'A','name':...,'page_start':...}, ...]}
@@ -350,13 +350,20 @@ def _load_global_contract(ext, ch):
     if node is None:
         return [], {}
     keys, subs = [], {}
-    for k in (node.sub_sec or []):
-        if getattr(k, 'type', '') == 'section':
-            key = str(k.key)
-            keys.append(key)
-            ls = getattr(k, 'letter_subs', None)
-            if ls:
-                subs[key] = list(ls)
+
+    def _walk_secs(n):
+        # 递归收集：2026-08-29 起契约小节按层级嵌套（1.2.1 在 1.2.sub_sec 下），
+        # 单层遍历会漏掉全部嵌套子节。
+        for k in (n.sub_sec or []):
+            if getattr(k, 'type', '') == 'section':
+                key = str(k.key)
+                keys.append(key)
+                ls = getattr(k, 'letter_subs', None)
+                if ls:
+                    subs[key] = list(ls)
+                _walk_secs(k)
+
+    _walk_secs(node)
     return keys, subs
 
 

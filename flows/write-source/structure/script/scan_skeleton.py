@@ -1,7 +1,7 @@
 """scan_skeleton.py — 扫描原书某章的【真实结构骨架】（SEC/EXER 行）。
 
 现主要作为 `build_structure.py` 的内部依赖（被 `import` 调用 `scan()` / `_mode_for_ordinal()`
-供其拼装 `book_structure.json` 书对象）；其 standalone CLI 仅向 stdout 打印扫描结果（诊断用），不写任何文件。
+供其拼装分章契约 `book_structure/ch{N}.json`）；其 standalone CLI 仅向 stdout 打印扫描结果（诊断用），不写任何文件。
 
 为什么需要它
 ------------

@@ -196,7 +196,7 @@ def _ross_canon(label, num, suffix=''):
 # deep (Remark 1.1.1 / Definition 2.3.4 / Theorem 3.2.1).  IDENTICAL in spirit to
 # ORDINAL_EN but with a THIRD numeric component.  The label is captured (group 1)
 # so keys_in_md can canonize it to the Chinese structure key (Remark -> 评注,
-# Example -> 例, Definition -> 定义, ...) aligning with book_structure.json.  The
+# Example -> 例, Definition -> 定义, ...) aligning with the per-chapter contract.  The
 # bold `**` prefix naturally excludes FIGURE 1.1.1 / (1.1.1) figure/formula numbers
 # (no label word), avoiding key collisions with the item set.
 ENTRY_RE_EN3_C = re.compile(

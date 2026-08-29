@@ -63,7 +63,7 @@ D 把“源有而 md 没有的节”按其在 md 节序列中的**位置**切成
 - **修复步骤**：
   1. 看 D-LAYER 各段列出的缺失节路径（如 `§2.3` 断裂、尾节 `§4.5` 缺失）。
   2. 回源 PDF 确认该节确实缺失；补写整节（标题 + 条目），并在 `manual_overrides` 登记。
-  3. 若属 OCR 漏检（源其实有）或本书确无该节，检查 `chapter_map.json` / `book_structure.json` 是否准确，
+  3. 若属 OCR 漏检（源其实有）或本书确无该节，检查 `chapter_map.json` / 分章契约（`book_structure/ch{N}.json`）是否准确，
 必要时修正源契约，而不是改 md 掩盖。
   4. 重跑 verify，确认 D-LAYER 各段为空。
 

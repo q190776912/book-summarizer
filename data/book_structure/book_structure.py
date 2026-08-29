@@ -41,7 +41,9 @@ _DERIVED_TYPES = ("description", "proof")
 
 # 分章契约的落位子目录与命名（数字章 ch{N}.json / 附录章 appendix{X}.json）
 OUT_SUBDIR = "book_structure"
-LEGACY_JSON_NAME = "book_structure.json"      # 旧版全书单文件（只读兼容）
+# 旧版全书单文件 book_structure.json 已废弃（2026-08-29 分章契约重构）：
+# 不再做任何读取兼容，BookStructure.load 只认分章文件。
+LEGACY_JSON_NAME = "book_structure.json"      # 仅用于报错提示（不再读取）
 
 
 def chapter_json_name(key: Any) -> str:
@@ -86,13 +88,20 @@ class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目 / 派生节点）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
-                 "consolidated", "letter_subs")
+                 "consolidated", "letter_subs", "raw")
+
+    # 内容块判定：attach_content 挂进 sub_sec 的 {"text"| "formula" | "image"}
+    # 裸字典（无 key/type）。from_dict 遇到含内容块的子树时保留整个原始 dict
+    # 到 node.raw，to_dict 原样吐回——否则内容块会被当默认节点解析、读写一轮
+    # 即静默丢内容（Koopman 书实测）。
+    _BLOCK_SIG = ("text", "formula", "image")
 
     def __init__(self, key: Any = ROOT_KEY, type: Any = ROOT_TYPE, name: str = "",
                   page_start: int = 0, page_end: int = 0,
                   sub_sec: Optional[List["StructureNode"]] = None,
                   consolidated: bool = False,
-                  letter_subs: Optional[List[Dict[str, Any]]] = None):
+                  letter_subs: Optional[List[Dict[str, Any]]] = None,
+                  raw: Optional[Dict[str, Any]] = None):
         self.key = key
         self.type = type
         self.name = name
@@ -110,9 +119,28 @@ class StructureNode:
         # （to_dict 仅在非空时写出 → 其他书 JSON 零变化）。字母子块的**条目**
         # 仍平铺挂在 section.sub_sec 下（不引入第三层容器，_place 归并逻辑不动）。
         self.letter_subs: Optional[List[Dict[str, Any]]] = letter_subs or None
+        # 原始 JSON 保真（含内容块/派生节点布局）。**只读语义**：一旦节点树被
+        # 原地修改（回填条目 / 重排），调用方必须先 clear_raw_recursive() 丢弃
+        # raw 并重建内容，再落盘——否则 raw 是过期视图。
+        self.raw: Optional[Dict[str, Any]] = raw
+
+    @classmethod
+    def _has_blocks(cls, d: Dict[str, Any]) -> bool:
+        sub = d.get("sub_sec") if isinstance(d, dict) else None
+        if not isinstance(sub, list):
+            return False
+        for el in sub:
+            if isinstance(el, dict) and not ("key" in el or "type" in el) \
+                    and any(k in el for k in cls._BLOCK_SIG):
+                return True
+        return False
 
     # ---- 序列化 ----------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
+        if self.raw is not None:
+            # 保真出口：完整契约（骨架+内容块）原样吐回，零信息损失。
+            import copy as _copy
+            return _copy.deepcopy(self.raw)
         d = {
             "key": self.key,
             "type": self.type,
@@ -130,16 +158,28 @@ class StructureNode:
     def from_dict(cls, d: Dict[str, Any]) -> "StructureNode":
         if not isinstance(d, dict):
             raise TypeError("StructureNode.from_dict expects a dict")
-        return cls(
+        raw = dict(d) if cls._has_blocks(d) else None
+        node = cls(
             key=d.get("key", ROOT_KEY),
             type=d.get("type", ROOT_TYPE),
             name=d.get("name", ""),
             page_start=d.get("page_start", 0),
             page_end=d.get("page_end", 0),
-            sub_sec=[cls.from_dict(x) for x in d.get("sub_sec", []) or []],
+            sub_sec=[cls.from_dict(x) for x in d.get("sub_sec", []) or []
+                     if not (isinstance(x, dict) and not ("key" in x or "type" in x)
+                             and any(k in x for k in cls._BLOCK_SIG))],
             consolidated=bool(d.get("consolidated", False)),
             letter_subs=list(d.get("letter_subs") or []) or None,
+            raw=raw,
         )
+        return node
+
+    def clear_raw_recursive(self) -> None:
+        """丢弃本节点及全部子孙的 raw 保真视图（原地修改节点树前必须调用，
+        否则 to_dict 会吐回修改前的过期完整契约）。"""
+        self.raw = None
+        for c in self.sub_sec:
+            c.clear_raw_recursive()
 
     # ---- 类型判定 --------------------------------------------------------
     def is_container(self) -> bool:
@@ -226,17 +266,15 @@ class BookStructure:
     """书结构契约的加载 / 保存 / 查询门面。
 
     ``load`` 聚合分章文件 ``ch{N}.json`` / ``appendix{X}.json`` 为内存书对象；
-    ``save`` 拆分写回各分章文件。历史书无分章文件时回退读旧单文件
-    ``book_structure.json``（只读兼容；此时 save 会拒绝——旧书须先迁移，
-    对其重跑 ``build_structure`` + ``attach_content`` 生成分章文件）。
+    ``save`` 拆分写回各分章文件。无分章文件时 load 返回 None——旧版全书单
+    文件 ``book_structure.json`` 已废弃（2026-08-29），不再读取。
     """
 
     def __init__(self, root: StructureNode, book_dir: Optional[str] = None,
-                 source_path: Optional[str] = None, legacy: bool = False):
+                 source_path: Optional[str] = None):
         self.root = root
         self.book_dir = book_dir
         self.source_path = source_path
-        self.legacy = legacy          # True = 回退自旧单文件（save 拒绝）
 
     # ---- 构造辅助 --------------------------------------------------------
     @classmethod
@@ -249,50 +287,27 @@ class BookStructure:
     # ---- 加载 / 保存 -----------------------------------------------------
     @classmethod
     def load(cls, ext_dir: str, book_dir: Optional[str] = None) -> Optional["BookStructure"]:
-        """聚合加载分章契约；无分章文件时回退旧单文件（legacy，只读）。"""
+        """聚合加载分章契约（唯一格式，2026-08-29 起不再回退旧单文件）。"""
         keys = list_chapter_keys(ext_dir)
-        if keys:
-            bd = book_dir or _default_book_dir(ext_dir)
-            chapters = []
-            for k in keys:
-                with open(chapter_json_path(ext_dir, k), encoding="utf-8") as f:
-                    chapters.append(json.load(f))
-            ps = min(int(c.get("page_start") or 0) for c in chapters)
-            pe = max(int(c.get("page_end") or 0) for c in chapters)
-            name = os.path.basename(os.path.normpath(bd)) if bd else ""
-            root = StructureNode(key=ROOT_KEY, type=ROOT_TYPE, name=name,
-                                 page_start=ps, page_end=pe,
-                                 sub_sec=[StructureNode.from_dict(c) for c in chapters])
-            return cls(root=root, book_dir=bd,
-                       source_path=os.path.join(ext_dir, OUT_SUBDIR))
-        return cls._load_legacy(ext_dir, book_dir)
-
-    @classmethod
-    def _load_legacy(cls, ext_dir: str, book_dir: Optional[str] = None) -> Optional["BookStructure"]:
-        p = os.path.join(ext_dir, LEGACY_JSON_NAME)
-        if not os.path.exists(p):
+        if not keys:
             return None
-        try:
-            with open(p, encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
-            return None
-        if not isinstance(d, dict):
-            return None
-        root = StructureNode.from_dict(d)
-        return cls(root=root, book_dir=book_dir, source_path=p, legacy=True)
+        bd = book_dir or _default_book_dir(ext_dir)
+        chapters = []
+        for k in keys:
+            with open(chapter_json_path(ext_dir, k), encoding="utf-8") as f:
+                chapters.append(json.load(f))
+        ps = min(int(c.get("page_start") or 0) for c in chapters)
+        pe = max(int(c.get("page_end") or 0) for c in chapters)
+        name = os.path.basename(os.path.normpath(bd)) if bd else ""
+        root = StructureNode(key=ROOT_KEY, type=ROOT_TYPE, name=name,
+                             page_start=ps, page_end=pe,
+                             sub_sec=[StructureNode.from_dict(c) for c in chapters])
+        return cls(root=root, book_dir=bd,
+                   source_path=os.path.join(ext_dir, OUT_SUBDIR))
 
     def save(self, ext_dir: Optional[str] = None) -> List[str]:
-        """拆分写回各分章文件（保存前重算书根页码）。返回写出的路径列表。
-
-        legacy（回退自旧单文件、且书根无分章文件）时拒绝保存——旧书须先对其
-        重跑 ``build_structure`` + ``attach_content`` 迁移为分章格式。
-        """
+        """拆分写回各分章文件（保存前重算书根页码）。返回写出的路径列表。"""
         out_dir = ext_dir or (self.book_dir if self.book_dir else None)
-        if self.legacy and not list_chapter_keys(out_dir or ""):
-            raise ValueError(
-                "legacy book_structure.json（旧单文件）不可写回；"
-                "请对其重跑 build_structure + attach_content 迁移为分章契约。")
         if not out_dir:
             raise ValueError("save() requires ext_dir or a prior source_path")
         # 保存前重算书根页码（容器取末代子孙页）

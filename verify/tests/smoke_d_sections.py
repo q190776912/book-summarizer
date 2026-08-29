@@ -57,6 +57,34 @@ def _cfg(path, obj):
         json.dump(obj, f)
 
 
+def _ord_cfg(ext, ordinal_groups, language=None):
+    """写 v2 ordinal 数组配置（旧版整型 ordinal 已废弃）。"""
+    cfg = {"ordinal": ordinal_groups}
+    if language:
+        cfg["language"] = language
+    _cfg(os.path.join(ext, "verify_config.json"), cfg)
+
+
+def _contract(ext, ch, sections):
+    """写分章契约 book_structure/ch{N}.json（2026-08-29 起唯一格式）。
+
+    sections: [{"key": "1.1", "name": "§1.1 ...", "children": [...]}]，children
+    为更低层级 section 节点（同构递归）；叶子 section 不带子节。
+    """
+    def _sec(s):
+        kids = [_sec(c) for c in s.get("children", [])]
+        return {"key": s["key"], "type": "section", "name": s["name"],
+                "page_start": 1, "page_end": 1, "sub_sec": kids}
+
+    ch_node = {"key": str(ch), "type": "chapter", "name": f"Chapter {ch}",
+               "page_start": 1, "page_end": 1,
+               "sub_sec": [_sec(s) for s in sections]}
+    os.makedirs(os.path.join(ext, "book_structure"), exist_ok=True)
+    _cfg(os.path.join(ext, "book_structure", "ch%s.json" % ch), ch_node)
+    # MM Repair 完成标记（ConfigLoader 硬闸要求；测试 fixture 模拟已提取完成的书）
+    _cfg(os.path.join(ext, "_extraction_done.json"), {"ok": True})
+
+
 def _run(args):
     p = subprocess.run([PY, CLI] + args, cwd=_ROOT,
                        capture_output=True, text=True, timeout=120,
@@ -67,9 +95,21 @@ def _run(args):
 def build_three_level(book):
     ext = os.path.join(book, "_extract")
     os.makedirs(ext, exist_ok=True)
-    _cfg(os.path.join(ext, "verify_config.json"), {"ordinal": 3})
+    _ord_cfg(ext, [{"type": 3, "name": ["uncat"], "scope": 3}], language="cn")
     _cfg(os.path.join(ext, "chapter_map.json"),
          {"chapters": [{"ch": 1, "start": 1, "end": 1}]})
+    _contract(ext, 1, [
+        {"key": "1.1", "name": "§1.1 集类", "children": [
+            {"key": "1.1.1", "name": "§1.1.1 定义"},
+            {"key": "1.1.2", "name": "§1.1.2 引理"},
+            {"key": "1.1.3", "name": "§1.1.3 定理"},
+        ]},
+        {"key": "1.2", "name": "§1.2 生成σ代数", "children": [
+            {"key": "1.2.1", "name": "§1.2.1 命题"},
+            {"key": "1.2.2", "name": "§1.2.2 定义"},
+            {"key": "1.2.3", "name": "§1.2.3 推论"},
+        ]},
+    ])
     md = os.path.join(book, "第1章_测度论.md")
     md_text = (
         "# 第一章 测度论\n\n"
@@ -99,9 +139,14 @@ def build_three_level(book):
 def build_two_level(book):
     ext = os.path.join(book, "_extract")
     os.makedirs(ext, exist_ok=True)
-    _cfg(os.path.join(ext, "verify_config.json"), {"ordinal": 2})
+    _ord_cfg(ext, [{"type": 2, "name": ["uncat"], "scope": 2}], language="cn")
     _cfg(os.path.join(ext, "chapter_map.json"),
          {"chapters": [{"ch": 1, "start": 1, "end": 1}]})
+    _contract(ext, 1, [
+        {"key": "1.1", "name": "§1.1 定义"},
+        {"key": "1.2", "name": "§1.2 引理"},
+        {"key": "1.3", "name": "§1.3 同态"},
+    ])
     md = os.path.join(book, "第1章_代数.md")
     md_text = (
         "# 第一章 代数\n\n"
@@ -125,11 +170,15 @@ def build_two_level(book):
 def build_gm(book):
     ext = os.path.join(book, "_extract")
     os.makedirs(ext, exist_ok=True)
-    _cfg(os.path.join(ext, "verify_config.json"), {"ordinal": 6})
+    _ord_cfg(ext, [{"type": 6, "name": ["uncat"], "scope": 2}], language="cn")
     _cfg(os.path.join(ext, "chapter_map.json"), {"chapters": [{
         "num": 1, "sections": [
             {"sec": 1, "start": 1, "end": 1},
             {"sec": 2, "start": 1, "end": 1}]}]})
+    _contract(ext, 1, [
+        {"key": "1", "name": "§1. Triangulated Spaces"},
+        {"key": "2", "name": "§2. Simplicial Sets"},
+    ])
     md = os.path.join(book, "第1章_同调代数.md")
     md_text = (
         "# Homological Algebra Ch1\n\n"

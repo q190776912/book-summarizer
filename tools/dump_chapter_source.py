@@ -5,7 +5,7 @@ Reads a chapter's page range from ``chapter_map.json`` and prints, per page,
 the OCR text blocks in *reading order* (sorted by the top-Y of each block's
 poly) plus the extracted formulas (latex). This is the "原文回归" source the
 write-source flow requires: authors must write content from this, never from
-``book_structure.json``'s ``name`` titles alone.
+the per-chapter contract's ``name`` titles alone.
 
 Usage:
     python tools/dump_chapter_source.py <extract_dir> <chapter> [--out FILE]

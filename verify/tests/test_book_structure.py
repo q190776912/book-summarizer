@@ -8,8 +8,8 @@ structural consumers:
   - verify.verbose_gates._load_contract         (P-LAYER contract)
   - verify.script.check_structure_completeness backfill path (save round-trip)
 
-The legacy single-file `book_structure.json` remains read-only compatible
-(`BookStructure.load` falls back to it when no split files exist).
+The old single-file `book_structure.json` is DEPRECATED (2026-08-29):
+`BookStructure.load` reads ONLY the split per-chapter files (no fallback).
 """
 import os
 import sys
@@ -228,7 +228,7 @@ def _main():
         test_recompute_pages_recursive,
         test_replace_chapter_upsert,
         test_chapter_items_excludes_exercise,
-        test_structure_io_read_from_single_file,
+        test_structure_io_read_from_split_files,
         test_structure_io_missing_file_returns_none,
         test_verbose_gates_contract_load,
         test_check_structure_backfill_roundtrip,

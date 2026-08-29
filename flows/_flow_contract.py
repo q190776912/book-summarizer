@@ -65,16 +65,17 @@ RUN_COMMANDS = {
         "python flows/script/extract_figures.py \"{pdf}\" --out \"{extract_dir}\" --book && "
         "python flows/script/assign_figures.py \"{pdf}\" --out \"{extract_dir}\" --book"),
     "write_source.structure": ("cmd",
-        # 结构完整性（章节/条目查漏回填 + gate.passed 闸门）是本步内的硬闸，见 structure.md 第 2-4 步
+        # 2026-08-29 重构：build_structure 一步产出含内容（text/formula/image/
+        # proof/description）的完整分章契约 ch{N}.json；结构完整性（章节/条目
+        # 查漏回填 + gate.passed 闸门）是本步内的硬闸，见 structure.md 第 2-4 步
         "python flows/write-source/structure/script/build_structure.py \"{extract_dir}\""),
     "write_source.draft": ("cmd",
-        # 基本总结草稿：内容化分章契约 + 完整性闸门 + 渲染（structure 完整性闸门
-        # 通过后才可执行；图片经契约 image 块随草稿继承，不再单独嵌图）
-        "python flows/write-source/structure/script/attach_content.py \"{extract_dir}\" && "
+        # 基本总结草稿：内容完整性闸门 + 渲染（完整契约已由 structure 步一步
+        # 产出，无需再 attach；图片经契约 image 块随草稿继承，不再单独嵌图）
         "python verify/script/check_content_completeness.py \"{extract_dir}\" && "
         "python flows/write-source/script/render_draft.py \"{extract_dir}\""),
     "write_source.write_chapters": ("agent",
-        "步骤1 render_draft.py 由 book_structure_{N}.json 渲染基本总结草稿 draft_ch{N}.md；"
+        "步骤1 render_draft.py 由含内容完整契约 ch{N}.json 渲染基本总结草稿 draft_ch{N}.md；"
         "步骤2 基于草稿逐章调整（公式逐条重写校正、Tier 压缩、writing-rules 格式，"
         "存疑回查 page_*.json），写出源语言 ChapterN_*.md / 第N章_*.md。"),
     "write_source.embed_figures": ("cmd",
@@ -243,7 +244,7 @@ class physical_evidence:
     def structure_ok(book_dir, extract_dir):
         """structure 完成证据 = 契约文件存在 **且** 每章完整性闸门 PASS。
 
-        🔴 仅"book_structure.json 存在"不足以落账——章节 / 定理定义等缺项的
+        🔴 仅"分章契约 ch{N}.json 存在"不足以落账——章节 / 定理定义等缺项的
         查漏回填闸门（structure.md 第 2–4 步，`check_structure_completeness.py`）
         必须对全部章节跑过且 `gate.passed == true`（报告落
         `<extract_dir>/completeness_reports/ch{N}_completeness_report.json`），

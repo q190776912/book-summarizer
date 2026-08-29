@@ -47,7 +47,7 @@ assert 上游完成，照样被挡：
 - `flows/write-source/structure/script/build_structure.py`：启动前要求 `_extraction_done.json`
   （同时覆盖其 Evans 字母章号降级分支）。
 - `verify/script/verify_chapter.py`：经 `ConfigLoader` 要求 `_extraction_done.json`，
-  并额外要求 `book_structure.json` 存在（verify 的编号项基准）。
+  并额外要求分章契约 `book_structure/` 下至少一章（verify 的编号项基准；旧版全书单文件已废弃）。
 
 ### 4. 证明戳（provenance）
 - `make_config.py` 生成的 `verify_config.json` 带 `_provenance.generated_by ==
@@ -98,8 +98,8 @@ derive:          [translate, verify_cn]
 python tools/flow_runner.py status <book_dir>
 python tools/flow_runner.py next   <book_dir>
 
-# 2) scripted 步（extract_text / write_source 的 config/figure/structure/draft/
-#    embed/verify）直接 run：
+# 2) scripted 步（extract_text / write_source 的
+#    config/figure/structure/draft/verify）直接 run：
 python tools/flow_runner.py run <book_dir> write_source config --pdf "<pdf>"
 python tools/flow_runner.py run <book_dir> write_source draft
 

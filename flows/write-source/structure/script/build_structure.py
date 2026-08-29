@@ -16,10 +16,11 @@ description / proof / 内容块）。正文内容由 ``attach_content``（第 5 
 为什么需要它
 ------------
 本脚本把 `scan_skeleton` 的 `SEC`/`EXER` 扫描 与 `extract_items*` 的编号项抽取**内部调用**，
-统一合成为**单一 `book_structure.json` 书对象**，一次产出同时满足两类需求：
+按章产出**分章契约**（`book_structure/ch{N}.json` / `appendix{X}.json`，含内容完整契约），
+一次产出同时满足两类需求：
   · write-source 写作契约：章节顺序、条目/练习齐全、印刷标题（name 带序标）。
   · verify 编号项基准：展平树、filter type!="exercise" 即得本书编号项集合
-    （data_provider 以本 JSON 为编号项基准）。
+    （data_provider 经 BookStructure.load 聚合读取分章文件为编号项基准）。
 
 设计要点（与 verify/data_provider 对齐）
 --------------------------------------
@@ -175,8 +176,16 @@ def _nat_key_digits(k):
     return (tuple(int(x) for x in re.findall(r"\d+", str(k))), _nat_key(k))
 
 
-def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False):
+def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
+                    chapter_scoped=False):
     """从带类型的条目 key 推导其所属『章节号』（用于挂到 section 节点）。
+
+    ``chapter_scoped``：章内计数器编号书（编著集如 Springer《Koopman Operator》，
+    "Theorem 2.6" = 第 2 章第 6 个定理，**不是** §2.6 的条目——各标签编号贯穿
+    全章）。此类书条目号末段与节号无对应关系，按数字派生节号必然错位
+    （Example 2.6 印在第 71 页却被挂进 "§2.6 Conclusion"，B 层报乱序）。
+    故直接返回 None，让条目走 ``_place`` 的页码就近归节。语义与
+    ``chapter_local`` 相同，只是编号体例不同（后者节号 §N 每章重置）。
 
     ``chapter_local``：章内局部编号书（如 Karlin，节 `§N` 每章重置）。此类书
     条目编号（``Theorem 1.5`` 的末位 5）是「章内条目序标」而非「节号」，与
@@ -199,6 +208,8 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False):
     短路会让所有 EN 条目失去派生小节能力，致使 scan_skeleton 两级模式本就漏扫的
     真实小节（如 §2.1–§2.6）也一并丢失（回归）。故此处按通用规则返回段号。
     """
+    if chapter_scoped or chapter_local:
+        return None
     if ordinal == ORDINAL_TWO_LEVEL:
         # 中文两级：key 形如 "定义1.1"（标签自有计数器），无章节分量 -> 页码归并
         return None
@@ -225,6 +236,46 @@ def _section_of_exer(num):
     if len(nums) >= 2:
         return f"{nums[0]}.{nums[1]}"
     return None
+
+
+_NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
+
+
+def _numbered_heading_y(ext, key, page):
+    """编号小节头在自身页上的 y：块文本以节号开头（含 OCR 粘连变体）才算命中。
+
+    2026-08-29 Koopman 书实测：仅按标题词搜（_find_title_pos）会把上一节折行
+    标题的尾巴（§1.2.1 "…Discrete-Time and" / 次行 "Continuous-Time Systems"）
+    误当 §1.2.1.2 的节头（y=199 vs 真值 1490），锚点提前吞掉整节内容块。
+    编号锚定：`1.2.1.2 Continuous-Time…` / 粘连 `1.2.1.2Continuous…` 两种形态。
+    找不到返回 None（调用方回退标题词搜索）。attach_content 同页锚点/排序
+    复用本函数（attach_content 以 `_bs._numbered_heading_y` 引用）。
+    """
+    if not _NUM_KEY_RE.match(str(key)):
+        return None
+    pat = re.compile(
+        r'^[\*§8Ss$]?\s*' + re.escape(str(key))
+        + r'(?:[.:：\s\u00a0]+(?=[A-Za-z\u4e00-\u9fff])|(?=[A-Za-z]))')
+    fp = os.path.join(ext, 'page_%03d.json' % int(page))
+    if not os.path.exists(fp):
+        return None
+    try:
+        d = scan_skeleton.PageJson.load(fp).data
+    except Exception:
+        return None
+    ys = []
+    for b in d.get("text", []) if isinstance(d, dict) else []:
+        if not isinstance(b, dict):
+            continue
+        s = (b.get("text") or "").strip()
+        if not s:
+            continue
+        for ln in s.split("\n"):
+            if pat.match(ln.strip()):
+                poly = b.get("poly") or []
+                ys.append(poly[1] if len(poly) >= 8 else 0)
+                break
+    return min(ys) if ys else None
 
 
 def _find_title_pos(ext, title, start, end):
@@ -316,7 +367,12 @@ def _item_pos(ext, it):
     """编号项在源页上的 (page, y)：取其 key/片段首个匹配块的 poly 顶边。
 
     找不到时 y 取 -1（同页排序时排在任何节头之前——OCR 整块丢失的条目
-    通常位于该页节头之前的阅读流里；跨节归并不受影响）。"""
+    通常位于该页节头之前的阅读流里；跨节归并不受影响）。
+
+    CN 规范键的 EN 别名重试（2026-08-29 Koopman 书实测）：契约 key 是 CN
+    规范标签（"定义1.1"），EN 书源文印 "Definition 1.1"——直接 startswith
+    永不命中 → y=-1 → attach 锚点错位、条目 0 内容块。此处把 CN 前缀译回
+    EN 别名（Definition/Theorem/…）再试 startswith。"""
     p = it.get("page")
     if not p:
         return None
@@ -330,6 +386,15 @@ def _item_pos(ext, it):
     key = (it.get("key") or "").strip().lower()
     snip = (it.get("text") or "").strip()
     probe = re.sub(r"\s+", " ", snip[:48]).lower()
+    key_variants = [key] if key else []
+    m_cn = re.match(r'^([\u4e00-\u9fff]+)', key)
+    if m_cn:
+        from verify_config import _LABEL_CANON as _LC
+        cn = m_cn.group(1)
+        rest = key[m_cn.end():]
+        # CN 键无分隔符（"定义1.1"）；EN 源文印 "Definition 1.1"（号前有空格）
+        key_variants += [(en.lower() + ' ' + rest.lstrip('.')) for en, c in _LC.items() if c == cn]
+        key_variants += [(en.lower() + rest) for en, c in _LC.items() if c == cn]
     ys_head, ys_contain = [], []
     for b in d.get("text", []):
         if not isinstance(b, dict):
@@ -340,7 +405,7 @@ def _item_pos(ext, it):
         sl = re.sub(r"\s+", " ", s.lower())
         poly = b.get("poly") or []
         y = poly[1] if len(poly) >= 8 else 0
-        if key and sl.startswith(key):
+        if key_variants and any(k and sl.startswith(k) for k in key_variants):
             ys_head.append(y)
         if probe and probe[:24] in sl:
             ys_contain.append(y)
@@ -618,7 +683,7 @@ def _exercise_region_start(ext, ch, start, end):
 
 # ---------------------------------------------------------------------------
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
-# 生成 book_structure.json 后，verify 与 write-source 均消费该 JSON，不再重跑抽取器。
+# 生成分章契约后，verify 与 write-source 均消费该契约（BookStructure.load 聚合），不再重跑抽取器。
 # ---------------------------------------------------------------------------
 def _single_en_items(ext, start, end, book):
     """EN 单级编号书（ORDINAL_SINGLE + language=="en"，如 Evans PDE 2ed /
@@ -1131,7 +1196,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
 
     for it in items:
         _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first,
-                                  chapter_local=getattr(book, 'chapter_local_sections', False)),
+                                  chapter_local=getattr(book, 'chapter_local_sections', False),
+                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False)),
                   it["page"])
     for row in ex_rows:
         _note_sec(_section_of_exer(row[2]), row[0])
@@ -1223,7 +1289,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _unnumbered_book = getattr(book, "sections_unnumbered", False)
     for it in items:
         sec_key = _section_of_key(it["key"], ordinal, book.chapter_first,
-                                  chapter_local=getattr(book, 'chapter_local_sections', False))
+                                  chapter_local=getattr(book, 'chapter_local_sections', False),
+                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False))
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])
@@ -1242,9 +1309,68 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node = _node(num, "exercise", name, p)
         _place(node, sec_key, p)
 
-    # 6) 章节内子节点按页码稳定排序（同页用自然序，防 '例10'<'例9' 伪乱序）
+    # 6) 章节内子节点按（页码, 页内 y, 自然序）稳定排序（2026-08-29 升级为
+    # y 感知：同页上「条目 vs 嵌套子节头」的先后只看 key 自然序会颠倒——
+    # Koopman ch5 实测 Remark 5.5(y=864) 在 §5.4.1 节头(y=1112) 之前，自然序
+    # 却把节头排前 → B 层乱序。y 取自源页锚定：条目用 _item_pos，编号节头用
+    # _numbered_heading_y；取不到 y 时回退 0（保持旧行为）。
+    def _doc_sort_key(child):
+        nid = id(child)
+        if nid not in _doc_y_cache:
+            page = int(child.get("page_start") or 0)
+            ckey = str(child.get("key") or "")
+            y = None
+            if child.get("type") == "section":
+                if not ckey.startswith("U"):
+                    y = _numbered_heading_y(ext, ckey, page)
+                if y is None:
+                    t = (child.get("name") or "").strip()
+                    t_no = re.sub(r'^[\dA-Z]+(?:\.[\dA-Z]+)*\s*', '', t).strip()
+                    pos = _find_title_pos(ext, t_no or t, page, page) if t else None
+                    y = pos[1] if pos else None
+            else:
+                pos = _item_pos(ext, {"key": ckey, "page": page,
+                                      "text": child.get("name") or ""})
+                y = pos[1] if pos and pos[1] is not None and pos[1] >= 0 else None
+            _doc_y_cache[nid] = float(y) if y is not None else 0.0
+        return (int(child.get("page_start") or 0), _doc_y_cache[nid],
+                _nat_key_digits(child["key"]))
+
+    _doc_y_cache = {}
     for n in all_sec_nums:
-        sec_nodes[n]["sub_sec"].sort(key=lambda x: (x["page_start"], _nat_key_digits(x["key"])))
+        sec_nodes[n]["sub_sec"].sort(key=_doc_sort_key)
+
+    # 6b) 小节按数字层级嵌套（Koopman 书实测，2026-08-29）：契约树必须与原书
+    # 标题层级同构——"1.2.1" 是 "1.2" 的子节、挂进其 sub_sec；"1.2.1.1" 再挂进
+    # "1.2.1"。此前所有 section 平铺在章下，写作契约与渲染骨架都丢失层级。
+    # 父键 = 去掉末段；父不存在（编号洞，如书直接从 1.2 跳 1.2.2）→ 留在顶层，
+    # 不编造父节。无序号标节（"U{n}"）与字母子块不参与嵌套。子节在父 sub_sec
+    # 内与条目一起按 (page_start, 自然序) 重排，保持文档顺序。
+    def _sec_depth(key):
+        return len(re.findall(r"\d+", str(key)))
+
+    top_secs = []
+    for n in all_sec_nums:
+        node = sec_nodes[n]
+        if n.startswith("U") or _sec_depth(n) < 2:
+            top_secs.append(node)
+            continue
+        parts = re.findall(r"\d+", str(n))
+        parent_key = ".".join(parts[:-1])
+        parent = sec_nodes.get(parent_key)
+        if parent is None or parent is node:
+            top_secs.append(node)
+        else:
+            parent["sub_sec"].append(node)
+
+    def _sort_tree(node):
+        node["sub_sec"].sort(key=_doc_sort_key)
+        for k in node["sub_sec"]:
+            if k.get("type") == "section":
+                _sort_tree(k)
+
+    for s in top_secs:
+        _sort_tree(s)
 
     # 7) 递归算 page_start / page_end（容器取末代子孙页）
     def _fix_pages(node):
@@ -1260,7 +1386,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node["page_end"] = max(child_ends)
         return node["page_end"]
 
-    ordered_secs = [sec_nodes[n] for n in all_sec_nums]
+    ordered_secs = top_secs
     for s in ordered_secs:
         _fix_pages(s)
 
@@ -1296,7 +1422,7 @@ def main():
     if not os.path.exists(os.path.join(ext, "_extraction_done.json")):
         print("[build_structure] BLOCKED: 缺 _extraction_done.json，MM Repair 未完成。")
         print("  须先完成 MM Repair（模式 A+B 写回 page_*.json，apply 真完成写出")
-        print("  _extraction_done.json）后再生成 book_structure.json。")
+        print("  _extraction_done.json）后再生成分章契约 book_structure/ch{N}.json。")
         print("  严禁跳步。可先对该书运行 `python tools/flow_runner.py bootstrap <book_dir>`")
         print("  依据物理证据补写完成标记。")
         return 2
@@ -1325,8 +1451,12 @@ def main():
     _loader_obj = locals().get("loader")
 
     # 每章独立落盘：<extract_dir>/book_structure/ch{N}.json（附录 appendix{X}.json）
-    # —— 2026-08-29 起**不再产出全书单文件 book_structure.json**；分章骨架文件即
-    # 结构契约唯一真源，attach_content 在其上挂正文内容后写回同一文件。
+    # —— 2026-08-29 重构：**一步产出完整契约**——build_structure 生成骨架后立即
+    # 调 build_chapter_contract 挂入正文内容（description / proof / text /
+    # formula / image 内容块）并写回同一文件，不再有独立的 attach_content 步骤；
+    # ch{N}.json 自此即"整章信息的唯一载体"，后续子流程只做校验与回填。
+    # 不再产出全书单文件 book_structure.json；分章文件即结构契约唯一真源。
+    from attach_content import build_chapter_contract
     out_sub = os.path.join(ext, "book_structure")
     os.makedirs(out_sub, exist_ok=True)
     built = 0
@@ -1340,15 +1470,20 @@ def main():
         node = StructureNode.from_dict(chapter)
         node.recompute_pages()
         out = chapter_json_path(ext, str(ch))
+        # 骨架 → 完整契约（内容挂载）→ 落盘；一次读写，无中间态文件。
+        full, stats = build_chapter_contract(ext, node.to_dict())
         with open(out, "w", encoding="utf-8") as f:
-            json.dump(node.to_dict(), f, ensure_ascii=False, indent=2)
+            json.dump(full, f, ensure_ascii=False, indent=2)
         built += 1
         n_item = sum(1 for _ in _iter_items(chapter)
                      if _["type"] not in ("exercise", "section", "chapter"))
         n_ex = sum(1 for _ in _iter_items(chapter) if _["type"] == "exercise")
         n_sec = sum(1 for _ in _iter_items(chapter) if _["type"] == "section")
-        print("ch%-3s BUILD | sections=%d items=%d exercises=%d -> %s"
+        print("ch%-3s BUILD | sections=%d items=%d exercises=%d "
+              "text=%d formula=%d image=%d proof=%d desc=%d noise=%d -> %s"
               % (ch, n_sec, n_item, n_ex,
+                 stats["text"], stats["formula"], stats["image"],
+                 stats["proof"], stats["description"], stats["noise_dropped"],
                  os.path.basename(out)))
     print("BOOK -> %s | chapters built=%d" % (out_sub, built))
     return 0

@@ -14,7 +14,7 @@ a printing off-by-one.  Example: Lasota & Mackey, *Chaos, Fractals, and Noise*,
 prints ``Proposition 12.8.3`` on p.452 **and** again on p.454 with a *different*
 heading (the second one is logically 12.8.4).  A naive dedup keyed only on
 (label, number) silently discards the second proposition, losing a real item
-from ``book_structure.json``.
+from the per-chapter contract (``book_structure/ch{N}.json``).
 
 The fix
 -------
@@ -69,6 +69,18 @@ def _is_genuine(it):
     second occurrence of the same number.)
     """
     if 'mstart' not in it:
+        # en/en3 系抽取器：匹配已锚定块首，但 Koopman 书实测仍有块首散文
+        # 提及幸存（"Proposition 2.1 is very general, but difficult…" 整块以
+        # 引用开头）。判据：key 之后紧跟 ≥2 个小写英文字母开头的词（"is very
+        # general"）= 句中延续，非条目头。真条目头在号后是： glued 标题
+        # （"2.1Theattractor"，大写）、句点、"(Title)"、大写动词
+        # （"Suppose that…"）；数学开头（"e^{iπ}"）第二字符非小写字母，不误伤。
+        s = it.get('text', '')
+        key = str(it.get('key', ''))
+        idx = s.find(key)
+        after = re.sub(r'\s+', ' ', s[idx + len(key):]).lstrip() if idx >= 0 else ''
+        if re.match(r'^[a-z]{2,}', after):
+            return False
         return True
     mstart = it.get('mstart', 0)
     at_head = mstart <= 1

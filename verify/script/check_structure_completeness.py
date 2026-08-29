@@ -2,17 +2,17 @@
 
 目的
 ----
-`build_structure` 产出 `book_structure.json`（书对象契约）。抽取器源侧捡漏覆盖不全，非三级书在 structure 阶段没有源侧查漏，book_structure.json 会安静地缺章节 / 缺定义定理例。
+`build_structure` 产出分章契约（`book_structure/ch{N}.json`，经 `BookStructure.load` 聚合为书对象）。抽取器源侧捡漏覆盖不全，非三级书在 structure 阶段没有源侧查漏，契约文件会安静地缺章节 / 缺定义定理例。
 
 步骤与状态分流的权威叙述（四步流程、readable / reference / needs_agent 分流、完整 + 连续闸门）见 `flows/write-source/structure/structure.md` 的「步骤（第 2–4 步）/ 源侧完整性校验与回填」一节；本文件仅承载该脚本的实现与调用方式。本脚本在「写书之前」把 `verify/section_continuity`（D 层）与 `verify/item_numbering_integrity`（B 层）两个公共校验层接到 structure 步骤做兜底，回填后由「完整 + 连续」闸门复核。
 
 用法
 ----
     python check_structure_completeness.py <extract_dir> [ch ...] [--backfill] [--report-dir DIR]
-    # 不传 <ch> 即扫全部章；--backfill 才写回 book_structure.json，否则只产出报告（dry-run）。
+    # 不传 <ch> 即扫全部章；--backfill 才写回分章契约（book_structure/ch{N}.json），否则只产出报告（dry-run）。
     # 默认报告写到 <extract_dir>/completeness_reports/。
 
-注意：本脚本只消费 raw `page_*.json` + `book_structure.json` + 配置，**不依赖已写的 .md**，
+注意：本脚本只消费 raw `page_*.json` + 分章契约 + 配置，**不依赖已写的 .md**，
 因此可在写书前独立运行，把查漏从「写完 MD 才发现」提前到「抽完即查、源侧兜底」。
 """
 import os
@@ -109,7 +109,7 @@ _CH = r'([0-9A-Za-z]+)'   # OCR 容错的「数字串」捕获（支持多位数
 # 会退化成 '1' 产生新幻影号）——实现：lookahead 内吹嘴匹配
 # ([0-9A-Za-z]*[0-9]) 后紧跟 (?=[\s.‑·，．]|$)，失败则整体失败，
 # 不会退回到更短的数字（对已完成书零回徒）。
-_S = r'(?=[0-9A-Za-z]*[0-9][\s.-·，．]|$)([0-9A-Za-z]*[0-9])'
+_S = r'(?=[0-9A-Za-z]*[0-9][\s.\-·，．]|$)([0-9A-Za-z]*[0-9])'
 # 块首锚定的「标签 + 编号」候选正则（独立于抽取器的行内扫描）。
 # 标签后加负向预查 (?![A-Za-z一-龥])，避免把章节标题（"Examples"/"Exercises"）或
 # 语篇词（"例如"）误当成条目标签——它们是纯噪声，必须排除。
@@ -180,7 +180,7 @@ def _is_three(scheme):
 def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None, groups=None):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
-    key 与 build_structure 产出的 book_structure.json 契约格式一致
+    key 与 build_structure 产出的分章契约格式一致
     （三级 = "C.S-N"；两级中文 = "标签C.S"；两级英文 = "标签 C.S"），
     以便回填后能被 write-source / verify 原样消费。
 
@@ -344,6 +344,12 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 if _is_three(scheme):
                     if len(nums) < 3:
                         continue
+                    # 两级书（ORDINAL_TWO_LEVEL / ORDINAL_EN）下的三段号是
+                    # 三级/四级小节标题（"2.2.1 Preliminaries"、"13.3.2 Algorithm"
+                    # —— 尾词恰为节题、会伪装成标签），不是编号条目——丢弃，
+                    # 否则回填出幻影项污染契约（Koopman 书实测）。
+                    if primary_type in (ORDINAL_TWO_LEVEL, ORDINAL_EN):
+                        break
                     key = f"{nums[0]}.{nums[1]}-{nums[2]}"
                     canon = (nums[0], nums[1], nums[2])
                 else:
@@ -381,7 +387,7 @@ def _find_section_page(ext, ch, sec_tuple):
     return None
 
 
-# === 契约（book_structure.json）读取 =============================================
+# === 契约（分章契约 book_structure/ch{N}.json，经 BookStructure.load 聚合）读取 =====
 _LABEL_RE = re.compile(r'^(定义|定理|引理|推论|命题|例|练习|习题|评注|注'
                        r'|Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|Remark|Axiom)')
 
@@ -437,7 +443,7 @@ def _composite_key(primary_type, label, canon):
 def load_contract(tree):
     """从结构树（StructureNode）提取 (tree, items: {canon: node}, sections: set(str 'C.S'))。
 
-    tree 为某章节点（StructureNode）；调用方通过 BookStructure.load 读取单文件并
+    tree 为某章节点（StructureNode）；调用方通过 BookStructure.load 聚合读取分章文件并
     用 ``bs.find_chapter(ch)`` 取得。
     """
     items = {}
@@ -456,6 +462,15 @@ def load_contract(tree):
         canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
         if canon is not None:
             label = _TYPE_TO_LABEL.get(n.type, "uncat")
+            if label == "uncat":
+                # uncat 节点（Assumption/Algorithm/Conjecture 等回填项）从 key
+                # 前缀恢复标签词，与源侧扫描的 (label, canon) 复合键对齐——
+                # 否则回填项在契约侧恒为 ('uncat', canon)，源侧为 ('假设', canon)，
+                # 永不相交 → readable 残留、闸门死锁（Koopman 书实测）。
+                # 前缀无需先规范化：_composite_key 内部会过 _canon_label。
+                m = re.match(r'^([A-Za-z\u4e00-\u9fff]+)', str(n.key).strip())
+                if m:
+                    label = m.group(1)
             items[_composite_key(_PRIMARY, label, canon)] = n
     walk(tree)
     return tree, items, sections
@@ -571,6 +586,22 @@ def insert_section(tree, sec_key, page):
     if _section_node(tree, sec_key) is not None:
         return False
     node = _node(sec_key, "section", sec_key, page or 0)
+    # 嵌套感知（2026-08-29）：多段数字键的子节（如 1.2.1）插到其数字父节
+    # （1.2）的 sub_sec 内、按页码排序；父节不存在（编号洞）才回落章级平铺。
+    parts = re.findall(r"\d+", str(sec_key))
+    parent = None
+    if len(parts) >= 2:
+        parent_key = ".".join(parts[:-1])
+        parent = _section_node(tree, parent_key)
+    if parent is not None:
+        idx = len(parent.sub_sec)
+        for i, child in enumerate(parent.sub_sec):
+            if (page or 0) < child.page_start:
+                idx = i
+                break
+        parent.sub_sec.insert(idx, node)
+        _fix_pages(tree)
+        return True
     secs = list(_iter_sections(tree))
     inserted = False
     for s in secs:
@@ -701,7 +732,7 @@ def step2_sections(ch, start, end, ext, cfg, tree):
             os.unlink(md_path)
         except OSError:
             pass
-    # book_structure.json 只建模 chapter → section → 条目（**没有 subsection 容器
+    # 契约只建模 chapter → section → 条目（**没有 subsection 容器
     # 节点**），所以 D 层只需比对「章节级（level 2 = C.S）」；level 3（subsection）
     # 在契约里无对应节点，若纳入会把每个 C.S-K 条目误报成「缺失 subsection」。
     # 故只取 levels[2] 的 continuity / missing（level 1 = 章前缀，level 2 = 节）。
@@ -874,7 +905,7 @@ _PRIMARY = ORDINAL_THREE_LEVEL
 def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     global _PRIMARY
     _PRIMARY = cfg.primary_type
-    # 单文件书对象：经 BookStructure 读取，定位指定章节点。
+    # 分章契约：经 BookStructure.load 聚合读取，定位指定章节点。
     bs = BookStructure.load(ext)
     if bs is None:
         return None
@@ -931,9 +962,18 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                         backfilled_items.append({"key": mk, "where": where,
                                                  "page": mo.get("page"), "source": "manual_override"})
         if backfilled_items or backfilled_sections:
-            # 回填后整体写回单文件书对象：用 ch_node 替换本书根下同 key 章节，再 save。
-            bs.root.replace_chapter(tree)
-            bs.save(ext)
+            # 回填后写回分章契约（2026-08-29 重构）：ch{N}.json 是"骨架+内容"
+            # 完整契约——先丢 raw 保真视图（树已被原地修改），重建该章内容
+            # （build_chapter_contract 幂等重挂，新回填条目也获得 text/formula
+            # 内容块），再写回单章文件。不走 bs.save()（会把全书按内存树
+            # 重写；此处只改了一章，避免无谓重写其他章）。
+            from attach_content import build_chapter_contract as _bcc
+            from data.book_structure.book_structure import chapter_json_path as _ch_path
+            tree.clear_raw_recursive()
+            full_ch, _stats = _bcc(ext, tree.to_dict())
+            with open(_ch_path(ext, str(ch)), "w", encoding="utf-8") as f:
+                json.dump(full_ch, f, ensure_ascii=False, indent=2)
+            bs.root.replace_chapter(StructureNode.from_dict(full_ch))
 
     # ---- 第 4 步：完整性与连续性闸门（回填后重跑断言）----
     # 回填已写入 bs（内存同对象），用最新章节点重算契约再校验。

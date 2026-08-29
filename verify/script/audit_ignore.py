@@ -7,13 +7,13 @@
 绝不可用于掩盖「源侧序列洞」（被忽略的编号在 .md 中本就不存在 —— 那是真实缺项，
 应经 manual_overrides 补回）。2.1-4 / 4.9-3 即此类误用：把序列洞塞进 ignore 隐藏缺口。
 
-本工具供 **agent 审核** 使用：逐条核对每个 ignore 条目与契约（book_structure.json）
+本工具供 **agent 审核** 使用：逐条核对每个 ignore 条目与契约（分章契约 book_structure/ch{N}.json，经 BookStructure.load 聚合）
 及源（page_*.json）的关系，给出 SUSPECT / SAFE 判定与举证，阻止「隐藏问题」。
 
 判定规则
 --------
 对每个 ignore 条目（键 C.S-N，可带标签前缀 / 原因）：
-  1) 契约存在性：C.S-N 是否在 book_structure.json 中？
+  1) 契约存在性：C.S-N 是否在分章契约（book_structure/ch{N}.json）中？
      - 存在 → SUSPECT：ignore 了一个真实存在的条目（真实条目绝不可进 ignore）。
   2) 序列洞：C.S-N 不在契约，但前后邻居 C.S-(N-1) 与 C.S-(N+1) 都在契约中？
      → SUSPECT：连续编号序列中的洞，应经 manual_overrides 补回，勿用 ignore 隐藏。

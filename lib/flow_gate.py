@@ -32,6 +32,7 @@
 """
 import json
 import os
+import sys
 import time
 
 GATE_FILE = ".flow_gate.json"

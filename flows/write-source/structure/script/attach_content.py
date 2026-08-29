@@ -283,16 +283,144 @@ def _collect_blocks(ext, start, end):
                    "bottom": fy1, "kind": "formula",
                    "latex": latex, "display": display}
             disp.append(blk)
+        # 行间公式的 OCR 文本重复行剔除（2026-08-29 Koopman 书实测）：OCR 引擎对
+        # 公式区域既输出 MFD latex 块、又输出一行乱码文本读数（如 "Usf =f os f e ."），
+        # 其 poly 与公式 bbox 几乎重合——按几何重叠丢弃文本块，保留 latex 块。
+        # 仅对 display 公式做重叠测试（行内公式宿主行必须保留，供 _splice_inline 拼接）。
+        disp_boxes = [(b["x"], b["y"], b["x1"], b["bottom"])
+                      for b in disp if b.get("display")]
+        if disp_boxes:
+            kept = []
+            for tb in texts:
+                bx0, by0, bx1, by1 = tb["x"], tb["y"], tb["x1"], tb["bottom"]
+                ta = max(bx1 - bx0, 0.0) * max(by1 - by0, 0.0)
+                dup = False
+                if ta > 0:
+                    for fx0, fy0, fx1, fy1 in disp_boxes:
+                        ix0, iy0 = max(bx0, fx0), max(by0, fy0)
+                        ix1, iy1 = min(bx1, fx1), min(by1, fy1)
+                        if ix1 > ix0 and iy1 > iy0:
+                            inter = (ix1 - ix0) * (iy1 - iy0)
+                            fa = max((fx1 - fx0) * (fy1 - fy0), 1e-6)
+                            # 除以较大面积：须互相重合（garbled 读数行）才算 dup；
+                            # 高文本块包含小公式 bbox 时 inter/ta < 0.5 → 保留正文
+                            if inter / max(ta, fa) > 0.5:
+                                dup = True
+                                break
+                if not dup:
+                    kept.append(tb)
+            texts = kept
+        # 章首页版面家具剔除（作者单位 / 版权 / Check for updates）——必须在
+        # _splice_inline 之前，否则家具块内的行内公式会被拼进上一行正文。
+        texts, disp = _strip_furniture(texts, disp, p)
         page_blocks = _splice_inline(texts, disp)
         page_blocks.extend(_figure_blocks(ext, p))
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
+        page_blocks = _attach_formula_tags(page_blocks)
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
 
 
+_TAG_RE = re.compile(r"^\((\d{1,3}(?:\.\d{1,3})*)\)$")
+
+
+def _attach_formula_tags(page_blocks):
+    """把行间公式同行右缘的编号 tag（"(2.17)" 独立文本块）挂到公式块的
+    ``tag`` 键上，并从散文流剔除该文本块（纯版面锚点，不是正文）。
+
+    判定（宁缺勿滥）：tag 文本块整块恰为 ``(<num>)``、位于公式块右侧
+    （x0 ≥ 公式 x1 - 容差）、与公式行垂直中心相近（≤ 行高 0.6 倍）。
+    纯几何 + 文本判定，无状态，保证 check_content_completeness 的
+    确定性复算两侧一致。
+    """
+    tags = []
+    for b in page_blocks:
+        if b["kind"] == "text":
+            m = _TAG_RE.match(b["text"].strip())
+            if m:
+                tags.append(b)
+    if not tags:
+        return page_blocks
+    consumed = set()
+    for b in page_blocks:
+        if b["kind"] != "formula" or not b.get("display") or "tag" in b:
+            continue
+        cy = (b["y"] + b["bottom"]) / 2.0
+        hh = max(b["bottom"] - b["y"], 1.0)
+        best = None
+        for t in tags:
+            if id(t) in consumed:
+                continue
+            tcy = (t["y"] + t["bottom"]) / 2.0
+            if abs(tcy - cy) > 0.6 * hh:
+                continue
+            if t["x"] < b["x1"] - 5.0:
+                continue
+            if best is None or t["x"] < best["x"]:
+                best = t
+        if best is not None:
+            b["tag"] = _TAG_RE.match(best["text"].strip()).group(0)
+            consumed.add(id(best))
+    if consumed:
+        page_blocks = [b for b in page_blocks if id(b) not in consumed]
+    return page_blocks
+
+
+_FURNITURE_RE = re.compile(r'e-mail|springer nature', re.I)
+_CHECKFOR_RE = re.compile(r'check\s*for\s*updat\w*', re.I)
+_CHECKFOR_BLOCK_RE = re.compile(r'^\s*(?:Check\s*for\b\w*|updates?)\s*[.。\s]*$', re.I)
+_TRAILING_URL_RE = re.compile(r'\s*(?:https?[:.\s]|www\.)\S+\s*(?:\d{1,4})?\s*$', re.I)
+
+
+def _strip_furniture(texts, disp, page):
+    """章首页版面家具剔除（2026-08-29 Koopman 书实测；须在 _splice_inline 之前
+    执行——家具块里的行内公式（$(\bowtie)$、$@$ 等）否则会被拼进上一行正文）：
+
+    ① ``Check for updates`` 小部件：合并进标题/摘要块时**就地剥离**，独立成块
+       （``^Check for`` 开头）时整块丢弃；
+    ② ``e-mail`` / ``Springer Nature`` 强标记块整块丢弃（作者单位、版权行）；
+    ③ 以强标记块为种子做 y 带聚类（间距 ≤90px 合并，上外扩 80 / 下外扩 40px），
+       带内其余文本块（作者名、单位、DOI 行）与**全部公式块**一并剔除——正文块
+       都在带外。"""
+    kept_texts, furn_boxes = [], []
+    for tb in texts:
+        t = tb["text"]
+        if _CHECKFOR_RE.search(t):
+            t = _CHECKFOR_RE.sub(" ", t)
+        # 块尾 URL（版权 / DOI 行与正文合并的块）：URL + 可选尾随页码属家具，
+        # 剥离尾部；参考文献条目的 URL 在块中部（后接下一条），不受影响。
+        t = _TRAILING_URL_RE.sub(" ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        if not t:
+            continue
+        tb = dict(tb, text=t)
+        if _CHECKFOR_BLOCK_RE.match(t):
+            continue                # 独立成块的 Check for updates 小部件
+        if _FURNITURE_RE.search(t):
+            furn_boxes.append((tb["y"], tb["bottom"]))
+            continue
+        kept_texts.append(tb)
+    if furn_boxes:
+        furn_boxes.sort()
+        clusters = []
+        for lo, hi in furn_boxes:
+            if clusters and lo - clusters[-1][1] <= 90.0:
+                p = clusters[-1]
+                clusters[-1] = (min(p[0], lo), max(p[1], hi))
+            else:
+                clusters.append((lo, hi))
+        bands = [(lo - 80.0, hi + 160.0) for lo, hi in clusters]
+        kept_texts = [tb for tb in kept_texts
+                      if not any(lo <= (tb["y"] + tb["bottom"]) / 2.0 <= hi
+                                 for lo, hi in bands)]
+        disp = [fb for fb in disp
+                if not any(lo <= (fb["y"] + fb["bottom"]) / 2.0 <= hi
+                           for lo, hi in bands)]
+    return kept_texts, disp
+
+
 def _filter_noise(blocks, page_height, n_pages):
-    """丢弃页眉 / 页脚 / 版权行 / 页码类噪声块（尽力而为；规则见模块 docstring）。"""
 
     def _edge(b):
         h = page_height
@@ -333,6 +461,7 @@ def _filter_noise(blocks, page_height, n_pages):
 # 锚点事件（结构节点 → (page, y)），复用 build_structure 的定位逻辑
 # ---------------------------------------------------------------------------
 _SEC_NO_PREFIX = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)*\s+(.*)$', re.DOTALL)
+_NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
 
 
 def _section_anchor(ext, node):
@@ -341,6 +470,9 @@ def _section_anchor(ext, node):
     key = str(node.get("key") or "")
     title = name if key.startswith("U") else (_SEC_NO_PREFIX.match(name).group(1)
                                               if _SEC_NO_PREFIX.match(name) else name)
+    y = _bs._numbered_heading_y(ext, key, page)
+    if y is not None:
+        return page, float(y)
     if title:
         pos = _bs._find_title_pos(ext, title, page, page)
         if pos:
@@ -353,8 +485,10 @@ def _item_anchor(ext, node):
     pos = _bs._item_pos(ext, {"key": node.get("key") or "",
                               "page": page,
                               "text": node.get("name") or ""})
-    if pos and pos[0] == page:
+    if pos and pos[0] == page and pos[1] is not None and pos[1] >= 0:
         return page, float(pos[1])
+    # y=-1 是 _item_pos 的「整块丢失」哨兵：在 attach 事件流里必须落在
+    # (page, 0.0)，否则会排到同页所有节头之前、吞掉/错失内容块。
     return page, 0.0
 
 
@@ -556,7 +690,10 @@ def _to_content(b):
         return out
     if b["kind"] == "image":
         return {"image": b["file"]}
-    return {"formula": b["latex"], "display": bool(b["display"])}
+    out = {"formula": b["latex"], "display": bool(b["display"])}
+    if b.get("tag"):
+        out["tag"] = b["tag"]
+    return out
 
 
 def _make_description(key, blocks):

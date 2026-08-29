@@ -29,7 +29,7 @@
 新鲜度
 ------
 渲染前对每章做结构指纹比对（:func:`attach_content.fingerprint_matches`）：单文件
-``book_structure.json`` 因回填 / restructure 发生变化（或缺分章文件）时自动对该章
+分章契约（``book_structure/ch{N}.json``）因回填 / restructure 发生变化（或缺文件）时自动对该章
 重跑 attach_content，保证草稿始终基于最新契约。
 
 用法
@@ -121,6 +121,33 @@ def _colon(lang):
     return "：" if lang == "cn" else ": "
 
 
+# 英文书条目标签转换（2026-08-29 Koopman 书实测）：契约 key 用 CN 规范标签
+# （"定义1.1"），英文书草稿头部必须是纯英文（writing-rules 双语铁律）——渲染时
+# 把 CN 标签+编号换回 EN 标签+编号；印刷标题若以同一编号开头则去重（避免
+# "Definition 1.1 1.1 (...)" 双编号）。
+_EN_LABEL = {"定义": "Definition", "定理": "Theorem", "引理": "Lemma",
+             "推论": "Corollary", "命题": "Proposition", "例": "Example",
+             "评注": "Remark", "注": "Remark", "假设": "Assumption",
+             "算法": "Algorithm", "公理": "Axiom", "猜想": "Conjecture",
+             "断言": "Assertion", "性质": "Property", "练习": "Exercise",
+             "习题": "Exercise"}
+_CN_KEY_RE = re.compile(
+    r'^(' + '|'.join(_EN_LABEL) + r')([0-9A-Za-z]+[-.][0-9A-Za-z.\-]*)\s*(.*)$',
+    re.DOTALL)
+
+
+def _item_header_name(name, lang):
+    """英文书把 CN 规范键头转成 EN 标签头；CN 书原样返回。"""
+    if lang != "en":
+        return name
+    m = _CN_KEY_RE.match(name)
+    if not m:
+        return name
+    lab, num, rest = m.group(1), m.group(2), m.group(3).strip()
+    rest = re.sub(r'^' + re.escape(num) + r'(?=[\s(:．.])', '', rest).strip()
+    return _EN_LABEL[lab] + " " + num + ((" " + rest) if rest else "")
+
+
 def _proof_label(lang):
     return "证明思路" if lang == "cn" else "Proof sketch"
 
@@ -180,6 +207,7 @@ def _emit_blocks(blocks, out, buf, quote=False, lang="cn"):
 
 _FLEX_STYLE = 'display:flex; gap:6px; flex-wrap:wrap; justify-content:center'
 _FIGCTX = {}          # render_chapter 初始化：{index_by_basename, labels, book_dir}
+_CTX = {"prev": "heading"}   # V-F 条目级分割线状态机（render_chapter 每章重置）
 
 
 def _img_html(path):
@@ -232,14 +260,20 @@ def _render_proof(pr, out, quote, lang):
         body[0] = header + body[0]
     else:
         body.insert(0, header)
+        if len(body) > 1 and body[1].startswith("$$"):
+            body.insert(1, "")          # $$ 前必须有空行（V-K #1）
     for ln in body:
         out.append(("> " + ln) if not quote else ln)
 
 
-def _walk_mixed(node, out, quote=False, lang="cn"):
+def _walk_mixed(node, out, quote=False, lang="cn", top=False):
     """sub_sec 混合列表：内容块成段（连续块成组传入，供连续图片 run 合并 flex
     div）；description 无标题纯段落；proof 证明思路块引用；章末集中习题块
-    （consolidated）按习题收录规则省略；其余结构节点递归。"""
+    （consolidated）按习题收录规则省略；其余结构节点递归。
+
+    top=True（章 / 节的直接子层）时按 V-F 边界规则 emit 条目级 ``---``：
+    item↔item、item↔描述散文之间必须有 ``---``；标题之下第一个元素、
+    desc↔desc（连续散文）不加；item 与其内部附属块（proof）之间禁止。"""
     buf = []
     kids = node.get("sub_sec") or []
     i = 0
@@ -251,18 +285,31 @@ def _walk_mixed(node, out, quote=False, lang="cn"):
                 run.append(kids[i])
                 i += 1
             _emit_blocks(run, out, buf, quote, lang)
+            if top:
+                _CTX["prev"] = "desc"
             continue
         _flush(buf, out, quote)
         t = el.get("type")
         if t == "exercise" and el.get("consolidated"):
             i += 1                        # 章末「集中习题块」省略（writing-rules 习题收录）
             continue
+        if top and t != "section":
+            # V-F：item↔item、item↔描述 之间必须有 ---；标题之下第一个元素、
+            # desc↔desc（连续散文）不加
+            if _CTX["prev"] in ("item", "desc") and \
+                    (t != "description" or _CTX["prev"] == "item"):
+                out.append("---")
+                out.append("")
         if t == "description":
             _walk_mixed(el, out, quote, lang)   # 无序标散文：纯段落，无标题
+            if top:
+                _CTX["prev"] = "desc"
         elif t == "proof":
             _render_proof(el, out, quote, lang)
         else:
             _render_node(el, out, lang)
+            if top:
+                _CTX["prev"] = "heading" if t == "section" else "item"
         i += 1
     _flush(buf, out, quote)
 
@@ -270,7 +317,7 @@ def _walk_mixed(node, out, quote=False, lang="cn"):
 def _render_item(node, out, lang):
     """条目 → ``**name**：正文``（首段与粗体标签同行；例块整段 ``> `` 包裹）。"""
     t = node.get("type")
-    name = (node.get("name") or "").strip()
+    name = _item_header_name((node.get("name") or "").strip(), lang)
     is_example = (t == "example")
     body = []
     _walk_mixed(node, body, quote=is_example, lang=lang)
@@ -280,6 +327,8 @@ def _render_item(node, out, lang):
         body[0] = header + body[0]
     else:
         body.insert(0, header)
+        if len(body) > 1 and body[1].startswith("$$"):
+            body.insert(1, "")          # $$ 前必须有空行（V-K #1）
     if is_example:
         for ln in body:
             out.append(("> " + ln) if ln.strip() else "> ")
@@ -292,7 +341,8 @@ def _render_node(node, out, lang="cn"):
     if t == "chapter":
         out.append(_chapter_heading(node, lang))
         out.append("")
-        _walk_mixed(node, out, False, lang)
+        _CTX["prev"] = "heading"
+        _walk_mixed(node, out, False, lang, top=True)
     elif t == "section":
         key = str(node.get("key") or "")
         name = (node.get("name") or "").strip()
@@ -301,11 +351,55 @@ def _render_node(node, out, lang="cn"):
         else:
             out.append("## §" + name)       # name 自带 "N.M 标题" 序标
         out.append("")
-        _walk_mixed(node, out, False, lang)
+        _CTX["prev"] = "heading"
+        _walk_mixed(node, out, False, lang, top=True)
         out.append("---")
         out.append("")
     else:
         _render_item(node, out, lang)
+
+
+def _tidy_separators(lines):
+    """草稿分割线整理（2026-08-29 Koopman 书实测）：
+    1) 堆叠 ``---`` 合并——嵌套小节边界各自 emit ``---``（子节末 + 父节末），
+       产生 "``---`` 空行 ``---``" 堆叠；间距 ≤2 行的 ``---`` 组合并为一个；
+    2) 每个保留的 ``---`` 上下恰有一个空行（V-F：``---`` 上下必须空行）；
+    3) 连续多空行折叠为单个空行。幂等。"""
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        if lines[i].strip() == "---":
+            last = i
+            while True:
+                k = last + 1
+                while k < n and not lines[k].strip():
+                    k += 1
+                if k < n and lines[k].strip() == "---" and k - last <= 2:
+                    last = k
+                else:
+                    break
+            out.append("---")
+            i = last + 1
+        else:
+            out.append(lines[i])
+            i += 1
+    res = []
+    for ln in out:
+        if ln.strip() == "---":
+            while res and not res[-1].strip():
+                res.pop()
+            if res:
+                res.append("")
+            res.append("---")
+            res.append("")
+        elif not ln.strip():
+            if res and res[-1].strip():
+                res.append("")
+        else:
+            res.append(ln)
+    while res and not res[-1].strip():
+        res.pop()
+    return res
 
 
 def render_chapter(ext, ch_key, language):
@@ -328,14 +422,31 @@ def render_chapter(ext, ch_key, language):
         for e in (idx if isinstance(idx, list) else [])}
     _FIGCTX["labels"] = _load_fig_labels(ext)
     _FIGCTX["book_dir"] = os.path.dirname(os.path.abspath(ext.rstrip("/\\")))
-    out = [
-        "<!-- book-summarizer 自动草稿（write-source 步骤 1）：由 %s 渲染，已按" % os.path.basename(p),
-        "     writing-rules 基本格式排版（粗体标签冒号接正文、例块 > 包裹、证明思路块引用、",
-        "     分段）。公式为 OCR 原样，调整时必须逐条重写校正（严禁照抄）；证明须压缩为",
-        "     1. 2. … 编号步骤；Tier 压缩 / 英文标注 / 残余噪声清理在调整时执行。 -->",
-        "",
-    ]
+    _CTX["prev"] = "heading"
+    if language == "en":
+        out = [
+            "<!-- book-summarizer auto-draft (write-source): rendered from %s per" % os.path.basename(p),
+            "     writing-rules base formatting (bold-label items, > example blocks, proof-sketch",
+            "     quotes, paragraphing). Formulas are raw OCR -- MUST be rewritten during the",
+            "     adjustment pass (never copy verbatim); proofs compressed to numbered steps;",
+            "     Tier compression / noise cleanup happen in the adjustment pass. -->",
+            "",
+        ]
+    else:
+        out = [
+            "<!-- book-summarizer 自动草稿（write-source 步骤 1）：由 %s 渲染，已按" % os.path.basename(p),
+            "     writing-rules 基本格式排版（粗体标签冒号接正文、例块 > 包裹、证明思路块引用、",
+            "     分段）。公式为 OCR 原样，调整时必须逐条重写校正（严禁照抄）；证明须压缩为",
+            "     1. 2. … 编号步骤；Tier 压缩 / 英文标注 / 残余噪声清理在调整时执行。 -->",
+            "",
+        ]
     _render_node(node, out, language)
+    out = _tidy_separators(out)
+    if language == "en":
+        # 英文书草稿禁任何 CJK（writing-rules 双语铁律）：契约 CN 标签已由
+        # _item_header_name 转换，此处清除 OCR 数学字形误读残留的单字 CJK 碎片
+        # （入/口/哆 等，均在 $$ 块外，实测不破坏公式）。
+        out = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in out]
     out_p = os.path.join(ext, _ac.OUT_DIR_NAME, "draft_ch%s.md" % ch_key)
     with open(out_p, "w", encoding="utf-8") as f:
         f.write("\n".join(out).rstrip() + "\n")

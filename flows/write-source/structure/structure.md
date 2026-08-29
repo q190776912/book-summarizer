@@ -16,18 +16,22 @@
 
 ## 步骤（有序）
 
-> 五步顺序：**第 1 步生成基线契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核 → 第 5 步 `attach_content` 正文内容化 + 按章拆分**。
-> 五步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
+> 🔴 **2026-08-29 二次重构**：**第 1 步即产出含全部正文内容的完整契约**——`build_structure` 生成骨架后**立即**调 `build_chapter_contract` 挂入 description / proof / text / formula / image 内容块并写回同一文件，`ch{N}.json` 自此就是"整章信息的唯一载体"；**不再有独立的 attach_content 内容化步骤**。后续只剩校验与回填：**第 1 步生成完整契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核**。
+> 四步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
 > 第 2 / 3 步都建议先 `--backfill` 之前的 dry-run 报告 review，确认 `readable` 项无误后再写回。
 
-**第 1 步 · 生成结构契约（必做，先跑，作为查漏基线）**
+**第 1 步 · 生成完整契约（骨架 + 内容一步到位）**
 ```powershell
 python flows/write-source/structure/script/build_structure <extract_dir>
 # 不传 <ch> 即扫全部章；也可指定章：build_structure.py <extract_dir> 1 2 3
 # 编号模式（三级/两级/en/vakil/gm/roman）由 <extract_dir>/verify_config.json
 # 的 ordinal 自动判定，无需 --scheme
 ```
-按章产出分章骨架 `ch{N}.json`（`sub_sec` 内按章顺序嵌套全部章节与条目），这是后续查漏对比的**基线契约**，也是 write-source 的写作契约 + verify 的编号项基准。
+按章产出完整契约 `ch{N}.json`（附录 `appendix{X}.json`）：`sub_sec` 内按章顺序**层级嵌套**全部章节（`1.2.1` 挂进 `1.2` 的 `sub_sec`、`1.2.1.1` 挂进 `1.2.1`，与原书标题层级同构）与条目，并携带**描述信息（章首序言 / 节导语 / 证明后尾随段落 → `description` 节点，与定理同级）+ 每个编号项 / 练习的文字、公式内容块 + 条目内证明（`proof` 子节点）+ 图片（`image` 路径）块**。要点：
+- 🔴 与 MM Repair 同一硬闸：缺 `_extraction_done.json` 拒绝运行。
+- **层级归属保真**：小节按 key 数字段嵌套；条目默认按其编号末段派生所属节，`verify_config.json` 置 `"chapter_scoped_items": true` 时（章内计数器书，如编著集 "Theorem 2.6" = 第2章第6个定理而非 §2.6 的条目）**只按页码就近归节**，禁止号→节绑定（否则条目错挂数字巧合节、B 层乱序）。
+- 内容块自动处理：页眉 / 页脚 / 版权行 / 页码噪声过滤；行内公式（MFD `cls=0`）按 x 位置拼回宿主文本行恢复阅读序；行间公式同行右缘的编号 tag（`(2.17)` 独立文本块）挂到公式块 `tag` 键并从散文流剔除；条目 / 小节正文开头按序匹配契约 `name` 的归一化前缀时剥离印刷标题（宁重复不误删）；证明标记 / QED 识别失败不拆（宁整不碎）。
+- 本步幂等：重跑即整章重建（内容随骨架重挂）。
 
 **第 2 步 · 章节查漏 + 回填（复用 `section_continuity` / D 层）**
 ```powershell
@@ -35,11 +39,11 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...]     
 python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --backfill  # 写回分章契约
 ```
 - 章节完整性 → 复用公共子流程 `verify/section_continuity`（语义名 **section-continuity**，`check_d_layer`）的 raw 重扫能力（直接扫 `page_*.json`，独立于 `extract_items`）。
-- 把 `book_structure.json` 派生出「合成 md」（`## §C.S` 标题）喂给 D 层，D 层比对「书中真值章节集」vs 契约，检出**遗漏章节**：内部洞（`continuity_sections`）+ 尾部缺节（`missing_sections`），回填分章契约的 `section` 节点。
-- 🔴 **只校验章节级（level 2 = C.S）**：`book_structure` 只建模 `chapter → section → 条目`，**无 subsection 容器节点**，故 D 层只取 `levels[2]`（level 1 = 章前缀、level 2 = 节），不查 subsection（否则会把每个 C.S-K 条目误报成「缺失 subsection」）。
+- 把分章契约派生出「合成 md」（`## §C.S` 标题）喂给 D 层，D 层比对「书中真值章节集」vs 契约，检出**遗漏章节**：内部洞（`continuity_sections`）+ 尾部缺节（`missing_sections`），回填分章契约的 `section` 节点。
+- 🔴 **只校验章节级（level 2 = C.S）**：`book_structure` 建模 `chapter → section（递归嵌套子节）→ 条目`，D 层只取 `levels[2]`（level 1 = 章前缀、level 2 = 节），不查 subsection（否则会把每个 C.S-K 条目误报成「缺失 subsection」）。
 
 **第 3 步 · 重要概念查漏 + 回填（复用 `item_numbering_integrity` / B 层）**
-- 条目完整性 → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把 `book_structure` 派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
+- 条目完整性 → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把契约派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
 - 具体**回填**由「源条目集（`scan_raw_items` 跨校验：标题锚定、全方案 / 全类型，抓抽取器漏检）− 契约」的结构化差集驱动（保留 `scan_raw_items` 作为稳健源侧交叉校验），只回填**重要概念**（排除练习类）：
   - `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本**自动回填**；
   - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
@@ -48,28 +52,17 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 确认 `readable` 项无误后，**先备份再写回**：
 ```powershell
 # 写回前建议备份（防止误填可秒回退）：
-#   cp book_structure.json <备份目录>/
+#   cp -r book_structure <备份目录>/
 python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --backfill
 ```
 回填节点与第 1 步**逐字段一致**（`key` 三级=`C.S-N`、两级中文=`标签C.S`、两级英文=`标签 C.S`；
 `type` 共用同一张 `_LABEL_TO_TYPE` 映射；`name = "key 印刷标题"`；`page_start/page_end = 页码`），
-故 write-source / verify 可原样消费。
+故 write-source / verify 可原样消费。🔴 **回填写回时同步重建该章内容**：树被原地修改后先 `clear_raw_recursive()` 丢过期保真视图，再 `build_chapter_contract` 幂等重挂（新回填条目同样获得 text/formula 内容块），写回单章文件——`ch{N}.json` 恒为完整契约。
 
 **第 4 步 · 完整 + 连续 闸门（收尾保证）**
-回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source。
+回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source 的草稿渲染。
 
-**第 5 步 · 正文内容化 + 按章拆分（`attach_content`，闸门通过后执行）**
-```powershell
-python flows/write-source/structure/script/attach_content.py <extract_dir> [ch ...] [--force]
-# 不传 <ch> 即全部章；--force 跳过结构指纹比对强制重挂
-```
-把**描述信息（章首序言 / 节导语 / 证明后尾随段落 → `description` 节点，与定理同级）+ 每个编号项 / 练习的文字、公式内容块 + 条目内证明（`proof` 子节点）**按文档顺序挂进 `sub_sec`，并**写回分章契约文件** `<extract_dir>/book_structure/ch{N}.json`（附录 `appendix{X}.json`）——骨架与内容同文件，分章契约是结构契约唯一真源。要点：
-- 🔴 与 `build_structure` 同一硬闸：缺 `_extraction_done.json`（MM Repair 未真完成）拒绝运行。
-- **无单独的全书文件**：verify 编号项基准 / completeness 回填 / restructure 等全部消费方经 `BookStructure.load` **聚合读取分章文件**；`build_structure` 重跑会覆盖已挂内容，**必须随后重跑本子流程第 5 步 attach_content**。
-- 内容块自动处理：页眉 / 页脚 / 版权行 / 页码噪声过滤；行内公式（MFD `cls=0`）按 x 位置拼回宿主文本行恢复阅读序；条目 / 小节正文开头按序匹配契约 `name` 的归一化前缀时剥离印刷标题（宁重复不误删）；证明标记 / QED 识别失败不拆（宁整不碎）。
-- **新鲜度**：结构指纹（全部结构节点 type/key/page 序列，忽略内容块与 description / proof 派生节点）比对单文件与分章文件；`check_structure_completeness --backfill` 或 `restructure_by_ocr --apply` 之后**必须重跑本步**（或直接跑 write-source 的 `render_draft`，其对过期章自动续挂）。
-
-> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**本流程步骤 4（渲染基本总结草稿）之前**完成，第 5 步（内容化）紧随闸门执行。回填后的编号项才会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。
+> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**write-source 渲染基本总结草稿**之前完成。回填后的编号项会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。B 层报「缺号」但核对源书确认是**稀疏编号**（作者跳号，如 ch5 无 Theorem 5.1、ch20 无 Theorem 20.4/20.5）时，按 verify 规则登记 `ignore_ch{N}.json` 豁免，**不得**为凑连续而编造条目。
 
 ## 源侧完整性校验与回填（写书前兜底）
 
@@ -127,7 +120,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **proof 拆分**：证明标记（`PROOF` / `Proof` / `Solution` / `证明` / `证：` / `解：`，块首匹配；中文与陈述同行被 OCR 合并时按句末标点 + 「证」边界内联拆分）开启，至 QED（`口` / `□` / `∎` / `证毕` / `Q.E.D.` / 纯 `\square` 型公式）或块流末尾收束；识别失败**不拆**（宁整不碎）；练习（exercise）的「证明：…」属题干任务不拆。
 - **图片**：取自 `figure_index.json`（page/bbox 并入阅读序，路径**相对书根**）；无图管线则零图片块；渲染按原嵌图格式（flex div + `<img>`），**无单独嵌图步骤**。
 - **已知近似（调整步骤兜底）**：无证明条目之后的游离段落仍留在该条目正文内（无边界信号不做切分）；证明无 QED 收尾时收束到该条目块流末尾（可能并入条目后段讨论，调整时拆出）；OCR 文本行与其行内公式的校正 latex 天然并存（内容重复，调整时保留公式、清理乱码）；图注文字 / 证明结尾框等残余噪声由调整清理。
-- **完整性闸门**：第 5 步之后由 `verify/script/check_content_completeness.py` 校验（确定性复算比对 + 图片独立真值 + 证明覆盖审计），FAIL 严禁渲染草稿（write-source 步骤 4）。
+- **完整性闸门**：由 `verify/script/check_content_completeness.py` 校验（确定性复算比对 + 图片独立真值 + 证明覆盖审计），在 write-source 步骤 4（渲染草稿）前执行，FAIL 严禁渲染。
 - 消费方：`flows/write-source/script/render_draft.py`（渲染基本总结草稿）；`_is_block` 判定与派生节点指纹排除见 `attach_content.py`。
 
 ## 构建逻辑（与 `verify/data_provider` 同一套抽取分派）
@@ -135,7 +128,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 2. **条目节点权威来自抽取器**（`extract_items` / `extract_items_en` / `extract_items_vakil` / `extract_items_gm` 等，按 `ordinal` 选路，与 data_provider 一致），`label → type`：
    `定义→definition`、`定理→theorem`、`引理→lemma`、`推论→corollary`、`命题→proposition`、`例→example`、`评注/注→remark`、`uncat→uncat`。**抽取器里的 `练习/习题` 类键被排除**（练习只来自下一步的 `EXER`）。
 3. **练习来自 `scan_skeleton` 的 `EXER` 扫描**（统一来源），与条目分开，避免重复计数。
-4. **挂接**：每个条目/练习优先按「派生章节号命中」挂到对应 section；命中失败则按**页码归最近 SEC**。section 的 `page_start = 子项最小页`、`page_end = 末代子孙页`（叶子 `== start`）。
+4. **挂接**：每个条目/练习优先按「派生章节号命中」挂到对应 section；命中失败则按**页码归最近 SEC**。`verify_config.json` 置 `"chapter_scoped_items": true`（章内计数器书）时一律页码归节。section 的 `page_start = 子项最小页`、`page_end = 末代子孙页`（叶子 `== start`）。产出前按 key 数字段**层级嵌套**（`1.2.1` → `1.2.sub_sec`）并重排为文档序。
 
 ## 本阶段规则（🔴 内联）
 - **JSON 是契约，不是参考**：
@@ -147,7 +140,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **写完后自查**：非 exercise 的 `section` 数应等于总结 `## §` 标题数（`section_types` 含 `0` 时按位置/数量对齐，允许 md 小节多于契约未记的小节）；非 exercise 节点 `key` 集合应与总结编号一致。
 
 ## 出口条件
-- 出口：全部章的分章契约 `ch{N}.json` / `appendix{X}.json` 已生成（章节 → 条目/练习递归嵌套），且第 2–4 步查漏回填闸门通过；第 5 步把正文内容（description / proof / 内容块）挂入后写回同一批文件。分章契约作为 write-source 的写作契约、verify 的编号项基准与草稿渲染（`render_draft`）输入采用。
+- 出口：全部章的**完整契约** `ch{N}.json` / `appendix{X}.json` 已生成（第 1 步：骨架 + description / proof / 内容块一步到位；章节按层级嵌套），且第 2–4 步查漏回填闸门通过（回填后内容同步重建）。分章契约作为 write-source 的写作契约、verify 的编号项基准与草稿渲染（`render_draft`）输入采用。
 
 ## 已知局限（实现层，非契约缺陷）
 - **en 两级（ordinal=4）章节检测为近似**：skeleton 的 `SEC` 行对部分 en 书乱匹配，章节号由条目键派生，可能多出空章节（条目仍正确捕获、按序归位）。写章时以「派生章节 + 源书实际节标题」为准。
@@ -155,8 +148,8 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **配置错配书**（如 `language=cn` 但正文为英文的 Evans）：cn 解析器抓不到章节标题，section `name` 缺标题（仅派生章节号），结构/条目仍正确。
 
 ## 相关代码（路径相对 skill 根目录）
-- `flows/write-source/structure/script/build_structure`：统一结构骨架生成（本子流程）。
-- `flows/write-source/structure/script/attach_content`：第 5 步正文内容化（写回分章契约 `ch{N}.json`；含噪声过滤 / 行内公式拼接 / 标题剥离，幂等可重跑）。
+- `flows/write-source/structure/script/build_structure`：统一结构 + 内容契约生成（本子流程；第 1 步一步产出完整契约）。
+- `flows/write-source/structure/script/attach_content`：`build_chapter_contract` 内容挂载实现（由 build_structure 与 completeness 回填共用；`attach()` CLI 保留作全章重挂的手动维护入口，不再是流程步骤）。
 - `flows/write-source/structure/script/scan_skeleton`：`SEC` / `EXER` 扫描（被 build_structure 调用）。
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` 等）：编号项抽取（被 build_structure 按 `ordinal` 调用）。
 

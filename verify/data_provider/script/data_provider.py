@@ -22,7 +22,7 @@ from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 # ---------------------------------------------------------------------------
 # data_provider.py — EXTRACT provider (order 0).
 #
-# 纯数据供给层（provider 模式）：从「书的真相集」(book_structure.json) 与「md 写入集」
+# 纯数据供给层（provider 模式）：从「书的真相集」(分章契约 book_structure/ch{N}.json) 与「md 写入集」
 # (keys_in_md) 取值，挂到 ctx 上供下游所有层使用。它**不做任何缺失项比对/查漏**——
 # 那些职责已统一归 B 层 (item_numbering_integrity)：B 是查漏的唯一权威，本层只供水。
 #
@@ -41,7 +41,7 @@ from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 
 
 def _dispatch_items(ctx):
-    """编号项来源：统一读 book_structure.json（extract/structure 产物，SSOT，书对象）。
+    """编号项来源：统一读分章契约（structure 产物，SSOT，经 BookStructure.load 聚合为书对象）。
     旧书须先重跑 build_structure 生成 JSON，不再回退抽取器（无兼容性代码）。"""
     items = read_structure_items(ctx.ext_dir, ctx.ch)
     if items is None:
@@ -84,7 +84,7 @@ class ExtractLayer(VerifyLayer):
     auto_fixable = False
 
     def run(self, ctx):
-        # 编号项来源：统一结构 JSON（book_structure.json，SSOT 书对象），无旧书回退。
+        # 编号项来源：统一分章契约（SSOT，经 BookStructure.load 聚合），无旧文件回退。
         items = _dispatch_items(ctx)
 
         label_warns = check_label_consistency(items)

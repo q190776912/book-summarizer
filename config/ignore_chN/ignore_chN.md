@@ -50,7 +50,7 @@
   ```bash
   python verify/script/audit_ignore.py <_extract> [--chapter N] [--json]
   ```
-    逐条核对 ignore 条目与契约（book_structure.json）及源（page_*.json）的关系，给出判定：
+    逐条核对 ignore 条目与契约（分章契约 book_structure/ch{N}.json）及源（page_*.json）的关系，给出判定：
     - **SUSPECT**（退出码 1）：ignore 了真实存在的条目 / 掩盖连续序列洞（前后皆契约正邻居且无证据）/ 源侧有『带标签但无编号』条头（OCR 丢号迹象）→ 优先用 `manual_overrides_ch{N}.json` 补回真实缺项；仅当确认确为书本身稀疏编号才保留 ignore 并补举证。
     - **SAFE**：契约无前后邻居、源侧无对应内容 → 疑似真·OCR 噪点 / 稀疏编号（agent 复核并举证）。
     - 🟢 **ACCEPTED**（非阻断）：序列洞型 ignore（`prev`/`nxt` 均在契约中），但**理由含显式证据标记**（`VERIFIED-SPARSE` / `源书真实跳号` / `已核实跳号` / `sparse numbering`）→ 判为「书源真实无此号，总结如实省略，非隐藏缺项」。该 verdict 不计入 SUSPECT、不抬高退出码（`audit_ignore.py` 退出码仍为 0，校验可 PASS），仅作非阻断记录。**无证据标记的序列洞 ignore 一律仍判 SUSPECT**——证据标记是本例外的唯一开关，防误用护栏不降级。

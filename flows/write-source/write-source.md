@@ -58,6 +58,7 @@
 - **🔴 规则5 — 章首序言保全（切片不丢章级信息）**：按步骤 5 逐节切片时，**章标题、章导语、章内全局记号约定、章级 TOC / 摘要列表等「`## §` 之前的所有章级内容」必须先于任何小节写出，且作为公共前缀注入每一次节切片**。禁止把章首信息并入「第一节」或丢弃——否则会丢失跨节共享的记号定义与章级动机。
 - **🔴 规则6 — 校验是翻译前不可省略的硬闸（死规则）**：本阶段步骤 6（`verify_chapter.py --all` 复验 `exit 0`）**必须**完成，源语言版才算就绪。图片不再单独嵌图——初始总结由脚本输出、内容完整性闸门保证其含全部图片（image 块随草稿继承到最终 md）；**严禁「写完源语言但未校验就跳去 derive 翻译」**——该行为违反 flow_gate 顺序闸（write_source 末步 `verify_source` 未 `done`，`derive` 硬拒），且会造成翻译版两版分叉、需全盘返工。源语言「写完 + 校验 PASS」齐备，才是进入 `derive-translate` 的唯一合法起点（详见 [`../derive-translate/derive-translate.md`](../derive-translate/derive-translate.md) 翻译硬闸）。
 - **🔴 规则7 — structure 完整性闸门是草稿的硬闸**：步骤 3 的查漏回填闸门（章节缺项 + 定理 / 定义等条目缺项，D 层 + B 层）**必须重跑至 `gate.passed == true`** 才允许进入步骤 4 渲染草稿——先渲染再回填会让已写的草稿/总结缺这些条目，返工成本远高于闸门前补齐。
+- **🔴 规则8 — write_chapters 落账证据 = 「基于草稿」的机械核对（死规则）**：`write_source.write_chapters` 的证据复核（`flow_runner verify / mark`）**不只看章数**——对每个有草稿的章机械核对：① **新鲜度**：最终 md 的 mtime 必须 ≥ `draft_ch{N}.md`（证明写在草稿之后、以草稿为底稿）；② **骨架同构**：结构契约全部 `section` 名必须在最终 md 中在位；③ **条目在位**：契约全部编号项 `name` 必须在最终 md 中在位。任何一项不过 → mark 被硬拒，必须回归 `draft_ch{N}.md` 补齐重写。**严禁跳过草稿直接凭 `page_*.json` / 印象写作**——脱离草稿导致的漏项、自创层级与格式漂移在落账前即被拦截，而不是堆积到步骤 6 verify 后全盘返工（证据实现见 `flows/_flow_contract.py` 的 `write_chapters_ok`）。
 - **核心原则（保真底线）**：OCR 噪声可修、表述可精简但**不得省略编号项 / 描述性内容中的公式概念**；**不编造**内容、**不编造结构**（不得新建原书没有的标题层级、不得重排条目顺序）；**严禁照抄 OCR 文本流**（页眉 / 页脚 / 版权行属噪声须剔除）；非核心内容须"摘要"而非整段照抄（Tier 1/2/3 分级见 `docs/writing-rules.md`）。
 - **双源铁律（结构 ≠ 内容）**：草稿 = 结构契约（骨架）+ `page_*.json`（内容）的**预合并视图**，只是调整底稿而**非免检成品**——正文**必须忠于草稿所载原文并回归 `page_*.json` 核对存疑处**，禁止脱离契约自创结构或重排顺序（草稿骨架即契约骨架）；草稿中的公式是 OCR 原样，**严禁照抄**（步骤 5a 重写校正）。
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
@@ -74,7 +75,7 @@
 - `config/verify_config/make_config.py`：步骤 1 书级配置生成（`verify_config.json`）。
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 调整时存疑处按节点 `page_start..page_end` 回查 OCR 原文（步骤 5b）。
 - `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer**（原「H 层 + G 层」，已并入 F 层）在步骤 6 `verify --fix` 自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
-- `../../verify/script/audit_counts.py`：逐节条数核对（原由 write-source 调用；该步骤取消后须在 cli 入口或 write-source 步骤 6 前另行挂接，否则源版缺失逐节条数核对）。
+- `../../verify/script/audit_counts.py`：逐节条数核对（OCR 侧启发式工具）。原「逐节条数核对须另行挂接」的缺口已由规则8 的 write_chapters 落账证据闭合——**契约条目在位核对**以结构契约为真值（优于 OCR 启发式），在 mark 前强制拦截漏项；本脚本保留为 OCR 侧独立交叉核对，供疑议时人工复核。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 6 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 

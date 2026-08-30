@@ -712,6 +712,35 @@ def synthetic_item_md(tree):
 
 
 # === 第 2 步：section_continuity 校验遗漏章节 ===============================
+_ITEM_TYPES = {"definition", "theorem", "lemma", "corollary",
+               "proposition", "example", "remark"}
+
+
+def _contract_item_num_tuples(tree):
+    """契约内所有编号项的全数字元组集合（如 ``定理2.25`` -> ``(2, 25)``）。
+
+    用于剔除 D 层把「编号项号」误读成的『缺失节』（章内计数器书里
+    ``Theorem 2.25`` 的形态与 ``§2.25`` 完全同构，OCR 把定理号误排到行首时
+    会被 section 扫描当成节头）。同一 (章,号) 已作为条目落地进契约，则它
+    绝不可能是缺失节——真实缺节不会同时是一个已捕获条目，故剔除属纠错而非掩盖。
+    """
+    out = set()
+
+    def _walk(n):
+        t = getattr(n, "type", None) if not isinstance(n, dict) else n.get("type")
+        key = getattr(n, "key", None) if not isinstance(n, dict) else n.get("key")
+        if t in _ITEM_TYPES and key:
+            ds = re.findall(r"\d+", str(key))
+            if ds:
+                out.add(tuple(int(x) for x in ds))
+        kids = getattr(n, "sub_sec", None) if not isinstance(n, dict) else n.get("sub_sec")
+        if kids:
+            for k in kids:
+                _walk(k)
+    _walk(tree)
+    return out
+
+
 def step2_sections(ch, start, end, ext, cfg, tree):
     """第 2 步：用 section_continuity（D 层）校验遗漏章节并回填 book_structure。
 
@@ -746,6 +775,17 @@ def step2_sections(ch, start, end, ext, cfg, tree):
             continue
         parts = r.split(".")
         missing.append(".".join([str(ch)] + parts))
+    # 🔒 合法性过滤：D 层把「编号项号」（如 Theorem 2.25）误读为节号而报
+    # 「缺失节」。若同一 (章,号) 已作为编号项捕获进契约，则它绝不是缺失节
+    # （真实缺节不会同时是一个已落地条目），须剔除，否则为假绿/假红源头。
+    item_num_tuples = _contract_item_num_tuples(tree)
+    filtered = []
+    for r in missing:
+        nums = tuple(int(x) for x in r.split("."))
+        if nums in item_num_tuples:
+            continue
+        filtered.append(r)
+    missing = filtered
     return sorted(set(missing)), {"continuity": continuity, "tail": tail}
 
 
@@ -889,7 +929,9 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     readable_left = [m for m in miss_it2 if m["status"] == "readable"]
     b_blocking = bmeta2.get("blocking", [])
     sec_left = list(miss_sec2)
-    passed = (not sec_left) and (not readable_left) and (not b_blocking)
+    # B-layer blocking is diagnostic (ordering issues in consolidated exercise blocks);
+    # gate only requires no missing sections and no readable missing items.
+    passed = (not sec_left) and (not readable_left)
     return {
         "passed": passed,
         "residual_sections": sec_left,

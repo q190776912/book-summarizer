@@ -269,7 +269,10 @@ def _collect_blocks(ext, start, end):
         for f in pg.formulas:
             if not isinstance(f, dict):
                 continue
-            latex = (f.get("latex") or "").strip()
+            _latex_raw = f.get("latex") or ""
+            if isinstance(_latex_raw, dict):
+                _latex_raw = _latex_raw.get("latex") or _latex_raw.get("latex_ocr") or ""
+            latex = _latex_raw.strip() if isinstance(_latex_raw, str) else ""
             if not latex:
                 continue
             bbox = f.get("bbox") or [0, 0, 0, 0]

@@ -77,7 +77,9 @@ RUN_COMMANDS = {
     "write_source.write_chapters": ("agent",
         "步骤1 render_draft.py 由含内容完整契约 ch{N}.json 渲染基本总结草稿 draft_ch{N}.md；"
         "步骤2 基于草稿逐章调整（公式逐条重写校正、Tier 压缩、writing-rules 格式，"
-        "存疑回查 page_*.json），写出源语言 ChapterN_*.md / 第N章_*.md。"),
+        "存疑回查 page_*.json），写出源语言 ChapterN_*.md / 第N章_*.md。"
+        "🔴 落账证据机械核对（脱离草稿 = 硬拒）：每个最终 md 晚于 draft_ch{N}.md，"
+        "且契约骨架节名 + 全部编号项 name 在最终 md 中在位。"),
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
     "write_source.verify_source": ("cmd",
@@ -347,23 +349,232 @@ class physical_evidence:
                 n += 1
         return n
 
+    # ---- write_chapters 证据辅助：「基于草稿 + 零漏项」的机械核对 ----
+    # 容器 / 派生 / 习题类型（与 data/book_structure/book_structure.py 对齐）
+    _GATE_CONTAINER_TYPES = ("chapter", "section")
+    _GATE_DERIVED_TYPES = ("description", "proof")
+
+    @staticmethod
+    def _sec_num(fn):
+        """节文件名中的节号（第N章_M_*.md / ChapterN_M_*.md）；合并文件返回 None。"""
+        base = os.path.basename(fn)
+        m = None
+        if base.startswith("第") and "章" in base:
+            m = re.match(r"^第\d+章_?(\d+(?:\.\d+)*)", base)
+        else:
+            m = re.match(r"^Chapter\d+_([\d.]+)", base)
+        if not m:
+            return None
+        sec = m.group(1)
+        if not sec or sec.endswith("."):
+            return None
+        return sec
+
+    @staticmethod
+    def _md_group(book_dir, key):
+        """该章最终 md 文件组：合并文件优先，否则按节号排序的节文件组。
+
+        数字章按 第N章_*.md / ChapterN_*.md；附录章（key 为字母）按
+        附录X_*.md / AppendixX_*.md（与 verify_chapter.chapter_md_groups 同规）。
+        """
+        if key[:1].isdigit():
+            pats = [f"第{key}章_*.md", f"Chapter{key}_*.md"]
+        else:
+            pats = [f"附录{key}_*.md", f"Appendix{key}_*.md"]
+        files = []
+        for p in pats:
+            files.extend(glob.glob(os.path.join(book_dir, p)))
+        uniq = sorted(set(files))
+        merged = [f for f in uniq if physical_evidence._sec_num(f) is None]
+        if merged:
+            return merged
+        secs = [(f, physical_evidence._sec_num(f)) for f in uniq]
+        secs = [(f, n) for f, n in secs if n]
+        secs.sort(key=lambda x: tuple(int(p) for p in x[1].split(".")))
+        return [f for f, _ in secs]
+
+    @staticmethod
+    def _iter_nodes(d):
+        """深度优先 yield 契约节点 dict（跳过无 key/type 的内容块裸字典）。"""
+        for el in (d.get("sub_sec") or []):
+            if not isinstance(el, dict) or ("key" not in el and "type" not in el):
+                continue  # 内容块（text/formula/image）
+            yield el
+            yield from physical_evidence._iter_nodes(el)
+
+    @staticmethod
+    def _norm_text(s):
+        """归一化：仅保留字母数字与 CJK，用于容忍标点/空白/排版差异的在位判断。"""
+        return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(s or "")).lower()
+
+    # 条目「标签+序号」前缀提取（name 常被 OCR 黏连污染：定义1.1 1.1 (Koopman
+    # operator ... — 真正的呈现键只有开头的 标签+序号，如 `定义1.1` / `Theorem 2.1`）
+    _LABEL_PREFIX_RE = re.compile(
+        r"^\s*([A-Za-z\u4e00-\u9fff]+)[.．·。]?\s*(\d+(?:[.．·。]\d+)*)")
+
+    # 中英标签互译（英文书源版 md 用 EN 标签而契约 key 可能是中文，反之亦然）
+    _LABEL_ZH2EN = {
+        "定义": ("definition",), "定理": ("theorem",), "引理": ("lemma",),
+        "推论": ("corollary",), "命题": ("proposition",), "公理": ("axiom",),
+        "断言": ("assertion", "claim"), "例": ("example",),
+        "反例": ("counterexample",), "评注": ("remark", "note", "comment"),
+        "注": ("remark", "note"), "注记": ("remark", "note"),
+        "性质": ("property",), "习题": ("exercise", "problem"),
+        "问题": ("problem", "exercise"), "猜想": ("conjecture",),
+        "记号": ("notation",), "约定": ("convention",),
+    }
+    _LABEL_EN2ZH = {}
+    for _zh, _ens in _LABEL_ZH2EN.items():
+        for _en in _ens:
+            _LABEL_EN2ZH.setdefault(_en, _zh)
+
+    @staticmethod
+    def _label_variants(ncand):
+        """把归一化候选串（如 `定义11` / `definition11`）生成中英标签互译变体。"""
+        m = re.match(r"^([\u4e00-\u9fff]+|[a-z]+)(\d.*)$", ncand)
+        if not m:
+            return [ncand]
+        lbl, rest = m.group(1), m.group(2)
+        out = {ncand}
+        if re.match(r"^[\u4e00-\u9fff]+$", lbl):
+            out.update(en + rest for en in physical_evidence._LABEL_ZH2EN.get(lbl, ()))
+        else:
+            zh = physical_evidence._LABEL_EN2ZH.get(lbl)
+            if zh:
+                out.add(zh + rest)
+        return list(out)
+
+    @staticmethod
+    def _missing_contract_names(contract, ntext):
+        """契约中未在最终 md 在位的 section 名 / 编号项名列表。
+
+        匹配键三级回退（容忍 OCR 污染与排版差异，全部经归一化包含判断）：
+          ① 节点 `key`（如 `定义1.1` / `Theorem 2.1` —— 契约的干净编号键）；
+          ② `name` 开头的「标签+序号」前缀（name 常黏连 OCR 题述原文）；
+          ③ `name` 全文（及去尾部括注形态）。
+        编号键候选额外做**中英标签互译**（英文书源版 md 用 EN 标签、契约 key
+        可能是中文，反之亦然）。section 节点用 `name`（草稿 `## §` 标题与之同源）；
+        容忍尾部括注被省略。
+        """
+        miss = []
+        for el in physical_evidence._iter_nodes(contract):
+            t = str(el.get("type", ""))
+            # chapter 容器：章标题呈现形态差异大（# 第N章 / # Chapter N: …），不核对；
+            # 派生节点（description/proof）与习题（consolidated 省略）非编号项。
+            if t in ("chapter",) or t in physical_evidence._GATE_DERIVED_TYPES \
+                    or t == "exercise":
+                continue
+            name = str(el.get("name") or "").strip()
+            key = str(el.get("key") or "").strip()
+            cands = []
+            nk = physical_evidence._norm_text(key)
+            if nk:
+                cands.extend(physical_evidence._label_variants(nk))
+            if name:
+                m = physical_evidence._LABEL_PREFIX_RE.match(name)
+                if m:
+                    npfx = physical_evidence._norm_text(m.group(0))
+                    cands.extend(physical_evidence._label_variants(npfx))
+                nn = physical_evidence._norm_text(name)
+                if nn:
+                    cands.append(nn)
+                core = re.sub(r"[（(][^（()）]*[)）]\s*$", "", name).strip()
+                nc = physical_evidence._norm_text(core)
+                if nc and nc != nn:
+                    cands.append(nc)
+            cands = [c for c in cands if c]
+            if not cands:
+                continue  # 无可用匹配键（纯符号名等），跳过避免假阳
+            if not any(c in ntext for c in cands):
+                miss.append(key or name)
+        return miss
+
     @staticmethod
     def write_chapters_ok(book_dir, extract_dir):
+        """写章节证据 = ① 章数齐备；② 每章「基于草稿」机械核对通过。
+
+        🔴 2026-08-30 强化（死命令：不基于草稿 = 落账被硬拒）：此前只核
+        「已写章数」，agent 脱离 draft_ch{N}.md 自由发挥（漏条目 / 自创层级 /
+        格式漂移）也能落账，返工全部堆积到 verify_source。现在凡有草稿的章，
+        mark 前机械核对：
+          - **新鲜度**：每个最终 md 的 mtime ≥ draft_ch{N}.md（写在草稿渲染
+            之后，杜绝跳过草稿直接凭 page_*.json / 印象写作）；
+          - **骨架同构**：契约全部 section 名在最终 md 中在位（禁重排 /
+            自创层级 / 漏节）；
+          - **条目在位**：契约全部编号项 name 在最终 md 中在位（漏项当场
+            拦截，不等到步骤 6）。
+        草稿 / 契约缺失（legacy 旧书）的章退化为章数核对并如实注明。
+        """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         cmap = os.path.join(ex, "chapter_map.json")
-        total = 0
+        keys = []
         if os.path.exists(cmap):
             try:
                 d = json.load(open(cmap, encoding="utf-8"))
-                total = len(d.get("chapters") or d.get("ch") or [])
+                chs = d.get("chapters") or d.get("ch") or []
+                for c in chs:
+                    n = (c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
+                         if isinstance(c, dict) else c)
+                    if n is not None:
+                        keys.append(str(n))
             except Exception:
                 pass
-        written = physical_evidence._count_md(book_dir, "Chapter")
-        if total and written < total:
-            return False, f"已写源版 {written}/{total} 章"
-        if written == 0:
-            return False, "尚未写任何源语言章节"
-        return True, f"已写 {written} 个源语言章节"
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        missing_md, stale, missing_names, degraded = [], [], [], []
+        for k in keys:
+            md_files = physical_evidence._md_group(book_dir, k)
+            if not md_files:
+                missing_md.append(k)
+                continue
+            draft = os.path.join(ex, "book_structure", f"draft_ch{k}.md")
+            contract_path = os.path.join(
+                ex, "book_structure",
+                ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k)
+            if not os.path.exists(draft) or not os.path.exists(contract_path):
+                degraded.append(k)
+                continue
+            # ① 新鲜度：写在草稿之后（2 秒容差吸收文件系统时间粒度）
+            stale_d = [f for f in md_files
+                       if os.path.getmtime(f) < os.path.getmtime(draft) - 2]
+            if stale_d:
+                stale.append((k, os.path.basename(stale_d[0])))
+                continue
+            # ②③ 骨架同构 + 条目在位
+            try:
+                contract = json.load(open(contract_path, encoding="utf-8"))
+            except Exception:
+                degraded.append(k)
+                continue
+            text = ""
+            for f in md_files:
+                try:
+                    with open(f, encoding="utf-8-sig") as fh:
+                        text += fh.read()
+                except Exception:
+                    pass
+            miss = physical_evidence._missing_contract_names(
+                contract, physical_evidence._norm_text(text))
+            if miss:
+                missing_names.append((k, miss))
+        if missing_md:
+            return False, f"缺最终 md {len(missing_md)} 章: {missing_md[:4]}"
+        if stale:
+            kk, fn = stale[0]
+            return False, (f"{len(stale)} 章 md 早于草稿（脱离 draft_ch{kk}.md 写作，"
+                           f"或草稿重渲后未重写）: ch{kk} {fn} 等；"
+                           f"必须以草稿为底稿重写后再 mark")
+        if missing_names:
+            k, miss = missing_names[0]
+            return False, (f"{len(missing_names)} 章相对结构契约漏骨架节/编号项: "
+                           f"ch{k} 缺 {len(miss)} 项（如 {miss[:4]}）；"
+                           f"须回归 draft_ch{k}.md / 契约补全后再 mark"
+                           f"（若条目为 OCR 噪声误收，走 manage_ignore 机制，勿编造）")
+        if degraded:
+            return True, (f"已写 {len(keys)} 章（{len(degraded)} 章缺草稿/契约，"
+                          f"退化为章数核对: {degraded[:4]}；建议重跑 draft 步后重验）")
+        return True, (f"已写 {len(keys)} 章，均基于草稿（mtime 晚于 draft_ch{{N}}.md）"
+                      f"且契约骨架节 + 编号项全部在位")
 
     @staticmethod
     def embed_figures_ok(book_dir, extract_dir):

@@ -207,6 +207,16 @@ def _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, 
     continuity_all = []
     missing_all = []
     for L in range(1, max_level + 1):
+        # 🔴 Level-1 (chapter prefix) immunity: for multi-level books the first
+        # depth is the chapter component itself; every item projects the chapter
+        # prefix at L1, and the .md *file* already embodies that chapter (one
+        # file per chapter).  A chapter with no `## §` headings (e.g. Leinster
+        # ch0 Introduction, items 0.1–0.9) must not fabricate a level-1 "tail"
+        # from the bare chapter prefix.  Chapter-level presence is owned by the
+        # file layout, so skip L1 whenever a deeper level exists.
+        if L == 1 and max_level >= 2:
+            levels[L] = {'continuity': [], 'missing': []}
+            continue
         raw_present = raw_sec_header[L] & raw_labeled_item[L]
         md_max = max(md_sections[L]) if md_sections[L] else None
         missing = sorted(s for s in raw_present if s not in md_sections[L])

@@ -50,13 +50,22 @@ EN3_LABEL_CANON = {
     'corollary': 'Corollary', 'example': 'Example', 'remark': 'Remark',
     'exercise': 'Exercise', 'assertion': 'Assertion', 'conjecture': 'Conjecture',
     'fact': 'Fact',
+    # OCR 变体与 Leinster 体例扩展（2026-08-30）：Deinition=Definition 漏 i；
+    # Construction/Warning/Notation/Note 归并为评注（本 skill 复合键空间只认
+    # 8 类规范标签，非规范标签会导致契约/源侧复合键永不相交、A 层 md 键不匹配）。
+    'deinition': 'Definition',
+    'construction': 'Remark', 'warning': 'Remark', 'notation': 'Remark',
+    'note': 'Remark',
 }
 EN3_LABEL_ALT = '|'.join([
-    '(?:Definition|Defnition|Defintion)', 'Theorem', 'Lemma',
+    '(?:Definition|Defnition|Defintion|Deinition)', 'Theorem', 'Lemma',
     # OCR 常把 i 误读为 l（PROPOslTloN），加模糊分支容忍
     '(?:Proposition|Propos[l1]t[l1]on)',
     'Corollary', 'Example', 'Remark',
     'Exercise', 'Assertion', 'Conjecture', 'Fact',
+    # Leinster 体例：Construction/Warning/Notation 是真实印刷条头（canon 到
+    # Remark）；Notation 必须排在 Note 之前（正则交替按序匹配，长词优先）。
+    'Construction', 'Warning', 'Notation', 'Note',
 ])
 EN3_LAB_RE = re.compile(
     # 🔴 尾界用 `(?![A-Za-z])` 而非 `\b`：OCR 常把标签与编号粘连成
@@ -67,6 +76,40 @@ EN3_LAB_RE = re.compile(
     r'(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)',
     re.IGNORECASE,
 )
+
+
+def _EN3_REST_OK(txt, m):
+    """统一条头判别（2026-08-30）：编号后允许①空②句点③括号标题
+    （可连续多组，如 "Examples 1.1.8 (Categories...)(a) ..."）④大写开头正文
+    （Leinster 体例无标点直接接正文）。拒绝：纯标点尾（断行引用尾
+    "Example 1.2.8."）、括号包裹引用（"Definition 5.1.1)"）、括号后小写延续
+    （"Remark 5.1.2(a) that they..." 式行首引用）。"""
+    rest = txt[m.end():].lstrip()
+    if rest and not re.search(r"[A-Za-z]", rest):
+        return False
+    while True:
+        m2 = re.match(r"\(([^)]*)\)\s*", rest)
+        if not m2:
+            break
+        rest = rest[m2.end():]
+    if rest and not (rest[0] == "." or rest[0] == "\u3002" or rest[0].isupper()):
+        return False
+    return True
+
+
+# 章级两级条头（chapter==0 的 Introduction，如 Leinster "Example 0.1"）：三级书
+# 的第 0 章条目只有两个数字分量。负向前瞻排除三级号（"1.1.3" 不被当作 "1.1"）。
+EN3_TWO_RE = re.compile(
+    r'\b(' + EN3_LABEL_ALT + r')s?(?![A-Za-z])\s*(?:\([^)]*\))?\s*'
+    r'([0Oo])\s*' + SEP_TIGHT + r'\s*(\d+)(?!\s*' + SEP_TIGHT + r'\s*\d)',
+    re.IGNORECASE)
+
+# 附录字母条头（如 Leinster 附录 "Lemma A.1"）：首分量为字母。仅在块首锚定下
+# 发射（与主正则同锚定纪律），字母位过滤只认 A（附录 A）。
+EN3_APP_RE = re.compile(
+    r'\b(' + EN3_LABEL_ALT + r')s?(?![A-Za-z])\s*'
+    r'([A-Za-z])\s*' + SEP_TIGHT + r'\s*(\d+)(?![.\d])',
+    re.IGNORECASE)
 
 
 def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
@@ -86,9 +129,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         # OCR 断行会把 'by Proposition' 留在上块，使行首引用伪装成条目头
         # （实测：'PROPOSITION 2.1.2, Zorn's lemma...' / 'LEMMA 6.1.1 are
         # satisfied...' / 'PROPOSITION 9.2.1(6), H(...'）——按后随标点拒绝。
-        rest = txt[m.end():].lstrip()
-        if rest and not (rest[0] == "." or rest[0] == "\u3002" or
-                         re.match(r"\(([^)]*[A-Za-z][^)]*)\)\s*[.\s]", rest)):
+        if not _EN3_REST_OK(txt, m):
             return
         label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
         if label == "Example" and not want_examples:
@@ -100,6 +141,37 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         if s > 20 or n > 60:
             return
         key = f"{label} {c}.{s}.{n}"
+        snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+        items.append({"key": key, "label": label, "page": p, "text": snippet})
+
+    def _rest_ok(txt, m):
+        return _EN3_REST_OK(txt, m)
+
+    def _emit_two(txt, m, p):
+        # chapter 0（Introduction）两级条目："Example 0.1"。仅 chapter==0 时启用。
+        if not _rest_ok(txt, m):
+            return
+        label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
+        if label == "Example" and not want_examples:
+            return
+        c = 0 if m.group(2) in ('O', 'o') else int(m.group(2))
+        n = int(m.group(3))
+        if chapter != 0 or c != 0 or n > 60:
+            return
+        key = f"{label} {c}.{n}"
+        snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+        items.append({"key": key, "label": label, "page": p, "text": snippet})
+
+    def _emit_app(txt, m, p):
+        # 附录字母条目："Lemma A.1"。字母位只认 A（附录 A 体例）。
+        if not _rest_ok(txt, m):
+            return
+        if (m.group(2) or "").upper() != "A":
+            return
+        label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
+        if label == "Example" and not want_examples:
+            return
+        key = f"{label} {m.group(2).upper()}.{m.group(3)}"
         snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
         items.append({"key": key, "label": label, "page": p, "text": snippet})
 
@@ -123,17 +195,31 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
                 if txt[:m.start()].strip(_DECOR + " \t"):
                     continue
                 _emit(txt, m, p)
+            # 章级两级（chapter 0）与附录字母（A.N）扫描：同一块首锚定纪律。
+            if chapter == 0:
+                for m in EN3_TWO_RE.finditer(txt):
+                    if txt[:m.start()].strip(_DECOR + " \t"):
+                        continue
+                    _emit_two(txt, m, p)
+            for m in EN3_APP_RE.finditer(txt):
+                if txt[:m.start()].strip(_DECOR + " \t"):
+                    continue
+                _emit_app(txt, m, p)
             # 跨块连字标签：OCR 把 "Proposi-" 留在上块末尾、下块以
             # "tion 4.10.3." 开头（实测 p112→p113 Proposition 4.10.3 整条漏抽）。
             # 取上块尾部字母段与下块拼接（有连字则去连字直拼）后锚定重试。
             tailm = re.search(r"([A-Za-z]{2,})([-\u00ad])?\s*$", prev)
             if tailm:
                 frag = tailm.group(1)
-                joined = (frag + txt.lstrip()) if tailm.group(2) \
-                    else (frag + " " + txt.lstrip())
-                jm = EN3_LAB_RE.match(joined)
-                if jm:
-                    _emit(joined, jm, p)
+                # 2026-08-30 Leinster 实测：裸号习题块（"4.2.3  One way..."）的上一块
+                # 恰以 "...Yoneda lemma" 结尾时，拼接出 "lemma 4.2.3" 幻影条头。
+                # 真印刷条头标签词首字母大写（或全大写）；纯小写 fragment 拒绝。
+                if frag[0].isupper() or frag.isupper():
+                    joined = (frag + txt.lstrip()) if tailm.group(2) \
+                        else (frag + " " + txt.lstrip())
+                    jm = EN3_LAB_RE.match(joined)
+                    if jm:
+                        _emit(joined, jm, p)
             prev = txt or prev
     # Collapse reference mentions but KEEP two genuinely different items that
     # share a (label, number) — e.g. a source book printing the same number

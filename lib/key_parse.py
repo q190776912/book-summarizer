@@ -208,6 +208,15 @@ PROSE_RE_EN3_C = re.compile(
     r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 
+# Appendix letter-led entries in three-level EN books: "**Lemma A.1**".
+# group(1)=label, group(2)=letter (A-Z), group(3)=arabic number.
+ENTRY_RE_EN3_APP_C = re.compile(
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')'
+    r'\s*([A-Z])' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
+
+
+
 # --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
 # Item numbers are Chapter.Section.Item with a ROMAN chapter: I.2.13, II.3.5.
 # The chapter prefix is a roman numeral; section/item are arabic.
@@ -372,6 +381,17 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                 for m in PROSE_RE_EN3_C.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
+                # Appendix letter-led items in EN3 books (e.g. Leinster App A:
+                # "**Lemma A.1**").  read_structure_items normalizes 'A.1' to
+                # canon-label + trailing number (e.g. 引理1); mirror that here so
+                # the md side can match.  Emit BOTH the letter key form and the
+                # number-only form to stay compatible with either contract shape.
+                for m in ENTRY_RE_EN3_APP_C.finditer(line):
+                    _cn = _canon_label(m.group(1))
+                    entries.add(f"{_cn}{m.group(3)}")
+                    allk.add(f"{_cn}{m.group(3)}")
+                    entries.add(f"{_cn} {m.group(2)}.{m.group(3)}")
+                    allk.add(f"{_cn} {m.group(2)}.{m.group(3)}")
             elif t == ORDINAL_SINGLE:
                 # Single-level EN book (e.g. Silverman "A Friendly Introduction to
                 # Number Theory" 4th ed — ordinal type 1): items carry ONE
@@ -439,6 +459,16 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     entries.add(normkey(m.group(1)))
                 for m in KEY_RE.finditer(line):
                     allk.add(normkey(f'{m.group(1)}.{m.group(2)}-{m.group(3)}'))
+                # Appendix letter-led items ("**Lemma A.1**") in three-level
+                # books: read_structure_items normalizes 'A.1' to canon-label +
+                # trailing number (e.g. 引理1); mirror that here so the md side
+                # can match.  (2026-08-30, Leinster App A.)
+                for m in ENTRY_RE_EN3_APP_C.finditer(line):
+                    _cn = _canon_label(m.group(1))
+                    entries.add(f"{_cn}{m.group(3)}")
+                    allk.add(f"{_cn}{m.group(3)}")
+                    entries.add(f"{_cn} {m.group(2)}.{m.group(3)}")
+                    allk.add(f"{_cn} {m.group(2)}.{m.group(3)}")
     return entries, allk
 
 def sortkey(k):

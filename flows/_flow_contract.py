@@ -256,18 +256,7 @@ class physical_evidence:
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         sub = os.path.join(ex, "book_structure")
         # 章节清单以 chapter_map 为准（骨架分章文件应覆盖全部章节）
-        cm = os.path.join(ex, "chapter_map.json")
-        keys = []
-        if os.path.exists(cm):
-            try:
-                d = json.load(open(cm, encoding="utf-8"))
-                chs = d.get("chapters") or d.get("ch") or []
-                for c in chs:
-                    n = c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
-                    if n is not None:
-                        keys.append(str(n))
-            except Exception:
-                pass
+        keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
         missing = [k for k in keys
@@ -301,18 +290,7 @@ class physical_evidence:
         """基本总结草稿证据：每个结构章节都有内容化分章契约 + 渲染出的草稿文件。"""
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         sub = os.path.join(ex, "book_structure")
-        cm = os.path.join(ex, "chapter_map.json")
-        keys = []
-        if os.path.exists(cm):
-            try:
-                d = json.load(open(cm, encoding="utf-8"))
-                chs = d.get("chapters") or d.get("ch") or []
-                for c in chs:
-                    n = c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
-                    if n is not None:
-                        keys.append(str(n))
-            except Exception:
-                pass
+        keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
         missing, stale = [], []
@@ -506,19 +484,7 @@ class physical_evidence:
         草稿 / 契约缺失（legacy 旧书）的章退化为章数核对并如实注明。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        cmap = os.path.join(ex, "chapter_map.json")
-        keys = []
-        if os.path.exists(cmap):
-            try:
-                d = json.load(open(cmap, encoding="utf-8"))
-                chs = d.get("chapters") or d.get("ch") or []
-                for c in chs:
-                    n = (c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
-                         if isinstance(c, dict) else c)
-                    if n is not None:
-                        keys.append(str(n))
-            except Exception:
-                pass
+        keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
         missing_md, stale, missing_names, degraded = [], [], [], []
@@ -631,8 +597,7 @@ class physical_evidence:
         total = 0
         if os.path.exists(cmap):
             try:
-                d = json.load(open(cmap, encoding="utf-8"))
-                total = len(d.get("chapters") or d.get("ch") or [])
+                total = len(_chapter_map_keys(ex))
             except Exception:
                 pass
         cn = 0
@@ -664,6 +629,51 @@ class physical_evidence:
 
 
 # 步 -> 证据函数（与 FLOW_ORDER 对齐）
+def _chapter_map_keys(extract_dir):
+    """读 chapter_map.json 的章号清单。支持两种形式（与 chapter_map_ok /
+    data/chapter_map.load_chapter_map_raw 对齐）：
+      * {"chapters": [...]} / {"ch": [...]} 列表形式；
+      * {"1": {"name":..,"start":..}, ...} 按章号索引的扁平字典形式
+        （Leinster 等历史书实测形态；此前 structure_ok/draft_ok 只认列表形式，
+        导致本书 structure 落账被误拒）。排序按数值（"0","1",...,"10"）。
+    """
+    cm = os.path.join(extract_dir, "chapter_map.json")
+    if not os.path.exists(cm):
+        return []
+    try:
+        d = json.load(open(cm, encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(d, dict):
+        chs = d.get("chapters") or d.get("ch")
+        if chs is None:
+            if d and all(isinstance(v, dict) for v in d.values()):
+                chs = list(d.values())
+                keys = []
+                for k in d.keys():
+                    if k.isdigit():
+                        keys.append(k)
+                if keys:
+                    return sorted(keys, key=lambda x: int(x))
+            return []
+        keys = []
+        for c in chs:
+            n = (c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
+                 if isinstance(c, dict) else c)
+            if n is not None:
+                keys.append(str(n))
+        return sorted(keys, key=lambda x: (int(x) if x.isdigit() else 10**9))
+    if isinstance(d, list):
+        keys = []
+        for c in d:
+            n = (c.get("num", c.get("ch", c.get("chapter", c.get("n"))))
+                 if isinstance(c, dict) else c)
+            if n is not None:
+                keys.append(str(n))
+        return keys
+    return []
+
+
 EVIDENCE = {
     "prep.env": None,  # 环境检查由 agent 确认
     "extract.place_pdf": None,

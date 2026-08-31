@@ -237,6 +237,80 @@ def _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, 
     }
 
 
+def _load_chapter_item_num_tuples(ch, ext):
+    """Load the set of all (chapter, *num) numeric tuples for numbered items
+    (definition/theorem/lemma/corollary/proposition/example/remark) present in
+    the per-chapter contract.
+
+    Returns an empty set when the contract is unavailable (no book_structure
+    dir, missing chapter node, or any load error) so the caller falls back to
+    the unfiltered D-layer result — no behavioral regression for books without a
+    per-chapter contract.
+    """
+    try:
+        from data.book_structure.book_structure import BookStructure
+        from verify.script.check_structure_completeness import (
+            load_contract, _contract_item_num_tuples)
+        bs = BookStructure.load(ext)
+        if bs is None:
+            return set()
+        node = bs.find_chapter(str(ch))
+        if node is None:
+            return set()
+        tree, _, _ = load_contract(node)
+        return _contract_item_num_tuples(tree)
+    except Exception:
+        return set()
+
+
+def _filter_d_layer_by_contract(result, ch, ext):
+    """Drop section entries whose (chapter, *nums) tuple is an item number in the
+    contract (e.g. Theorem 2.25 -> (2, 25)). Mirrors the _contract_item_num_tuples
+    filter in check_structure_completeness.step2_sections, preventing the D-layer
+    from mistaking a numbered item for a missing section.
+
+    A numbered item (Theorem 2.25) carries a number form identical to a section
+    header (§2.25); when OCR/extract places the number at line start, the
+    section scan treats it as a section header, so it surfaces as a "missing
+    section". The same (chapter, num) already landed as a contract item, so it
+    can NOT be a real missing section — a real missing section would not also be
+    a captured item. Filtering is correction, not concealment.
+
+    Returns the (possibly filtered) result unchanged when the contract is
+    unavailable (empty item_num_tuples) — no behavioral regression.
+    """
+    if not result:
+        return result
+    item_num_tuples = _load_chapter_item_num_tuples(ch, ext)
+    if not item_num_tuples:
+        return result
+
+    def _keep(rp):
+        if not rp:
+            return False
+        try:
+            t = (ch,) + tuple(int(x) for x in rp.split('.'))
+        except ValueError:
+            return True
+        return t not in item_num_tuples
+
+    levels = result.get('levels', {}) or {}
+    new_levels = {}
+    kept_cont = set()
+    kept_miss = set()
+    for L, lv in levels.items():
+        cont = [r for r in (lv.get('continuity', []) or []) if _keep(r)]
+        miss = [r for r in (lv.get('missing', []) or []) if _keep(r)]
+        new_levels[L] = {'continuity': cont, 'missing': miss}
+        kept_cont.update(cont)
+        kept_miss.update(miss)
+    result = dict(result)
+    result['levels'] = new_levels
+    result['continuity_sections'] = sorted(kept_cont)
+    result['missing_sections'] = sorted(kept_miss)
+    return result
+
+
 def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
     """Chapter-local section check (Karlin-style: sections reset per chapter,
     written as ``## §N`` in the md and ``"N. Title"`` in the source).
@@ -773,7 +847,13 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
                 if _d_is_labeled(txt, m):
                     _project(c, section_depths, raw_labeled_item)
 
-    return _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)
+    result = _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)
+    # 🔒 纠错过滤（与 step2_sections 的 _contract_item_num_tuples 同构）：D 层把
+    # 「编号项号」(如 Theorem 2.25) 误判为节号而报「缺失节」。若同一 (章,号) 已
+    # 作为编号项落地进契约，则它绝不可能是缺失节(真实缺节不会同时是已捕获条目)，
+    # 须剔除，否则为假绿/假红源头(Shafarevich Ch2 §2.25/§2.27 实测)。契约不可用时
+    # 原样返回，保持旧行为不回归。
+    return _filter_d_layer_by_contract(result, ch, ext)
 
 
 class DLayer(VerifyLayer):

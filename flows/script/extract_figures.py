@@ -57,7 +57,7 @@ _boot.setup()
 import figure_detect
 from figure_detect import FigureDetect
 from page_json import PageJson
-from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT, fig_label_from_match
+from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT, fig_label_from_match, figure_dir
 
 
 import os, sys
@@ -416,7 +416,7 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
     Returns (model, new_entries) — pass model back on subsequent calls to
     keep the model resident in VRAM across batches.
     """
-    fig_dir = os.path.join(out_dir, "figure")
+    fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     os.makedirs(fig_dir, exist_ok=True)
 
     if model is None:
@@ -464,7 +464,7 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
     chapter_map.json (pages outside any range -> ch 0), write one global
     figure_detect.json. Detection crops get positional names det_pNNN_KK.png;
     NO semantic 图X.X.X name is assigned here (that is assign_figures.py)."""
-    fig_dir = os.path.join(out_dir, "figure")
+    fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     os.makedirs(fig_dir, exist_ok=True)
     # remove previous DETECTION artefacts (keep any chNN_* assigned/manual crops)
     for old in glob.glob(os.path.join(fig_dir, "det_*.png")):
@@ -516,7 +516,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
     """Re-detect a single chapter's pages; merge into the existing global
     figure_detect.json and remove this chapter's previously-saved det crops
     (by page range) first."""
-    fig_dir = os.path.join(out_dir, "figure")
+    fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     os.makedirs(fig_dir, exist_ok=True)
     # remove this chapter's old det crops (named det_p{PAGE}_{IDX}.png)
     for old in glob.glob(os.path.join(fig_dir, "det_*.png")):

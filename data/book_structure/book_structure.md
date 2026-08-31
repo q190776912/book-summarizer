@@ -134,7 +134,7 @@
 { "text": "且当 x 等于 y 时距离为零。", "line_start": true }                    // 新行顶格（续段或新段由消费方判断）
 { "text": "由对称性还有 d(y,x) 等于 d(x,y)。", "line_start": true, "indent": 16.7 }  // 居中行也如实写缩进
 { "formula": "d(x,y) \\le d(x,z)+d(z,y)", "display": false }          // 行内公式
-{ "image": "_extract/figure/ch01_unnamed_01.png" }              // 图片（裁剪图路径，相对书根：最终 md 落书根可直接渲染）
+{ "image": "figure/ch01_unnamed_01.png" }              // 图片（书根相对 figure/xxx.png，figure 与 md 同级，可直接渲染）
 { "formula": "\\begin{aligned} … \\end{aligned}", "display": true }   // 行间公式（独立占一行或多行）
 ```
 

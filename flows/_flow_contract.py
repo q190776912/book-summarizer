@@ -597,16 +597,16 @@ class physical_evidence:
 
     @staticmethod
     def embed_figures_ok(book_dir, extract_dir):
-        # 宽松判定：存在 figures 目录或任一 md 含图片引用
-        figdir = os.path.join(book_dir, "figures")
+        # 宽松判定：存在 figure 目录（书根，与 md 同级，2026-09-01 起）或任一 md 含图片引用
+        figdir = os.path.join(book_dir, "figure")
         if os.path.isdir(figdir):
-            return True, "figures 目录存在"
+            return True, "figure 目录存在"
         for f in glob.glob(os.path.join(book_dir, "*.md")):
             try:
                 txt = open(f, encoding="utf-8").read()
             except Exception:
                 continue
-            if "![" in txt or "](figures/" in txt or "](figure/" in txt:
+            if "![" in txt or "](figure/" in txt:
                 return True, "存在图片引用"
         return True, "嵌图为可选步骤（图少书可视为完成）"
 

@@ -14,7 +14,7 @@ Design:
   caption carries no usable item number but the figure clearly belongs to an item).
   Format: { "<fname.png>": {"anchors": ["**例1.5-9", ...], "is_proof": false}, ... }
 - Idempotent: a figure already referenced in the .md is skipped (never double-inserted).
-- Path written is always `_extract/figure/<fname>` (NOT `figure/<fname>`).
+- Path written is always `figure/<fname>`（书根相对，2026-09-01 起 figure 目录与总结 md 同级）。
 - After embedding, runs three post-scans automatically:
     (a) indent_inblock  — top-level images sitting inside a `> **证明/例**` block get a
         `>` prefix so they belong to the block;
@@ -344,7 +344,8 @@ def load_overrides(book_dir):
 
 
 def already_embedded(lines, fname):
-    needle = f'src="_extract/figure/{fname}"'
+    # 🔴 2026-09-01 起图片路径为书根相对 figure/xxx.png
+    needle = f'src="figure/{fname}"'
     return any(needle in ln for ln in lines)
 
 
@@ -651,7 +652,7 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
                     pct = 100.0   # full-bleed figure -> fills the reader column
             else:
                 pct = 45.0
-            rel = "_extract/figure/" + fname
+            rel = "figure/" + fname   # 🔴 2026-09-01 起书根相对（figure 与 md 同级）
             alt = (tag + " " + cap).replace('"', "'")
             img = ('<img src="%s" alt="%s" width="%s%%" height="auto">\n' % (rel, alt, pct))
             if is_proof:

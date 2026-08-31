@@ -60,10 +60,10 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - **flex 容器格式铁律（2026-07-27 立）**：`<div style="display:flex; ...">` 与 `<img>`、`<img>` 与 `</div>` 之间**禁止出现空行**。合法形态：
   ```
   <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center">
-    <img src="_extract/figure/ch00_fig1.4.png" alt="图 Figure 1.4. ..." width="35.4%" height="auto">
+    <img src="figure/ch00_fig1.4.png" alt="图 Figure 1.4. ..." width="35.4%" height="auto">
   </div>
   ```
-  根因：早期 `wrap_images_in_flex()` 给元素尾部追加 `\n` 而 `write_lines()` 又 `"\n".join`，双重换行 = 容器内空行。现已改为无尾换行行列表，重扫即净化。
+  根因：早期 `wrap_images_in_flex()` 给元素尾部追加 `\n` 而 `write_lines()` 又 `"\n".join`，双重换行 = 容器内空行。现已改为无尾换行行列表，重扫即净化。🔴 2026-09-01 起 `img src` 为书根相对 `figure/xxx.png`（figure 目录与 md 同级，不再有 `_extract/` 前缀）。
 - **书特有覆盖映射**：图注无明确条目编号但内容明显属某条目时，在该书 `_extract/figure_embed_overrides.json` 声明精确锚点（字段 `anchors` / `is_proof`、JSON 示例与生成脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）；无此文件则纯靠启发式。
 - **自动锚点匹配的局限**（嵌入后处理）：`../../script/embed_figures.py` 用启发式匹配图注（caption）与条目标签（`**定义X.X**`, `**定理X.X**` 等）。当 OCR 图注文本噪声大、或图无文字标注（如图1.1 Venn 图只有 "图1.1" 而无 "定义1.4" 字样）时，匹配会失败，脚本输出 `no item ref`。**对此情况，必须创建 `_extract/figure_embed_overrides.json` 手动声明锚点**（字段 `anchors` / `is_proof`、JSON 示例与自动产出脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）。此文件在中文教材（Venn 图、拓扑示意图等无文字图注的图）中几乎是必选项。
 - **嵌入后 C 层 "missing blank line after `</div>`"**：顶层（非块引用内）图片的 `</div>` 后缺空行会导致 Markdown 解析器吞内容，C 层报错。详见 [`../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行`](../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行)。

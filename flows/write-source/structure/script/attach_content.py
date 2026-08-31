@@ -21,8 +21,9 @@
       * 内容块：``{"text": "<段落文字>", "line_start": true, "indent": 2.0}``、
         ``{"formula": "<LaTeX>", "display": true|false}``
         （``display: true`` = 行间公式 / 独立占一行或多行；``false`` = 行内公式）、
-        ``{"image": "<裁剪图路径>"}``（图检测产物，路径相对 ``<extract_dir>``；
-        按 ``figure_index.json`` 的 page/bbox 并入阅读序，无图管线则为零图片块）。
+        ``{"image": "<裁剪图路径>"}``（图检测产物，**书根相对 ``figure/xxx.png``**，
+        figure 目录与总结 md 同级（2026-09-01 起）；按 ``figure_index.json`` 的
+        page/bbox 并入阅读序，无图管线则为零图片块）。
     description / proof 为**派生节点**：非编号项，verify 展平编号项基准时
     排除（``StructureNode.iter_items`` / :func:`_structural_fp`）。
 
@@ -193,17 +194,6 @@ def _splice_inline(texts, formulas):
 
 
 _FIG_INDEX_CACHE = {}
-_EXTRACT_REL_PREFIX = {}
-
-
-def _extract_rel_prefix(ext):
-    """<extract_dir> 相对书根目录的前缀（如 ``_extract`` / ``_extract/上册``）——
-    图片路径写成书根相对，最终 md 落书根即可直接渲染。"""
-    if ext not in _EXTRACT_REL_PREFIX:
-        book_dir = os.path.dirname(os.path.abspath(ext.rstrip("/\\"))) or "."
-        _EXTRACT_REL_PREFIX[ext] = os.path.relpath(
-            os.path.abspath(ext), book_dir).replace("\\", "/")
-    return _EXTRACT_REL_PREFIX[ext]
 
 
 def _figure_blocks(ext, page):
@@ -234,7 +224,9 @@ def _figure_blocks(ext, page):
             x0, y0, x1, y1 = 0.0, 0.0, 0.0, 0.0
         out.append({"page": page, "y": y0, "x": x0, "x1": x1, "bottom": y1,
                     "kind": "image",
-                    "file": _extract_rel_prefix(ext) + "/" + (fig.get("file") or "")})
+                    # 🔴 2026-09-01 起 figure 目录与总结 md 同级（书根 figure/）：
+                    # file = figure/xxx.png 即书根相对路径，最终 md 落书根直接渲染。
+                    "file": (fig.get("file") or "")})
     return out
 
 

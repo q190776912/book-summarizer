@@ -21,7 +21,8 @@ caption labels. To recover them:
   3. Run this script:
          python apply_manual_figures.py <extract_dir> <ch> --pdf <pdf_path>
      It renders the page at the same DPI as the auto pipeline, crops the
-     bbox, rotates if requested, saves to _extract/figure/ch{NN}_fig{LABEL}.png,
+     bbox, rotates if requested, saves to <book>/figure/ch{NN}_fig{LABEL}.png
+     (figure 目录与总结 md 同级，2026-09-01 起),
      and appends (or updates) the entry in figure_index.json with
      source="manual". The E-layer will then see the label as "provided".
 
@@ -47,6 +48,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+from lib.figure_io import figure_dir
 
 
 import os, sys
@@ -101,7 +103,7 @@ def safe_imwrite(path, img):
 def apply_one(ext, ch, pdf, label, spec, dpi=200, fig_dir=None, idx=None):
     """Crop, rotate, save one manual figure; return (entry, ok)."""
     if fig_dir is None:
-        fig_dir = os.path.join(ext, "figure")
+        fig_dir = figure_dir(ext)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     os.makedirs(fig_dir, exist_ok=True)
 
     pno = int(spec.get("page", 0))
@@ -171,7 +173,7 @@ def main():
         except Exception:
             idx = []
 
-    fig_dir = os.path.join(ext, "figure")
+    fig_dir = figure_dir(ext)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     n_ok = 0
     for label, spec in manual.items():
         entry, ok = apply_one(ext, args.ch, args.pdf, label, spec,

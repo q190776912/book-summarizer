@@ -60,7 +60,7 @@
   `extract_figures.py` / `assign_figures.py` 刷新索引。
   3. 若图确实存在但索引未含，手工补 `figure_index.json`（或 `figure_embed_overrides.json`）；
   若确为 OCR 幻影引用，加 `ignore_figure` 抑制。
-  4. 看 `E-LAYER FIGURE VALIDITY ERRORS` 列出的图（缺失文件 / 无法解码 / 单边 <20px）：到 `<book>/_extract/figure/` 确认文件存在且可解码；缺失则重跑图片提取生成，损坏则在源 PDF 重新裁剪。
+  4. 看 `E-LAYER FIGURE VALIDITY ERRORS` 列出的图（缺失文件 / 无法解码 / 单边 <20px）：到 `<book>/figure/`（🔴 2026-09-01 起 figure 目录与总结 md 同级，在书根下）确认文件存在且可解码；缺失则重跑图片提取生成，损坏则在源 PDF 重新裁剪。
   5. `E-LAYER FIGURE EXTRA` / `E-LAYER FIGURE SUSPICIOUS` 仅 WARN，核对裁剪图 label 配对 / 近空白疑似文字块，必要时加 `ignore_figure`。
   6. 重跑 verify，确认 `E-LAYER FIGURE COMPLETENESS MISSING` 与 `E-LAYER FIGURE VALIDITY ERRORS` 清零。
 

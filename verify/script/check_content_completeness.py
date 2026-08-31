@@ -168,8 +168,9 @@ def check_chapter(ext, ch_node):
         with open(fp, encoding="utf-8") as f:
             idx = json.load(f)
         start, end = int(ch_node.get("page_start") or 0), int(ch_node.get("page_end") or 0)
+        # 🔴 2026-09-01 起 image 块 file = figure/xxx.png（书根相对，与 attach 同步）
         want = collections.Counter(
-            os.path.join(ac._extract_rel_prefix(ext), e.get("file") or "").replace("\\", "/")
+            (e.get("file") or "").replace("\\", "/")
             for e in (idx if isinstance(idx, list) else [])
             if start <= int(e.get("page") or 0) <= end)
         got = collections.Counter(b["image"] for b in ac._iter_blocks(saved)

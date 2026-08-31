@@ -209,3 +209,27 @@ def load_figure_index(path):
             return json.load(f)
     except Exception:
         return []
+
+
+# ---------------------------------------------------------------------------
+# figure 目录统一约定（2026-09-01 用户需求：figure 目录与总结文件同级）
+# ---------------------------------------------------------------------------
+def figure_dir(ext):
+    """裁剪图所在目录的**书根绝对路径**：``<book_dir>/figure``（与最终 md 同级）。
+
+    🔴 2026-09-01 起 figure 目录从 ``_extract/figure/`` 提升到书根 ``<book_dir>/figure/``
+    （与总结文件同级），最终 md 里 ``<img src="figure/xxx.png">`` 即为书根相对路径，
+    直接可渲染。``ext`` 是 ``<book_dir>/_extract``；多册书子目录同理取该书根。
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(ext.rstrip("/\\"))), "figure")
+
+
+def figure_abs(ext, rel):
+    """把 ``figure_index.json`` 的 ``file``（``figure/xxx.png``）解析为书根下的
+    绝对路径 ``<book_dir>/figure/xxx.png``。
+
+    消费方打开裁剪图文件须经本函数（基准目录 = 书根）；裁剪图统一在
+    ``<book_dir>/figure/``（与总结 md 同级）。
+    """
+    base = os.path.basename((rel or "").replace("\\", "/"))
+    return os.path.join(figure_dir(ext), base)

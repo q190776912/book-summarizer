@@ -66,7 +66,7 @@ import numpy as np
 # reuse detection helpers (kept in extract_figures.py)
 # ----------------------------------------------------------------------------
 from extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
-from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re  # noqa: E402
+from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re, figure_dir  # noqa: E402
 
 
 def load_figure_detect(out_dir):
@@ -146,7 +146,7 @@ def bbox_center(bbox):
 def assign_chapter(det_all, ch, start, end, out_dir):
     """Assign labels to one chapter's detected figures; rename crops; return
     the list of assigned entries (label-filled) for this chapter."""
-    fig_dir = os.path.join(out_dir, "figure")
+    fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     def _ch_tag(c):
         # 章号文件名标签：数字章补零两位，字母章（附录 A/B…）原样大写
         try:

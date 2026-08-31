@@ -40,7 +40,7 @@ import os, json, re
 
 from page_json import PageJson
 from verify.script.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
-from lib.figure_io import load_fig_components, fig_label_from_match
+from lib.figure_io import load_fig_components, fig_label_from_match, figure_abs
 
 
 # --- attribution (figure -> owning item block) ---------------------------------
@@ -233,12 +233,9 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
     else:
         import numpy as np
         for e in ch_entries:
-            # `e['file']` is a basename under the book's `_extract/figure/` subdir
-            # (written that way by extract_figures.py). Joining ext+file resolves
-            # to `_extract/figure/<file>`; if a given book stores crops directly
-            # under `_extract/`, adjust the prefix here. (Kept identical to the
-            # former F layer — verify path resolution during smoke test.)
-            fpath = os.path.join(ext, e.get('file', ''))
+            # 🔴 2026-09-01 起 figure 目录在书根 `<book>/figure/`（与总结 md 同级）。
+            # `e['file']` 存 `figure/xxx.png`，经 figure_abs 解析到书根下真实裁剪图。
+            fpath = figure_abs(ext, e.get('file', ''))
             lbl = e.get('label') or e.get('file')
             if not os.path.exists(fpath):
                 errors.append(f"  x FIG MISSING FILE: {lbl} -> {e.get('file')}")

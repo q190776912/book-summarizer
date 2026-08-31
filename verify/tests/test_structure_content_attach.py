@@ -517,9 +517,10 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
     assert "d(x,y)\\ge 0" in latexes            # 行间公式保留（在 statement 内）
     assert any("d: X" in s for s in latexes)    # 行内公式（拼接或独立）保留
     assert any("positivity" in b.get("text", "") for b in blocks)
-    # 图片块：内容即裁剪图路径，落在其 bbox 对应的阅读位置（条目正文内）
+    # 图片块：内容即裁剪图路径（书根相对 figure/xxx.png，2026-09-01 起），
+    # 落在其 bbox 对应的阅读位置（条目正文内）
     imgs = [b for b in ac._iter_blocks(item) if "image" in b]
-    assert imgs and imgs[0]["image"] == "_extract/figure/ch01_unnamed_01.png"
+    assert imgs and imgs[0]["image"] == "figure/ch01_unnamed_01.png"
 
     # 页眉噪声被过滤
     ex_texts = [b["text"] for b in ac._iter_blocks(ch) if "text" in b]
@@ -568,7 +569,7 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
     assert "1.1.B" not in md                                    # 集中习题块省略
     assert "> **1.1-E1 Example (Dirac mass).**:" in md          # 例块 > 包裹
     assert '<div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center">' in md  # 原嵌图格式
-    assert '<img src="_extract/figure/ch01_unnamed_01.png"' in md   # 书根相对路径
+    assert '<img src="figure/ch01_unnamed_01.png"' in md   # 书根相对路径（figure 与 md 同级）
     assert 'height="auto">' in md                                  # bbox 比例 width
     assert "This chapter introduces the basic notions." in md   # 章首序言纯段落
     assert "In this section we study the basic notions." in md  # 节导语纯段落

@@ -347,17 +347,17 @@ Common patterns (after correction):
 - **嵌入语法**：图片用 **HTML `<img>`**（不用 markdown `![…](…)`），百分比宽度按原书比例缩放，**所有图片（含单张）统一包裹在 flex 容器内**：
   ```
   <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center">
-    <img src="_extract/figure/chNN_figX.X.X.png" alt="图N 简注" width="X%" height="auto">
+    <img src="figure/chNN_figX.X.X.png" alt="图N 简注" width="X%" height="auto">
   </div>
   ```
   - `width="X%"` = `(bbox_crop_w + 16) / 1653 × 100`（bbox 来自 `figure_index.json`，+16 为 8px 裁剪余量；1653px = A4 页面 200 DPI 宽）。
-  - 路径相对书根；`figure/` 实际在 `_extract/` 下，故链接须 `_extract/figure/chNN_...png`（非 `<书根>/figure/...`）。
+  - 路径相对书根；🔴 2026-09-01 起 `figure/` 目录与总结 md 同级（在书根下），链接即 `figure/chNN_...png`（非 `_extract/figure/...`）。
   - 图块单独成行，放在条目后或证明内；**图块后接 `---`** 才算条目正式收尾。
   - 多图并排放在同一 flex 容器（总宽 ≤100% 自动并排）；图在 `>` 块内时容器每行均带 `>` 前缀。
 
 - **caption → 条目编号解析**（`figure_index.json` 的 `caption` 常带 OCR 噪声）：含 `定理N.S-N`/`引理`/`命题`/`推论`/`例N.S-N`/`定义N.S-N` → 锚定该条目粗体标签；含 `例N`/`例a`（单级）→ 锚定 `**例N**`/`**例a**`；仅含 `图N` 无条目编号 → 按页面位置找到 `## §` 节作"节末尾补充图"，或放弃；完全无法解析 → 放弃嵌入。
 
-- **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](figure/ch01_...png)` 漏 `_extract/` 前缀。
+- **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](_extract/figure/ch01_...png)`（2026-09-01 起 figure 已在书根，勿加 `_extract/` 前缀）。
 
 - **机器兜底与已知坑**（写源避坑即可，无需手跑）：
   - `flows/script/embed_figures.py`（write-source 步骤 3 强制脚本）会自动：块内缩进（顶层 `<img>` 补 `>`）、连续性修复（块内裸空行转 `> `）、flex 包装；三步幂等。

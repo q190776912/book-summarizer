@@ -1,4 +1,4 @@
-"""render_draft.py — 单元渲染库（write-source 步骤 4/5 共用）
+"""render_draft.py — 单元渲染库（write-source 步骤 4/6 共用）
 
 🔴 **2026-08-31 角色变更**：本文件从「独立渲染整章草稿 ``draft_ch{N}.md``」降级为
 **纯渲染库**——主流程不再直接调用它产出草稿（`draft` 步的命令已改为

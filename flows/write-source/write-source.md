@@ -118,7 +118,7 @@
      分隔线**：节标题之前（非首单元）加 `---`；`item`↔`item`、`item`↔`desc`、
      `desc`→`item`（条目尾随）加 `---`；章 / 节标题之下第一元素、连续 `desc` 不加；
      复用 `_tidy_separators` 合并堆叠 `---`、保证上下空行（幂等）。
-7. **最后：使用 `verify/verify.md` 完整校验所有总结文件**（源语言全部章节初稿写完 + 后执行，🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
+7. **最后：使用 `verify/verify.md` 完整校验所有总结文件**（源语言全部章节初稿写完后执行，🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
    ```bash
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
    ```
@@ -127,7 +127,7 @@
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动本流程前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
 - **🔴 规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
-- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完 + 后、由步骤 7 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
+- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言全部初稿写完后、由步骤 7 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
 - **🔴 规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件，命名 `第{N}章_{M}_{名称}.md` / `Chapter{N}_{M}_{名称}.md`（章号后、节号后各一个下划线）；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。
 - **🔴 规则4 — 写源唯一规则文档 = `writing-rules.md`**：本步骤格式与保真约束**只来自 [`docs/writing-rules.md`](../../docs/writing-rules.md)**（含其末尾「verify 规则 ↔ 写作规则映射表」）。verify 各子文档（`verify/<snake>/<snake>.md`、含 `format_verify.md`）仅承载机器判定 / `--fix` 实现，写源阶段**不必读**；校验失败时再查对应子文档。此举收敛 skill 的 token 开销——写源上下文不再重复注入整组 verify 规则文档。
 - **🔴 规则5 — 章首序言保全（单元改写不丢章级信息）**：按步骤 5 逐个改好单元时，**章标题单元、章首序言 `desc` 单元、章内全局记号约定等「`# 章标题` 之后、第一个 `## §` 之前的章级内容」必须完整保留在对应单元内**，拼接后位于最终 md 最前。禁止把章首信息并入「第一节」或丢弃——否则会丢失跨节共享的记号定义与章级动机。

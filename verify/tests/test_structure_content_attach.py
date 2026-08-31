@@ -638,7 +638,7 @@ def test_content_gate_pass_fail_roundtrip():
          "text": "1.1-1 Definition (Metric). A metric orders a set.", "score": 0.9}],
         "formulas": [
             {"bbox": [150, 300, 650, 400], "cls": 1, "conf": .9,
-             "latex": "d(x,y)\ge 0"}], "deskew": 0}
+             "latex": "d(x,y)\\ge 0"}], "deskew": 0}
     json.dump(p1, open(os.path.join(ext, "page_001.json"), "w", encoding="utf-8"),
               ensure_ascii=False)
     json.dump({"ok": 1}, open(os.path.join(ext, "_extraction_done.json"), "w"))

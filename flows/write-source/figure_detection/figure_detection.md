@@ -10,6 +10,8 @@
 - `_extract/verify_config.json` 已存在且（若书图号前缀非默认）`ordinal` 含 Figure 组（`name` 列前缀词、`type` 设段数）。**缺 Figure 组则图号前缀退化为默认 `["图","Figure","Fig"]`**，自定义前缀书（Scheme / Illustration 等）会漏识 caption。
 
 ## 步骤（有序）
+> 🔴 **2026-09-01 起 figure 目录在书根 `<book>/figure/`**（与总结 md 同级）；`figure_index.json` 的 `file` 字段存 `figure/xxx.png`（相对书根）。消费方打开裁剪图经 `lib.figure_io.figure_abs()` 解析到书根。
+
 1. **检测（detection）**：`python extract_figures.py <pdf> --out <extract> --book`
    - 用 DocLayout-YOLO（`doclayout_yolo_ft.pt`）在全书每页框出 `figure`(class 3) / `figure_caption`(class 4)，裁图存 `figure/det_pNNN_KK.png`（**位置名，无图号**），写出 `figure_detect.json`。
    - 图号前缀由 `verify_config.json` 的 `ordinal` Figure 组决定（`lib.figure_io.load_fig_labels` 从 Figure 组 `name` 读取）；**带序标（图 X.X / Fig X.X / Scheme X.X 等）的图，会把其下方 caption（标号 + 说明）一并裁入同一张图；无标号 caption 的图只裁图本身**（"有标号才一起扣、没标号就算"）。

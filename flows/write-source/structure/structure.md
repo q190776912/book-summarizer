@@ -60,9 +60,9 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 故 write-source / verify 可原样消费。🔴 **回填写回时同步重建该章内容**：树被原地修改后先 `clear_raw_recursive()` 丢过期保真视图，再 `build_chapter_contract` 幂等重挂（新回填条目同样获得 text/formula 内容块），写回单章文件——`ch{N}.json` 恒为完整契约。
 
 **第 4 步 · 完整 + 连续 闸门（收尾保证）**
-回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source 的草稿渲染。
+回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source 的单元拆分（步骤 4）。
 
-> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**write-source 渲染基本总结草稿**之前完成。回填后的编号项会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。B 层报「缺号」但核对源书确认是**稀疏编号**（作者跳号，如 ch5 无 Theorem 5.1、ch20 无 Theorem 20.4/20.5）时，按 verify 规则登记 `ignore_ch{N}.json` 豁免，**不得**为凑连续而编造条目。
+> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**write-source 单元拆分（步骤 4）**之前完成。回填后的编号项会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。B 层报「缺号」但核对源书确认是**稀疏编号**（作者跳号，如 ch5 无 Theorem 5.1、ch20 无 Theorem 20.4/20.5）时，按 verify 规则登记 `ignore_ch{N}.json` 豁免，**不得**为凑连续而编造条目。
 
 ## 源侧完整性校验与回填（写书前兜底）
 

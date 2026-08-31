@@ -20,7 +20,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 <corpus_root>\<书名>\       ← 每个书一个文件夹（corpus_root 见 user_config.json / README 配置章节）
   ├─ <书名>.pdf            ← 源 PDF（必须在此专属目录内，保留原名）
   ├─ _extract\              ← 提取目录：所有后台数据（page_*.json / chapter_map.json / figure_* / _mm_repair/）
-  │   └─ book_structure\    ← 内容化分章契约 ch{N}.json（附录 appendix{X}.json）+ 草稿 draft_ch{N}.md（write-source 步骤 4）
+  │   └─ book_structure\    ← 内容化分章契约 ch{N}.json（附录 appendix{X}.json）+ units\ch{N}\ 每 item 一单元的拆分目录（write-source 步骤 4）
   ├─ 第1章_章名.md           ← 中文版
   ├─ Chapter1_Name.md       ← 英文版（仅英文/他语种书时有）
   └─ ...
@@ -45,13 +45,13 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 
 ## 主流程（Stage 0 → 3，唯一主干）
 
-> 每个阶段是一个独立 `flows/<name>/<name>.md`（统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）。点开链接看该阶段的完整规则与命令。通用校验 `verify` 是**顶层公用文档**（与 `flows` 并行，路径 `verify`），被 `write-source`（最终校验步骤 6；步骤 4 另有内容完整性闸门脚本）与 `derive-translate` 复用，不属于某个流程阶段。
+> 每个阶段是一个独立 `flows/<name>/<name>.md`（统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）。点开链接看该阶段的完整规则与命令。通用校验 `verify` 是**顶层公用文档**（与 `flows` 并行，路径 `verify`），被 `write-source`（最终校验步骤 7；步骤 4 另有内容完整性闸门脚本）与 `derive-translate` 复用，不属于某个流程阶段。
 
 | Stage | 流程 | 一句话 | 关键约束 |
 |-------|------|--------|---------|
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
 | 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair，以 `_extraction_done.json` 收尾 | 防停滞（extract 规则1）；多册书逐册串行（extract 规则2）；视觉识别询问式全书一次（extract 规则3）；**MM Repair 门（extract/mm_repair 流程 规则1）** |
-| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（`build_structure` 按章**一步产出含内容的完整契约** `ch{N}.json`（层级嵌套小节 + description/proof/text/formula含tag/image 内容块）+ 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行；回填后自动重建该章内容）→ 步骤 4 **基本总结草稿**（内容完整性闸门 `check_content_completeness` + `render_draft` 渲染 `draft_ch{N}.md`，按 writing-rules 基本格式排版）→ 步骤 5 基于草稿逐章调整写源语言初稿（🔴 落账证据强制「基于草稿」：md 晚于草稿 + 契约骨架节/编号项在位，脱离草稿 = mark 硬拒）→ 步骤 6 批量校验至 PASS | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是草稿的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；草稿公式是 OCR 原样**严禁照抄**（步骤 5a 重写校正）；草稿不经 verify（初版全量保真） |
+| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（`build_structure` 按章**一步产出含内容的完整契约** `ch{N}.json`（层级嵌套小节 + description/proof/text/formula含tag/image 内容块）+ 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行；回填后自动重建该章内容）→ 步骤 4 **拆分单元**（纯脚本：内容完整性闸门 `check_content_completeness` + `split_draft_units` 拆出 `units/ch{N}/` 每 item 一单元目录）→ 步骤 5 **逐个按写作要求改好（agent 核心步）+ 强制门控**（agent **逐个改好每个单元**：写作要求全部在此落实（公式重写 / Tier 压缩 / 格式），并把首行 DRAFT→DONE → 🔴 `gate_units` 强制门控：每单元存在+DONE+内容改写才 exit 0（每个 item 都不漏））→ 步骤 6 **拼接**（`merge_units` 纯脚本机械执行，按 manifest 顺序合并全部单元成最终 `ChapterN_*.md` / `第N章_*.md` 并按 V-F 重建 `---` 分隔线，**无 agent 参与**；🔴 落账证据强制「逐单元改好+门控通过」：每章 gate 通过 + 契约骨架节/编号项在位，脱离单元 = mark 硬拒）→ 步骤 7 批量校验至 PASS | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是拆分的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；单元公式是 OCR 原样**严禁照抄**（步骤 5 重写校正）；单元不经 verify（初版全量保真） |
 | 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS（**仅英文书**：英文书→派生中文 `第N章_*.md`；**中文书无翻译阶段，本阶段整体跳过**） | 单向修复（derive-translate 规则4）；中英 1:1 同构（规则3） |
 
 > 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 出口 = `_extraction_done.json`（见 [`extract`](flows/extract/extract.md) 出口条件）。
@@ -84,9 +84,9 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 | 提取（文本） | `flows/extract/pipeline/script/extract_pipeline.py` · `launch_pipeline.sh` |
 | 配置（write-source 步骤 1） | `config/verify_config/make_config.py`（生成 `verify_config.json`） |
 | 图检测（write-source 步骤 2） | `flows/script/extract_figures` · `…/assign_figures.py` |
-| 内容化 + 草稿（write-source 步骤 3–4） | `flows/write-source/structure/script/build_structure.py`（第 1 步一步产出含内容完整契约）+ `flows/write-source/script/render_draft.py`（描述信息 `description` 节点 + 条目文字/公式/图片内容块 + 证明 `proof` 子节点按 `sub_sec` 文档顺序挂入分章契约 `_extract/book_structure/ch{N}.json`（附录 `appendix{X}.json`），幂等可重跑；噪声过滤 / 行内公式拼接 / 标题剥离 / 行间公式 tag 键） |
+| 内容化 + 拆分（write-source 步骤 3–4） | `flows/write-source/structure/script/build_structure.py`（第 1 步一步产出含内容完整契约，描述信息 `description` 节点 + 条目文字/公式/图片内容块 + 证明 `proof` 子节点按 `sub_sec` 文档顺序挂入分章契约 `_extract/book_structure/ch{N}.json`（附录 `appendix{X}.json`），幂等可重跑；噪声过滤 / 行内公式拼接 / 标题剥离 / 行间公式 tag 键）+ `flows/write-source/script/split_draft_units.py`（步骤 4：由内容化契约拆出 `units/ch{N}/` 每 item 一单元目录 + `manifest.json`，首行 DRAFT 标记；渲染复用 `render_draft.py` 纯函数） |
 | MM Repair | `flows/extract/mm_repair/script/mm_repair_audit.py` · `…/mm_repair_text_compare.py` · `…/mm_repair_apply.py` |
-| 写作 | 消费 `build_structure` 一步产出的含内容分章契约 `ch{N}.json`（写作契约，不再重跑抽取器）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供；注：2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 围栏门才执行）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
+| 写作（步骤 5 改单元 + 步骤 6 拼接） | `flows/write-source/script/gate_units.py`（🔴 步骤 5 强制门控：每单元 DONE + 内容改写才 exit 0）+ `flows/write-source/script/merge_units.py`（🔴 步骤 6 纯脚本拼接：**自带强制门控**——拼接前先跑 gate_units，任一单元未改好即直接报错拒绝拼接；按 manifest 合并全部单元成最终 md，按 V-F 重建 `---` 分隔线，无 agent 参与）；格式化 CLI 工具 `tools/wrap_examples_bq` · `tools/fmt_proofs.py` · `verify/format_verify/script/check_katex.py`（KaTeX 检测，由 `verify/format_verify/` 提供）· `verify/format_verify/script/fix_katex.py`（KaTeX 修复，由 `verify/format_verify/` 提供；注：2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 围栏门才执行）· `verify/script/audit_counts.py` · `tools/split_chapters.py`（注：源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 format_verify（F 层，原称 H/G 层）的 `h_mbq` 检测规则及 `{h,h_stmt,h_ul,h_mbq,c,g,…}` 系列 fixer 在 `--fix` 自动兜底） |
 | ~~嵌图~~ | **已删除**（2026-08-29）：图片经内容化分章契约 image 块随草稿继承（内容完整性闸门保证齐备）；`flows/script/embed_figures.py` 保留为其格式逻辑的来源参考 |
 | 校验 | `verify/script/verify_chapter.py` · `config/ignore_chN/manage_ignore.py` |
 | 公式对账 | Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖序标集合成员 + 序列顺序(ORDER_MISMATCH) + 小节定位(MISPLACED)；公式内容保真人工核对 |
@@ -99,7 +99,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 代码按流程组织在对应 `flows/<stage>/script/<pkg>/` 目录；通用校验 `verify` 的代码在技能根级 `verify`（与 `flows` 并行），每层一个 `<语义名>/` 子包（实现 `<snake>.py` + 子流程文档 `<snake>.md`，位于 `verify/<语义名>/`），注册表与总编排见 `verify/verify.md` 与各校验层子包 `verify/<语义名>/`：
 
 - `flows/write-source/structure/script`（结构骨架 `scan_skeleton` + 编号项抽取 `extract_items*` + `build_structure` + `attach_content` 的 `build_chapter_contract` 内容挂载，按章产出含内容完整契约 `ch{N}.json`）· `flows/extract/pipeline/script` · `flows/extract/script`（共享库 `build_ocr`/`build_vakil_bundle`）。源侧查漏 + 混合回填由 `verify/script/check_structure_completeness.py` 负责。
-- `flows/write-source/script`（`render_draft.py`：由内容化分章契约渲染基本总结草稿，write-source 步骤 4）。
+- `flows/write-source/script`（`split_draft_units.py`：步骤 4 由内容化分章契约拆出每 item 一单元目录 `units/ch{N}/`；`gate_units.py`：步骤 5 agent 逐个改好单元后跑强制门控；`merge_units.py`：步骤 6 纯脚本按 manifest 顺序拼接单元成最终 md；`render_draft.py`：单元渲染库——纯渲染函数被 split/merge 复用，不再单独产出整章草稿）。
 - `flows/extract/mm_repair/script`
 - `flows/script`
 - `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；生产期格式化 CLI 工具集中于此处；其中格式修复类由 verify 的 H/G 等层在 `--fix` 兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）🔴 **`tools/` 只放通用、可跨书复用的工具**；特定书/章节的处理脚本（如硬编码某书路径的 `_diag_ch5.py` / `_dump_contract.py`）必须放进对应书的 `_extract/`，**不得留在本目录**。

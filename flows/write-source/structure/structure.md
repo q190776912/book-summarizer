@@ -120,8 +120,8 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **proof 拆分**：证明标记（`PROOF` / `Proof` / `Solution` / `证明` / `证：` / `解：`，块首匹配；中文与陈述同行被 OCR 合并时按句末标点 + 「证」边界内联拆分）开启，至 QED（`口` / `□` / `∎` / `证毕` / `Q.E.D.` / 纯 `\square` 型公式）或块流末尾收束；识别失败**不拆**（宁整不碎）；练习（exercise）的「证明：…」属题干任务不拆。
 - **图片**：取自 `figure_index.json`（page/bbox 并入阅读序，路径**相对书根**）；无图管线则零图片块；渲染按原嵌图格式（flex div + `<img>`），**无单独嵌图步骤**。
 - **已知近似（调整步骤兜底）**：无证明条目之后的游离段落仍留在该条目正文内（无边界信号不做切分）；证明无 QED 收尾时收束到该条目块流末尾（可能并入条目后段讨论，调整时拆出）；OCR 文本行与其行内公式的校正 latex 天然并存（内容重复，调整时保留公式、清理乱码）；图注文字 / 证明结尾框等残余噪声由调整清理。
-- **完整性闸门**：由 `verify/script/check_content_completeness.py` 校验（确定性复算比对 + 图片独立真值 + 证明覆盖审计），在 write-source 步骤 4（渲染草稿）前执行，FAIL 严禁渲染。
-- 消费方：`flows/write-source/script/render_draft.py`（渲染基本总结草稿）；`_is_block` 判定与派生节点指纹排除见 `attach_content.py`。
+- **完整性闸门**：由 `verify/script/check_content_completeness.py` 校验（确定性复算比对 + 图片独立真值 + 证明覆盖审计），在 write-source 步骤 4（拆分单元）前执行，FAIL 严禁拆分。
+- 消费方：`flows/write-source/script/split_draft_units.py`（拆出每 item 一单元目录，渲染复用 `render_draft.py` 纯函数）；`_is_block` 判定与派生节点指纹排除见 `attach_content.py`。
 
 ## 构建逻辑（与 `verify/data_provider` 同一套抽取分派）
 1. **章节骨架**优先来自 `scan_skeleton` 的 `SEC` 扫描（含印刷标题）；当某方案 `SEC` 捕获不全（en 两级、vakil）时，用「条目键派生章节号」补齐缺失章节。
@@ -140,7 +140,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 - **写完后自查**：非 exercise 的 `section` 数应等于总结 `## §` 标题数（`section_types` 含 `0` 时按位置/数量对齐，允许 md 小节多于契约未记的小节）；非 exercise 节点 `key` 集合应与总结编号一致。
 
 ## 出口条件
-- 出口：全部章的**完整契约** `ch{N}.json` / `appendix{X}.json` 已生成（第 1 步：骨架 + description / proof / 内容块一步到位；章节按层级嵌套），且第 2–4 步查漏回填闸门通过（回填后内容同步重建）。分章契约作为 write-source 的写作契约、verify 的编号项基准与草稿渲染（`render_draft`）输入采用。
+- 出口：全部章的**完整契约** `ch{N}.json` / `appendix{X}.json` 已生成（第 1 步：骨架 + description / proof / 内容块一步到位；章节按层级嵌套），且第 2–4 步查漏回填闸门通过（回填后内容同步重建）。分章契约作为 write-source 的写作契约、verify 的编号项基准与单元拆分（`split_draft_units`）输入采用。
 
 ## 已知局限（实现层，非契约缺陷）
 - **en 两级（ordinal=4）章节检测为近似**：skeleton 的 `SEC` 行对部分 en 书乱匹配，章节号由条目键派生，可能多出空章节（条目仍正确捕获、按序归位）。写章时以「派生章节 + 源书实际节标题」为准。

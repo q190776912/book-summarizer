@@ -2,15 +2,16 @@
 
 > 🔴 **本文件是该 JSON 数据结构的唯一权威说明（SSOT）**。模型类见同目录 `book_structure.py`；
 > 骨架生成 `flows/write-source/structure/script/build_structure.py`；正文内容化
-> `flows/write-source/structure/script/attach_content.py`（structure 子流程第 5 步）；草稿渲染
-> `flows/write-source/script/render_draft.py`（write-source 步骤 4）。契约语义
+> `flows/write-source/structure/script/attach_content.py`（structure 子流程第 5 步）；单元拆分
+> `flows/write-source/script/split_draft_units.py`（write-source 步骤 4，渲染复用
+> `render_draft.py` 纯函数）。契约语义
 > （步骤 / 命令 / 已知近似）的流程侧 SSOT 见 `flows/write-source/structure/structure.md`。
 
 ## 1. 格式总览（2026-08-29 用户最终确认：**分章契约是唯一真源，全书单文件已废弃**）
 
 | 产物 | 位置 | 承载 | 消费方 |
 |------|------|------|--------|
-| **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `render_draft`（write-source 步骤 4）→ 基本总结草稿 `draft_ch{N}.md`；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
+| **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `split_draft_units`（write-source 步骤 4）→ 每 item 一单元目录 `units/ch{N}/`；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
 
 - **两阶段写同一文件**：`build_structure` 产出**纯骨架**（叶子 `sub_sec=[]`，无 description / proof / 内容块）→ structure 完整性闸门 → `attach_content` 挂入正文内容写回同一文件。
 - **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 已废弃（2026-08-29），不再读取（无兼容回退）。
@@ -150,7 +151,7 @@
 - **产生规则**（`attach_content`）：① 章首序言块 → 章 `sub_sec` 最前的 description 节点；② 节首散文块 → 节 `sub_sec` 最前的 description 节点；③ 条目末个 `proof` 之后的尾随正文块 → 与该条目**同级**的 description 节点（插在该条目之后）。
 - **字段**：合成 `key="D{n}"`（章内按文档顺序递增）；`name=""`（无序标）；`page_start/page_end` = 所含块的页区间；`sub_sec` = 文字/公式内容块。
 - **verify 不消费**：description 仅存在于分章内容契约，结构基线不含，编号项基准 / B·D 层均不受影响（结构指纹亦排除）。
-- **渲染**：`render_draft` 输出为**无标题纯段落**（公式照常 `$`/`$$`），agent 调整时按 Tier 2 描述性内容规则压缩。
+- **渲染**：`split_draft_units` 输出为**无标题纯段落**（公式照常 `$`/`$$`）的独立 `desc` 单元，agent 调整时按 Tier 2 描述性内容规则压缩。
 
 ## 5. proof 节点（证明，条目子节点）
 
@@ -159,13 +160,13 @@
 - **字段**：合成 `key="{条目key}-P{n}"`（同条目多证明依次 P1、P2…）；`name` = 证明标记原文（如 `PROOF` / `证明`）；`page_start/page_end` = 证明块的页区间；`sub_sec` = 证明内容块。
 - **宁整不碎**：标记 / QED 识别失败时不拆分（正文整体留在条目内）；不依据 y 空隙等弱信号切分。
 - **verify 不消费**（同 description，仅分章契约中存在）。
-- **渲染**：`render_draft` 输出 `> **证明**：…` / `> **Proof**: …` 块引用，证明内容块**逐块原样输出**（草稿零压缩，不摘要化、不跳步）；agent 调整时按 writing-rules 压成 `> **证明思路**：1. 2. …` 编号步骤（OCR 公式逐条重写校正）。带序标的行间公式由契约 `tag`（**裸编号**，形态按本书 `formula` 配置派生）渲染为 `$$ … \tag{…} $$`。
+- **渲染**：`split_draft_units` 输出 `> **证明**：…` / `> **Proof**: …` 块引用（并入所属 item 单元），证明内容块**逐块原样输出**（单元零压缩，不摘要化、不跳步）；agent 调整时按 writing-rules 压成 `> **证明思路**：1. 2. …` 编号步骤（OCR 公式逐条重写校正）。带序标的行间公式由契约 `tag`（**裸编号**，形态按本书 `formula` 配置派生）渲染为 `$$ … \tag{…} $$`。
 
 ## 6. 模型类 API（`book_structure.py`）
 
 > 模型服务分章契约的聚合读写：`load` 把各分章文件聚合成内存书对象（root = 书根包装），
 > `save` 把书根下的章节点拆分写回各自 `ch{N}.json` / `appendix{X}.json`；
-> `attach_content` / `render_draft` / checker 直接按章读写单文件（经
+> `attach_content` / `split_draft_units` / checker 直接按章读写单文件（经
 > `chapter_json_path` 命名单点）。
 
 ### `StructureNode`
@@ -203,9 +204,9 @@
 - `verify/script/check_structure_completeness.py`：章节 / 条目查漏回填（`replace_chapter` + `save` 拆分写回）。
 - `verify/script/audit_ignore.py`：编号 ignore 审计。
 - `tools/restructure_by_ocr.py`：B 层 ORDERING 修复（聚合读、写回 md）。
-- `flows/write-source/script/render_draft.py`：按章直读单文件（`chapter_json_path`）渲染草稿；内容完整性闸门 `verify/script/check_content_completeness.py` 同。
+- `flows/write-source/script/split_draft_units.py`：按章直读单文件（`chapter_json_path`）拆单元；内容完整性闸门 `verify/script/check_content_completeness.py` 同。
 
-## 8. 构建 / 回填 / 内容化 / 渲染约定
+## 8. 构建 / 回填 / 内容化 / 拆分约定
 
 1. **骨架生成**（write-source 步骤 3 前半）：`build_structure <extract_dir> [ch ...]`
    → 按章写 `book_structure/ch{N}.json`（纯骨架）。每章文件独立，重跑只覆盖指定章
@@ -215,7 +216,7 @@
    `save` 拆分写回（先备份）；闸门 `gate.passed == true` 后放行。
 3. **正文内容化**（structure 第 5 步）：`attach_content <extract_dir> [ch ...]` 读入
    骨架、挂 description / proof / 内容块后**写回同一文件**（幂等可重跑）。
-4. **草稿渲染**（write-source 步骤 4）：`render_draft <extract_dir> [ch ...]` →
-   `draft_ch{N}.md`。
+4. **单元拆分**（write-source 步骤 4）：`split_draft_units <extract_dir> [ch ...]` →
+   `units/ch{N}/`（每 item 一单元 + `manifest.json`）。
 5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
-   图片真值 + 证明覆盖审计），FAIL 严禁渲染。
+   图片真值 + 证明覆盖审计），FAIL 严禁拆分。

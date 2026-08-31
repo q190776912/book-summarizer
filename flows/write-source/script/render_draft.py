@@ -1,17 +1,22 @@
-"""render_draft.py — write-source 步骤 1：由分章内容契约渲染基本总结草稿
+"""render_draft.py — 单元渲染库（write-source 步骤 4/5 共用）
+
+🔴 **2026-08-31 角色变更**：本文件从「独立渲染整章草稿 ``draft_ch{N}.md``」降级为
+**纯渲染库**——主流程不再直接调用它产出草稿（`draft` 步的命令已改为
+``split_draft_units.py``），而是由 ``split_draft_units.py``（拆分单元）与
+``merge_units.py``（拼接）复用其纯渲染函数（``_chapter_heading`` /
+``_item_header_name`` / ``_render_item`` / ``_walk_mixed`` / ``_render_proof`` /
+``_tidy_separators`` 等）。本文件**无 CLI 入口**，只能被 import 复用。
 
 职责（2026-08-29 用户需求）
 --------------------------
-🔴 **全量保真，零压缩（硬契约）**：草稿是「调整与校验」的底稿，承载的是**内容
+🔴 **全量保真，零压缩（硬契约）**：单元是「调整与校验」的底稿，承载的是**内容
 全集**——证明与描述信息**逐块原样输出，一律不得摘要化、不得跳步、不得按 Tier
 压缩、不得因长度截断**。Tier 1/2/3 只压缩**表述**，且只发生在最终 md 的调整
 步骤（唯一规则源 `docs/writing-rules.md`），**不在本渲染器内**。契约里有多少
-内容块，草稿就写多少内容块（唯一例外：章末集中习题块 ``consolidated=true`` 按
+内容块，单元就写多少内容块（唯一例外：章末集中习题块 ``consolidated=true`` 按
 习题收录规则省略）。
 
-读取 ``<extract_dir>/book_structure/book_structure_{N}.json``（attach_content 产出的
-内容化分章契约），按 **writing-rules 书写格式**机械渲染出对应章的**基本总结草稿**
-``draft_ch{N}.md``：
+渲染函数输出（供单元拆分 / 拼接复用）按 **writing-rules 书写格式**：
 
   * 标题体系：``# 第N章 / # Chapter N:``、``## §N.M``（无序号标书 ``## § 标题``）、
     节间 ``---`` 分隔线；
@@ -20,15 +25,15 @@
     （块内空行为 ``> ``、公式为 ``> $$…$$``，符合 V-F 例块连续性）；
   * 证明：proof 子节点 → ``> **证明**：…`` / ``> **Proof**: …`` 块引用——**完整
     证明原文逐块输出，不压缩**（故用「证明」而非「证明思路」：后者是最终 md
-    压成 `1. 2. …` 步骤后的标签，用在草稿上会误导调整者以为可以删内容。
+    压成 `1. 2. …` 步骤后的标签，用在底稿上会误导调整者以为可以删内容。
     两个标签 F 层 fixer 都识别，写成 ``**Proof**`` 不影响后续校验）；
   * 习题收录规则：章末集中习题块（``consolidated=true``）**省略**，穿插练习保留；
   * 带编号的行间公式：契约公式块的 ``tag`` 以 KaTeX ``\\tag{...}`` 独立一行写入
-    ``$$`` 块内（书无号不编造；草稿据此保留序标供调整与 Q 层对账）；
+    ``$$`` 块内（书无号不编造；单元据此保留序标供调整与 Q 层对账）；
   * 描述信息（description 节点）为无标题纯段落；图片块按原嵌图格式（flex div + ``<img>``）输出；
   * 分段：``line_start`` + ``indent``（首行缩进带）另起一段。
 
-草稿是 write-source 逐章「调整与校验」的**底稿**，不是成品，**不经 verify、不受任何校验层约束**（P 层冗长告警等在草稿上属预期——初版按设计保留完整信息，Tier 压缩发生在调整步骤）：
+单元是 write-source 逐章「调整与校验」的**底稿**，不是成品，**不经 verify、不受任何校验层约束**（P 层冗长告警等在其上属预期——初版按设计保留完整信息，Tier 压缩发生在调整步骤）：
 
   * 公式是 OCR 原样（UniMERNet 风格，含 `` { `` 等噪声）——🔴 调整时必须逐条
     重写校正（writing-rules：OCR 公式严禁直接照抄）；
@@ -36,20 +41,6 @@
   * 条目正文首行可能与粗体标题重复（标题剥离未命中时）——调整时去重；
   * 保真分级（Tier 1/2/3）、例块包裹、习题收录、图片嵌入等写作规则在调整步骤套用
     （唯一规则源 `docs/writing-rules.md`）。
-
-新鲜度
-------
-渲染前对每章做结构指纹比对（:func:`attach_content.fingerprint_matches`）：单文件
-分章契约（``book_structure/ch{N}.json``）因回填 / restructure 发生变化（或缺文件）时自动对该章
-重跑 attach_content，保证草稿始终基于最新契约。
-
-用法
-----
-    python flows/write-source/script/render_draft.py <extract_dir> [ch ...] [--force]
-    # 不传 <ch> 即全部章；--force 强制重挂内容后渲染
-输出
-----
-    <extract_dir>/book_structure/draft_ch{N}.md
 """
 import json
 import os
@@ -228,8 +219,8 @@ def _emit_blocks(blocks, out, buf, quote=False, lang="cn"):
 
 
 _FLEX_STYLE = 'display:flex; gap:6px; flex-wrap:wrap; justify-content:center'
-_FIGCTX = {}          # render_chapter 初始化：{index_by_basename, labels, book_dir}
-_CTX = {"prev": "heading"}   # V-F 条目级分割线状态机（render_chapter 每章重置）
+_FIGCTX = {}          # 图上下文：{index_by_basename, labels, book_dir}（调用方 split 初始化）
+_CTX = {"prev": "heading"}   # V-F 条目级分割线状态机（调用方 split 每章重置；仅 top=True 用）
 
 
 def _img_html(path):
@@ -424,81 +415,4 @@ def _tidy_separators(lines):
     return res
 
 
-def render_chapter(ext, ch_key, language):
-    """渲染单章草稿；返回输出路径。"""
-    p = _ac.out_path(ext, ch_key)
-    if not os.path.exists(p):
-        raise SystemExit("[render_draft] 缺 %s——先跑 build_structure + attach_content。" % p)
-    with open(p, encoding="utf-8") as f:
-        node = json.load(f)
-    # 原嵌图格式上下文：figure_index 按文件名索引 + 图号标签（verify_config Figure 组）
-    fp = os.path.join(ext, "figure_index.json")
-    try:
-        with open(fp, encoding="utf-8") as f:
-            idx = json.load(f)
-    except Exception:
-        idx = []
-    _FIGCTX.clear()
-    _FIGCTX["index_by_basename"] = {
-        os.path.basename(e.get("file") or ""): e
-        for e in (idx if isinstance(idx, list) else [])}
-    _FIGCTX["labels"] = _load_fig_labels(ext)
-    _FIGCTX["book_dir"] = os.path.dirname(os.path.abspath(ext.rstrip("/\\")))
-    _CTX["prev"] = "heading"
-    if language == "en":
-        out = [
-            "<!-- book-summarizer auto-draft (write-source): rendered from %s per" % os.path.basename(p),
-            "     writing-rules base formatting (bold-label items, > example blocks, proof-sketch",
-            "     quotes, paragraphing). Formulas are raw OCR -- MUST be rewritten during the",
-            "     adjustment pass (never copy verbatim); proofs compressed to numbered steps;",
-            "     Tier compression / noise cleanup happen in the adjustment pass. -->",
-            "",
-        ]
-    else:
-        out = [
-            "<!-- book-summarizer 自动草稿（write-source 步骤 1）：由 %s 渲染，已按" % os.path.basename(p),
-            "     writing-rules 基本格式排版（粗体标签冒号接正文、例块 > 包裹、证明思路块引用、",
-            "     分段）。公式为 OCR 原样，调整时必须逐条重写校正（严禁照抄）；证明须压缩为",
-            "     1. 2. … 编号步骤；Tier 压缩 / 英文标注 / 残余噪声清理在调整时执行。 -->",
-            "",
-        ]
-    _render_node(node, out, language)
-    out = _tidy_separators(out)
-    if language == "en":
-        # 英文书草稿禁任何 CJK（writing-rules 双语铁律）：契约 CN 标签已由
-        # _item_header_name 转换，此处清除 OCR 数学字形误读残留的单字 CJK 碎片
-        # （入/口/哆 等，均在 $$ 块外，实测不破坏公式）。
-        out = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in out]
-    out_p = os.path.join(ext, _ac.OUT_DIR_NAME, "draft_ch%s.md" % ch_key)
-    with open(out_p, "w", encoding="utf-8") as f:
-        f.write("\n".join(out).rstrip() + "\n")
-    return out_p
 
-
-def main():
-    argv = [a for a in sys.argv[1:] if a != "--force"]
-    force = "--force" in sys.argv[1:]
-    if not argv:
-        print(__doc__)
-        return 2
-    ext = argv[0]
-    if not os.path.exists(os.path.join(ext, "_extraction_done.json")):
-        print("[render_draft] BLOCKED: 缺 _extraction_done.json（MM Repair 未完成）。")
-        return 2
-    try:
-        chapters = [int(x) for x in argv[1:]]
-    except ValueError:
-        chapters = argv[1:]
-    if force:
-        _ac.attach(ext, chapters or None)
-    keys = [k for k in _ac.list_chapter_keys(ext)
-            if not chapters or k in {str(c) for c in chapters}]
-    language = _book_language(ext)
-    for k in keys:
-        out = render_chapter(ext, k, language)
-        print("draft -> %s" % out)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

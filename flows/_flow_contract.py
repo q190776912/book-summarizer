@@ -70,16 +70,26 @@ RUN_COMMANDS = {
         # 查漏回填 + gate.passed 闸门）是本步内的硬闸，见 structure.md 第 2-4 步
         "python flows/write-source/structure/script/build_structure.py \"{extract_dir}\""),
     "write_source.draft": ("cmd",
-        # 基本总结草稿：内容完整性闸门 + 渲染（完整契约已由 structure 步一步
-        # 产出，无需再 attach；图片经契约 image 块随草稿继承，不再单独嵌图）
+        # 基本总结草稿拆分：内容完整性闸门 + 把整章草稿细分为「每 item 一单元」
+        # 的 units/ch{N}/ 目录（2026-08-31 起取代整章 draft_ch{N}.md 输出）。
+        # 完整契约已由 structure 步产出，无需再 attach；图片经契约 image 块随
+        # 单元继承。render_draft.py 降级为 split_draft_units 的渲染库（不再单独产出草稿）。
         "python verify/script/check_content_completeness.py \"{extract_dir}\" && "
-        "python flows/write-source/script/render_draft.py \"{extract_dir}\""),
+        "python flows/write-source/script/split_draft_units.py \"{extract_dir}\""),
     "write_source.write_chapters": ("agent",
-        "步骤1 render_draft.py 由含内容完整契约 ch{N}.json 渲染基本总结草稿 draft_ch{N}.md；"
-        "步骤2 基于草稿逐章调整（公式逐条重写校正、Tier 压缩、writing-rules 格式，"
-        "存疑回查 page_*.json），写出源语言 ChapterN_*.md / 第N章_*.md。"
-        "🔴 落账证据机械核对（脱离草稿 = 硬拒）：每个最终 md 晚于 draft_ch{N}.md，"
-        "且契约骨架节名 + 全部编号项 name 在最终 md 中在位。"),
+        "🔴 对应文档步骤 5（agent 逐个改好 + 门控）与步骤 6（纯脚本拼接）："
+        "① agent 逐个打开 split_draft_units.py 拆出的单元目录 units/ch{N}/（章标题 / "
+        "节标题 / 描述 / 每个编号项 各一 md），按 writing-rules 改好（公式逐条重写校正、"
+        "Tier 压缩、格式落地、存疑回查 page_*.json）——🔴 全部写作要求在文档步骤 5 "
+        "落实，每个单元把首行 DRAFT 标记改为 DONE；"
+        "② 跑 python flows/write-source/script/gate_units.py \"{extract_dir}\" "
+        "——🔴 强制门控：全部单元 DONE 且内容确被改写才 exit 0（每个 item 都不漏）；"
+        "③ 跑 python flows/write-source/script/merge_units.py \"{extract_dir}\" <ch> "
+        "逐章拼接单元成最终 ChapterN_*.md / 第N章_*.md——文档步骤 6 纯脚本机械执行"
+        "（按 V-F 规则重建 --- 分隔线），无需 agent 写作调整。🔴 merge_units 自带"
+        "强制门控：拼接前先跑 gate_units，任一单元未改好即直接报错拒绝拼接。"
+        "🔴 落账证据机械核对（脱离单元 / 门控未过 = 硬拒）：每章 gate_units 通过"
+        "（全部单元改好）+ 最终 md 存在。"),
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
     "write_source.verify_source": ("cmd",
@@ -287,7 +297,12 @@ class physical_evidence:
 
     @staticmethod
     def draft_ok(book_dir, extract_dir):
-        """基本总结草稿证据：每个结构章节都有内容化分章契约 + 渲染出的草稿文件。"""
+        """单元拆分证据：每个结构章节都有内容化分章契约 + 拆出的单元目录。
+
+        🔴 2026-08-31 重构：原「整章草稿 draft_ch{N}.md」被「每 item 一单元目录
+        units/ch{N}/」取代（split_draft_units.py）。契约必须 content 化后拆分，
+        且 manifest 晚于契约（attach 重跑后必须重拆，否则单元过期）。
+        """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         sub = os.path.join(ex, "book_structure")
         keys = _chapter_map_keys(ex)
@@ -297,21 +312,21 @@ class physical_evidence:
         for k in keys:
             fname = (f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json")
             jp = os.path.join(sub, fname)
-            dp = os.path.join(sub, f"draft_ch{k}.md")
+            mp = os.path.join(sub, "units", f"ch{k}", "manifest.json")
             if not os.path.exists(jp):
                 missing.append(k)
                 continue
-            if not os.path.exists(dp):
+            if not os.path.exists(mp):
                 missing.append(k)
                 continue
-            # 新鲜度：草稿必须晚于契约（attach 重跑后必须重渲，否则草稿过期）
-            if os.path.getmtime(dp) < os.path.getmtime(jp):
+            # 新鲜度：manifest 必须晚于契约（attach 重跑后必须重拆，否则单元过期）
+            if os.path.getmtime(mp) < os.path.getmtime(jp):
                 stale.append(k)
         if missing:
-            return False, f"缺内容化分章契约 / 草稿: {missing[:4]}"
+            return False, f"缺内容化分章契约 / 单元 manifest: {missing[:4]}"
         if stale:
-            return False, f"草稿早于契约（attach 后未重渲）: {stale[:4]}"
-        return True, f"{len(keys)} 章内容化契约 + 草稿齐备且新鲜"
+            return False, f"单元 manifest 早于契约（attach 后未重拆）: {stale[:4]}"
+        return True, f"{len(keys)} 章内容化契约 + 单元拆分齐备且新鲜"
 
     @staticmethod
     def _count_md(book_dir, prefix):
@@ -468,45 +483,84 @@ class physical_evidence:
         return miss
 
     @staticmethod
-    def write_chapters_ok(book_dir, extract_dir):
-        """写章节证据 = ① 章数齐备；② 每章「基于草稿」机械核对通过。
+    def _units_gate_ok(units_dir, manifest):
+        """单元门控核心判定（内联，避免 import 耦合）：每单元文件存在、首行
+        DONE、内容 hash 已变。返回 (ok, problems)。"""
+        import hashlib
+        problems = []
+        done = {"DRAFT": False, "DONE": True}
+        mark_re = re.compile(
+            r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
+        for u in manifest.get("units") or []:
+            up = os.path.join(units_dir, u["file"])
+            if not os.path.exists(up):
+                problems.append("缺失单元文件 %s（%s %s）" % (u["file"], u["type"], u["key"]))
+                continue
+            try:
+                raw = open(up, encoding="utf-8").read()
+            except Exception:
+                problems.append("单元 %s 读取失败" % u["file"])
+                continue
+            m = mark_re.match(raw)
+            if not m:
+                problems.append("单元 %s 首行标记缺失（须 DONE）" % u["file"])
+                continue
+            if m.group(1) == "DRAFT":
+                problems.append("单元 %s（%s %s）仍未处理（标记仍 DRAFT）" % (
+                    u["file"], u["type"], u["key"]))
+                continue
+            # item / desc 必须内容确被改写；章节标题本就无需改动，只确认 DONE
+            if u["type"] in ("item", "desc"):
+                body = raw[m.end():].lstrip("\r\n").rstrip("\n")
+                if hashlib.sha1(body.encode("utf-8")).hexdigest() == (u.get("hash") or ""):
+                    problems.append("单元 %s（%s %s）标记 DONE 但内容未改写" % (
+                        u["file"], u["type"], u["key"]))
+        return (len(problems) == 0, problems)
 
-        🔴 2026-08-30 强化（死命令：不基于草稿 = 落账被硬拒）：此前只核
-        「已写章数」，agent 脱离 draft_ch{N}.md 自由发挥（漏条目 / 自创层级 /
-        格式漂移）也能落账，返工全部堆积到 verify_source。现在凡有草稿的章，
-        mark 前机械核对：
-          - **新鲜度**：每个最终 md 的 mtime ≥ draft_ch{N}.md（写在草稿渲染
-            之后，杜绝跳过草稿直接凭 page_*.json / 印象写作）；
-          - **骨架同构**：契约全部 section 名在最终 md 中在位（禁重排 /
-            自创层级 / 漏节）；
-          - **条目在位**：契约全部编号项 name 在最终 md 中在位（漏项当场
-            拦截，不等到步骤 6）。
-        草稿 / 契约缺失（legacy 旧书）的章退化为章数核对并如实注明。
+    @staticmethod
+    def write_chapters_ok(book_dir, extract_dir):
+        """写章节证据 = ① 章数齐备；② 每章单元门控通过 + 契约名在位。
+
+        🔴 2026-08-31 重构（死命令：不逐单元改好 = 落账被硬拒）：整章草稿
+        draft_ch{N}.md 已细分为「每 item 一单元」目录 units/ch{N}/（split_draft_units）。
+        agent 必须**逐个把单元按 writing-rules 改好**（首行 DRAFT→DONE + 内容确被
+        改写），由 gate_units.py 强制门控。mark 前机械核对每章：
+          - **单元门控通过**：manifest 中每个单元文件存在、首行 DONE、正文 hash
+            已变——保证「每个编号项都改好、一个不漏」；
+          - **最终 md 存在**：merge_units 拼接产物；
+          - **契约名在位**：结构契约全部 section 名 + 编号项 name 在最终 md 中
+            在位（merge 拼接的兜底，防单元内标题被改没导致漏项）。
+        单元 manifest / 契约缺失（legacy 旧书）的章退化为章数核对并如实注明。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
-        missing_md, stale, missing_names, degraded = [], [], [], []
+        missing_md, gate_fail, missing_names, degraded = [], [], [], []
         for k in keys:
             md_files = physical_evidence._md_group(book_dir, k)
             if not md_files:
                 missing_md.append(k)
                 continue
-            draft = os.path.join(ex, "book_structure", f"draft_ch{k}.md")
+            mpath = os.path.join(ex, "book_structure", "units", f"ch{k}", "manifest.json")
             contract_path = os.path.join(
                 ex, "book_structure",
                 ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k)
-            if not os.path.exists(draft) or not os.path.exists(contract_path):
+            if not os.path.exists(mpath) or not os.path.exists(contract_path):
                 degraded.append(k)
                 continue
-            # ① 新鲜度：写在草稿之后（2 秒容差吸收文件系统时间粒度）
-            stale_d = [f for f in md_files
-                       if os.path.getmtime(f) < os.path.getmtime(draft) - 2]
-            if stale_d:
-                stale.append((k, os.path.basename(stale_d[0])))
+            # ① 单元门控：每单元存在 + DONE + 内容已改写（每个 item 都不漏）
+            try:
+                manifest = json.load(open(mpath, encoding="utf-8"))
+            except Exception:
+                gate_fail.append((k, "manifest 非法 JSON"))
                 continue
-            # ②③ 骨架同构 + 条目在位
+            ok_g, gprob = physical_evidence._units_gate_ok(
+                os.path.join(ex, "book_structure", "units", f"ch{k}"), manifest)
+            if not ok_g:
+                gate_fail.append((k, gprob[0] if gprob else "门控未通过"))
+                continue
+            # ② 契约名在位（merge 拼接兜底，防单元内漏项）
             try:
                 contract = json.load(open(contract_path, encoding="utf-8"))
             except Exception:
@@ -525,21 +579,20 @@ class physical_evidence:
                 missing_names.append((k, miss))
         if missing_md:
             return False, f"缺最终 md {len(missing_md)} 章: {missing_md[:4]}"
-        if stale:
-            kk, fn = stale[0]
-            return False, (f"{len(stale)} 章 md 早于草稿（脱离 draft_ch{kk}.md 写作，"
-                           f"或草稿重渲后未重写）: ch{kk} {fn} 等；"
-                           f"必须以草稿为底稿重写后再 mark")
+        if gate_fail:
+            k, prob = gate_fail[0]
+            return False, (f"{len(gate_fail)} 章单元门控未通过（须逐个把单元改好、"
+                           f"DONE + 内容改写后重跑 gate_units）: ch{k} {prob}")
         if missing_names:
             k, miss = missing_names[0]
             return False, (f"{len(missing_names)} 章相对结构契约漏骨架节/编号项: "
                            f"ch{k} 缺 {len(miss)} 项（如 {miss[:4]}）；"
-                           f"须回归 draft_ch{k}.md / 契约补全后再 mark"
+                           f"须回归 units/ch{k}/ 单元补齐后再 mark"
                            f"（若条目为 OCR 噪声误收，走 manage_ignore 机制，勿编造）")
         if degraded:
-            return True, (f"已写 {len(keys)} 章（{len(degraded)} 章缺草稿/契约，"
+            return True, (f"已写 {len(keys)} 章（{len(degraded)} 章缺单元 manifest/契约，"
                           f"退化为章数核对: {degraded[:4]}；建议重跑 draft 步后重验）")
-        return True, (f"已写 {len(keys)} 章，均基于草稿（mtime 晚于 draft_ch{{N}}.md）"
+        return True, (f"已写 {len(keys)} 章，每章单元门控全部通过（每 item 改好）"
                       f"且契约骨架节 + 编号项全部在位")
 
     @staticmethod

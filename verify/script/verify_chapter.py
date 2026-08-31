@@ -25,7 +25,7 @@ registered in `verify/script/register_all.py` and orchestrated by
 Exit 0 only when there is NO truly-missing item AND NO B-layer blocking issue
 AND NO KaTeX error AND (if figure_index.json present) NO missing-figure gap AND
 NO invalid figure AND NO quote-block continuity gap (G-layer).
-Referenced by write-source 步骤 6（批量校验硬闸）。
+Referenced by write-source 步骤 7（批量校验硬闸）。
 """
 import os
 import sys

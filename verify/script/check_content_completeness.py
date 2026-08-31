@@ -26,7 +26,7 @@
 用法
 ----
     python verify/script/check_content_completeness.py <extract_dir> [ch ...]
-退出码：0 = 全部通过；1 = 存在 FAIL。write-source 步骤 4 以此为闸（渲染草稿前执行）。
+退出码：0 = 全部通过；1 = 存在 FAIL。write-source 步骤 4 以此为闸（拆分单元前执行）。
 """
 import collections
 import json

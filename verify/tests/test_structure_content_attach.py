@@ -8,7 +8,8 @@ Covers the structure Step-5 content attach + write-source draft rendering:
       description nodes "D{n}" and proof child nodes "{key}-P{n}" merged into
       sub_sec in document order; per-chapter split under
       <extract_dir>/book_structure/)
-  - flows/write-source/script/render_draft.py  (draft_ch{N}.md rendering)
+  - flows/write-source/script/render_draft.py  (单元渲染库；渲染验证在
+    split_draft_units 拆出的单元产物上做)
 
 The per-chapter contract (book_structure/ch{N}.json) stays structure-only; these tests
 also pin that attach() never rewrites it and that derived nodes (description /
@@ -16,6 +17,7 @@ proof) are excluded from the structural fingerprint.
 """
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -34,7 +36,28 @@ _boot.setup()
 
 import attach_content as ac
 import render_draft as rd
+import split_draft_units as sp
 import check_content_completeness as cc
+
+
+def _units_md(ext, ch, lang):
+    """用 split_draft_units 拆分单章，按 manifest 顺序拼接全部单元正文（去首行标记）。
+
+    🔴 2026-08-31 起渲染验证改在单元产物上做（render_draft.py 已无整章 CLI /
+    render_chapter）：草稿的 writing-rules 格式由每个单元文件承载。
+    """
+    mp = sp.split_chapter(ext, ch, lang, force=True)
+    outdir = os.path.join(ext, "book_structure", "units", "ch" + ch)
+    with open(mp, encoding="utf-8") as f:
+        man = json.load(f)
+    parts = []
+    for u in man["units"]:
+        with open(os.path.join(outdir, u["file"]), encoding="utf-8") as f:
+            raw = f.read()
+        m = re.search(r"<!--.*?-->\n?", raw, re.S)
+        body = raw[m.end():] if m else raw
+        parts.append(body.strip())
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -534,11 +557,9 @@ def test_attach_split_fingerprint_and_draft_roundtrip():
     th = [n for n in sec3["sub_sec"] if n.get("key") == "1.1-2"][0]
     assert isinstance(th.get("sub_sec"), list)   # 新条目也进入 attach 管线
 
-    # 渲染草稿：writing-rules 书写格式——标签冒号接正文、例块 > 包裹、证明思路块引用、
-    # 图片行、序言纯段落、consolidated 练习省略
-    out = rd.render_chapter(ext, "1", "en")
-    with open(out, encoding="utf-8") as f:
-        md = f.read()
+    # 渲染验证（2026-08-31 起在单元产物上做）：writing-rules 书写格式——标签冒号
+    # 接正文、例块 > 包裹、证明思路块引用、图片行、序言纯段落、consolidated 练习省略
+    md = _units_md(ext, "1", "en")
     assert "# Chapter 1: Intro" in md
     assert "## §1.1 Basics" in md
     assert "**1.1-1 Definition (Metric).**:" in md              # 标签冒号接正文（EN）
@@ -591,7 +612,7 @@ def test_render_draft_keeps_full_proof_and_description():
              ]}]}
     json.dump(node, open(ac.chapter_json_path(ext, "1"), "w", encoding="utf-8"),
               ensure_ascii=False)
-    md = open(rd.render_chapter(ext, "1", "en"), encoding="utf-8").read()
+    md = _units_md(ext, "1", "en")
     # 描述信息：每个源段都在
     for t in desc_body:
         assert t in md

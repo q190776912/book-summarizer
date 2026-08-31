@@ -21,6 +21,33 @@
 
 ---
 
+## 单元化写作流程（write-source 步骤 4–6，2026-08-31 起）
+
+> 写源阶段不再基于「整章草稿」写作，而是**以拆分出的单元为底稿，在步骤 5
+> 逐个改好**。步骤 6 只是纯脚本拼接，**不再需要 agent 参与**。
+
+- **拆分**（步骤 4，纯脚本）：`split_draft_units.py` 把内容化分章契约拆成
+  按写作顺序的单元目录 `units/ch{N}/`——**每个编号项（定义/定理/例等，含其内部
+  证明）一个独立 md 文件**，另有章标题 / 节标题 / 描述散文单元。每单元首行是
+  `<!-- book-summarizer DRAFT unit: … -->` 标记。
+- **逐个改好**（步骤 5 核心，agent）：打开每个单元文件，按本文件各规则改好该
+  单元内容（公式重写 / Tier 压缩 / 格式落地）——**全部写作要求在此落实**，
+  并把首行 `DRAFT` 改为 `DONE`。**禁止跳过任何单元。**
+- **🔴 强制门控**（步骤 5 末尾，脚本）：`gate_units.py` 核对每个单元「存在 +
+  首行 DONE + 内容确被改写」——只有全部单元都改好（每个 item 都不漏）才
+  exit 0，否则列出未处理清单。未过 gate 严禁进入步骤 6 拼接。
+- **拼接**（步骤 6，纯脚本无 agent）：`merge_units.py` 按 manifest 顺序合并全部
+  单元为最终 `ChapterN_*.md` / `第N章_*.md`，并按本文件 [V-F](#v-f-格式与块引用f-层母文档)
+  规则重建条目级 `---` 分隔线（节标题前 / item↔item / item↔desc 之间加 `---`；
+  章/节标题之下第一元素、连续 desc 不加；堆叠 `---` 自动合并）。
+  🔴 **merge 自带强制门控**：拼接前先跑 `gate_units`，任一单元未改好（首行非
+  DONE / 内容未改写 / 缺失）即直接报错拒绝拼接——即使跳过 `gate_units` 单独跑
+  merge 也会被拦截。
+- 单元内「结构骨架」不可重排、不可自创层级；公式是 OCR 原样，**严禁照抄**，
+  须按本文档重写校正。
+
+---
+
 ## OCR 噪声处理原则
 
 OCR on scanned mathematical textbooks produces **noisy text and severely corrupted LaTeX formulas**. This is expected and not a bug. The correct approach:

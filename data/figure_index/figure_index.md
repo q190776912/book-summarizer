@@ -8,7 +8,7 @@ PDF 抽取阶段 2 的**命名索引**：把阶段 1 的检测框匹配到书源
 - 类与构造函数：`FigureIndex` / `FigureEmbedOverrides`（+ `Figure`）—— `from figure_index import FigureIndex, FigureEmbedOverrides`；
   `FigureIndex.from_figures(figs)` / `FigureEmbedOverrides.from_figures(figs)`，均 `.dump(path)`。
 - 按章增量实例化：`FigureIndex.from_records(records).dump(path)`，由模块级 `merge_index(out_dir, ch, assigned)`
-  提供——**被 `flows/.../assign_figures.py` 委托**（裸 `json.dump` 已移出流程脚本，实例化归本目录）。
+  提供——**被 `flows/script/assign_figures.py` 委托**（裸 `json.dump` 已移出流程脚本，实例化归本目录）。
 - 落盘：`<book>/_extract/figure_index.json`
 
 ## 数据结构（每条约）

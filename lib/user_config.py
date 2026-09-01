@@ -18,6 +18,7 @@ by hand.
 CLI (used by bash launchers and the agent):
 
     python lib/user_config.py get <dotted.key>     # prints the resolved value
+    python lib/user_config.py <dotted.key>         # short form (same as `get`)
     python lib/user_config.py status               # JSON: resolved + missing + discovered
 """
 import json
@@ -223,6 +224,16 @@ def _resolved(key):
     return True
 
 
+def _default_of(dotted):
+    """Resolve a dotted key against the built-in ``_DEFAULTS`` tree (None when absent)."""
+    node = _DEFAULTS
+    for p in dotted.split("."):
+        if not isinstance(node, dict) or p not in node:
+            return None
+        node = node[p]
+    return node
+
+
 def missing():
     """Return ``{dotted_key: {...}}`` for every required key that is not
     resolved: unset, or a configured path that does not exist. Each entry
@@ -236,7 +247,7 @@ def missing():
         val = get(key)
         out[key] = {
             "configured": val or None,
-            "default": _DEFAULTS.get(key),
+            "default": _default_of(key),
             "discovered": disc.get(key) or None,
             "exists": bool(val) and Path(val).exists() if key in _PATH_KEYS else None,
         }
@@ -244,10 +255,17 @@ def missing():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    argv = sys.argv[1:]
+    # `get <dotted.key>` (documented) and bare `<dotted.key>` (used by
+    # launchers) are both accepted; anything else is a usage error.
+    if len(argv) == 2 and argv[0] == "get":
+        key = argv[1]
+    elif len(argv) == 1 and argv[0] != "get":
+        key = argv[0]
+    else:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    if sys.argv[1] == "status":
+    if key == "status":
         cfg = load()
         disc = discover()
         print(json.dumps({
@@ -258,8 +276,8 @@ if __name__ == "__main__":
             "missing": missing(),
         }, ensure_ascii=False, indent=2))
         sys.exit(0)
-    val = get(sys.argv[1])
+    val = get(key)
     if val is None:
-        print(f"config key not found: {sys.argv[1]}", file=sys.stderr)
+        print(f"config key not found: {key}", file=sys.stderr)
         sys.exit(1)
     print(val)

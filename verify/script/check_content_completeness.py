@@ -222,7 +222,6 @@ def check_chapter(ext, ch_node):
                 f" 未挂={len(unattached)}")
 
     # ③ 证明覆盖审计（尽力而为，WARN 不阻断）
-    proof_nodes = _nodes_by_type(saved).get("proof", 0)
     missed = []
     for n in _walk_nodes(saved):
         for b in n.get("sub_sec") or []:

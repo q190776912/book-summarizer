@@ -116,13 +116,12 @@ def find_items(ch, start, end, extract_dir):
         fpath = os.path.join(extract_dir, f"page_{p:03d}.json")
         if not os.path.exists(fpath):
             continue
-        f = page_json.PageJson.load(fpath, "r").data
+        data = page_json.PageJson.load(fpath).data
         for t in data.get("text", []):
             txt = t.get("text", "").strip()
             if not txt:
                 continue
-            poly = t.get("poly", [])
-            y = poly[1] if poly and len(poly) >= 8 else 0
+            y = _ykey(t)
             all_blocks.append((p, y, txt))
     all_blocks.sort(key=lambda x: (x[0], x[1]))
 

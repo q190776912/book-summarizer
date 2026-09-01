@@ -41,7 +41,7 @@ def main():
         if not os.path.exists(p):
             print("WARNING: missing %s" % p, file=sys.stderr)
             continue
-        fh = PageJson.load(p).data
+        d = PageJson.load(p).data
         lines = []
         for it in d.get("text", []):
             txt = it.get("text") or ""

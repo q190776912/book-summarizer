@@ -47,6 +47,9 @@ import shutil
 
 # ---- 定位 _extract（分章契约 book_structure/ 与 page_*.json 所在）----
 # 优先：src_md 同目录下的 _extract；其次：脚本同目录（skill 模式）；再其次：BKS_EXTRACT_DIR。
+if len(sys.argv) < 5:
+    print(__doc__)
+    raise SystemExit(2)
 SRC = sys.argv[4]
 SRC_DIR = os.path.dirname(os.path.abspath(SRC))
 if os.path.isdir(os.path.join(SRC_DIR, "_extract")):
@@ -86,6 +89,9 @@ def page_to_sec(pg):
         if ps <= pg <= pe and lv > bestlv:
             bestlv = lv; best = key
     return best
+# OCR 行首条目头：兼容「带/不带章前缀」(定义2.5 / 定义5)，统一用章内号作键
+# （\d+ 贪婪取点号后的首位段；OCR 丢点时「定义25」也按 2.5→5 容错回收）
+HEADER_RE = re.compile(r'^(定义|定理|引理|推论|命题|例)\s*%s?\.?(\d+)' % chkey)
 ocr = {}
 for pg in range(pg0, pg1 + 1):
     fn = os.path.join(EX, "page_%03d.json" % pg)

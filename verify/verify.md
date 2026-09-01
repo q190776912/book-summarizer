@@ -9,7 +9,7 @@
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
 ## 目的
-某语言全部初稿写完后，**一次性批量校验该语言全部章节**，未过则用 `--fix` 自动修复后重验，直至 `verify PASS + KaTeX OK`。
+某语言全部初稿写完后，**一次性批量校验该语言全部章节**，未过则修复后重验，直至 `verify PASS + KaTeX OK`（🔴 全层 `--fix` 已默认禁用，修复纪律见下方步骤 0 / 步骤 3：默认选择性单层修复 / 手工定点修改，确需自动修复用 `--fix --fix-force` 并先过 PREFLIGHT）。
 ## 前置
 - 待校验语言的全部章节初稿写完。
 - `_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式）。
@@ -18,7 +18,7 @@
 ## 校验层注册表（SSOT）
 所有校验层脚本在 `verify/<snake>/script/<snake>.py`，子流程文档 `<snake>.md` 在 `verify/<snake>/` 目录内（与 `script/` 并列），
 由 `script/register_all.py` 遍历 `verify/*/script/` 用 `importlib` 按裸名 `import` 自动发现并注册（无 `__init__.py`，下划线前缀模块跳过）。`code` 为稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；
-`name` 为语义名。`order` 决定运行顺序，`auto_fixable` / `fix_order` 决定 `--fix` 修复顺序。
+`name` 为语义名。`order` 决定运行顺序，`auto_fixable` / `fix_order` 决定 `--fix` 修复顺序（🔴 全层 `--fix` 默认禁用，见步骤 0 与步骤 3 修复纪律）。
 
 | code | 语义名 | 模块（snake） | order | auto_fixable | fix_order | 子流程文档 |
 |------|--------|---------------|-------|--------------|-----------|------------|

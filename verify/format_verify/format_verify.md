@@ -28,7 +28,7 @@
 > 每条规则给出：**语义** + **错误格式**（被判定为非法的写法）+ **正确格式**（应当写成的写法）+ 契约键 / 阻断性 / `--fix` / 原层代号。约定：结构标签（`**定义 N.N**`、`**定理 N.N**`、`**引理**`、`**推论**` 等）与陈述内容位于顶层；证明、例、注、说明等附属块一律用 `>` 块引用包裹（`> **证明**`、`> **例 N**`、`> **注**` …）。
 
 ### 检测规则1 · KaTeX 渲染校验（原 C 层，检测 + `--fix` 自动修复、阻断 FAIL）
-调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，`verify --fix` 自动调用；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`。
+调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，经 `verify_chapter.py` 的 `--fix` 调用（🔴 2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 门，见下方「前置守卫」）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（🔴 独立 CLI 自 2026-09 起内置同款 PREFLIGHT 写回守卫：围栏不配对 / 块外 `\tag` 时跳过不写回）。
 
 **错误格式（KaTeX 渲染失败，阻断 FAIL）：**
 ```text
@@ -58,7 +58,7 @@ $$x = y$$
 | 7 | `$$\text{N}pt\]` 对齐参数 | `\\[\text{N}pt]` 被改写为 `$$\text{N}pt]` |
 | 8 | `$$` 块内空行 | 空白行插入 `$$` 内部，部分渲染器中断显示块 |
 
-> 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–10（含单行 `$$…$$` 显示数学拆分）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览），复验 `python verify/format_verify/script/check_katex.py <file>`。
+> 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–10（含单行 `$$…$$` 显示数学拆分）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览；🔴 独立 CLI 自 2026-09 起内置 PREFLIGHT 写回守卫，与 `verify --fix` 同级），复验 `python verify/format_verify/script/check_katex.py <file>`。
 >
 > 🔴 **模式 2 的保守判定（2026-08 Kreyszig 事故修复）**：旧启发式「块内含中文且首行非反斜杠命令 → 拆围栏」把 `\text{中文}` 公式与字母开头的合法显示式（如 `p(\alpha x)=… \text{对所有 }…`）成批误拆（单章最多 -14 对围栏）。现规则：剥离 `$…$` 行内段后，仅当**行外文本含 CJK 散文且全块无任何 LaTeX 结构**（无命令/`&`/`^`/`_`/`{}`/`\begin{}`）或包裹 `##` 标题时才拆；纯关系式（`x=y+z.` 这类无命令块）一律保留围栏（疑错从有）。回归测试见 `verify/tests/test_fix_katex_fence.py`。
 

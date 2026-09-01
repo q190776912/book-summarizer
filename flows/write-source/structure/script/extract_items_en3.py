@@ -56,16 +56,39 @@ EN3_LABEL_CANON = {
     'deinition': 'Definition',
     'construction': 'Remark', 'warning': 'Remark', 'notation': 'Remark',
     'note': 'Remark',
+    # 🔴 Weibel 等书 OCR 把英文标签词咬成「尾部碎片」（漏掉首部、只留尾 4+ 字母）：
+    #   cise     = Exercise（"Exer▢cise" 首部丢失，留 cise）
+    #   orem     = Theorem（"The▢orem"）
+    #   emma     = Lemma（"Le▢mma"）
+    #   llary    = Corollary（"Coro▢llary"）
+    #   mple     = Example（"Exa▢mple"）；ples/xample/examp 同理（Examples/例截断）
+    #   mark     = Remark（"Re▢mark"）；remak/remarl 同理
+    #   tion     = Definition（"Defini▢tion" 尾 4 字母；Proposition 也截成 tion，
+    #             本书 §1 中 tion 多为 Definition，故归一 Definition，个别 Proposition
+    #             由 step5 agent 据 OCR 正文校正）
+    #   sition   = Proposition（"Proposi▢tion" 尾 6 字母，区别于 Definition 的 tion）
+    # 均带 \b 词边界（EN3_LAB_RE 外层 \b 首界 + (?![A-Za-z]) 尾界），不会命中
+    # exercise/lemma 等中词（mid-word 无边界），故不加错。
+    'cise': 'Exercise', 'orem': 'Theorem', 'emma': 'Lemma', 'llary': 'Corollary',
+    'mple': 'Example', 'ples': 'Example', 'xample': 'Example', 'examp': 'Example',
+    'mark': 'Remark', 'remak': 'Remark', 'remarl': 'Remark',
+    'tion': 'Definition', 'sition': 'Proposition', 'oposition': 'Proposition',
 }
 EN3_LABEL_ALT = '|'.join([
-    '(?:Definition|Defnition|Defintion|Deinition)', 'Theorem', 'Lemma',
+    '(?:Definition|Defnition|Defintion|Deinition|tion)', 'Theorem', 'Lemma',
     # OCR 常把 i 误读为 l（PROPOslTloN），加模糊分支容忍
-    '(?:Proposition|Propos[l1]t[l1]on)',
+    '(?:Proposition|Propos[l1]t[l1]on|sition|oposition)',
     'Corollary', 'Example', 'Remark',
     'Exercise', 'Assertion', 'Conjecture', 'Fact',
     # Leinster 体例：Construction/Warning/Notation 是真实印刷条头（canon 到
     # Remark）；Notation 必须排在 Note 之前（正则交替按序匹配，长词优先）。
     'Construction', 'Warning', 'Notation', 'Note',
+    # 🔴 Weibel OCR 尾截变体（见 EN3_LABEL_CANON 注释）；rick/exes/ions 不在此列
+    # —— 它们分别是 Sign Trick / Total Complexes / Truncations 的尾部碎片，属
+    # 「无标准 skill 类型的命名结果」，易与 Remark/Exercise 混淆，改由
+    # manual_overrides_chN.json 显式回填（标签取标准类型 Remark），不污染共享正则。
+    '(?:cise)', '(?:orem)', '(?:emma)', '(?:llary)',
+    '(?:mple|ples|xample|examp)', '(?:mark|remak|remarl)',
 ])
 EN3_LAB_RE = re.compile(
     # 🔴 尾界用 `(?![A-Za-z])` 而非 `\b`：OCR 常把标签与编号粘连成
@@ -106,9 +129,36 @@ EN3_TWO_RE = re.compile(
 
 # 附录字母条头（如 Leinster 附录 "Lemma A.1"）：首分量为字母。仅在块首锚定下
 # 发射（与主正则同锚定纪律），字母位过滤只认 A（附录 A）。
+# 🔴 第三级可选（2026-09-01 修复 Weibel 附录全漏）：Weibel Appendix A 的条目印成
+# 三级 letter 号 "Exercise A.1.1" / "Definition A.4.2" / "Example A.1.8"（A.N.M），
+# 旧正则的 (?![.\d]) 尾界对 "A.1.1" 直接拒绝 → 附录含练习在内的全部条目漏抽。
+# 改为「可选第三级」：两级 "Lemma A.1"（Leinster）仍命中（group(4)=None），
+# 三级 "A.1.1" 新增命中；_emit_app 据 group(4) 是否为 None 决定键形 A.N / A.N.M。
 EN3_APP_RE = re.compile(
     r'\b(' + EN3_LABEL_ALT + r')s?(?![A-Za-z])\s*'
-    r'([A-Za-z])\s*' + SEP_TIGHT + r'\s*(\d+)(?![.\d])',
+    r'([A-Za-z])\s*' + SEP_TIGHT + r'\s*(\d+)'
+    r'(?:\s*' + SEP_TIGHT + r'\s*(\d+))?',
+    re.IGNORECASE)
+# 🔴 Weibel 附录「无标签定义」（印成 "A.1.4 Small categories" / "A.1.5 A
+# morphism…"：粗体号 + 词目，省略 Definition 词）。块首锚定 + 号后须接大写标题
+# 词（排除 "(see A.1.5)" 之类交叉引用），label 统归 Definition。仅字母位 A 生效。
+EN3_APP_BARE_RE = re.compile(
+    r'\b([A-Za-z])\s*' + SEP_TIGHT + r'\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)'
+    r'(?=\s+[A-Z])',
+    re.IGNORECASE)
+# 标题在前、号在中间的的无标签定义（Weibel 附录主体体例，如
+# "Opposite Category A.1.7 Every category…" / "Hom and Tensor Product A.2.1 Let R…"
+# / "Faithful Functors A.2.3 A functor…" / "Small categories A.1.4 A category…"）：
+# 1–5 个词目（首词大写、排除标签词与散文起手词 In/See/Section/Chapter/The/We/This）
+# + 空白 + A.N.M + 空白 + 大写（定义正文）。块首锚定（^）天然排除 "(see A.N.M)"
+# 之类交叉引用；号在中间（后接大写正文）而非块尾。
+EN3_APP_BARE_MID_RE = re.compile(
+    r'^(?!(?:Definition|Theorem|Lemma|Corollary|Proposition|Example|Examples|'
+    r'Remark|Exercise|Assertion|Conjecture|Fact|Construction|Warning|Notation|'
+    r'Note|In|See|Section|Chapter|The|We|This)\b)'
+    r'(?:[A-Z][a-zA-Z]*(?:\s+[a-zA-Z]+){0,4})\s+'
+    r'([A-Za-z])\s*' + SEP_TIGHT + r'\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)'
+    r'(?=\s+[A-Z])',
     re.IGNORECASE)
 
 
@@ -163,7 +213,8 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         items.append({"key": key, "label": label, "page": p, "text": snippet})
 
     def _emit_app(txt, m, p):
-        # 附录字母条目："Lemma A.1"。字母位只认 A（附录 A 体例）。
+        # 附录字母条目："Lemma A.1" / "Exercise A.1.1"（三级可选，Weibel）。
+        # 字母位只认 A（附录 A 体例）。
         if not _rest_ok(txt, m):
             return
         if (m.group(2) or "").upper() != "A":
@@ -171,7 +222,27 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
         if label == "Example" and not want_examples:
             return
-        key = f"{label} {m.group(2).upper()}.{m.group(3)}"
+        letter = m.group(2).upper()
+        n = m.group(3)
+        mpart = m.group(4)
+        key = f"{label} {letter}.{n}" + (f".{mpart}" if mpart else "")
+        snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+        items.append({"key": key, "label": label, "page": p, "text": snippet})
+
+    def _emit_app_bare(txt, m, p, tail=False):
+        # 附录无标签定义（"A.1.4 Small categories" / "Small categories A.1.4"）：
+        # 粗体号 + 词目、省略 Definition 词，Weibel 附录惯例归 Definition。仅 A 生效。
+        letter = (m.group(1) or "").upper()
+        if letter != "A":
+            return
+        n = m.group(2)
+        mpart = m.group(3)
+        if not tail:
+            # 号后须接大写标题词（_EN3_REST_OK 的 rest 起点判定）：
+            if not _EN3_REST_OK(txt, m):
+                return
+        label = "Definition"
+        key = f"{label} {letter}.{n}.{mpart}"
         snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
         items.append({"key": key, "label": label, "page": p, "text": snippet})
 
@@ -205,6 +276,16 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
                 if txt[:m.start()].strip(_DECOR + " \t"):
                     continue
                 _emit_app(txt, m, p)
+            # 🔴 Weibel 附录无标签定义（三级 letter 号，省略 Definition 词）：
+            # 仅在附录章（字母位 A）生效，避免误伤正文章（其首分量为数字）。
+            if chapter == "A":
+                for m in EN3_APP_BARE_RE.finditer(txt):
+                    if txt[:m.start()].strip(_DECOR + " \t"):
+                        continue
+                    _emit_app_bare(txt, m, p, tail=False)
+                for m in EN3_APP_BARE_MID_RE.finditer(txt):
+                    # 块首锚定（^）已由正则保证；号后接大写正文，走 rest 判别。
+                    _emit_app_bare(txt, m, p, tail=False)
             # 跨块连字标签：OCR 把 "Proposi-" 留在上块末尾、下块以
             # "tion 4.10.3." 开头（实测 p112→p113 Proposition 4.10.3 整条漏抽）。
             # 取上块尾部字母段与下块拼接（有连字则去连字直拼）后锚定重试。

@@ -218,6 +218,11 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
         return None
     k = _STRIP_LABEL.sub("", key)
     k = _STRIP_LABEL_CN.sub("", k)
+    # 🔴 字母前缀附录编号（Weibel "A.1.4" → §A.1）：先判字母首分量，digit-first /
+    # CN 书键（"1.2-3" / "定义1.2-1"）首字符非字母，自然落回原逻辑，零回归。
+    _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)', k)
+    if _lm:
+        return f"{_lm.group(1).upper()}.{_lm.group(2)}"
     nums = re.findall(r"\d+", k)
     if len(nums) >= 2:
         if chapter_first:
@@ -231,7 +236,11 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
 
 
 def _section_of_exer(num):
-    """练习序标（如 "1.2.A" / "1.2" / "1.A"）推导章节号；不足两级归章级。"""
+    """练习序标（如 "1.2.A" / "1.2" / "1.A" / "A.4-1"）推导章节号；不足两级归章级。"""
+    # 🔴 字母前缀附录练习（Weibel "Exercise A.4.1" → key "A.4-1" → §A.4）
+    _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)', num or "")
+    if _lm:
+        return f"{_lm.group(1).upper()}.{_lm.group(2)}"
     nums = re.findall(r"\d+", num)
     if len(nums) >= 2:
         return f"{nums[0]}.{nums[1]}"
@@ -385,7 +394,14 @@ def _item_pos(ext, it):
         return None
     key = (it.get("key") or "").strip().lower()
     snip = (it.get("text") or "").strip()
-    probe = re.sub(r"\s+", " ", snip[:48]).lower()
+    # 契约 name 形如 "1.2-1 1.2.1 <正文>"（前两段为契约序标 + 书源序标，书源块里
+    # 没有），或 "Definition 1.2.1 <正文>"。剥离前导数字序标段（最多两段）以保留
+    # <正文> 供子串回退匹配——否则 "1.2-1 1.2.1" 前缀导致书源 "Definition 1.2.1
+    # <正文>" 块永远匹配不到（Weibel《同调代数》实测：序标印在标签词之后，非行首）。
+    snip_body = re.sub(r'^(?:[\dA-Z]+(?:[.\-][\dA-Z]+)*\s+){1,2}', '', snip)
+    if not snip_body:
+        snip_body = snip
+    probe = re.sub(r"\s+", " ", snip_body[:48]).lower()
     key_variants = [key] if key else []
     m_cn = re.match(r'^([\u4e00-\u9fff]+)', key)
     if m_cn:
@@ -395,6 +411,20 @@ def _item_pos(ext, it):
         # CN 键无分隔符（"定义1.1"）；EN 源文印 "Definition 1.1"（号前有空格）
         key_variants += [(en.lower() + ' ' + rest.lstrip('.')) for en, c in _LC.items() if c == cn]
         key_variants += [(en.lower() + rest) for en, c in _LC.items() if c == cn]
+    # 三级点分 scheme（scheme three-level）：契约键用连字符（"1.2-1"），书源多印
+    # 点分（"1.2.1"），反之亦然。追加对方分隔变体，否则 startswith 永不命中 →
+    # y=-1 → _item_anchor 回退 (page, 0.0) → 同页多 item 内容全错归该页最后一个
+    # item（Weibel《同调代数》实测 1.2-1/1.2-2、1.4-3/4/5 错位空心）。
+    # 仅对「纯数字+分隔符」键追加反向变体，避免正文数学（如 "1-1=0"）被误当序标。
+    if key:
+        if '-' in key:
+            _v = key.replace('-', '.')
+            if _v not in key_variants:
+                key_variants.append(_v)
+        if '.' in key and re.match(r'^[\d.]+$', key):
+            _v = key.replace('.', '-')
+            if _v not in key_variants:
+                key_variants.append(_v)
     ys_head, ys_contain = [], []
     for b in d.get("text", []):
         if not isinstance(b, dict):
@@ -405,7 +435,10 @@ def _item_pos(ext, it):
         sl = re.sub(r"\s+", " ", s.lower())
         poly = b.get("poly") or []
         y = poly[1] if len(poly) >= 8 else 0
-        if key_variants and any(k and sl.startswith(k) for k in key_variants):
+        # 边界感知：序标后必须跟非数字（空格/字母/标点），避免 "1.2.1" 误命中
+        # "1.2.10" 等同前缀序标块（ch6 含 1.6-1…1.6-14）。
+        if key_variants and any(k and re.match(r'^' + re.escape(k) + r'(?!\d)', sl)
+                                for k in key_variants):
             ys_head.append(y)
         if probe and probe[:24] in sl:
             ys_contain.append(y)
@@ -1032,7 +1065,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #     而此类书无 "EXERCISES" 标题块、编号也无字母位，EXER 恒空，直接丢弃
     #     会整书漏练。故把练习类条目转成 EXER 行并入 ex_rows（按练习号去重，
     #     skeleton EXER 优先），非练习类照旧进 ITEM 合同。
-    _exer_num_re = re.compile(r'(\d{1,2}\.\d{1,2}(?:\.\d{1,3}|[A-Z])?)\.?$')
+    # 🔴 分隔符无关 + 字母前缀附录（2026-09-01 修复 Weibel exercises=0）：
+    # raw_items 的 key 经 _extract_items 的 normkey 已转连字符 scheme
+    # （"1.1.1"→"1.1-1"，附录 "A.4.1"→"A.4-1"）。原正则只认 digit-first 点分，
+    # 对 "1.1-1" 永不命中 → 3a `continue` 漏掉全部 Exercise。改为：可选字母首
+    # 分量 + [.\-] 分隔符无关，digit-first（"1.2-3"）与字母前缀（"A.4-1"）均命中，
+    # exercise 节点键取 normkey 形态，_section_of_exer 据字母前缀派生 §A.N。
+    _exer_num_re = re.compile(
+        r'((?:[A-Za-z][.\-])?\d{1,2}[.\-]\d{1,2}(?:[.\-](?:\d{1,3}|[A-Z]))?)\.?$')
     _exer_seen = {r[2] for r in ex_rows}
     for it in raw_items:
         if (it.get("label") or "").strip() not in _EXERCISE_LABELS:
@@ -1210,6 +1250,24 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     derived_sec_firstpage = {
         n: pg for n, pg in derived_sec_firstpage.items() if n in sec_pages
     }
+
+    # 🔴 Weibel 附录：条目键为字母前缀（"A.1-4"），scan_skeleton 不检附录字母
+    # 小节，上面「须命中 skeleton」过滤器会把派生的 A.1/A.2… 全部清空。附录章直接
+    # 以字母前缀条目键派生 A.N 小节注入（标题留空，write-source 阶段据源标题补全
+    # §A.N 标题），保证附录条目归入正确的 §A.N 而非堆在章级。仅当本章含字母前缀
+    # 键时触发，digit-first 书零回归。
+    if any(re.match(r'^[A-Za-z]', (it.get("key") or "")) for it in items):
+        for it in items:
+            _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)',
+                           (it.get("key") or ""))
+            if not _lm:
+                continue
+            _an = f"{_lm.group(1).upper()}.{_lm.group(2)}"
+            _pg = it.get("page", 0)
+            if _an not in sec_pages:
+                sec_pages[_an] = _pg
+            sec_titles.setdefault(_an, "")
+            derived_sec_firstpage.setdefault(_an, _pg)
 
     all_sec_nums = list(sec_pages.keys()) + [n for n in derived_sec_firstpage if n not in sec_pages]
     # 章节排序：按（skeleton 页 或 派生最小页）

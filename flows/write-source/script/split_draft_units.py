@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -155,8 +156,17 @@ def _emit_units(node, lang):
                      _render_desc(child, lang))
             elif t == "proof":
                 continue            # proof 是 item 内部附属，由 item 单元渲染
-            elif t == "exercise" and child.get("consolidated"):
-                continue            # 章末集中习题块省略（writing-rules 习题收录规则）
+            elif t == "exercise":
+                if child.get("consolidated"):
+                    continue        # 章末集中习题块省略（writing-rules 习题收录规则）
+                # 🔴 独立 exercise 单元类型：Weibel 等书「结果项」与「习题项」共用
+                # 同节编号空间（如 Definition 1.2.2 与 Exercise 1.2.2 同号），若也发
+                # 成 item 单元会与结果项同名文件互覆盖。故习题用专属 exercise 单元
+                # 类型（文件名 NNNN_exercise_*.md），不与其他 item 冲突；merge/gate
+                # 均识别该类型（习题单元门控只需 DONE 标记，不做 item 级质量校验）。
+                emit("exercise", str(child.get("key") or ""),
+                     (child.get("name") or "").strip(),
+                     _render_item(child, lang))
             else:
                 emit("item", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
@@ -212,6 +222,10 @@ def split_chapter(ext, ch_key, language, force=False):
     if os.path.isdir(out_dir) and any(True for _ in os.scandir(out_dir)) and not force:
         print("[split_draft_units] ch%s 已存在 units 目录，跳过（--force 覆盖）。" % ch_key)
         return os.path.join(out_dir, "manifest.json")
+    # 🔴 --force 必须清空旧 units 目录，否则上一 run 残留的孤儿/内容 bleed 文件
+    # 会留存在磁盘（manifest 已不含它们，但文件仍在），造成 merge/verify 噪声。
+    if force and os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {

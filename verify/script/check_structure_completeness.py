@@ -1111,7 +1111,7 @@ def main():
                 key = int(n)
             except (TypeError, ValueError):
                 key = str(n).strip()  # 字母章号（附录 A/B…）
-            rng[key] = (c.get("start"), c.get("end"))
+            rng[key] = (c.get("start", c.get("start_page")), c.get("end", c.get("end_page")))
     elif isinstance(cm, dict):
         for kk, cc in cm.items():
             s = cc.get("start", cc.get("start_page"))

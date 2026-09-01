@@ -134,8 +134,8 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=True, require_gate=True):
             if lines:
                 lines.append("---")
                 lines.append("")
-        elif utype == "item":
-            if prev in ("desc", "item"):
+        elif utype in ("item", "exercise"):
+            if prev in ("desc", "item", "exercise"):
                 lines.append("---")
                 lines.append("")
         elif utype == "desc":
@@ -147,7 +147,7 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=True, require_gate=True):
             lines.extend(body)
             lines.append("")
         prev = {"section": "heading", "chapter": "heading",
-                "item": "item", "desc": "desc"}.get(utype, prev)
+                "item": "item", "desc": "desc", "exercise": "item"}.get(utype, prev)
 
     # 整理分隔线 + 空行（复用 render_draft）
     lines = _rd._tidy_separators(lines)

@@ -10,14 +10,17 @@
 判定（一个单元「已改好」须同时满足）：
   ① **标记已替换**：文件首行由拆分时写入的 ``<!-- ... DRAFT unit: ... -->``
      变为 ``<!-- ... DONE unit: ... -->``（agent 改完后显式确认）；
-  ② **内容确被改写**：正文指纹（不含首行标记）与拆分时记录在 manifest 的
-     ``hash`` 不同——防止"只改标记、不碰内容"假处理。
+  ② **「写对」而非「重写」**：item / desc 单元做**单元级质量校验**
+     （``check_unit_quality.py``）——公式闭合、无裸数学、结构标签齐全、无明显
+     OCR 残留。🔴 2026-09-01 起判断标准是"写对"（是否符合写作要求），**不再看
+     内容指纹是否变化**——防止模型瞎改（公式没渲染对 / 格式破坏）就标 DONE。
+     （章节标题单元本就无需改动，只确认 DONE。）
 
 完整性核对（防漏项）：
   ③ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
   ④ manifest 的 ``units`` 覆盖契约全部编号项单元（item）+ 章/节/描述单元。
 
-不满足任一 → 输出未处理 / 缺失清单并 exit 1（不通过）；全部通过 → exit 0。
+不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
 用法
 ----
@@ -50,6 +53,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 import attach_content as _ac
 from data.book_structure.book_structure import list_chapter_keys
 import split_draft_units as _split
+import check_unit_quality as _quality
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
 
@@ -101,10 +105,14 @@ def gate_chapter(ext, ch_key):
             problems.append("单元 %s（%s %s）仍未处理（标记仍为 DRAFT）" % (
                 u["file"], u["type"], u["key"]))
             continue
-        # DONE：item / desc 单元必须内容确被改写（章节标题本就无需改动，只确认 DONE）
-        if utype in ("item", "desc") and bh == (u.get("hash") or ""):
-            problems.append("单元 %s（%s %s）标记 DONE 但内容未被改写（须真正按"
-                            "writing-rules 修改后再标 DONE）" % (u["file"], u["type"], u["key"]))
+        # DONE：item / desc 单元必须「写对」——质量校验通过（公式闭合 / 无裸数学 /
+        # 结构标签 / 无明显 OCR 残留）。🔴 2026-09-01 起判断标准是"写对"而非"重写"：
+        # 不再看内容指纹是否变化，而是看单元是否符合写作要求（拦"瞎改就标 DONE"）。
+        if utype in ("item", "desc"):
+            ok_q, qproblems = _quality.check_body(utype, u.get("name") or "", body)
+            if not ok_q:
+                problems.append("单元 %s（%s %s）质量未达标（写错/格式破坏）：%s" % (
+                    u["file"], u["type"], u["key"], "；".join(qproblems[:4])))
     # 多余文件检查（manifest 之外的 .md 属误放）
     for fn in sorted(os.listdir(out_dir)):
         if fn == "manifest.json" or not fn.endswith(".md"):

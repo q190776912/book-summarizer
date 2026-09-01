@@ -95,13 +95,22 @@
      - 结构回查：单元骨架由拆分器从契约生成、天然同构；调整时**不得重排、不得自创
        层级、不得无中生有**；章首序言（`# 章标题` 之后的 `desc` 单元）必须保留在
        最终 md 最前（规则 5）。
-   - **(b) 🔴 强制门控（确保每个 item 都改好，一个不漏）**：
+   - **(b) 🔴 强制门控（确保每个 item 都改好且**写对**，一个不漏）**：
      ```bash
      python flows/write-source/script/gate_units.py "<extract_dir>" [ch ...]
      ```
-     exit 0 = 该章全部单元都被改好（每个单元文件存在、首行 `DONE`、内容指纹已变），
-     否则列出未处理 / 缺失单元清单并 exit 1。**未过 gate 严禁进入步骤 6 拼接。**
-     超大章（字符 > 60000）按规则 3 拆节后，逐节单元组分别门控。
+     exit 0 = 该章全部单元文件存在、首行 `DONE`、**单元级质量校验通过**。
+     🔴 **2026-09-01 起判断标准是「写对」而非「重写」**（拦"模型瞎改就标 DONE"）：
+     `check_unit_quality.py` 对每个 item / desc 单元做**质量校验**，复用
+     `verify/format_verify/script/katex_heuristics.py` 的成熟检测（先经本模块的
+     数学区划分剥除 `$...$` / `$$...$$` 再扫），聚焦可机械判定的严重错误——
+     **公式闭合**（`$`/`$$` 未配对 = 渲染崩）、**裸数学命令**（`\frac`/`\sum` 等
+     在 `$` 外）、**裸 Unicode 数学字符 / 裸箭头**（`α` `→` `≤` 等在 `$` 外 =
+     writing-rules 要求数学必须 KaTeX）、**结构标签**（item 缺粗体标签 /
+     example 未 `>` 包裹）、**OCR 残留启发式**（`{ }` 半括号 / `\begin{array}` 残缺 /
+     乱码）。任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。
+     未过 gate 严禁进入步骤 6 拼接。超大章（字符 > 60000）按规则 3 拆节后，
+     逐节单元组分别门控。
 6. **拼接全部单元成最终源语言章 md（纯脚本，无 agent 参与）**
    - 🔴 本步**只是机械拼接**：agent 的全部写作要求已在步骤 5 逐个改好单元时落实
      （每单元 DONE + 门控通过），本步仅运行拼接脚本，**不需要也不允许 agent 再做
@@ -122,7 +131,7 @@
    ```bash
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
    ```
-   未过则用 `--fix` 自动修复其中可修复层（`fix_order` 升序），再不带 `--fix` 复验确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。校验层语义 / `--fix` 范围 / 字节契约键见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
+   未过则修复其中可修复层——🔴 **全层 `--fix` 已默认禁用**（2026-08-28 用户裁定，防止 G 层等邻接启发式修复在内容未归位时污染正文）：默认走**选择性单层修复 / 手工定点修改**；确需整章自动修复时先跑 `--preflight` 确认 `$$` 围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受 PREFLIGHT 门约束），随后**不带 fix 旗标复验**确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。校验层语义 / `--fix`（含默认禁用与强制开关）范围 / 字节契约键见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
 
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动本流程前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
@@ -139,7 +148,7 @@
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
 
 ## 出口条件
-- 出口：源语言全部章节初稿写完（图片由内容化分章契约随单元继承），且 `verify/script/verify_chapter.py --all` 对全书 `exit 0`（`verify PASS + KaTeX OK`）；格式修复经 verify 的 `--fix` 自动进行。
+- 出口：源语言全部章节初稿写完（图片由内容化分章契约随单元继承），且 `verify/script/verify_chapter.py --all` 对全书 `exit 0`（`verify PASS + KaTeX OK`）；格式修复在步骤 7 校验失败时按 [`verify/verify.md`](../../verify/verify.md) 修复纪律进行（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/write-source/structure/script/build_structure`：统一结构 + 内容契约生成器（步骤 3，按章产出含内容的完整 `ch{N}.json`，内部调用 `scan_skeleton` / `extract_items` 系列并即时挂载内容）。
@@ -152,7 +161,7 @@
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `config/verify_config/make_config.py`：步骤 1 书级配置生成（`verify_config.json`）。
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 调整时存疑处按节点 `page_start..page_end` 回查 OCR 原文（步骤 5 agent 改单元时）。
-- `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer**（原「H 层 + G 层」，已并入 F 层）在步骤 7 `verify --fix` 自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
+- `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦由 `derive-translate` 阶段对翻译版调用）。源版「顶层例/证包裹进 `>` + 连续性」已由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer**（原「H 层 + G 层」，已并入 F 层）在步骤 7 `verify --fix`（🔴 2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
 - `../../verify/script/audit_counts.py`：逐节条数核对（OCR 侧启发式工具）。原「逐节条数核对须另行挂接」的缺口已由规则8 的 write_chapters 落账证据闭合——**契约条目在位核对**以结构契约为真值（优于 OCR 启发式），在 mark 前强制拦截漏项；本脚本保留为 OCR 侧独立交叉核对，供疑议时人工复核。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 7 批量校验（`--all` / `--fix`，语言无关，源/译共用）。

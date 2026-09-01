@@ -119,14 +119,22 @@ def _chapter_range(ext, ch):
             n = c.get("num", c.get("chapter", c.get("ch")))
             if n is None:
                 continue
-            rng[int(n)] = (c.get("start"), c.get("end"))
+            try:
+                key = int(n)
+            except (TypeError, ValueError):
+                key = str(n).strip()  # 字母章号（附录 A/B…）
+            rng[key] = (c.get("start", c.get("start_page")), c.get("end", c.get("end_page")))
     elif isinstance(cm, dict):
         for kk, cc in cm.items():
             s = cc.get("start", cc.get("start_page"))
             e = cc.get("end", cc.get("end_page"))
             if s is None or e is None:
                 continue
-            rng[int(kk)] = (int(s), int(e))
+            try:
+                key = int(kk)
+            except (TypeError, ValueError):
+                key = str(kk).strip()
+            rng[key] = (int(s), int(e))
     return rng.get(ch)
 
 

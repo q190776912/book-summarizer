@@ -83,7 +83,10 @@ RUN_COMMANDS = {
         "Tier 压缩、格式落地、存疑回查 page_*.json）——🔴 全部写作要求在文档步骤 5 "
         "落实，每个单元把首行 DRAFT 标记改为 DONE；"
         "② 跑 python flows/write-source/script/gate_units.py \"{extract_dir}\" "
-        "——🔴 强制门控：全部单元 DONE 且内容确被改写才 exit 0（每个 item 都不漏）；"
+        "——🔴 强制门控：全部单元 DONE 且单元级质量校验通过（公式闭合 / 无裸命令·裸"
+        "Unicode 字符·裸箭头——数学必须 KaTeX / 结构标签 / 无 OCR 残留，"
+        "check_unit_quality.py 复用 katex_heuristics 成熟检测）才 exit 0——判断标准"
+        "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）；"
         "③ 跑 python flows/write-source/script/merge_units.py \"{extract_dir}\" <ch> "
         "逐章拼接单元成最终 ChapterN_*.md / 第N章_*.md——文档步骤 6 纯脚本机械执行"
         "（按 V-F 规则重建 --- 分隔线），无需 agent 写作调整。🔴 merge_units 自带"
@@ -438,7 +441,7 @@ class physical_evidence:
         return list(out)
 
     @staticmethod
-    def _missing_contract_names(contract, ntext):
+    def _missing_contract_names(contract, ntext, ignore_set=None):
         """契约中未在最终 md 在位的 section 名 / 编号项名列表。
 
         匹配键三级回退（容忍 OCR 污染与排版差异，全部经归一化包含判断）：
@@ -478,6 +481,13 @@ class physical_evidence:
             cands = [c for c in cands if c]
             if not cands:
                 continue  # 无可用匹配键（纯符号名等），跳过避免假阳
+            # 检查是否在 ignore 列表中
+            if ignore_set:
+                key_norm = physical_evidence._norm_text(key)
+                name_norm = physical_evidence._norm_text(name)
+                if (key_norm in ignore_set or name_norm in ignore_set or
+                    any(physical_evidence._norm_text(k) in ignore_set for k in [key, name])):
+                    continue
             if not any(c in ntext for c in cands):
                 miss.append(key or name)
         return miss
@@ -485,10 +495,8 @@ class physical_evidence:
     @staticmethod
     def _units_gate_ok(units_dir, manifest):
         """单元门控核心判定（内联，避免 import 耦合）：每单元文件存在、首行
-        DONE、内容 hash 已变。返回 (ok, problems)。"""
-        import hashlib
+        DONE、**质量校验通过**（写对，非仅重写）。返回 (ok, problems)。"""
         problems = []
-        done = {"DRAFT": False, "DONE": True}
         mark_re = re.compile(
             r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
         for u in manifest.get("units") or []:
@@ -509,12 +517,18 @@ class physical_evidence:
                 problems.append("单元 %s（%s %s）仍未处理（标记仍 DRAFT）" % (
                     u["file"], u["type"], u["key"]))
                 continue
-            # item / desc 必须内容确被改写；章节标题本就无需改动，只确认 DONE
+            # item / desc 必须「写对」——单元级质量校验通过（🔴 2026-09-01 起
+            # 判断标准是"写对"而非"重写"，不再看内容指纹变化）；章节标题只确认 DONE
             if u["type"] in ("item", "desc"):
                 body = raw[m.end():].lstrip("\r\n").rstrip("\n")
-                if hashlib.sha1(body.encode("utf-8")).hexdigest() == (u.get("hash") or ""):
-                    problems.append("单元 %s（%s %s）标记 DONE 但内容未改写" % (
-                        u["file"], u["type"], u["key"]))
+                try:
+                    import check_unit_quality as _quality
+                    ok_q, qp = _quality.check_body(u["type"], u.get("name") or "", body)
+                except Exception:
+                    ok_q, qp = True, []
+                if not ok_q:
+                    problems.append("单元 %s（%s %s）质量未达标：%s" % (
+                        u["file"], u["type"], u["key"], "；".join(qp[:4])))
         return (len(problems) == 0, problems)
 
     @staticmethod
@@ -573,8 +587,20 @@ class physical_evidence:
                         text += fh.read()
                 except Exception:
                     pass
+            # 加载 ignore 列表
+            ignore_set = set()
+            ignore_path = os.path.join(ex, f"ignore_ch{k}.json")
+            if os.path.exists(ignore_path):
+                try:
+                    ignore_data = json.load(open(ignore_path, encoding="utf-8"))
+                    if isinstance(ignore_data, dict):
+                        ignore_set = set(ignore_data.keys())
+                    elif isinstance(ignore_data, list):
+                        ignore_set = set(ignore_data)
+                except Exception:
+                    pass
             miss = physical_evidence._missing_contract_names(
-                contract, physical_evidence._norm_text(text))
+                contract, physical_evidence._norm_text(text), ignore_set)
             if miss:
                 missing_names.append((k, miss))
         if missing_md:
@@ -641,7 +667,7 @@ class physical_evidence:
         if rc is None:
             return False, f"verify 执行异常: {err}"
         return False, (f"源语言 verify 未通过（exit {rc}）。禁止 mark，"
-                       f"须先 embed_figures + --fix 复验至 exit 0，再进 derive 翻译。")
+                       f"须先 embed_figures + 修复（🔴 --fix 默认禁用，须 --fix --fix-force + PREFLIGHT）复验至 exit 0，再进 derive 翻译。")
 
     @staticmethod
     def translate_ok(book_dir, extract_dir):
@@ -678,7 +704,7 @@ class physical_evidence:
         if rc is None:
             return False, f"verify 执行异常: {err}"
         return False, (f"翻译版 verify 未通过（exit {rc}）。禁止 mark，"
-                       f"须按单向修复规则 --fix / 手工修复后复验至 exit 0。")
+                       f"须按单向修复规则（--fix 默认禁用，须 --fix --fix-force + PREFLIGHT）/ 手工修复后复验至 exit 0。")
 
 
 # 步 -> 证据函数（与 FLOW_ORDER 对齐）

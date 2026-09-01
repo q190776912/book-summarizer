@@ -34,13 +34,17 @@ from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
 # 引理/lemma > 推论/corollary > 命题/proposition.
 # ---------------------------------------------------------------------------
 _LABEL_MAP = [
-    (r'练习|习题', '练习'),
-    (r'例|example', '例'),
+    # 🔴 OCR 残缺变体（Weibel 等英文书）：Exercise→cise/exes/exer，Example→mple/
+    # xample/examp，Remark→rick/ions/remak/remarl。均加词边界 \b，避免误命中
+    # precise/concise/equations/derrick 等正常词（mid-word 无边界，不触发）。
+    (r'练习|习题|exercise|\bcise\b|\bexes\b|\bexer\b', '练习'),
+    (r'例|example|\bmple\b|\bxample\b|\bexamp\b', '例'),
     (r'定义|definition', '定义'),
     (r'定理|theorem', '定理'),
     (r'引理|lemma', '引理'),
     (r'推论|corollary', '推论'),
     (r'命题|proposition', '命题'),
+    (r'remark|\brick\b|\bions\b|\bremak\b|\bremarl\b', 'Remark'),
 ]
 
 
@@ -441,8 +445,10 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     label_re = re.compile(
         r'(?:定义|定理|引理|推论|命题|练习|习题)\s*（'
         r'|例(?:子)?'
-        r'|Example|Exercise'
-        r'|\bDefinition\b|\bTheorem\b|\bLemma\b|\bCorollary\b|\bProposition\b',
+        r'|Example|Exercise|Remark'
+        r'|\bDefinition\b|\bTheorem\b|\bLemma\b|\bCorollary\b|\bProposition\b|\bRemark\b'
+        r'|\bcise\b|\bexes\b|\bexer\b|\bmple\b|\bxample\b|\bexamp\b'
+        r'|\brick\b|\bions\b|\bremak\b|\bremarl\b',
         re.IGNORECASE
     )
     # Two-level 练习 / 习题 / Example pass (R3): CN three-level books number

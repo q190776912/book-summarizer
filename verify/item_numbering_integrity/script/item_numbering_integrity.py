@@ -98,7 +98,7 @@ def _numpath_regexes(levels):
 # is then treated as prose by _after_label_boundary and the entry is dropped
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
-    r'定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
+    r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
     r'|算法|性质|构造|应用|变式'
     r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Examples|Remark|Remarks'
     r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology|Application|Variation|Porism'
@@ -114,6 +114,7 @@ _LABEL_NORM = {
     '问题': 'Problem', '练习': 'Exercise', '习题': 'Exercise', '引例': 'Example',
     '附注': 'Remark', '算法': 'Algorithm', '性质': 'Property',
     '应用': 'Application', '变式': 'Variation', 'Application': 'Application',
+    '系': 'Porism',
     'Variation': 'Variation', 'Porism': 'Porism',
 }
 

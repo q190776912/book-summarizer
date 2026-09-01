@@ -275,6 +275,8 @@ _LABEL_CANON = {
     'Assumption': '假设', '假设': '假设', '假定': '假设',
     'Algorithm': '算法', '算法': '算法',
     'Property': '性质', '性质': '性质',
+    'Construction': '构造', '构造': '构造',
+    'Application': 'Application', 'Variation': 'Variation', 'Porism': 'Porism',
     # exercise-family labels canonize to 练习; Example canonizes to 例
     # (例子 ≠ 练习). A book that checks examples uses a group named
     # ["Example"] (canon -> 例); a book that checks exercises uses
@@ -284,7 +286,8 @@ _LABEL_CANON = {
 
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
-                  'Assumption', 'Algorithm', 'Commentary']
+                  'Assumption', 'Algorithm', 'Commentary', 'Application',
+                  'Variation', 'Porism']
 
 
 def _canon_label(lbl):

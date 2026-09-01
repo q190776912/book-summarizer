@@ -99,9 +99,9 @@ def _numpath_regexes(levels):
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
     r'定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
-    r'|算法|性质'
+    r'|算法|性质|构造|应用|变式'
     r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Examples|Remark|Remarks'
-    r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology'
+    r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology|Application|Variation|Porism'
 )
 # Label-first:  LABEL  NUMPATH   (e.g. "定理 4.1", "Definition 2.1")
 
@@ -113,6 +113,8 @@ _LABEL_NORM = {
     '注记': 'Remark', '评注': 'Remark', '注': 'Remark', '公理': 'Axiom',
     '问题': 'Problem', '练习': 'Exercise', '习题': 'Exercise', '引例': 'Example',
     '附注': 'Remark', '算法': 'Algorithm', '性质': 'Property',
+    '应用': 'Application', '变式': 'Variation', 'Application': 'Application',
+    'Variation': 'Variation', 'Porism': 'Porism',
 }
 
 

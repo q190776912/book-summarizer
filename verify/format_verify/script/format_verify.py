@@ -31,9 +31,9 @@ fixer 代号 H/G/I/J/K/L/M/N 对应的检测项：
     M  math_blockquote_leak    -> `>` lines inside display math blocks
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
-所有检测逻辑内联于本文件；本层产出 17 个字节契约键，并追加 `heading_sep` /
-`heading_blank_above` 检测键（由 DEFAULT_RESULT 与契约测试的动态 ALLOWED 集覆盖）
-——故 `report.py`、`verify_chapter.py` 与契约测试保持通过。
+所有检测逻辑内联于本文件（超长公式行检测独立于 `long_row_check.py`）；本层产出 19 个字节契约键（含 `heading_sep`/`heading_blank_above`/`long_formula_rows`）
+（显示公式行过长 → `\tag` 重叠风险，WARN 非阻断；由 DEFAULT_RESULT 与契约测试的
+动态 ALLOWED 集覆盖）——故 `report.py`、`verify_chapter.py` 与契约测试保持通过。
 
 Auto-fix is NOT performed by this layer: it is implemented by the eight
 `fix_*.py` modules in this same `script/` directory, which self-register via
@@ -52,6 +52,7 @@ from verify.script.struct_labels import (
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
 )
 from lib.regexlib import G_HEAD, FMT_HR_RE, FMT_SEC_RE
+from long_row_check import check_long_formula_rows  # 显示公式行过长（tag 重叠）WARN
 
 
 # ===========================================================================
@@ -869,9 +870,12 @@ class FLayer(VerifyLayer):
 
     def run(self, ctx):
         katex_errors, katex_lines = check_katex(ctx.md_file)
+        with open(ctx.md_file, encoding='utf-8-sig') as _f:
+            _md_lines = _f.read().split('\n')
         return LayerResult(code=self.code, metadata={
             'katex_errors': katex_errors,
             'katex_lines': katex_lines,
+            'long_formula_rows': check_long_formula_rows(_md_lines),
             'quote_gaps': check_g_quote_continuity(ctx.md_file),
             'nested_bq': check_nested_blockquotes(ctx.md_file),
             'ex_proof_gaps': check_example_proof_gap(ctx.md_file),

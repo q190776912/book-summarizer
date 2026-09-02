@@ -327,6 +327,12 @@ Common patterns (after correction):
     - **(A) 裸 Unicode 数学字形**（强制）：σ √ ∑ ∞ ≤ ≥ ≠ ≈ ≡ × ÷ ± ∓ ∂ ∇ ∏ ∪ ∩ ∈ ∉ ⊂ ⊆ ∀ ∃ ∅ ℝ ℕ ℤ ℂ，以及希腊字母 α–ω / Γ–Ω。这些在总结里几乎不作散文出现，一律视为错误（如 `σ²t`→`$\sigma^{2}t$`、`x∈ℝ`→`$x\in\mathbb{R}$`）。上标数字 ²³ 暂不强制（物理单位误报），但数学里 `n²` 仍应 `$n^{2}$`。
     - **(B) ASCII 数学写成纯文本**（强制）：概率/期望/方差算符 `Pr{`/`Pr(`/`E[`/`Var(`/`Cov(`，单字母函数调用 `X(t)`/`p_k(n)`/`f(x+y)`，变量+下标数字 `x0`/`t1`/`y2`。必须包进 `$...$`（如 `设 $p_{k}(n)=\Pr\{\text{…}\}$`、`$X(t)$ is continuous`、`初始位置 $x_{0}$`、`$\mathbb{E}[X]$`）。
     - 本规则与 #8（Unicode 箭头/关系字形）、#9（裸 LaTeX 命令）共同构成「数学必须渲染」三道防线。
+18. **🔴 超长显示公式行 → `\tag` 重叠（折行规则；F 层 `long_formula_rows` 每章自动 WARN）**：带 `\tag` 的显示公式，若单行内容**可视长度**超过阈值（默认 100 可视字符 ≈ 渲染宽 50–60 em；长行会在右端顶到编号 → 视觉重叠），须**改公式排版、不改编号**：
+    - **判定**：`verify_chapter.py` 跑每章即报 `F-LAYER FORMAT · 长公式行 (WARN, non-blocking)`（含行号 / `\tag{}` / 可视长度）；批量预检可用 `tools/scan_long_formulas.py <book_dir> [阈值]`。
+    - **折行位置**：只在**顶层**（花括号深度 0、括号深度 0、不在 `\left…\right` 内）的二元运算符 `=` / `+` / `-` 处断行；绝不切进分数、矩阵、指数、`\text{…}` 内部；断行不改任何数学语义与 `\tag{原编号}`。
+    - **写法**：长行包进 `\begin{aligned}…\end{aligned}`——首行保留左侧对齐，续行用 `& \qquad <运算符> …`（示例：`\frac{\mathrm{d}\nu}{\mathrm{d}t} &= \frac{1}{T K_{eff} K_m}\{\cdots \right. \\ &\qquad \left. - P_0 - P_1 - \cdots \},`）。
+    - **不可折环境**（`matrix`/`array`/`cases`/交换图 `\begin{CD}` 等整块宽度天然超界）：不做硬折行，靠查看器横向滚动兜底（CSS `.katex-display { overflow-x: auto; }`）。
+    - **批量折行工具**：`tools/wrap_long_formulas.py <book_dir> [阈值]`（先出 dry-run 计划供审，确认后再落盘）。
 
 **公式序标（编号 1:1 真实性，Q 层校验）**
 

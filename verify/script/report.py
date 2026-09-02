@@ -193,6 +193,14 @@ def print_result(r):
                 print(f"  x {l}")
             except UnicodeEncodeError:
                 print(f"  x {l.encode('ascii', errors='replace').decode('ascii')}")
+    # ---- 超长显示公式行（tag 重叠风险，WARN 非阻断）----
+    if r.get('long_formula_rows'):
+        print(f"\nF-LAYER FORMAT · 长公式行 (WARN, non-blocking; {len(r['long_formula_rows'])}): "
+              f"display rows so long that \\tag may overlap the formula — wrap per "
+              f"writing-rules「超长显示公式折行」, or allow container scroll "
+              f"(tools/scan_long_formulas.py 同阈值检测, tools/wrap_long_formulas.py 折行):")
+        for l in r['long_formula_rows']:
+            print(f"  ~ {l}")
     # ---- 引用块连续性（原 G 层）----
     if r.get('quote_gaps'):
         problems += 1

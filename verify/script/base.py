@@ -172,6 +172,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'truly_missing': [], 'mentioned_only': [], 'extra': [],
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
+    'long_formula_rows': [],   # F 层：超长显示公式行（tag 重叠风险，WARN 非阻断）
     'b_gap_warnings': [], 'b_tail_warnings': [],
     'entry_keys': set(), 'd_layer': {'continuity_sections': [], 'missing_sections': [], 'levels': {}},
     # Top-level mirror of d_layer['levels'] (declared in verify/section_continuity/section_continuity.md's

@@ -214,6 +214,40 @@ def check_example_proof_gap(md_file):
     return errors, warns
 
 
+# G-LAYER: example blockquote check (writing-rules V-F)
+# Example blocks must be wrapped in `>` blockquotes.
+_EX_NO_BQ_RE = re.compile(
+    r'^\*\*(?:例\b(?:\d[\d.]*-[0-9]+|\d+)?\*\*'
+    r'|Example\b(?:\s*\d+)?\*\*)'
+)
+
+def check_example_blockquote_lines(lines):
+    """Check example blocks not wrapped in `>` blockquotes.
+
+    Standalone function usable by both verify (file-level) and
+    check_unit_quality (unit-level). Takes list of lines, returns
+    list of error strings.
+    """
+    out = []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith('>'):
+            continue
+        if _EX_NO_BQ_RE.match(s):
+            out.append(f"  x L{i+1}: example block not wrapped in `>` blockquote "
+                       f"(writing-rules V-F): {s[:60]}")
+    return out
+
+def check_example_blockquote(md_file):
+    """G-LAYER: file-level wrapper for check_example_blockquote_lines."""
+    try:
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except Exception:
+        return []
+    return check_example_blockquote_lines(lines)
+
+
 # ===========================================================================
 # H-LAYER: structural label / blockquote audit (4 sub-checks)
 # ===========================================================================
@@ -841,6 +875,7 @@ class FLayer(VerifyLayer):
             'quote_gaps': check_g_quote_continuity(ctx.md_file),
             'nested_bq': check_nested_blockquotes(ctx.md_file),
             'ex_proof_gaps': check_example_proof_gap(ctx.md_file),
+            'ex_no_bq': check_example_blockquote(ctx.md_file),
             'h_structural_bq': check_h_structural_blockquote(ctx.md_file),
             'h_stmt_bq': check_h_statement_in_blockquote(ctx.md_file),
             'h_ul_bq': check_unlabeled_blockquotes(ctx.md_file),

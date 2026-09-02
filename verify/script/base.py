@@ -183,6 +183,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'fig_misattributed': [],
     'quote_gaps': [], 'nested_bq': [],
     'ex_proof_gaps': ([], []),
+    'ex_no_bq': [],
     'h_structural_bq': [], 'h_stmt_bq': [], 'h_ul_bq': [], 'h_mbq': [],
     'i_sep_gaps': [], 'j_header_dash': [], 'k_proof_list': [], 'l_sep_blanks': [], 'm_dm_gt': [], 'n_bq_empty': [],
     'heading_sep': [],

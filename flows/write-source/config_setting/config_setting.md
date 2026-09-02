@@ -16,14 +16,20 @@
 
 ## 步骤（有序）
 
-1. **建章节映射（chapter_map，统一在本阶段生成）**
-   - 从 `_extract/page_*.json` 的目录页（TOC 通常位于 `page_001~005` 附近，MM 修复后可用全文检索章名交叉确认）读每章**章名**与 **PDF 页码起止**，写 `_extract/chapter_map.json`：
+1. **建章节映射（chapter_map，一步生成正确页码）**
+   - agent 只校订**结构真相**（OCR 给不出、必须由人定的部分）：从 `_extract/page_*.json` 的目录页（TOC 通常位于 `page_001~005` 附近，MM 修复后可用全文检索章名交叉确认）读每章**章号 + 章名**（中 `name` + 英 `name_en`）+ 附录标记；写 `_extract/chapter_map.json`：
      ```json
-     { "chapters": [ {"ch": 1, "name": "Measure Theory", "start": 1, "end": 47}, ... ] }
+     { "chapters": [ {"ch": 1, "name": "测度论", "name_en": "Measure Theory"}, ... ] }
      ```
-   - 用 `../../../../data/chapter_map/chapter_map.py` 生成模板（数据结构见 [data/chapter_map/chapter_map.md](../../../../data/chapter_map/chapter_map.md)），或人工填入。
-   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**原书印刷页码；若 TOC 给的是印刷页号，须加前页偏移换算成 PDF 页号再写（详见 [data/chapter_map/chapter_map.md](../../../../data/chapter_map/chapter_map.md)）。全书落盘后可用正文首尾页与 TOC 交叉核对章边界。
+     `start`/`end` 此时**不填或仅填 TOC 粗略值**——页码由下一步自动算出，无需人抄印刷页号。
+   - 🔴 用 `build_chapter_map.py` **一步从 OCR 生成正确页码**（检测引擎已内联于该脚本，无外部依赖）：
+     ```bash
+     python tools/build_chapter_map.py <extract_dir>
+     ```
+     它扫描 `page_*.json` 自动定位每章真实起点（"Chapter N" 标题匹配 / 裸标题回退）、推断 `end`（下一章起点-1），写回 `chapter_map.json` 并产出 `chapter_map.build_report.md` 供 agent 判断。
+   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；但 agent **不再手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../../data/chapter_map/chapter_map.md)）。
    - 它是后续"某章是否已可写"、`make_config.py` 编号判定（罗马数字章号 / 每章 `ordinal` / `chapter_first`）、figure 按章分配与 `build_structure` 页区间读取的**唯一判定依据**。
+   - 🔴 **生成后 agent 判断（强制）**：读 `chapter_map.build_report.md`——确认 `CORRECTED` 值；若有 `UNDTECTED` 章（检测器未能从 OCR 定位起点），在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具。全章 `start`/`end` 非 null 才放行进入 Step 2–3 与下游 write-source（与"规则 B：暴露真实缺陷、禁止掩盖"一脉相承）。
 
 2. **探测编号形态**（用全书 `page_*.json`）：
    - `ordinal` 分组（`type` / `name` / `scope`）、`language`、章节层级（`section_types`，深度经 `SECTION_TYPE_DEPTH` 派生，多数由 `primary_type` 自动反推，仅四级子小节 `1.1.1.1` 需显式覆盖）；
@@ -59,6 +65,10 @@
   - **允许增量扩展**：agent 找不到匹配时，**可以**增量式引入新类型：在 `verify_config.json` 的 `ordinal` 中新增一个 `type` 码（沿用既有 1–6 / 8 / 9 判定树，超出则顺延新码，如 `10`）+ 对应 `name` 标签；若该新类型需要新的抽取/匹配/校验脚本，agent **可增量添加相关脚本**（置于对应 flow 的 `script/` 下，并登记到 `../../../lib/boot.py` 注入路径与 `verify.md` 注册表），而非临时 hack 或强塞。
   - **判定不清仍须回归全书**：新类型的判定同样适用 规则2（回归全部 `page_*.json` 上下文），不得抽样定稿。
   - 补充：本规则与 `missing_label_policy.md` 互补——后者管"已识别类别但 OCR 漏抽的条目"（§2 凭知识库补写），本规则管"类别本身未知、需要扩展类型体系"的情形。
+- **规则6 — chapter_map 一步生成 + agent 判断（🔴 强制）**：Step 1 用 `build_chapter_map.py` 一步从 OCR 算出正确 `start`/`end` 写回 `chapter_map.json`，**不得**让人从 TOC 手抄印刷页号当 PDF 页号。生成后 agent **必须**审阅 `chapter_map.build_report.md`：
+  - `CORRECTED` 值（检测值 ≠ 原 TOC 粗略值）→ 确认接受（已自动写入）；
+  - `UNDTECTED` 章（检测器未能从 OCR 定位起点）→ **必须**在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具；
+  - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成，不再有独立的校验脚本闸步。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `ordinal` 必须含 Figure 组（自定义前缀→`name` 非空、无图序标→不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
 - **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–9，原 7 已并入 4）。
 

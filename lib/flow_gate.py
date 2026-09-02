@@ -42,8 +42,8 @@ FLOW_ORDER = {
     "prep": ["env"],
     # 2026-08-29 流程重构：extract 终于 MM Repair，后续步骤移入 write_source。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
-    "write_source": ["config", "figure_detection", "structure", "draft",
-                     "write_chapters", "verify_source"],
+    "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
+                     "draft", "write_chapters", "verify_source"],
     "derive": ["translate", "verify_cn"],
 }
 

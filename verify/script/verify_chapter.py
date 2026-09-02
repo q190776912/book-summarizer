@@ -139,7 +139,13 @@ def _appendix_letter(book_dir, ch):
     if node is None:
         return None
     m = re.search(r'\bAppendix\s+([A-Z])\b', str(node.name or ''))
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    # Also match "A Title" pattern (appendix without "Appendix" prefix)
+    m2 = re.match(r'^([A-Z])\s+\S', str(node.name or ''))
+    if m2 and m2.group(1) in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+        return m2.group(1)
+    return None
 
 
 def chapter_md_groups(book_dir, ch):

@@ -35,12 +35,16 @@
   并把首行 `DRAFT` 改为 `DONE`。**禁止跳过任何单元。**
 - **🔴 强制门控**（步骤 5 末尾，脚本）：`gate_units.py` 核对每个单元「存在 +
   首行 DONE + **单元级质量校验通过**」——🔴 2026-09-01 起判断标准是**「写对」
-  而非「重写」**：`check_unit_quality.py` 对每个 item/desc 单元校验**公式闭合**
-  （`$`/`$$` 未配对）、**无裸数学命令 / 无裸 Unicode 数学字符 / 无裸箭头**
-  （`\frac` `α` `→` `≤` 等在 `$...$` / `$$...$$` 之外——数学必须 KaTeX，复用
-  katex_heuristics 成熟检测）、**结构标签**（item 缺粗体标签 / example 未 `>`
-  包裹）、**无 OCR 残留**（`{ }` 半括号 / `\begin{array}` 残缺 / 乱码）——拦模型
-  瞎改就标 DONE。只有全部单元都改对（每个 item 都不漏）才 exit 0，否则列出
+  而非「重写」**：`check_unit_quality.py` 对每个 item/desc 单元校验——全部引用
+  verify 已有检测函数，不重复造轮子：
+  - **公式闭合**：`check_katex.check_display_math_closure`（同 verify F 层）
+  - **裸数学/箭头**：`katex_heuristics.find_bare_math_errors` / `find_raw_arrow_errors`
+    （同 verify F 层）
+  - **证明过长**：`verbose_gates.check_verbose_proofs`（同 verify P 层）
+  - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify H 层）
+  - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
+  - **OCR 残留**：verify 不覆盖的 OCR 公式模式（`\ensuremath` `\pmb` 等）由薄封装补充
+  ——拦模型瞎改就标 DONE。只有全部单元都改对（每个 item 都不漏）才 exit 0，否则列出
   未达标清单。未过 gate 严禁进入步骤 6 拼接。
 - **拼接**（步骤 6，纯脚本无 agent）：`merge_units.py` 按 manifest 顺序合并全部
   单元为最终 `ChapterN_*.md` / `第N章_*.md`，并按本文件 [V-F](#v-f-格式与块引用f-层母文档)

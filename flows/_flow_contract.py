@@ -28,8 +28,8 @@ FLOW_ORDER = {
     # 🔴 2026-08-29 流程重构：extract 终于 MM Repair；config / figure_detection /
     # structure / 基本总结草稿全部移入 write_source（草稿前须过 structure 完整性闸门）。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
-    "write_source": ["config", "figure_detection", "structure", "draft",
-                     "write_chapters", "verify_source"],
+    "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
+                     "draft", "write_chapters", "verify_source"],
     "derive": ["translate", "verify_cn"],
 }
 
@@ -61,6 +61,12 @@ RUN_COMMANDS = {
         "先按 config_setting.md 步骤 1 建章节映射 _extract/chapter_map.json"
         "（MM Repair 完成后统一生成，只建一次），再跑 "
         "python config/verify_config/make_config.py \"{extract_dir}\"；两者都完成才算 done。"),
+    "write_source.build_chapter_map": ("cmd",
+        # 🔴 一步从 OCR 生成正确页码：检测引擎已内联于 build_chapter_map.py，自动填每章
+        # start/end 写回 chapter_map.json，并产出 chapter_map.build_report.md 供
+        # agent 判断。UNDTECTED 章 exit 1，agent 手动补正后重跑。全章 start/end
+        # 非 null 才算 done（见 EVIDENCE chapter_map_built）。
+        "python tools/build_chapter_map.py \"{extract_dir}\""),
     "write_source.figure_detection": ("cmd",
         "python flows/script/extract_figures.py \"{pdf}\" --out \"{extract_dir}\" --book && "
         "python flows/script/assign_figures.py \"{pdf}\" --out \"{extract_dir}\" --book"),
@@ -83,9 +89,11 @@ RUN_COMMANDS = {
         "Tier 压缩、格式落地、存疑回查 page_*.json）——🔴 全部写作要求在文档步骤 5 "
         "落实，每个单元把首行 DRAFT 标记改为 DONE；"
         "② 跑 python flows/write-source/script/gate_units.py \"{extract_dir}\" "
-        "——🔴 强制门控：全部单元 DONE 且单元级质量校验通过（公式闭合 / 无裸命令·裸"
-        "Unicode 字符·裸箭头——数学必须 KaTeX / 结构标签 / 无 OCR 残留，"
-        "check_unit_quality.py 复用 katex_heuristics 成熟检测）才 exit 0——判断标准"
+        "——🔴 强制门控：全部单元 DONE 且单元级质量校验通过（全部引用 verify 已有检测："
+        "check_katex.check_display_math_closure（$$ 闭合）/ katex_heuristics（裸命令·裸"
+        "Unicode 字符·裸箭头）/ verbose_gates.check_verbose_proofs（证明过长）/ "
+        "struct_labels（结构标签）/ format_verify.check_example_blockquote_lines"
+        "（example blockquote）/ OCR 残留薄封装）才 exit 0——判断标准"
         "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）；"
         "③ 跑 python flows/write-source/script/merge_units.py \"{extract_dir}\" <ch> "
         "逐章拼接单元成最终 ChapterN_*.md / 第N章_*.md——文档步骤 6 纯脚本机械执行"
@@ -246,6 +254,47 @@ class physical_evidence:
         if not (isinstance(d.get("ordinal"), list) and len(d.get("ordinal")) > 0):
             return False, "verify_config.json 缺 ordinal 数组"
         return True, "chapter_map.json + verify_config.json（含 ordinal 数组）就绪"
+
+    @staticmethod
+    def chapter_map_built(book_dir, extract_dir):
+        """build_chapter_map 步骤证据：全章 start/end 已填 + 起飞前报告已生成。
+
+        机器可强制的部分只有"完整性"：chapter_map.json 解析成功、每章 start/end
+        均非 null、chapter_map.build_report.md 存在（证明生成器已跑、agent 有报告
+        可判）。agent 对报告的人工判断（确认 CORRECTED / 补 UNDTECTED）是流程规则，
+        不靠机器闸——这与"生成 + agent 判断"的一步法一致，不再有独立校验脚本。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        cmap = os.path.join(ex, "chapter_map.json")
+        if not os.path.exists(cmap):
+            return False, "缺 chapter_map.json（config 步未生成）"
+        try:
+            with open(cmap, encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            return False, "chapter_map.json 非法 JSON: %s" % e
+        # 兼容形态 A（{"chapters":[...]}）与 B（{"1":{...}}）
+        recs = []
+        if isinstance(raw, dict) and isinstance(raw.get("chapters"), list):
+            recs = raw["chapters"]
+        elif isinstance(raw, dict):
+            recs = [v for v in raw.values() if isinstance(v, dict)]
+        if not recs:
+            return False, "chapter_map.json 无章节"
+        missing = []
+        for c in recs:
+            ch = c.get("ch", c.get("num", c.get("chapter")))
+            s = c.get("start", c.get("start_page"))
+            e = c.get("end", c.get("end_page"))
+            if s is None or e is None:
+                missing.append(str(ch))
+        if missing:
+            return False, ("以下章 start/end 仍为空（须 agent 在 build_report 中补正后"
+                           "重跑 build_chapter_map）: %s" % ", ".join(missing))
+        report = os.path.join(ex, "chapter_map.build_report.md")
+        if not os.path.exists(report):
+            return False, "缺 chapter_map.build_report.md（build_chapter_map 未运行）"
+        return True, "chapter_map.json 全章 start/end 已填（build_chapter_map 生成 + agent 已审阅报告）"
 
     @staticmethod
     def figure_ok(book_dir, extract_dir):
@@ -759,6 +808,7 @@ EVIDENCE = {
     "extract.extract_text": physical_evidence.pages_all_landed,
     "extract.mm_repair": physical_evidence.mm_repair_complete,
     "write_source.config": physical_evidence.config_ok,
+    "write_source.build_chapter_map": physical_evidence.chapter_map_built,
     "write_source.figure_detection": physical_evidence.figure_ok,
     "write_source.structure": physical_evidence.structure_ok,
     "write_source.draft": physical_evidence.draft_ok,

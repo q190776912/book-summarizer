@@ -43,6 +43,7 @@ DISPATCH = {
     "make-summary": "flows/extract/pipeline/script/make_summary.py",
     "split-chapters": "tools/split_chapters.py",
     "audit-counts": "verify/script/audit_counts.py",
+    "build-chapter-map": "tools/build_chapter_map.py",
 }
 
 

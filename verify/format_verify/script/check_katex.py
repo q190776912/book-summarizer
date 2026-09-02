@@ -90,6 +90,53 @@ from katex_heuristics import (
 from katex_render import run_render_check
 
 
+def check_display_math_closure(lines):
+    """Check for unclosed display math ($$ or > $$) at EOF.
+
+    Standalone function usable by both verify (file-level) and
+    check_unit_quality (unit-level). Takes list of lines, returns
+    list of error strings.
+
+    Handles both standalone $$ delimiters and inline $$...content$$ patterns.
+    """
+    in_math = False
+    in_bq_math = False
+    for line in lines:
+        s = line.strip()
+        # Strip escaped \$
+        s = s.replace('\\$', '')
+        # Count $$ occurrences (standalone delimiter or inline pair)
+        dq_count = s.count('$$')
+        if dq_count == 0:
+            continue
+        if dq_count % 2 == 1:
+            # Odd $$ count: toggles math state
+            if s.startswith('> $$') or (s.startswith('$$') and not s.startswith('>')):
+                if in_bq_math:
+                    in_bq_math = False
+                elif in_math:
+                    in_math = False
+                else:
+                    # Opening $$: determine if blockquote or plain
+                    if s.startswith('>'):
+                        in_bq_math = True
+                    else:
+                        in_math = True
+            else:
+                # Inline $$ with odd count (e.g. text $$formula) — toggle
+                if in_math:
+                    in_math = False
+                else:
+                    in_math = True
+        # Even $$ count: complete pairs, no state change needed
+    errors = []
+    if in_math:
+        errors.append('display math $$ opened but never closed (EOF reached)')
+    if in_bq_math:
+        errors.append('blockquote display math > $$ opened but never closed (EOF reached)')
+    return errors
+
+
 def process_file(path, fix):
     """Process a single markdown file. Returns True if OK (no errors after fix)."""
     with open(path, 'r', encoding='utf-8') as f:
@@ -344,6 +391,9 @@ def process_file(path, fix):
             errors.append(
                 f'line {i + 1}: 结构性条目不应进入块引用（>），应独立成行顶层')
             fix_struct.append(('strip_bq', i))
+
+    # --- Pass 2c: unclosed display math ($$ not closed at EOF) ---
+    errors.extend(check_display_math_closure(lines))
 
     # -- Apply fixes (bottom-up so indices stay valid) --
     if fix:

@@ -221,6 +221,13 @@ def print_result(r):
               f"example and proof (visual spacing OK, but can be removed):")
         for w in ex_warns:
             print(w)
+    ex_no_bq = r.get('ex_no_bq', [])
+    if ex_no_bq:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · Example not in blockquote ({len(ex_no_bq)}): example blocks "
+              f"must be wrapped in `>` blockquotes (writing-rules V-F) — add `> ` prefix:")
+        for g in ex_no_bq:
+            print(g)
     # ---- 结构标签守卫（原 H 层）----
     h_bq = r.get('h_structural_bq', [])
     if h_bq:

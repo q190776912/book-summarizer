@@ -101,14 +101,16 @@
      ```
      exit 0 = 该章全部单元文件存在、首行 `DONE`、**单元级质量校验通过**。
      🔴 **2026-09-01 起判断标准是「写对」而非「重写」**（拦"模型瞎改就标 DONE"）：
-     `check_unit_quality.py` 对每个 item / desc 单元做**质量校验**，复用
-     `verify/format_verify/script/katex_heuristics.py` 的成熟检测（先经本模块的
-     数学区划分剥除 `$...$` / `$$...$$` 再扫），聚焦可机械判定的严重错误——
-     **公式闭合**（`$`/`$$` 未配对 = 渲染崩）、**裸数学命令**（`\frac`/`\sum` 等
-     在 `$` 外）、**裸 Unicode 数学字符 / 裸箭头**（`α` `→` `≤` 等在 `$` 外 =
-     writing-rules 要求数学必须 KaTeX）、**结构标签**（item 缺粗体标签 /
-     example 未 `>` 包裹）、**OCR 残留启发式**（`{ }` 半括号 / `\begin{array}` 残缺 /
-     乱码）。任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。
+     `check_unit_quality.py` 对每个 item / desc 单元做**质量校验**——全部引用 verify
+     已有检测函数，不重复造轮子：
+     - **公式闭合**：`check_katex.check_display_math_closure`（同 verify F 层）
+     - **裸数学/箭头**：`katex_heuristics.find_bare_math_errors` / `find_raw_arrow_errors`
+       （同 verify F 层）
+     - **证明过长**：`verbose_gates.check_verbose_proofs`（同 verify P 层）
+     - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify H 层）
+     - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
+     - **OCR 残留**：verify 不覆盖的 OCR 公式模式由薄封装补充
+     任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。
      未过 gate 严禁进入步骤 6 拼接。超大章（字符 > 60000）按规则 3 拆节后，
      逐节单元组分别门控。
 6. **拼接全部单元成最终源语言章 md（纯脚本，无 agent 参与）**

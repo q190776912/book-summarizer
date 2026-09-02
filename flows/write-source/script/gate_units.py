@@ -11,8 +11,9 @@
   ① **标记已替换**：文件首行由拆分时写入的 ``<!-- ... DRAFT unit: ... -->``
      变为 ``<!-- ... DONE unit: ... -->``（agent 改完后显式确认）；
   ② **「写对」而非「重写」**：item / desc 单元做**单元级质量校验**
-     （``check_unit_quality.py``）——公式闭合、无裸数学、结构标签齐全、无明显
-     OCR 残留。🔴 2026-09-01 起判断标准是"写对"（是否符合写作要求），**不再看
+     （``check_unit_quality.py``）——全部引用 verify 已有检测函数（check_katex /
+     katex_heuristics / verbose_gates / struct_labels / format_verify），不重复
+     造轮子。🔴 2026-09-01 起判断标准是"写对"（是否符合写作要求），**不再看
      内容指纹是否变化**——防止模型瞎改（公式没渲染对 / 格式破坏）就标 DONE。
      （章节标题单元本就无需改动，只确认 DONE。）
 

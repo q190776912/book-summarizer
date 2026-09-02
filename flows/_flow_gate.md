@@ -59,14 +59,20 @@ assert 上游完成，照样被挡：
 ```
 prep:            [env]
 extract:         [place_pdf, extract_text, mm_repair]
-write_source:    [config, figure_detection, structure, draft,
-                  write_chapters, verify_source]
+write_source:    [config, build_chapter_map, figure_detection, structure,
+                  draft, write_chapters, verify_source]
 derive:          [translate, verify_cn]
 ```
 
 > `config` 步骤包含两件事（见 config_setting.md）：① 建章节映射
 > `chapter_map.json`（MM Repair 完成后统一生成，只建一次）；② `make_config.py`
 > 生成 `verify_config.json`。旧 `extract.chapter_map` 独立步骤已并入 `config`。
+> 🔴 **`build_chapter_map` 一步生成正确页码（代替旧的两步法）**：chapter_map 由
+> agent 只填结构（章号 + 中/英章名 + 附录标记），再经
+> `python tools/flow_runner.py run <book_dir> write_source build_chapter_map`
+> 从 OCR 证据自动算出每章 `start`/`end` 写回，并产出 `chapter_map.build_report.md`
+> 供 agent 判断。不再有独立的"校验脚本闸步"；agent 对报告的判断是强制环节
+> （UNDTECTED 章手动补正后重跑），全章 `start`/`end` 非 null 才放行后续步骤。
 
 ## 每步"完成"的判据（物理证据，见 flows/_flow_contract.py）
 
@@ -77,10 +83,14 @@ derive:          [translate, verify_cn]
   marker 时回退物理核对）。
 - `config`：`chapter_map.json` 存在且含章节 **且** `verify_config.json` 存在且
   含 `ordinal` 数组。
+- `build_chapter_map`：`tools/build_chapter_map.py` 一步生成正确页码后，`chapter_map.json`
+  全章 `start`/`end` 均非 null **且** `chapter_map.build_report.md` 已生成（证明生成器
+  已跑、agent 有报告可判）。任一章 `start`/`end` 仍空（UNDTECTED 未补正）禁止 mark，
+  figure/structure 等下游步骤的顺序闸随之硬拒；agent 对报告的判断是强制环节。
 - `figure_detection`：`figure_index.json` 存在。
 - `structure`：`chapter_map` 全部章节均有分章骨架 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）**且** 每章完整性报告 `completeness_reports/ch{N}_*.json` 的 `gate.passed == true`（🔴 structure.md 第 2–4 步闸门）。
 - `draft`：每章 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）+ `units/ch{N}/manifest.json` 齐备且 manifest 不早于契约（内容化分章契约 + 每 item 一单元拆分；内容完整性闸门 `check_content_completeness.py` PASS）。
-- `write_chapters`：已写源语言章数 == chapter_map 章数 **且** 每章「逐单元改好 + 门控通过」机械核对（🔴 2026-08-31 重构，脱离单元 / 门控未过 = 硬拒）——① 每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；2026-09-01 起判断标准是「写对」而非「重写」，check_unit_quality.py 校验公式闭合 / 无裸命令·裸 Unicode 字符·裸箭头（数学必须 KaTeX）/ 结构标签 / 无 OCR 残留）；② 最终 md 存在（`merge_units.py` 拼接产物）；③ 结构契约全部 section 名在最终 md 在位（禁重排 / 自创层级 / 漏节）；④ 契约全部编号项 `name` 在最终 md 在位（漏项当场拦截，不堆积到 verify_source）。单元 manifest / 契约缺失的 legacy 章退化为章数核对并如实注明。
+- `write_chapters`：已写源语言章数 == chapter_map 章数 **且** 每章「逐单元改好 + 门控通过」机械核对（🔴 2026-08-31 重构，脱离单元 / 门控未过 = 硬拒）——① 每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；2026-09-01 起判断标准是「写对」而非「重写」，check_unit_quality.py 全部引用 verify 已有检测：`check_katex.check_display_math_closure`（$$ 闭合）/ `katex_heuristics`（裸命令·裸 Unicode 字符·裸箭头）/ `verbose_gates.check_verbose_proofs`（证明过长）/ `struct_labels`（结构标签）/ `format_verify.check_example_blockquote_lines`（example blockquote）/ OCR 残留薄封装）；② 最终 md 存在（`merge_units.py` 拼接产物）；③ 结构契约全部 section 名在最终 md 在位（禁重排 / 自创层级 / 漏节）；④ 契约全部编号项 `name` 在最终 md 在位（漏项当场拦截，不堆积到 verify_source）。单元 manifest / 契约缺失的 legacy 章退化为章数核对并如实注明。
 - `draft` 证据补充：内容完整性闸门（`verify/script/check_content_completeness.py`）PASS——描述信息 / 证明 / 图片 / 文字公式块齐备。
 - `verify_source`：agent 跑 `verify_chapter.py --all` 对**源语言版**确认 `exit 0`（`verify PASS + KaTeX OK`）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**——未嵌图 / 未复验 PASS 不得视为完成。
 - `translate`：**前置硬闸**＝源语言 `verify_source` 已 `done`（即 `verify_chapter.py --all` 对源语言真实 `exit 0`）。源语言未 PASS 时 `require_flow_prereqs` 硬拒，禁止进入翻译。

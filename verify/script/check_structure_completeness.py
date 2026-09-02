@@ -929,14 +929,17 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     readable_left = [m for m in miss_it2 if m["status"] == "readable"]
     b_blocking = bmeta2.get("blocking", [])
     sec_left = list(miss_sec2)
-    # B-layer blocking is diagnostic (ordering issues in consolidated exercise blocks);
-    # gate only requires no missing sections and no readable missing items.
-    passed = (not sec_left) and (not readable_left)
+    # B-layer blocking: numbering errors (out-of-order / gaps) are now blocking,
+    # not just diagnostic — they propagate to unit content and final output.
+    # Only exercise-block ordering issues are exempt (some books have genuine
+    # non-sequential exercise numbering).
+    real_b_blocking = [b for b in b_blocking if not b.get("exercise_block_only", False)]
+    passed = (not sec_left) and (not readable_left) and (not real_b_blocking)
     return {
         "passed": passed,
         "residual_sections": sec_left,
         "residual_readable_items": [m["key"] for m in readable_left],
-        "residual_b_blocking": b_blocking,
+        "residual_b_blocking": real_b_blocking,
     }
 
 

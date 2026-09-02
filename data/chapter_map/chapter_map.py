@@ -119,9 +119,12 @@ def iter_chapter_records(raw: dict) -> List[dict]:
         for c in raw["chapters"]:
             if not isinstance(c, dict):
                 continue
-            out.append({"ch": c.get("ch"), "name": c.get("name", ""),
-                        "name_en": c.get("name_en", ""),
-                        "start": c.get("start"), "end": c.get("end")})
+            ch = c.get("ch", c.get("num", c.get("chapter")))
+            start = c.get("start", c.get("start_page", c.get("pdf_start")))
+            end = c.get("end", c.get("end_page", c.get("pdf_end")))
+            out.append({"ch": ch, "name": c.get("name", ""),
+                        "name_en": c.get("name_en", c.get("title", "")),
+                        "start": start, "end": end})
         return out
     for k, v in raw.items():
         if not isinstance(v, dict):

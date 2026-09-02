@@ -28,7 +28,7 @@
 > 每条规则给出：**语义** + **错误格式**（被判定为非法的写法）+ **正确格式**（应当写成的写法）+ 契约键 / 阻断性 / `--fix` / 原层代号。约定：结构标签（`**定义 N.N**`、`**定理 N.N**`、`**引理**`、`**推论**` 等）与陈述内容位于顶层；证明、例、注、说明等附属块一律用 `>` 块引用包裹（`> **证明**`、`> **例 N**`、`> **注**` …）。
 
 ### 检测规则1 · KaTeX 渲染校验（原 C 层，检测 + `--fix` 自动修复、阻断 FAIL）
-调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，经 `verify_chapter.py` 的 `--fix` 调用（🔴 2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 门，见下方「前置守卫」）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（🔴 独立 CLI 自 2026-09 起内置同款 PREFLIGHT 写回守卫：围栏不配对 / 块外 `\tag` 时跳过不写回）。
+调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。另导出 `check_display_math_closure(lines)` 函数供单元级质量校验（`check_unit_quality.py`）复用，检测 `$$` / `> $$` 在 EOF 未闭合。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，经 `verify_chapter.py` 的 `--fix` 调用（🔴 2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 门，见下方「前置守卫」）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（🔴 独立 CLI 自 2026-09 起内置同款 PREFLIGHT 写回守卫：围栏不配对 / 块外 `\tag` 时跳过不写回）。
 
 **错误格式（KaTeX 渲染失败，阻断 FAIL）：**
 ```text
@@ -136,6 +136,19 @@ $$x = y$$
 
 > **例 1.4** 内容。
 > **证明** 证明。
+```
+
+### 检测规则4b · ex_no_bq（原 G 层，不 `--fix`）
+writing-rules V-F 要求 example 块必须被 `>` 块引用包裹。检测未被 `>` 包裹的 example 行（`**例 N.N**` / `**Example N.N**` 出现在顶层而非 `>` 内）。契约键 `ex_no_bq`。
+
+**错误格式（example 未被 `>` 包裹）：**
+```text
+**例 1.3** 这是例的内容。
+```
+
+**正确格式（example 在 `>` 块引用内）：**
+```text
+> **例 1.3** 这是例的内容。
 ```
 
 ### 检测规则5 · h_structural_bq（原 H 层，可 `--fix`）

@@ -62,14 +62,13 @@ python tools/flow_runner.py run "<corpus_root>/<书名>" write_source config
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source figure_detection
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source structure
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source draft
-# 3. 写源语言初稿 → 批量校验至 PASS →（仅英文书）派生翻译版 → 校验至 PASS
+# 3. 写源语言初稿 →（仅英文书）逐单元翻译 → 拼接源+译两版 → 批量校验（一次覆盖两版）
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source write_chapters
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source merge_all
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source verify_source
-python tools/flow_runner.py run "<corpus_root>/<书名>" derive translate
-python tools/flow_runner.py run "<corpus_root>/<书名>" derive verify_cn
 ```
 
-完整流程与每步规则见 **[`SKILL.md`](SKILL.md)**（Stage 0 → 3 主流程、写源硬闸、flow_gate 强制顺序）与 `flows/<stage>/<stage>.md`。
+完整流程与每步规则见 **[`SKILL.md`](SKILL.md)**（Stage 0 → 2 主流程、写源硬闸、flow_gate 强制顺序）与 `flows/<stage>/<stage>.md`。
 
 ## 常见问题
 
@@ -82,7 +81,7 @@ python tools/flow_runner.py run "<corpus_root>/<书名>" derive verify_cn
 
 ## 架构速览
 
-- `SKILL.md`：主流程（Stage 0 prep → 1 extract → 2 write-source → 3 derive-translate）、目录契约、写源硬闸、flow_gate
+- `SKILL.md`：主流程（Stage 0 prep → 1 extract → 2 write-source（含 2026-09-03 内建的翻译单元化步骤））、目录契约、写源硬闸、flow_gate
 - `flows/`：各阶段流程文档（统一模板：目的/前置/步骤/规则/出口/相关代码）与脚本
 - `verify/`：通用校验引擎（多层语义校验，`verify/verify.md` 为编排权威）
 - `config/`：书籍处理过程配置（`verify_config` 生成器、`ignore_chN` 忽略清单等）

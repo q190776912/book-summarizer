@@ -5,7 +5,7 @@
 机制
 ----
 1. 单一真源：``FLOW_ORDER`` 定义每个 flow 的有序步骤；``FLOW_PREREQS`` 定义
-   flow 之间的主干先后（prep → extract → write_source → derive）。
+   flow 之间的主干先后（prep → extract → write_source；翻译已并入 write_source）。
 2. 证明账本（ledger）：``<extract_dir>/.flow_gate.json``（单卷书即
    ``<book_dir>/_extract/.flow_gate.json``）记录每步完成情况
    （done / ts / iso / evidence）。**仅 flow_runner 在证据复核通过后写 done**，
@@ -41,17 +41,18 @@ GATE_FILE = ".flow_gate.json"
 FLOW_ORDER = {
     "prep": ["env"],
     # 2026-08-29 流程重构：extract 终于 MM Repair，后续步骤移入 write_source。
+    # 2026-09-03 翻译单元化：translate_chapters / merge_all 内置于 write_source，
+    # 翻译单元按需生成，verify_source 末移一次覆盖源+译两版。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
-                     "draft", "write_chapters", "verify_source"],
-    "derive": ["translate", "verify_cn"],
+                     "draft", "write_chapters", "translate_chapters",
+                     "merge_all", "verify_source"],
 }
 
 # 主干先后：进入某 flow 前必须完成的其它 flow（取其末步判断）。
 FLOW_PREREQS = {
     "extract": ["prep"],
     "write_source": ["extract"],
-    "derive": ["write_source"],
 }
 
 

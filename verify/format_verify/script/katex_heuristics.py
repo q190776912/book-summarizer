@@ -78,24 +78,30 @@ def _strip_math_and_code(line, in_fence, in_display):
         re.match(r'^\s*>\s*\$\$\s*$', line) or re.match(r'^\s*\$\$\s*$', line))
     if is_standalone_disp:
         line = line.replace('$$', '\x00D\x00', 1)
+    # Also protect single-line $$...$$ display math from inline-$ stripping
+    # Pattern: $$...$$ on the same line (not standalone)
+    line = re.sub(r'\$\$[^$]+\$\$', lambda m: '\x00D\x00' + m.group()[2:-2] + '\x00D\x00', line)
     # Strip inline $...$ and `...` FIRST so the subsequent display-math
     # detection only sees genuine `$$` delimiters (not adjacent-inline `$$`).
     line = re.sub(r'\$[^$]*\$', ' ', line)
     line = re.sub(r'`[^`]*`', ' ', line)
     # Restore protected display delimiters.
+    # \x00D\x00 is a 3-char marker: NUL + 'D' + NUL
     line = line.replace('\x00D\x00', '$$')
     # handle $$ display math (possibly multi-line)
-    n = line.count('$$')
+    # Use chr(36)+chr(36) to avoid Python escape interpretation of $$
+    dd = chr(36) + chr(36)
+    n = line.count(dd)
     if in_display:
         if n % 2 == 1:
             in_display = False
-            line = line.split('$$', 1)[1] if '$$' in line else ''
+            line = line.split(dd, 1)[1] if dd in line else ''
         else:
             return '', in_fence, in_display
     else:
         if n % 2 == 1:
             in_display = True
-            line = line.split('$$', 1)[0]
+            line = line.split(dd, 1)[0]
         elif n >= 2:
             line = re.sub(r'\$\$.*?\$\$', ' ', line)
     return line, in_fence, in_display

@@ -1,7 +1,7 @@
 """lib/figure_io.py — shared reader for ``figure_index.json``.
 
 Consumed by both the figure-assignment package (write-source/figures) and the
-verify figure layer (E, unified figure completeness + validity) (write-source step 3 / derive-translate). Both callers only ever test truthiness or
+verify figure layer (E, unified figure completeness + validity) (write-source step 2). Both callers only ever test truthiness or
 iterate the result, so a uniform empty-list return on missing/corrupt file is
 safe for all of them.
 """

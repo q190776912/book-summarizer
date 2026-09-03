@@ -43,22 +43,22 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 
 > env 覆盖 `BKS_CORPUS_ROOT` / `BKS_MODEL_ROOT` / `BKS_CONDA_ENV_NAME` / `BKS_CONDA_ENV_PATH` / `BKS_PADDLEOCR_CACHE` 仅供脚本直调场景，交互式首次配置以写 `user_config.json` 为准。
 
-## 主流程（Stage 0 → 3，唯一主干）
+## 主流程（Stage 0 → 2，唯一主干）
 
-> 每个阶段是一个独立 `flows/<name>/<name>.md`（统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）。点开链接看该阶段的完整规则与命令。通用校验 `verify` 是**顶层公用文档**（与 `flows` 并行，路径 `verify`），被 `write-source`（最终校验步骤 7；步骤 4 另有内容完整性闸门脚本）与 `derive-translate` 复用，不属于某个流程阶段。
+> 每个阶段是一个独立 `flows/<name>/<name>.md`（统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程）。点开链接看该阶段的完整规则与命令。通用校验 `verify` 是**顶层公用文档**（与 `flows` 并行，路径 `verify`），被 `write-source`（最终校验步骤 8；步骤 4 另有内容完整性闸门脚本）复用，不属于某个流程阶段。
 
 | Stage | 流程 | 一句话 | 关键约束 |
 |-------|------|--------|---------|
 | 0 | [`prep`](flows/prep/prep.md) | 环境检查（conda pdfextract + torch CUDA） | — |
 | 1 | [`extract`](flows/extract/extract.md) | 归位 PDF + 启动**后台**文本提取 + 轮询做 MM Repair，以 `_extraction_done.json` 收尾 | 防停滞（extract 规则1）；多册书逐册串行（extract 规则2）；视觉识别询问式全书一次（extract 规则3）；**MM Repair 门（extract/mm_repair 流程 规则1）** |
-| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（`build_structure` 按章**一步产出含内容的完整契约** `ch{N}.json`（层级嵌套小节 + description/proof/text/formula含tag/image 内容块）+ 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行；回填后自动重建该章内容）→ 步骤 4 **拆分单元**（纯脚本：内容完整性闸门 `check_content_completeness` + `split_draft_units` 拆出 `units/ch{N}/` 每 item 一单元目录）→ 步骤 5 **逐个按写作要求改好（agent 核心步）+ 强制门控**（agent **逐个改好每个单元**：写作要求全部在此落实（公式重写 / Tier 压缩 / 格式），并把首行 DRAFT→DONE → 🔴 `gate_units` 强制门控：每单元存在+DONE+**单元级质量校验通过**（公式闭合 / 无裸命令·裸 Unicode 字符·裸箭头（数学必须 KaTeX）/ 结构标签 / 无 OCR 残留，check_unit_quality.py 复用 katex_heuristics，判断标准是「写对」而非「重写」）才 exit 0（每个 item 都不漏））→ 步骤 6 **拼接**（`merge_units` 纯脚本机械执行，按 manifest 顺序合并全部单元成最终 `ChapterN_*.md` / `第N章_*.md` 并按 V-F 重建 `---` 分隔线，**无 agent 参与**；🔴 落账证据强制「逐单元改好+门控通过」：每章 gate 通过 + 契约骨架节/编号项在位，脱离单元 = mark 硬拒）→ 步骤 7 批量校验至 PASS | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是拆分的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；单元公式是 OCR 原样**严禁照抄**（步骤 5 重写校正）；单元不经 verify（初版全量保真） |
-| 3 | [`derive-translate`](flows/derive-translate/derive-translate.md) | 据已校验源版派生翻译版并校验至 PASS（**仅英文书**：英文书→派生中文 `第N章_*.md`；**中文书无翻译阶段，本阶段整体跳过**） | 单向修复（derive-translate 规则4）；中英 1:1 同构（规则3） |
+| 2 | [`write-source`](flows/write-source/write-source.md) | 步骤 1 **config 子流程**（chapter_map + `verify_config.json`）→ 步骤 2 **figure_detection 子流程**（图检测+分配）→ 步骤 3 **structure 子流程**（`build_structure` 按章**一步产出含内容的完整契约** `ch{N}.json`（层级嵌套小节 + description/proof/text/formula含tag/image 内容块）+ 🔴 章节/条目完整性查漏回填闸门，`gate.passed` 才放行；回填后自动重建该章内容）→ 步骤 4 **拆分单元**（纯脚本：内容完整性闸门 `check_content_completeness` + `split_draft_units` 拆出 `units/ch{N}/` 每 item 一单元目录）→ 步骤 5 **逐个按写作要求改好（agent 核心步）+ 强制门控**（agent **逐个改好每个单元**：写作要求全部在此落实（公式重写 / Tier 压缩 / 格式），并把首行 DRAFT→DONE → 🔴 `gate_units` 强制门控：每单元存在+DONE+**单元级质量校验通过**（公式闭合 / 无裸命令·裸 Unicode 字符·裸箭头（数学必须 KaTeX）/ 结构标签 / 无 OCR 残留，check_unit_quality.py 复用 katex_heuristics，判断标准是「写对」而非「重写」）才 exit 0（每个 item 都不漏））→ 步骤 6 **逐单元翻译**（仅英文书；`init_translate_units` 初始化清单（元数据+src_hash，不复制正文）→ agent 逐个看一个源单元生成一个翻译单元 `units-translate/ch{N}/`（DONE）→ 双重门控 `gate_units --units-dir units-translate` + `check_translate_parity` 1:1 同构闸）→ 步骤 7 **拼接**（`merge_units --all` 纯脚本机械执行，一次拼源+译两组 `ChapterN_*.md` / `第N章_*.md` 并按 V-F 重建 `---` 分隔线，**无 agent 参与**；🔴 落账证据强制「逐单元改好+门控通过」+ 契约骨架节/编号项在位，脱离单元 = mark 硬拒）→ 步骤 8 批量校验至 PASS（一次覆盖源+译两版） | config 在 MM 修复后统一生成只一次（config_setting 步骤 1）；🔴 **图检测前必须 config 先行**；🔴 **structure 完整性闸门是拆分的硬闸（规则7）**；内容完整性闸门（描述/证明/图片/文字块齐备）在步骤 4；源语言优先（规则1）；拆章（规则3）；写源期间**禁逐章 verify（规则2）**；单元公式是 OCR 原样**严禁照抄**（步骤 5 重写校正）；单元不经 verify（初版全量保真） |
+| 3 | （已并入 [`write-source`](flows/write-source/write-source.md)，2026-09-03 翻译单元化） | agent 逐个翻译单元（看一个源单元生成一个翻译单元）+ 双重门控 → 拼接源+译两版 → verify --all 一次覆盖（**仅英文书有翻译步**；中文书自动跳过） | 翻译闸=源单元门控+1:1 同构闸（`check_translate_parity.py`）；单向修复（先源后译） |
 
 > 🔴 **写源硬闸（全阶段不可绕过）**：Stage 2 `write-source` 严禁在 MM Repair 的 `apply` 写回 `page_*.json` 完成前启动。验证标准：该章 `page_*.json` 含 `mm_repaired`/`mm_reviewed` 标记、且 `_mm_repair/manifest.json` 中该章对应页**每条目 `resolved == true`**。`manifest.status == "applied"` 因 `apply` 无条件设置而**不可作为完成判据**（会出现"已 applied 但大量未修"假绿）；`repairs.json` 有 resolved 条目 ≠ `apply` 已写回（前者只是中间产物，后者才是出口）。MM Repair 全流程与验证命令见 [`extract/mm_repair`](flows/extract/mm_repair/mm_repair.md) 出口条件；extract 出口 = `_extraction_done.json`（见 [`extract`](flows/extract/extract.md) 出口条件）。
 
 ## 🔒 流程强制顺序执行（flow_gate，死命令：上一步没做完不能进下一步）
 
-所有 flow（prep → extract → write_source → derive）的步骤**严格有序、机械不可跳步**。
+所有 flow（prep → extract → write_source；翻译已并入 write_source）的步骤**严格有序、机械不可跳步**。
 违规会被两层同时拦截：① `tools/flow_runner.py` 的顺序闸（flow 前置 + 同 flow 内顺序）；
 ② 关键加载器自断言上游（`make_config` / `ConfigLoader` / `mm_repair_apply` /
 `build_structure` / `verify_chapter`）。机制、顺序、判据、标准工作流与**禁止清单**

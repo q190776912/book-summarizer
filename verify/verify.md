@@ -2,10 +2,10 @@
 
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
-> `write-source`（步骤 3，源语言）与 `derive-translate`（翻译版）都引用本流程，区别仅在于被校验的是哪个语言目录。
+> `write-source`（步骤 8）引用本流程对**源语言 + 翻译语言两组 md** 一次性校验（源版与翻译版共用同一套校验）。
 >
 > **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 8 个校验层模块，
-> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`、`../flows/derive-translate`
+> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`、`../flows/write-source`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
 ## 目的

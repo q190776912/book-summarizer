@@ -29,7 +29,7 @@
 - `tools/flow_runner.py` 是推进任何步骤的**唯一 sanctioned 入口**。
 - 进入 `flow X` 的 `step S` 前：
   - `require_flow_prereqs`：其上游 flow 的末步必须已完成（prep → extract →
-    write_source → derive）；
+    write_source）；
   - `require_ordered`：`flow X` 内 `S` 之前的所有步骤必须已 `done`。
 - 二者任一不满足 → 抛 `FlowGateError`，**硬拒绝，禁止跳步**。
 
@@ -60,8 +60,8 @@ assert 上游完成，照样被挡：
 prep:            [env]
 extract:         [place_pdf, extract_text, mm_repair]
 write_source:    [config, build_chapter_map, figure_detection, structure,
-                  draft, write_chapters, verify_source]
-derive:          [translate, verify_cn]
+                  draft, write_chapters, translate_chapters,
+                  merge_all, verify_source]
 ```
 
 > `config` 步骤包含两件事（见 config_setting.md）：① 建章节映射
@@ -90,16 +90,13 @@ derive:          [translate, verify_cn]
 - `figure_detection`：`figure_index.json` 存在。
 - `structure`：`chapter_map` 全部章节均有分章骨架 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）**且** 每章完整性报告 `completeness_reports/ch{N}_*.json` 的 `gate.passed == true`（🔴 structure.md 第 2–4 步闸门）。
 - `draft`：每章 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）+ `units/ch{N}/manifest.json` 齐备且 manifest 不早于契约（内容化分章契约 + 每 item 一单元拆分；内容完整性闸门 `check_content_completeness.py` PASS）。
-- `write_chapters`：已写源语言章数 == chapter_map 章数 **且** 每章「逐单元改好 + 门控通过」机械核对（🔴 2026-08-31 重构，脱离单元 / 门控未过 = 硬拒）——① 每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；2026-09-01 起判断标准是「写对」而非「重写」，check_unit_quality.py 全部引用 verify 已有检测：`check_katex.check_display_math_closure`（$$ 闭合）/ `katex_heuristics`（裸命令·裸 Unicode 字符·裸箭头）/ `verbose_gates.check_verbose_proofs`（证明过长）/ `struct_labels`（结构标签）/ `format_verify.check_example_blockquote_lines`（example blockquote）/ OCR 残留薄封装）；② 最终 md 存在（`merge_units.py` 拼接产物）；③ 结构契约全部 section 名在最终 md 在位（禁重排 / 自创层级 / 漏节）；④ 契约全部编号项 `name` 在最终 md 在位（漏项当场拦截，不堆积到 verify_source）。单元 manifest / 契约缺失的 legacy 章退化为章数核对并如实注明。
+- `write_chapters`：每章「逐单元改好 + 门控通过」机械核对（🔴 2026-08-31 重构 / 2026-09-03 拼接移出，脱离单元 / 门控未过 = 硬拒）——每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；2026-09-01 起判断标准是「写对」而非「重写」，check_unit_quality.py 全部引用 verify 已有检测：`check_katex.check_display_math_closure`（$$ 闭合）/ `katex_heuristics`（裸命令·裸 Unicode 字符·裸箭头）/ `verbose_gates.check_verbose_proofs`（证明过长）/ `struct_labels`（结构标签）/ `format_verify.check_example_blockquote_lines`（example blockquote）/ OCR 残留薄封装）。最终 md 存在 + 契约骨架节 / 编号项在位核对移至 `merge_all` 步。
+- `translate_chapters`：① 翻译清单已初始化（`units-translate/ch{N}/manifest.json`，翻译步内 `init_translate_units.py` 生成——元数据 + src_hash，不复制正文；中文源书自动跳过）；② 翻译单元门控通过（`gate_units --units-dir units-translate`，缺文件/未译/质量差即拒）；③ `check_translate_parity.py` 1:1 同构闸通过（单元序列 / \tag / 图片 / 编号项标签与源单元逐一相等）。
+- `merge_all`：每章源语言 + 翻译语言两组最终 md 存在（`merge_units.py --all` 产物），且结构契约全部 section 名 + 编号项 `name` 在两组 md 中在位（漏项当场拦截）。中文源书只要求源语言（中文）一组。
 - `draft` 证据补充：内容完整性闸门（`verify/script/check_content_completeness.py`）PASS——描述信息 / 证明 / 图片 / 文字公式块齐备。
-- `verify_source`：agent 跑 `verify_chapter.py --all` 对**源语言版**确认 `exit 0`（`verify PASS + KaTeX OK`）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**——未嵌图 / 未复验 PASS 不得视为完成。
-- `translate`：**前置硬闸**＝源语言 `verify_source` 已 `done`（即 `verify_chapter.py --all` 对源语言真实 `exit 0`）。源语言未 PASS 时 `require_flow_prereqs` 硬拒，禁止进入翻译。
-- `verify_cn`：agent 跑 `verify_chapter.py --all` 对翻译版确认 `exit 0`。
+- `verify_source`：流程末步，`verify_chapter.py --all` 对**源语言 + 翻译语言两组 md** 确认 `exit 0`（`verify PASS + KaTeX OK`；中文源书只有一组中文 md）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**。
 
-> **适用范围**：`derive` 流程（translate / verify_cn）**仅适用于英文书**（源=英文
-> `ChapterN_*.md` → 派生中文）。**中文书无翻译阶段**：`write_source.verify_source`
-> 完成即为全书完成，`derive.translate / derive.verify_cn` 保持未标记即可（中文书源
-> =`第N章_*.md`，无独立翻译版；见 [`derive-translate`](derive-translate/derive-translate.md) 适用范围）。
+> **适用范围**：翻译步骤（`translate_chapters`）**仅适用于英文书**（源=英文 `ChapterN_*.md` → 翻译中文）。**中文书无翻译阶段**：翻译证据自动跳过，`write_source` 全部步骤完成即为全书完成（中文书源=`第N章_*.md`，无独立翻译版）。
 
 ## 标准工作流（agent 必须遵守）
 
@@ -129,6 +126,6 @@ python tools/flow_runner.py bootstrap <book_dir>
 - ❌ 提前手 touch `_extraction_done.json` 冒充 MM Repair 完成（它只能由
   `mm_repair_apply.py` 真完成写出，或 `bootstrap` 依物理证据补写）。
 - ❌ 跳步：未跑完本 flow 前置步骤就进下一步（顺序闸硬拒）。
-- ❌ **源语言「写完但未校验 PASS」就进 `derive` 翻译**：这是死规则违规。`write_source` 的 `verify_source` 必须 `done`，源语言 `verify_chapter.py --all` 真实 `exit 0`，否则 `derive` 硬拒（详见 [`derive-translate`](derive-translate/derive-translate.md) 翻译硬闸）。
+- ❌ **跳过单元粒度直接凭整章 md 翻译**，或**未过同构闸（`check_translate_parity.py`）就拼接翻译版**（翻译闸详见 [`write-source`](write-source/write-source.md) 步骤 6）。
 - ❌ 手填 `_extract/.flow_gate.json` 账本（仅 `flow_runner` 经证据复核后写）。
 - ❌ 把"文本 100% 落盘 / Pipeline finished 日志 / 后台进程结束"当作"MM Repair 完成"。

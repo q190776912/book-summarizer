@@ -23,10 +23,19 @@
 
 不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
+翻译单元（2026-09-03 起，翻译并入 write-source，单元按需生成）
+----------------------------------------------------------
+同一套门控作用于翻译单元目录 ``book_structure/units-translate/ch{N}/``
+（由 ``init_translate_units.py`` 初始化清单后按需生成），只需加 ``--units-dir units-translate``：
+    python flows/write-source/script/gate_units.py <extract_dir> [ch ...] --units-dir units-translate
+单元级质量校验（``check_unit_quality``）全部复用 verify 检测函数，**语言无关**
+（$$ 闭合 / 裸数学 / 裸箭头 / 证明过长 / 结构标签 / 例块包裹 / OCR 残留），
+故源单元与翻译单元共用同一实现，不重复造轮子。
+
 用法
 ----
-    python flows/write-source/script/gate_units.py <extract_dir> [ch ...]
-    # 不传 <ch> 即全部章
+    python flows/write-source/script/gate_units.py <extract_dir> [ch ...] [--units-dir <sub>]
+    # 不传 <ch> 即全部章；<sub> 默认 units（翻译单元传 units-translate）
 输出
 ----
     通过：exit 0；未通过：exit 1 并打印未处理 / 缺失单元清单（逐章）。
@@ -80,12 +89,18 @@ def _read_unit(path):
     return mark, uid, utype, key, body, _hash_text(body.rstrip("\n"))
 
 
-def gate_chapter(ext, ch_key):
-    """门控单章。返回 (ok, detail)。detail 为逐条问题或通过说明。"""
-    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, "units", _split.UNITS_DIR % ch_key)
+def gate_chapter(ext, ch_key, units_sub="units"):
+    """门控单章。返回 (ok, detail)。detail 为逐条问题或通过说明。
+
+    ``units_sub``：单元子目录名——``units``（源语言单元，默认）或
+    ``units-translate``（翻译单元；2026-09-03 起翻译并入本流程，
+    与源单元共用同一门控与同一套单元级质量校验，语言无关不重复造轮子）。
+    """
+    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, _split.UNITS_DIR % ch_key)
     mpath = os.path.join(out_dir, "manifest.json")
     if not os.path.exists(mpath):
-        return False, "ch%s 缺 units/manifest.json（先跑 split_draft_units）。" % ch_key
+        return False, "ch%s 缺 %s/manifest.json（先跑 split_draft_units / "
+        "init_translate_units）。" % (ch_key, units_sub)
     with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     units = manifest.get("units") or []
@@ -129,6 +144,14 @@ def gate_chapter(ext, ch_key):
 
 def main():
     argv = sys.argv[1:]
+    units_sub = "units"
+    if "--units-dir" in argv:
+        i = argv.index("--units-dir")
+        if i + 1 >= len(argv):
+            print("[gate_units] --units-dir 缺参数（units | units-translate）。")
+            return 2
+        units_sub = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
     if not argv:
         print(__doc__)
         return 2
@@ -142,9 +165,11 @@ def main():
     if not keys:
         print("[gate_units] 无章节可门控。")
         return 2
+    if units_sub != "units":
+        print("[gate_units] 门控目录：%s（翻译单元）" % units_sub)
     all_ok = True
     for k in keys:
-        ok, detail = gate_chapter(ext, k)
+        ok, detail = gate_chapter(ext, k, units_sub=units_sub)
         print(("[PASS] " if ok else "[FAIL] ") + detail)
         if not ok:
             all_ok = False

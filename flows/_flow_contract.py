@@ -27,16 +27,18 @@ FLOW_ORDER = {
     "prep": ["env"],
     # 🔴 2026-08-29 流程重构：extract 终于 MM Repair；config / figure_detection /
     # structure / 基本总结草稿全部移入 write_source（草稿前须过 structure 完整性闸门）。
+    # 🔴 2026-09-03 翻译单元化（内置于 write_source）：翻译 = 单步 translate_chapters
+    #（清单初始化 + agent 逐个翻译生成翻译单元 + 门控 + 1:1 同构闸）/ merge_all
+    #（一次拼接源语言 + 翻译语言两版）；verify_source 后移至末步、一次覆盖两版。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
-                     "draft", "write_chapters", "verify_source"],
-    "derive": ["translate", "verify_cn"],
+                     "draft", "write_chapters", "translate_chapters",
+                     "merge_all", "verify_source"],
 }
 
 FLOW_PREREQS = {
     "extract": ["prep"],
     "write_source": ["extract"],
-    "derive": ["write_source"],
 }
 
 # --------------------------------------------------------------------------
@@ -83,33 +85,44 @@ RUN_COMMANDS = {
         "python verify/script/check_content_completeness.py \"{extract_dir}\" && "
         "python flows/write-source/script/split_draft_units.py \"{extract_dir}\""),
     "write_source.write_chapters": ("agent",
-        "🔴 对应文档步骤 5（agent 逐个改好 + 门控）与步骤 6（纯脚本拼接）："
-        "① agent 逐个打开 split_draft_units.py 拆出的单元目录 units/ch{N}/（章标题 / "
-        "节标题 / 描述 / 每个编号项 各一 md），按 writing-rules 改好（公式逐条重写校正、"
-        "Tier 压缩、格式落地、存疑回查 page_*.json）——🔴 全部写作要求在文档步骤 5 "
-        "落实，每个单元把首行 DRAFT 标记改为 DONE；"
-        "② 跑 python flows/write-source/script/gate_units.py \"{extract_dir}\" "
+        "🔴 对应文档步骤 5（agent 逐个改好 + 门控）：agent 逐个打开 "
+        "split_draft_units.py 拆出的单元目录 units/ch{N}/（章标题 / 节标题 / 描述 / "
+        "每个编号项 各一 md），按 writing-rules 改好（公式逐条重写校正、Tier 压缩、"
+        "格式落地、存疑回查 page_*.json），每个单元把首行 DRAFT 标记改为 DONE；"
+        "跑 python flows/write-source/script/gate_units.py \"{extract_dir}\" "
         "——🔴 强制门控：全部单元 DONE 且单元级质量校验通过（全部引用 verify 已有检测："
         "check_katex.check_display_math_closure（$$ 闭合）/ katex_heuristics（裸命令·裸"
         "Unicode 字符·裸箭头）/ verbose_gates.check_verbose_proofs（证明过长）/ "
         "struct_labels（结构标签）/ format_verify.check_example_blockquote_lines"
         "（example blockquote）/ OCR 残留薄封装）才 exit 0——判断标准"
-        "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）；"
-        "③ 跑 python flows/write-source/script/merge_units.py \"{extract_dir}\" <ch> "
-        "逐章拼接单元成最终 ChapterN_*.md / 第N章_*.md——文档步骤 6 纯脚本机械执行"
-        "（按 V-F 规则重建 --- 分隔线），无需 agent 写作调整。🔴 merge_units 自带"
-        "强制门控：拼接前先跑 gate_units，任一单元未改好即直接报错拒绝拼接。"
-        "🔴 落账证据机械核对（脱离单元 / 门控未过 = 硬拒）：每章 gate_units 通过"
-        "（全部单元改好）+ 最终 md 存在。"),
+        "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）。"
+        "🔴 2026-09-03 起拼接移至 merge_all 步：本步不含拼接，证据 = 每章单元门控通过。"),
+    "write_source.translate_chapters": ("agent",
+        "🔴 对应文档步骤 6（agent 逐个翻译单元 + 双重门控；翻译单元按需生成、"
+        "不分步预派生）：① 先跑 "
+        "python flows/write-source/script/init_translate_units.py \"{extract_dir}\" "
+        "（初始化 units-translate/ch{N}/manifest.json 清单 + src_hash 快照，不复制正文；"
+        "--scaffold 可选补齐源文骨架；内置翻译硬闸：源章 gate_units 未过即拒；中文书跳过）；"
+        "② agent 逐个打开源单元 units/ch{N}/ 看一个 → 把译文写入对应的 "
+        "units-translate/ch{N}/ 单元（文件不存在则新建，公式 / \\tag / 图片 / 编号项"
+        "逐字保留，术语首现标注规则见 writing-rules），译完置 DONE；"
+        "③ 双重门控必须全过——"
+        "python flows/write-source/script/gate_units.py \"{extract_dir}\" "
+        "--units-dir units-translate（同一套单元质量校验，缺文件/仍 DRAFT 即拒）＋ "
+        "python flows/write-source/script/check_translate_parity.py \"{extract_dir}\" "
+        "[ch ...]（🔴 1:1 同构闸：单元序列 / \\tag 集合 / 图片集合 / 编号项标签集合"
+        "与源单元逐一相等，漏译 / 漏公式 / 漏图 / 漏编号在此被拦）。"),
+    "write_source.merge_all": ("cmd",
+        # 文档步骤 7（原步骤 6 拼接后移并扩展）：一次拼接源语言 + 翻译语言两组 md。
+        # merge_units 自带强制门控（拼接前先 gate_units，--units-dir 同步生效）。
+        "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all && "
+        "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all "
+        "--units-dir units-translate"),
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
     "write_source.verify_source": ("cmd",
-        # exit 0 才算 PASS
-        "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
-    "derive.translate": ("agent",
-        "以已校验源版为唯一蓝本逐条翻译中文 第N章_*.md（1:1 同构）。"),
-    "derive.verify_cn": ("cmd",
-        # 针对翻译版，exit 0
+        # exit 0 才算 PASS；--all 覆盖源语言 + 翻译语言两组 .md（2026-09-03 起两版
+        # 均已由 merge_all 写出，一次校验覆盖两版）。
         "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
 }
 
@@ -582,93 +595,230 @@ class physical_evidence:
 
     @staticmethod
     def write_chapters_ok(book_dir, extract_dir):
-        """写章节证据 = ① 章数齐备；② 每章单元门控通过 + 契约名在位。
+        """写章节证据 = 每章单元门控通过（每个 item 都改好、一个不漏）。
 
         🔴 2026-08-31 重构（死命令：不逐单元改好 = 落账被硬拒）：整章草稿
         draft_ch{N}.md 已细分为「每 item 一单元」目录 units/ch{N}/（split_draft_units）。
-        agent 必须**逐个把单元按 writing-rules 改好**（首行 DRAFT→DONE + 内容确被
-        改写），由 gate_units.py 强制门控。mark 前机械核对每章：
-          - **单元门控通过**：manifest 中每个单元文件存在、首行 DONE、正文 hash
-            已变——保证「每个编号项都改好、一个不漏」；
-          - **最终 md 存在**：merge_units 拼接产物；
-          - **契约名在位**：结构契约全部 section 名 + 编号项 name 在最终 md 中
-            在位（merge 拼接的兜底，防单元内标题被改没导致漏项）。
-        单元 manifest / 契约缺失（legacy 旧书）的章退化为章数核对并如实注明。
+        agent 必须**逐个把单元按 writing-rules 改好**（首行 DRAFT→DONE + 质量校验
+        通过），由 gate_units.py 强制门控。
+        🔴 2026-09-03 重构（翻译单元化）：拼接移至 merge_all 步——本步证据不再
+        要求最终 md 存在与契约名在位（该核对移入 merge_all_ok，对源 + 译两版生效）。
+        确保前置：draft 步未跑（缺 units/manifest.json）→ 硬拒，防 bootstrap 误回填。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
-        missing_md, gate_fail, missing_names, degraded = [], [], [], []
+        gate_fail, no_units, empty_units = [], [], []
         for k in keys:
-            md_files = physical_evidence._md_group(book_dir, k)
-            if not md_files:
-                missing_md.append(k)
+            units_dir = os.path.join(ex, "book_structure", "units", f"ch{k}")
+            mpath = os.path.join(units_dir, "manifest.json")
+            if not os.path.exists(mpath):
+                no_units.append(k)
                 continue
-            mpath = os.path.join(ex, "book_structure", "units", f"ch{k}", "manifest.json")
-            contract_path = os.path.join(
-                ex, "book_structure",
-                ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k)
-            if not os.path.exists(mpath) or not os.path.exists(contract_path):
-                degraded.append(k)
-                continue
-            # ① 单元门控：每单元存在 + DONE + 内容已改写（每个 item 都不漏）
             try:
                 manifest = json.load(open(mpath, encoding="utf-8"))
             except Exception:
                 gate_fail.append((k, "manifest 非法 JSON"))
                 continue
-            ok_g, gprob = physical_evidence._units_gate_ok(
-                os.path.join(ex, "book_structure", "units", f"ch{k}"), manifest)
+            ok_g, gprob = physical_evidence._units_gate_ok(units_dir, manifest)
             if not ok_g:
                 gate_fail.append((k, gprob[0] if gprob else "门控未通过"))
                 continue
-            # ② 契约名在位（merge 拼接兜底，防单元内漏项）
-            try:
-                contract = json.load(open(contract_path, encoding="utf-8"))
-            except Exception:
-                degraded.append(k)
-                continue
-            text = ""
-            for f in md_files:
-                try:
-                    with open(f, encoding="utf-8-sig") as fh:
-                        text += fh.read()
-                except Exception:
-                    pass
-            # 加载 ignore 列表
-            ignore_set = set()
-            ignore_path = os.path.join(ex, f"ignore_ch{k}.json")
-            if os.path.exists(ignore_path):
-                try:
-                    ignore_data = json.load(open(ignore_path, encoding="utf-8"))
-                    if isinstance(ignore_data, dict):
-                        ignore_set = set(ignore_data.keys())
-                    elif isinstance(ignore_data, list):
-                        ignore_set = set(ignore_data)
-                except Exception:
-                    pass
-            miss = physical_evidence._missing_contract_names(
-                contract, physical_evidence._norm_text(text), ignore_set)
-            if miss:
-                missing_names.append((k, miss))
-        if missing_md:
-            return False, f"缺最终 md {len(missing_md)} 章: {missing_md[:4]}"
+            if not (manifest.get("units") or []):
+                empty_units.append(k)
+        if no_units:
+            return False, (f"{len(no_units)} 章缺 units/manifest.json"
+                           f"（先跑 draft 步拆分单元）: {no_units[:4]}")
         if gate_fail:
             k, prob = gate_fail[0]
             return False, (f"{len(gate_fail)} 章单元门控未通过（须逐个把单元改好、"
-                           f"DONE + 内容改写后重跑 gate_units）: ch{k} {prob}")
+                           f"DONE + 质量校验通过后重跑 gate_units）: ch{k} {prob}")
+        note = f"；{len(empty_units)} 章单元清单为空: {empty_units[:4]}" if empty_units else ""
+        return True, f"{len(keys)} 章单元门控全部通过（每 item 改好，一个不漏）{note}"
+
+    # ---- 翻译单元证据（2026-09-03 翻译单元化：清单 + 门控 + 同构闸） ----
+
+    @staticmethod
+    def _src_manifest(ex, key):
+        """读源单元 manifest；不存在返回 None。"""
+        p = os.path.join(ex, "book_structure", "units", f"ch{key}", "manifest.json")
+        if not os.path.exists(p):
+            return None
+        try:
+            return json.load(open(p, encoding="utf-8"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _tgt_language(src_lang):
+        """源语言 → 翻译目标语言；中文源（或未知）返回 None = 无翻译阶段。"""
+        return {"en": "cn"}.get((src_lang or "").lower())
+
+    @staticmethod
+    def translate_chapters_ok(book_dir, extract_dir):
+        """翻译证据 = ① 翻译清单已初始化（units-translate/ch{N}/manifest.json，
+        由翻译步内 init_translate_units.py 生成——元数据 + src_hash，不复制正文）；
+        ② 翻译单元门控通过（同一套单元质量校验）；
+        ③ 1:1 同构闸 check_translate_parity 通过（漏译/漏公式/漏图/漏编号在此拦截）。
+
+        中文源书（无翻译阶段）自动通过。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        todo, skip, no_src = [], [], []
+        for k in keys:
+            src = physical_evidence._src_manifest(ex, k)
+            if src is None:
+                no_src.append(k)
+                continue
+            tgt = physical_evidence._tgt_language(src.get("language"))
+            if tgt is None:
+                skip.append(k)
+                continue
+            todo.append(k)
+        if no_src:
+            return False, (f"{len(no_src)} 章缺源 units/manifest.json"
+                           f"（先完成 draft + write_chapters 步）: {no_src[:4]}")
+        if not todo:
+            return True, "中文源书：无翻译阶段，全部章跳过"
+        gate_fail, parity_fail = [], []
+        for k in todo:
+            tdir = os.path.join(ex, "book_structure", "units-translate", f"ch{k}")
+            tmanifest_path = os.path.join(tdir, "manifest.json")
+            if not os.path.exists(tmanifest_path):
+                gate_fail.append((k, "缺 units-translate/manifest.json"
+                                      "（先跑 init_translate_units.py 初始化清单）"))
+                continue
+            try:
+                tmanifest = json.load(open(tmanifest_path, encoding="utf-8"))
+            except Exception:
+                gate_fail.append((k, "units-translate manifest 非法 JSON"))
+                continue
+            ok_g, gprob = physical_evidence._units_gate_ok(tdir, tmanifest)
+            if not ok_g:
+                gate_fail.append((k, gprob[0] if gprob else "翻译单元门控未通过"))
+                continue
+            # 1:1 同构闸（子进程解耦，复用与 CLI 同一脚本）
+            script = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "write-source", "script", "check_translate_parity.py")
+            try:
+                rc = subprocess.call([sys.executable, script, ex, k])
+            except Exception as e:
+                parity_fail.append((k, f"parity 执行异常: {e}"))
+                continue
+            if rc != 0:
+                parity_fail.append((k, "check_translate_parity 未通过"
+                                      "（漏译/漏公式/漏图/漏编号，按输出逐项修复）"))
+        if gate_fail:
+            k, prob = gate_fail[0]
+            return False, (f"{len(gate_fail)} 章翻译单元门控未通过"
+                           f"（gate_units --units-dir units-translate）: ch{k} {prob}")
+        if parity_fail:
+            k, prob = parity_fail[0]
+            return False, f"{len(parity_fail)} 章 1:1 同构闸未通过: ch{k} {prob}"
+        return True, (f"{len(todo)} 章翻译清单就绪 + 门控 + 同构闸全部通过"
+                      f"（tag/图片/编号项与源单元 1:1）")
+
+    @staticmethod
+    def _md_group_lang(book_dir, key, lang):
+        """按语种取该章最终 md 组：cn → 第N章_*/附录X_*；en → ChapterN_*/AppendixX_*。"""
+        if key[:1].isdigit():
+            pats = ([f"第{key}章_*.md"] if lang == "cn" else [f"Chapter{key}_*.md"])
+        else:
+            pats = ([f"附录{key}_*.md"] if lang == "cn" else [f"Appendix{key}_*.md"])
+        files = []
+        for p in pats:
+            files.extend(glob.glob(os.path.join(book_dir, p)))
+        uniq = sorted(set(files))
+        merged = [f for f in uniq if physical_evidence._sec_num(f) is None]
+        if merged:
+            return merged
+        secs = [(f, physical_evidence._sec_num(f)) for f in uniq]
+        secs = [(f, n) for f, n in secs if n]
+        secs.sort(key=lambda x: tuple(int(p) for p in x[1].split(".")))
+        return [f for f, _ in secs]
+
+    @staticmethod
+    def _contract_names_missing(ex, k, md_files):
+        """结构契约骨架节 + 编号项在 md 组中的在位核对；返回缺失名列表。"""
+        contract_path = os.path.join(
+            ex, "book_structure",
+            ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k)
+        if not os.path.exists(contract_path):
+            return None
+        try:
+            contract = json.load(open(contract_path, encoding="utf-8"))
+        except Exception:
+            return None
+        text = ""
+        for f in md_files:
+            try:
+                with open(f, encoding="utf-8-sig") as fh:
+                    text += fh.read()
+            except Exception:
+                pass
+        ignore_set = set()
+        ignore_path = os.path.join(ex, f"ignore_ch{k}.json")
+        if os.path.exists(ignore_path):
+            try:
+                ignore_data = json.load(open(ignore_path, encoding="utf-8"))
+                if isinstance(ignore_data, dict):
+                    ignore_set = set(ignore_data.keys())
+                elif isinstance(ignore_data, list):
+                    ignore_set = set(ignore_data)
+            except Exception:
+                pass
+        return physical_evidence._missing_contract_names(
+            contract, physical_evidence._norm_text(text), ignore_set)
+
+    @staticmethod
+    def merge_all_ok(book_dir, extract_dir):
+        """拼接证据（2026-09-03 起 = 原步骤 6 后移并扩展）：每个外语章有
+        源语言 + 翻译语言两组最终 md，且两组的契约骨架节 + 编号项全部在位
+        （merge 拼接兜底，防单元内漏项；翻译版的同名漏项由同构闸 + 此处双拦）。
+
+        中文源书只要求源语言（即中文）一组 md。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        missing, missing_names, degraded = [], [], []
+        for k in keys:
+            src = physical_evidence._src_manifest(ex, k)
+            if src is None:
+                degraded.append(k)
+                continue
+            src_lang = (src.get("language") or "cn").lower()
+            tgt_lang = physical_evidence._tgt_language(src_lang)
+            groups = [(src_lang, physical_evidence._md_group_lang(book_dir, k, src_lang))]
+            if tgt_lang:
+                groups.append((tgt_lang, physical_evidence._md_group_lang(book_dir, k, tgt_lang)))
+            for lang, md_files in groups:
+                if not md_files:
+                    missing.append((k, lang))
+                    continue
+                miss = physical_evidence._contract_names_missing(ex, k, md_files)
+                if miss:
+                    missing_names.append((k, lang, miss))
+        if missing:
+            (k, lang) = missing[0]
+            return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_all 拼接）: "
+                           f"ch{k} [{lang}]" + (f" 等 {len(missing)} 组" if len(missing) > 1 else ""))
         if missing_names:
-            k, miss = missing_names[0]
-            return False, (f"{len(missing_names)} 章相对结构契约漏骨架节/编号项: "
-                           f"ch{k} 缺 {len(miss)} 项（如 {miss[:4]}）；"
-                           f"须回归 units/ch{k}/ 单元补齐后再 mark"
+            k, lang, miss = missing_names[0]
+            return False, (f"{len(missing_names)} 组 md 相对结构契约漏骨架节/编号项: "
+                           f"ch{k} [{lang}] 缺 {len(miss)} 项（如 {miss[:4]}）；"
+                           f"须回归对应单元目录（units / units-translate）补齐后重拼"
                            f"（若条目为 OCR 噪声误收，走 manage_ignore 机制，勿编造）")
         if degraded:
-            return True, (f"已写 {len(keys)} 章（{len(degraded)} 章缺单元 manifest/契约，"
-                          f"退化为章数核对: {degraded[:4]}；建议重跑 draft 步后重验）")
-        return True, (f"已写 {len(keys)} 章，每章单元门控全部通过（每 item 改好）"
-                      f"且契约骨架节 + 编号项全部在位")
+            return True, (f"已拼 {len(keys)} 章（{len(degraded)} 章缺源 manifest，"
+                          f"跳过核对: {degraded[:4]}）")
+        return True, (f"{len(keys)} 章源语言 + 翻译语言 md 均已拼接且契约项在位")
 
     @staticmethod
     def embed_figures_ok(book_dir, extract_dir):
@@ -705,55 +855,18 @@ class physical_evidence:
 
     @staticmethod
     def verify_source_ok(book_dir, extract_dir):
-        # 🔴 翻译硬闸的物理证据：必须真实复验源语言版 exit 0，否则视为未完成。
-        # 不再软放行——未嵌图 / 未校验 PASS 的源语言不得 mark，从而闸门挡住 derive。
-        ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        # 仅校验源语言版：此时翻译版尚未写出，--all 只会扫到已存在的源版 .md。
-        # （英文书源=ChapterN_*.md；中文书源=第N章_*.md，且无翻译版。）
-        rc, err = physical_evidence._run_verify_all(ex, book_dir)
-        if rc == 0:
-            return True, "源语言 verify_chapter.py --all exit 0（verify PASS + KaTeX OK）"
-        if rc is None:
-            return False, f"verify 执行异常: {err}"
-        return False, (f"源语言 verify 未通过（exit {rc}）。禁止 mark，"
-                       f"须先 embed_figures + 修复（🔴 --fix 默认禁用，须 --fix --fix-force + PREFLIGHT）复验至 exit 0，再进 derive 翻译。")
-
-    @staticmethod
-    def translate_ok(book_dir, extract_dir):
-        ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        cmap = os.path.join(ex, "chapter_map.json")
-        total = 0
-        if os.path.exists(cmap):
-            try:
-                total = len(_chapter_map_keys(ex))
-            except Exception:
-                pass
-        cn = 0
-        for f in glob.glob(os.path.join(book_dir, "*.md")):
-            b = os.path.basename(f)
-            if (b.startswith("第") and "章" in b[:6]) or re.match(r"^附录[A-Z]", b):
-                cn += 1
-        if total and cn < total:
-            return False, f"已译 {cn}/{total} 章"
-        if cn == 0:
-            return False, "尚未翻译任何中文章"
-        return True, f"已译 {cn} 个中文章节"
-
-    @staticmethod
-    def verify_cn_ok(book_dir, extract_dir):
-        # 🔴 与源语言侧同规（不再软放行）：翻译完成后必须真实复验 exit 0。
-        # --all 会同时校验中英两组 .md——源版在 write_source.verify_source 已
-        # 过闸，此处复验兼作回归保护；中文书源=第N章_*.md（无独立翻译版），
-        # 复验对象即源版本身，语义一致。
+        # 🔴 2026-09-03 翻译单元化后为流程末步：--all 一次覆盖源语言 + 翻译语言
+        # 两版（merge_all 已把两组 md 写出）。中文源书只有一组中文 md，语义一致。
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         rc, err = physical_evidence._run_verify_all(ex, book_dir)
         if rc == 0:
             return True, ("verify_chapter.py --all exit 0"
-                          "（源版+中文版全部 verify PASS + KaTeX OK）")
+                          "（源语言 + 翻译语言全部 verify PASS + KaTeX OK）")
         if rc is None:
             return False, f"verify 执行异常: {err}"
-        return False, (f"翻译版 verify 未通过（exit {rc}）。禁止 mark，"
-                       f"须按单向修复规则（--fix 默认禁用，须 --fix --fix-force + PREFLIGHT）/ 手工修复后复验至 exit 0。")
+        return False, (f"verify 未通过（exit {rc}）。禁止 mark，"
+                       f"须修复（🔴 --fix 默认禁用，须 --fix --fix-force + PREFLIGHT）"
+                       f"或手工定点修改后复验至 exit 0。")
 
 
 # 步 -> 证据函数（与 FLOW_ORDER 对齐）
@@ -813,9 +926,9 @@ EVIDENCE = {
     "write_source.structure": physical_evidence.structure_ok,
     "write_source.draft": physical_evidence.draft_ok,
     "write_source.write_chapters": physical_evidence.write_chapters_ok,
+    "write_source.translate_chapters": physical_evidence.translate_chapters_ok,
+    "write_source.merge_all": physical_evidence.merge_all_ok,
     "write_source.verify_source": physical_evidence.verify_source_ok,
-    "derive.translate": physical_evidence.translate_ok,
-    "derive.verify_cn": physical_evidence.verify_cn_ok,
 }
 
 

@@ -54,6 +54,33 @@ _OCR_FORMULA_PATTERNS = [
 ]
 
 
+def _prose_text(line_list):
+    """剥掉数学模式，只留散文段（OCR 残留模式只对数学模式外文本有意义）。
+
+    🔴 2026-09-03 修复：此前把模式应用在全文（含 `$$` 块内部），导致
+    ``\\boldsymbol{\\Gamma} f`` 这类**合法的显示公式**（算子作用于 f）被
+    "boldsymbol 在数学模式外" 误报。现按 `$` 配对剥除：
+      - 先剥 blockquote 前缀 `>`（否则 `> $$` 围栏识别不到，块内公式被当散文）；
+      - `$$` 围栏内的行整行跳过（含围栏行本身）；
+      - 其余行按单个 `$` 分段，偶数段（数学外）保留。
+    """
+    out = []
+    in_display = False
+    for ln in line_list:
+        content = re.sub(r"^\s*>\s?", "", ln)  # 剥一层 blockquote 前缀
+        s = content.strip()
+        if s == "$$" or (s.startswith("$$") and not s.endswith("$$")):
+            in_display = not in_display
+            continue
+        if s.startswith("$$") and s.endswith("$$") and len(s) > 4:
+            continue  # 单行 $$...$$ 整行是数学
+        if in_display:
+            continue
+        parts = content.split("$")
+        out.append("".join(parts[0::2]))  # 偶数段 = 数学外
+    return "\n".join(out)
+
+
 # ── 主入口 ────────────────────────────────────────────────────────────────
 def check_body(utype, name, body):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
@@ -88,7 +115,9 @@ def check_body(utype, name, body):
             all_problems.append(errs[0].strip())
         else:
             # 3) OCR 公式残留补充（verify 不覆盖的 OCR 特有模式）
-            joined = "\n".join(line_list)
+            # 🔴 只对数学模式外的散文段匹配（_prose_text 剥除 $...$ / $$ 块），
+            #    否则 `\boldsymbol{\Gamma} f` 这类合法显示公式被误报（2026-09-03）。
+            joined = _prose_text(line_list)
             for pat, msg in _OCR_FORMULA_PATTERNS:
                 if re.search(pat, joined):
                     all_problems.append(msg)

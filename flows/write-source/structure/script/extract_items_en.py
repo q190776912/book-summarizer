@@ -286,6 +286,20 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 n1 = _ocr_int_glue(m.group(2), txt[m.end(2):m.end(2) + 1])
                 if n1 is None:
                     continue
+                # 🔴 Section-scoped books (chapter_first=False, e.g. Hilton &
+                # Stammbach): a real heading is ALWAYS "Label S.N" with an
+                # ARABIC section number.  A first token made purely of roman
+                # numeral letters ("Theorem IV.4.1") is a cross-CHAPTER
+                # reference that a line wrap left at block start — never a
+                # heading; and a missing second component ("Theorem 1") is a
+                # prose sentence fragment / single-number reference.  Reject
+                # both (they would otherwise fabricate phantom items).
+                if section_scoped:
+                    raw_tok = m.group(2)
+                    if raw_tok and re.fullmatch(r"[IVXLCivxlc]+", raw_tok):
+                        continue
+                    if m.group(3) is None:
+                        continue
                 # single-mode regex has only 2 groups (label + number); the
                 # optional second component (group 3) exists ONLY in two-level
                 # mode. Guard every group(3) access with `not single`.
@@ -346,5 +360,8 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     # twice (a printing off-by-one).  Genuine headings are already pre-filtered
     # above (only block-start matches survive), so any same-key collision with a
     # different heading text is a distinct item.
-    out = dedup_items(items)
+    # 🔴 section_scoped 书例外（Hilton & Stammbach 实测）：编号首段即节号，
+    # 同一章内同 key 的第二个"条目头"必是句尾换行恰好落在 "Theorem 2.4." 的
+    # 引用残行（其后内容块属前一条目的尾随散文），绝无"同号双印"。故唯一化。
+    out = dedup_items(items, unique_keys=section_scoped)
     return out

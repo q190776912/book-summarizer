@@ -364,6 +364,20 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                     "canon": canon, "has_label": has_label,
                 })
                 break
+    # 🔴 section-scoped EN 两级书（chapter_first=False，如 Hilton & Stammbach）：
+    # 编号首段即节号，一章内同 (label, canon) 的真条目头只出现一次。行尾换行恰好
+    # 落在 "Theorem 2.4." 的引用残行会被本扫描当成第二个条目头；若保留，回填会把
+    # 幻影项写回契约。与 extract_items_en 的 unique_keys 去重同语义：保留首个。
+    if primary_type == ORDINAL_EN and not chapter_first:
+        seen = set()
+        uniq = []
+        for it in out:
+            ck = (_canon_label(str(it.get("label") or "uncat")).lower(), it.get("canon"))
+            if ck in seen:
+                continue
+            seen.add(ck)
+            uniq.append(it)
+        out = uniq
     return out
 
 
@@ -932,8 +946,12 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     # B-layer blocking: numbering errors (out-of-order / gaps) are now blocking,
     # not just diagnostic — they propagate to unit content and final output.
     # Only exercise-block ordering issues are exempt (some books have genuine
-    # non-sequential exercise numbering).
-    real_b_blocking = [b for b in b_blocking if not b.get("exercise_block_only", False)]
+    # non-sequential exercise numbering). B 层 blocking 条目现为字符串消息
+    # （"  WARN (BLOCKING): ..."）；保留旧 dict 格式的豁免判断，非 dict 视为真 blocking。
+    real_b_blocking = [
+        b for b in b_blocking
+        if not (isinstance(b, dict) and b.get("exercise_block_only", False))
+    ]
     passed = (not sec_left) and (not readable_left) and (not real_b_blocking)
     return {
         "passed": passed,

@@ -94,7 +94,23 @@ EXER_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 # so the optional dot lets us match real dotted sections while the page-number
 # guard below still rejects the headers).  The noise set is tiny and a prose
 # line never starts with "'N.", so this is benign for other books.
-SEC_2 = re.compile(r"^(?:['\u2019\u00b6\u00a7\u2020\*]\s*)?(\d{1,2})\.?\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$")
+# 🔴 Title may also start with a DIGIT or '&': Hilton & Stammbach GTM 4 prints
+# sections like "3. ℤ-Satellites" whose blackboard-bold ℤ OCRs variously as
+# "8" / "6" / "&" ("3. 8-Satellites", "2. &-Derived Functors") — a strict
+# `[A-Z]` start silently dropped those sections from the skeleton.  Pure-number
+# titles are still rejected below (`_sec2_title_ok`).
+SEC_2 = re.compile(r"^(?:['\u2019\u00b6\u00a7\u2020\*]\s*)?(\d{1,2})\.?\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z0-9&].{3,72})$")
+
+
+def _sec2_title_ok(title: str) -> bool:
+    """Reject SEC_2 titles that are pure numbering/math fragments ("2.3", "8 12")."""
+    t = title.strip()
+    if not t:
+        return False
+    if re.fullmatch(r"\d{1,2}(?:[.\uFF0E]\d{1,3})*[.．]?", t):
+        return False
+    return bool(re.search(r"[A-Za-z\u4e00-\u9fff]", t))
+
 # Section numbers are small (a chapter rarely has > ~30 flat `N. Title`
 # sections).  A much larger number is a PAGE-NUMBER RUNNING HEADER (e.g. do
 # Carmo's "36 Riemannian Metrics" printed at the top of every page), never a
@@ -424,6 +440,33 @@ def lines_of(page_json):
             yield ln.strip()
 
 
+_CHAP_TITLE_CACHE = {}
+
+
+def _norm_title_txt(s: str) -> str:
+    """Normalise a title for equality checks: keep alnum only, lowercase."""
+    return re.sub(r'[^a-z0-9\u4e00-\u9fff]', '', str(s or '').lower())
+
+
+def _chap_title_norm(extract_dir: str, ch) -> str:
+    """Normalised chapter title from chapter_map.json (running-head guard)."""
+    key = (extract_dir, ch)
+    if key not in _CHAP_TITLE_CACHE:
+        title = None
+        try:
+            fp = os.path.join(extract_dir, 'chapter_map.json')
+            with open(fp, encoding='utf-8-sig') as fh:
+                cm = json.load(fh)
+            for e in cm.get('chapters', []):
+                if int(e.get('ch', -1)) == int(ch):
+                    title = e.get('name_en') or e.get('name')
+                    break
+        except Exception:
+            title = None
+        _CHAP_TITLE_CACHE[key] = _norm_title_txt(title)
+    return _CHAP_TITLE_CACHE[key]
+
+
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
          exercise_headings=None, plain_sec_heads=False):
     rows = []
@@ -608,8 +651,19 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # guard; legacy callers (chapter_first=None) also keep it.
                 _sec_ch_ok = ((chapter_first is False) or m is None
                               or (int(m.group(1)) == ch))
+                # 🔴 Running-head guard (Hilton & Stammbach ch2 实测)：本书页眉
+                # 交替印「页码 | N. 章题」——罗马章号 "II." 被 OCR 读成 "11."，
+                # 恰好命中 SEC_2，伪造成 §11 "Categories and Functors"（节题 ==
+                # 章题）。节题与章题同名、编号>1、且位于页眉带（y<300，本书真节头
+                # y≥950 或章首页顶——ch4 §5 "Derived Functors" 与章同名但 y=1795，
+                # 不得误杀）→ 只可能是页眉，拒绝。
+                _rh_ok = (m is None or int(m.group(1)) <= 1
+                          or ln_y is None or ln_y >= 300
+                          or _norm_title_txt(m.group(2))
+                          != _chap_title_norm(extract_dir, ch))
                 if (not use_universal_sec and not in_exercise and not plain_sec_heads
-                        and m and _sec_ch_ok
+                        and m and _sec_ch_ok and _rh_ok
+                        and _sec2_title_ok(m.group(2))
                         and int(m.group(1)) <= SEC_MAX_NUMBER
                         and not m.group(2).endswith('.')):
                     rows.append((p, 'SEC', m.group(1), m.group(2).strip(), ln_y))

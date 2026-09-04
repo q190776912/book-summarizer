@@ -118,9 +118,16 @@ def _name_sig(it):
     return tail[:60]
 
 
-def dedup_items(raw_matches):
+def dedup_items(raw_matches, unique_keys=False):
     """Collapse a single item's many mentions/references down to its definition
     entry, but KEEP two genuinely different items that share a (label, number).
+
+    ``unique_keys`` (section-scoped books): the first numeric key component is
+    the SECTION number, so within one chapter the same (label, number) can only
+    ever be printed once as a genuine heading.  Any same-key collision is a
+    reference whose line wrap left it at a block start (e.g. a trailing
+    "Theorem 2.4." fragment) — coalesce to the earliest genuine occurrence,
+    never keep a second entry.
 
     Returns items sorted by (page, key).
 
@@ -136,6 +143,15 @@ def dedup_items(raw_matches):
             groups[k] = [it]
             continue
         grp = groups[k]
+        if unique_keys:
+            # 🔴 section-scoped：章内同 key 必为引用幻影，保留首个真头（有非空
+            # 标题签名者优先），其余丢弃。真条目头在本书每号只出现一次。
+            genuines = [x for x in grp if _is_genuine(x)]
+            if not genuines:
+                grp.append(it)          # 首个真头到达：追加为该组真头
+            elif g and not _name_sig(genuines[0]) and _name_sig(it):
+                grp[grp.index(genuines[0])] = it   # 裸者让位给带标题者
+            continue
         # Same-page collision: two occurrences of the same (label, number) on the
         # SAME page can only be a duplicate match (the heading captured twice, or
         # a same-page reference) — never two genuinely distinct items.  Always

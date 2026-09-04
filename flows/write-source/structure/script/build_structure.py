@@ -1039,10 +1039,23 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #    /附录字母升格行 y=None。
     sec_rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None)
                 for r in sec_rows]
+    # 🔴 同号择优（Hilton & Stammbach ch2 实测）：行内公式残行 "8 F0=8 FG8 FεG'"
+    # 可先于真节头命中 SEC_2，把 §8 的标题/起始页污染成公式碎片。含数学运算符
+    # 的标题视为碎片，让位给纯词标题；同级取最早页（真节头先于其页眉复本）。
+    _SEC_MATH_OP = re.compile(r'[=<>≤≥≠±×÷→←↔⇒∫∑√∂∇∈∋⊂⊃∪∩]')
+
+    def _sec_title_mathy(t):
+        return bool(_SEC_MATH_OP.search(str(t or '')))
+
     sec_best = {}
     for row in sec_rows:
         num, title = row[2], row[3]
-        if num not in sec_best or (sec_best[num][3] == "" and title != ""):
+        if num not in sec_best:
+            sec_best[num] = row
+            continue
+        cur = sec_best[num]
+        cur_mathy, new_mathy = _sec_title_mathy(cur[3]), _sec_title_mathy(title)
+        if (cur_mathy and not new_mathy) or (cur[3] == "" and title != ""):
             sec_best[num] = row
     seen = set()
     dedup_sec = []

@@ -29,7 +29,8 @@ from data.book_structure.book_structure import BookStructure
 
 from key_parse import keys_in_md, _first_num
 from verify.script.ordinal import int_to_roman
-from verify_config import ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_HUM, _canon_label
+from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
+                           ORDINAL_HUM, ORDINAL_APP, _canon_label)
 
 
 TYPE_TO_LABEL = {
@@ -43,11 +44,23 @@ TYPE_TO_LABEL = {
 }
 
 
-def read_structure_items(ext_dir, ch):
+#: 附录字母章号条目键（`ORDINAL_APP` / type 13）：首字母章位 + 节号 + 条目号，
+#: 分隔符与正文一致走通配集（点 / 连字符 / 全角变体）。
+_APP_ITEM_RE = re.compile(
+    r'^([A-Za-z])[.\-－．·–〜](\d+)[.\-－．·–〜](\d+)(?![\d.\-－．·–〜])')
+
+
+def read_structure_items(ext_dir, ch, primary_type=None):
     """读分章契约，定位章节节点，展平为非 exercise 的编号项列表。
 
     返回 None 表示 JSON 不存在/损坏；返回 list（可能为空）表示已采用 JSON 路径。
     exercise / chapter / section 节点被排除。
+
+    `primary_type`（可选）= `BookConfig.primary_type`。仅当它是
+    `ORDINAL_APP`（13，附录字母章号体例）时启用「字母章位」键规范化
+    （`A.1.1` → `定义A.1-1`）；其余取值 / 缺省一律走既有逻辑，零回归。
+    🔴 该分支**必须**由 `primary_type` 显式开启：`I.2-13` 这类罗马章号键
+    （Gelfand–Manin）在字形上与 `A.1-1` 同构，无类型闸门会被误判成附录键。
     """
     bs = BookStructure.load(ext_dir)
     if bs is None:
@@ -75,6 +88,21 @@ def read_structure_items(ext_dir, ch):
         #   behavior ('定义1.1' / 'Remark1.1.1'), which already matches
         #   `keys_in_md`'s output for those ordinals (their keys have no dash).
         raw = (n.key or n.name or '')
+        # ORDINAL_APP (type 13)：附录字母章号 `A.1.1` → 规范键 `定义A.1-1`
+        # （与 key_parse.keys_in_md 的 ORDINAL_APP 分支同构）。必须先于下面的
+        # 「首个数字串」通用分支，否则 `A.1.1` 会被截成 `1.1` 而丢掉字母章位。
+        if primary_type == ORDINAL_APP:
+            _am = _APP_ITEM_RE.match(raw.strip())
+            if _am:
+                _canon = (TYPE_TO_LABEL.get(n.type, 'uncat')
+                          + f"{_am.group(1).upper()}.{_am.group(2)}-{_am.group(3)}")
+                items.append({
+                    'key': _canon,
+                    'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                    'page': n.page_start,
+                    'text': n.name,
+                })
+                continue
         # ORDINAL_HUM (Humphreys GTM 9): keys use English labels with § prefix
         # (e.g. "Theorem §4.1", "Lemma §10.2B"). The markdown uses bare labels
         # without numbers (**Theorem**: / **Corollary A**:), so strip the §+number

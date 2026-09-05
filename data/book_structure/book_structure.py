@@ -52,8 +52,46 @@ def chapter_json_name(key: Any) -> str:
     return f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json"
 
 
+def unit_dir_name(key: Any) -> str:
+    """章号 → 单元子目录名：数字章 ``ch{N}`` / 附录章 ``appendix{X}``。"""
+    k = str(key)
+    return f"ch{k}" if k[:1].isdigit() else f"appendix{k}"
+
+
+def chapter_label(key: Any) -> str:
+    """章号的显示标签 / 侧车文件名段：数字章 ``ch{N}``、附录章 ``appendix{X}``。
+
+    与 :func:`chapter_json_name` / :func:`unit_dir_name` 同一判据（首字符是否
+    数字）。打印章号、拼接随章侧车文件名（ignore_* / manual_overrides_* /
+    figure 文件基名等）一律经此函数——附录的称呼是 appendix，
+    "ch" 只属于数字章（日志里打成 "chA" 是错误称呼）。
+    """
+    k = str(key)
+    return f"ch{k}" if k[:1].isdigit() else f"appendix{k}"
+
+
 def chapter_json_path(ext_dir: str, key: Any) -> str:
     return os.path.join(ext_dir, OUT_SUBDIR, chapter_json_name(key))
+
+
+def norm_chapter_key(key: Any) -> Any:
+    """CLI / 字典键归一：数字章号（含 ``"11"``）→ ``int``；字母章号（附录 ``A/B…``）
+    → 原串。与 :func:`_build_rng` 的键型对齐（数字章 ``int``、附录 ``str``），使
+    附录章（如 ``A``）不会被误当成数字章 11、也不会被 ``int()`` 转换时崩溃。"""
+    s = str(key).strip()
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return s
+
+
+def chapter_sort_key(key: Any):
+    """章号排序键（与 :func:`_build_rng` 键型一致）：数字章 ``(0, int)``，字母/其它
+    ``(1, str)``（附录排末尾）。供全量构建时 `sorted(rng, key=chapter_sort_key)`。"""
+    try:
+        return (0, int(str(key)))
+    except (TypeError, ValueError):
+        return (1, str(key))
 
 
 def _chapter_sort_key_fn(key: str):

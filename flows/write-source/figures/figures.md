@@ -18,7 +18,7 @@
 
 本子流程（write-source 阶段）只负责**嵌图**：把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目引用到的图，嵌入到该条目处。上游的**检测（Detection）与命名（Assignment）**由 extract 阶段的 `figure_detection` 子流程统一执行，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**：
 
-- `figure/chNN_figX.X.X.png`（已命名图）
+- `figure/chNN_figX.X.X.png`（已命名图；附录章基名为 `appendix{X}_figX.X.X.png`，`chNN_` 只属数字章）
 - `figure/chNN_unnamed_K.png`（已检测、无图号）
 - `figure_index.json`：每条约 `chapter`/`page`/`fig_idx`/`label`/`bbox`/`conf`/`file`/`caption`/`source`
 
@@ -35,7 +35,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 ### 手动补图
 当 DocLayout-YOLO 漏判某图（典型：旋转 90° 的全页图、文字密集分类树被当 `plain text`），E 层会报"图 X.X.X missing"。**不要**靠改 `--conf` 或换模型救，**用 `figure_manual_chN.json` 声明 + `../../../config/figure_manual_chN/apply_manual_figures.py` 执行**（该步骤回写 `figure_index.json`，属 extract 阶段命名环节的 remediation）：
 
-1. **定位图在哪页**。翻原文 / `figure/inspect_tool.py page <raw_dir> <page>` 找"图 X.X.X"被引用的页；用 fitz 渲染到 PNG 肉眼确认。
+1. **定位图在哪页**。翻原文 / `flows/script/inspect_tool.py page <raw_dir> <page>` 找"图 X.X.X"被引用的页；用 fitz 渲染到 PNG 肉眼确认。
 2. **读 bbox**。以**200-DPI 渲染图**的像素坐标为准 `[x0, y0, x1, y1]`。若 PDF 把图旋转 90° 存放，设 `rotate: 90`。
 3. **写 `_extract/figure_manual_chN.json`**：其字段（`page` / `bbox` / `rotate` / `caption`）、JSON 示例与执行方式见公用配置文档 [`../../../config/figure_manual_chN/figure_manual_chN.md`](../../../config/figure_manual_chN/figure_manual_chN.md)。
 4. **执行**：`python config/figure_manual_chN/apply_manual_figures.py <_extract> <ch> --pdf <pdf_path>`
@@ -80,7 +80,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - `flows/script/embed_figures`：嵌图（幂等，含缩进进块 / 连续性修复 / flex 包装）——本子流程核心脚本。
 - `flows/script/extract_figures` / `flows/script/assign_figures`：图片检测 / 命名，属 extract 阶段 `figure_detection` 子流程（产出本子流程的输入契约 `figure_index.json`）。
 - `../../../config/figure_manual_chN/apply_manual_figures.py`：E 层 FAIL 时手动补图。
-- `figure/inspect_tool.py`：定位图所在页的可视化检查工具。
+- `flows/script/inspect_tool.py`：定位图所在页的可视化检查工具。
 
 ## 命令速查
 ```bash

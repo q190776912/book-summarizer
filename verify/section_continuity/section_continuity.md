@@ -7,7 +7,7 @@
 ## 目的
 **节的层级**检测（BLOCKING），堵住 B 层只在已检出节之间重扫、看不到整节漏写/节序列断裂的盲区。D 取 B 的“节内条目连续性 + 尾部”逻辑，抬升到“节”这一粒度。
 
-支持**任意嵌套深度（1–4 级序标：`## §N` / `## §N.M` / `## §N.M.K` / `## §N.M.K.L`）**，由 `<book>/_extract/verify_config.json` 的 `section_types` 驱动——`section_types` 是**逐层级列表（从章层级排到最深 `## §` 层级）**，每个元素是**该层级的序标段数**（1/2/3/4 段），`0` 表示该层级无序号标；深度经 `SECTION_TYPE_DEPTH` 派生（详见 `../verify.md` §6）。**列表长度 = 章节层级总数（章计入）**，故单层级书为 `[0]`、章+无序号标小节书为 `[0, 0]`（两个层级，Silverman 即此）。「章/节/小节/子小节」只是标准书里这些段数的*典型称呼*，并非硬语义；一本书可声明 `section_types: [1,1,1]`（所有层级都是一级序标）或 `section_types: [0, 0]`（章与章下小节都无序号标，如 Silverman）。未显式声明时按 `ordinal` 反推（`ORDINAL_SECTION_TYPES`）：ordinal 2/4/6 校验一级+二级序标两级（节基 EN 两级如 Fraleigh 已并入 type 4 + `chapter_first:false`，同样走两级）；ordinal 3/5 额外校验三级序标（1.1.1）层级（旧 `D_MD_NESTED_SEC_RE` 是死代码，本次首次真正生效）；ordinal 1 仅一级序标。
+支持**任意嵌套深度（1–4 级序标：`## §N` / `## §N.M` / `## §N.M.K` / `## §N.M.K.L`）**，由 `<book>/_extract/verify_config.json` 的 `section_types` 驱动——`section_types` 是**逐层级列表（从章层级排到最深 `## §` 层级）**，每个元素是**该层级的序标段数**（1/2/3/4 段），`0` 表示该层级无序号标；深度经 `SECTION_TYPE_DEPTH` 派生（详见 `../verify.md` 的 section_types 字段说明）。**列表长度 = 章节层级总数（章计入）**，故单层级书为 `[0]`、章+无序号标小节书为 `[0, 0]`（两个层级，Silverman 即此）。「章/节/小节/子小节」只是标准书里这些段数的*典型称呼*，并非硬语义；一本书可声明 `section_types: [1,1,1]`（所有层级都是一级序标）或 `section_types: [0, 0]`（章与章下小节都无序号标，如 Silverman）。未显式声明时按 `ordinal` 反推（`ORDINAL_SECTION_TYPES`）：ordinal 2/4/6 校验一级+二级序标两级（节基 EN 两级如 Fraleigh 已并入 type 4 + `chapter_first:false`，同样走两级）；ordinal 3/5 额外校验三级序标（1.1.1）层级（旧 `D_MD_NESTED_SEC_RE` 是死代码，本次首次真正生效）；ordinal 1 仅一级序标。
 
 > 节的**条目级**尾部缺口（节在、末号丢了）仍由 **B 层** `_md_tail_warnings` 负责（md 末号 vs 抽取契约）。D 不重复做条目级尾部，只做“整节”层面的两件事。
 

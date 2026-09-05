@@ -28,6 +28,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+from data.book_structure.book_structure import chapter_label
 import chapter_map
 from figure_detect import FigureDetect
 
@@ -53,7 +54,7 @@ HEADER_RE = re.compile(
 
 
 def section_map_for(ext, ch):
-    ocr = os.path.join(ext, f"ch{ch}_ocr.txt")
+    ocr = os.path.join(ext, f"{chapter_label(ch)}_ocr.txt")
     if not os.path.exists(ocr):
         return {}
     cur = None

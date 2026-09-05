@@ -40,7 +40,7 @@
      python flows/write-source/script/split_draft_units.py "<extract_dir>" [ch ...]
      ```
      由内容化分章契约 `ch{N}.json` **拆出按写作顺序排列的单元目录**
-     `<extract_dir>/book_structure/units/ch{N}/`——**每个单元一个独立 md 文件**：
+     `<extract_dir>/book_structure/units/ch{N}/`（附录章为 `units/appendix{X}/`——本文所有 `ch{N}` 目录/文件处，附录章一律同理换成 `appendix{X}`，命名总则见 SKILL.md 附录命名总则）——**每个单元一个独立 md 文件**：
        * `chapter` 单元：`# 章标题`；
        * `section` 单元：`## §…` 标题行（其下描述 / 编号项各为独立单元）；
        * `desc` 单元：描述散文（章首序言 / 节导语 / 条目尾随段，无标题纯段落）；

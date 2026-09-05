@@ -77,7 +77,7 @@ def _numpath_regexes(levels):
     per-span parse does not recompile."""
     lv = max(1, int(levels))
     rep = '{' + str(lv - 1) + '}'               # {0}/{1}/{2} for 1/2/3 levels
-    numpath = r'\d+(?:' + SEP_TIGHT + r'\d+)' + rep
+    numpath = r'[A-Za-z]?\d+(?:' + SEP_TIGHT + r'\d+)' + rep
     exact = re.compile(r'^' + numpath + r'$')
     cap = re.compile(r'(' + numpath + r')')
     # re.IGNORECASE: English books (e.g. Apostol) print headings in UPPERCASE
@@ -430,7 +430,7 @@ def _md_tail_blocking(ctx, cfg, groups):
             blocking.append(
                 f"  WARN (BLOCKING): TAIL {gk}: 源最大 {smax} 远大于 md 最大 {last}（差距 {gap}）"
                 f"— 疑似 OCR 幻影或异源编号，请核实该组是否即止；"
-                f"确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json")
+                f"确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json")
             continue
         for n in range(last + 1, smax + 1):
             full = (prefix_str + '-' if prefix_str else '') + str(n)
@@ -441,7 +441,7 @@ def _md_tail_blocking(ctx, cfg, groups):
                 continue
             blocking.append(
                 f"  WARN (BLOCKING): TAIL {gk} 缺尾部号 {n}（md 最大 {last}，源最大 {smax} — "
-                f"请核实章/节是否即止；确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json）")
+                f"请核实章/节是否即止；确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json）")
     return blocking
 
 

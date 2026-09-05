@@ -1,7 +1,7 @@
 # 遗漏标签处理策略（Missing-Label Policy）
 
 > 🔴 **SSOT**：本书总结中"书中存在某条重要概念（定义/定理/引理/推论/命题），但 OCR 未识别其标题，导致总结缺失该条目"时的标准处理流程。
-> 由用户 2026-08-05 制定，配套代码实现见 [`data_provider/data_provider.md`](data_provider/data_provider.md) 与 `data_provider/script/data_provider.py` 的"merged Q + over-mark 守卫"段；本文件只描述**策略与判定**，不重复代码。
+> 由用户 2026-08-05 制定，配套代码实现见 `item_numbering_integrity/script/item_numbering_integrity.py` 的 `_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`（2026-09 起自 data_provider 迁入 B 层；策略描述与 data_provider/data_provider.md 的「EXTRACT 只供水、B 只查漏」口径一致）；本文件只描述**策略与判定**，不重复代码。
 
 ## 1. 适用范围
 
@@ -69,6 +69,6 @@ B 层本就是"查漏"层。下列两项为 B 层查漏能力的子集（整类�
 
 ## 6. 相关文件
 
-- 代码：`data_provider/script/data_provider.py`（`_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`）。
+- 代码：`item_numbering_integrity/script/item_numbering_integrity.py`（`_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`）。
 - 抽取覆盖：`flows/write-source/structure/script/extract_items`（`manual_overrides` 合并 + `agent_recovered` 标记）、各书 `_extract/manual_overrides_ch{N}.json`。
 - 注册表：[`verify.md`](verify.md) 第 1 节（B 层）、第 3 节同步清单（本策略无新契约键，仅复用 `blocking`/`warnings`）。

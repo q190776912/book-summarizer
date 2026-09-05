@@ -1,8 +1,8 @@
 # 书结构契约（内容化分章契约 `ch{N}.json` / `appendix{X}.json`）
 
 > 🔴 **本文件是该 JSON 数据结构的唯一权威说明（SSOT）**。模型类见同目录 `book_structure.py`；
-> 骨架生成 `flows/write-source/structure/script/build_structure.py`；正文内容化
-> `flows/write-source/structure/script/attach_content.py`（structure 子流程第 5 步）；单元拆分
+> 完整契约一步产出 `flows/write-source/structure/script/build_structure.py`
+> （骨架 + 内容挂载一体；`attach_content.py` 的 attach CLI 仅保留为全章重挂手动维护入口）；单元拆分
 > `flows/write-source/script/split_draft_units.py`（write-source 步骤 4，渲染复用
 > `render_draft.py` 纯函数）。契约语义
 > （步骤 / 命令 / 已知近似）的流程侧 SSOT 见 `flows/write-source/structure/structure.md`。
@@ -11,9 +11,9 @@
 
 | 产物 | 位置 | 承载 | 消费方 |
 |------|------|------|--------|
-| **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `split_draft_units`（write-source 步骤 4）→ 每 item 一单元目录 `units/ch{N}/`；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
+| **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `split_draft_units`（write-source 步骤 4）→ 每 item 一单元目录 `units/ch{N}/`（附录章 `units/appendix{X}/`，下同）；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
 
-- **两阶段写同一文件**：`build_structure` 产出**纯骨架**（叶子 `sub_sec=[]`，无 description / proof / 内容块）→ structure 完整性闸门 → `attach_content` 挂入正文内容写回同一文件。
+- **一步产出完整契约**（2026-08-29 二次重构）：`build_structure` 生成骨架后**同进程**挂入正文内容（description / proof 派生节点与 text / formula / image 内容块）写回同一文件，不再有独立 attach 步骤；重跑即重建整章（幂等）。
 - **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 已废弃（2026-08-29），不再读取（无兼容回退）。
 - 命名单点：`chapter_json_name` / `chapter_json_path` / `list_chapter_keys`（`book_structure.py`）——数字章按数值排序在前、附录字母章按字母排后。
 
@@ -103,7 +103,7 @@
 
 | type | 语义 | key 形态 | 实书样例（key → name 摘录） |
 |------|------|----------|------------------------------|
-| `chapter` | 章 | 数字 `"2"`；附录字母 `"A"` | `"2"` → `2 A Crash Course…`；`"A"` → `A Appendix A: Notation` |
+| `chapter` | 章 | 数字 `"2"`；附录字母 `"A"` | `"2"` → `2 A Crash Course…`；`"A"` → `A Category Theory Language`（附录 name 填裸标题，勿带 "Appendix A" 序标——见 data/chapter_map/chapter_map.md） |
 | `section` | 节 | `"N.M"`；无序号标书 `"U{n}"` | `"1.1"` → `1.1 Categories`；`"U1"` → `A. MOTIVATION` |
 | `definition` | 定义 | 三级 dash `"1.1-1"` / 两级 canon `"定义1.1"` | `"定义1.1"` → `定义1.1 f is a finite map if k[X] is…` |
 | `theorem` | 定理 | 同上 | `"定理1.1"` → `定理1.1 At any nonsingular point…` |
@@ -197,7 +197,7 @@
 
 ## 7. 消费者（只读，不裸操作 json）
 
-全部经 `BookStructure.load` **聚合读取分章契约**（历史书回退旧单文件）：
+全部经 `BookStructure.load` **聚合读取分章契约**（旧单文件无任何回退读取）：
 
 - `verify/script/structure_io.py`：`read_structure_items(ext_dir, ch)` → `chapter_items` 返回编号项列表（被 `data_provider` 消费；派生节点 description / proof 已在 `iter_items` 排除）。
 - `verify/verbose_gates/script/verbose_gates.py`：`_load_contract` 取契约。
@@ -208,15 +208,16 @@
 
 ## 8. 构建 / 回填 / 内容化 / 拆分约定
 
-1. **骨架生成**（write-source 步骤 3 前半）：`build_structure <extract_dir> [ch ...]`
-   → 按章写 `book_structure/ch{N}.json`（纯骨架）。每章文件独立，重跑只覆盖指定章
-   **并清除其已挂内容**——重跑后必须随后执行第 4 步 attach。
+1. **完整契约生成**（write-source 步骤 3）：`build_structure <extract_dir> [ch ...]`
+   → 按章写 `book_structure/ch{N}.json`（附录 `appendix{X}.json`；骨架 + 内容一步产出）。每章文件独立，
+   重跑只覆盖指定章并整章重建（幂等）。
 2. **查漏回填 + 闸门**（structure 第 2–4 步）：`check_structure_completeness.py
    <extract_dir> [ch ...] --backfill` 经聚合 load 定位章节点、`replace_chapter` +
    `save` 拆分写回（先备份）；闸门 `gate.passed == true` 后放行。
-3. **正文内容化**（structure 第 5 步）：`attach_content <extract_dir> [ch ...]` 读入
-   骨架、挂 description / proof / 内容块后**写回同一文件**（幂等可重跑）。
+3. **正文内容化**（已并入第 1 步）：`build_structure` 一步产出骨架 + 内容；
+   `attach_content <extract_dir> [ch ...]` 仅保留为全章重挂的**手动维护入口**
+   （幂等可重跑，正常流程无需单独执行）。
 4. **单元拆分**（write-source 步骤 4）：`split_draft_units <extract_dir> [ch ...]` →
-   `units/ch{N}/`（每 item 一单元 + `manifest.json`）。
+   `units/ch{N}/`（附录章 `units/appendix{X}/`；每 item 一单元 + `manifest.json`）。
 5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
    图片真值 + 证明覆盖审计），FAIL 严禁拆分。

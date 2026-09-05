@@ -50,6 +50,7 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as ac
+from data.book_structure.book_structure import chapter_label
 
 
 def _norm_text(s):
@@ -239,7 +240,7 @@ def check_chapter(ext, ch_node):
         for k, t in missed[:5]:
             lines.append(f"      - 条目 {k}: {t}")
 
-    lines.insert(0, f"ch{ch_key}: text={stats['text']} formula={stats['formula']} "
+    lines.insert(0, f"{chapter_label(ch_key)}: text={stats['text']} formula={stats['formula']} "
                     f"formula_tag={len(got_tags)} "
                     f"image={stats['image']} proof={stats['proof']} "
                     f"description={stats['description']} "

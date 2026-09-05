@@ -35,7 +35,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
-from data.book_structure.book_structure import BookStructure, StructureNode
+from data.book_structure.book_structure import (BookStructure, StructureNode,
+                                                chapter_label)
 
 import page_json
 # 公共校验层（verify/*/script 由 boot 注入 sys.path，可直接裸 import）：
@@ -46,7 +47,7 @@ from audit_ignore import run_audit             # ignore 条目审核（防误用
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
-    ORDINAL_CN3LAB, ORDINAL_ROSS,
+    ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
     _canon_label, _load_ignore_file,
 )
 
@@ -268,6 +269,28 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "scheme": "ross", "canon": c, "has_label": True,
             })
         return out
+    if primary_type == ORDINAL_APP:
+        # （附录字母章位，type 13）条目形如 `Definition A.1.1` / 裸 `A.1.5`，
+        # 委托 extract_items_en3 的附录正则（EN3_APP_RE / EN3_APP_BARE_*，
+        # 与 build_structure 同一抽取真源）；canon = (字母, 节[, 条])，与
+        # _canon_key(ORDINAL_APP, key) 逐字段一致。键存 normkey 形 "A.1-1"。
+        from extract_items_en3 import extract_items_en3
+        out = []
+        for it in extract_items_en3(ext, ch, start, end, want_examples=True):
+            # EN3 的键形为 "Definition A.1.1"（标签 + 空格 + 字母号）：先剥标签
+            # 再做字母号 canon（标签单独经 _canon_label 进复合键）。
+            lab = (it.get("label") or "uncat")
+            _num = it["key"].partition(" ")[2] if " " in it["key"] else it["key"]
+            c = _canon_key(ORDINAL_APP, _num)
+            if c is None:
+                continue
+            out.append({
+                "key": _num, "label": lab,
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "app", "canon": c, "has_label": True,
+            })
+        return out
     if primary_type == ORDINAL_CN3LAB:
         # （规则5增量扩展）CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 /
         # 定义2.3.4，每类标签独立计数、每节重置）。委托 extract_items_cn3lab
@@ -422,6 +445,18 @@ def _canon_key(primary_type, key):
         if m.group(4):
             return (n1, ord(m.group(4).lower()) - 96)
         return (n1,)
+    if primary_type == ORDINAL_APP:
+        # 附录字母章位（type 13）：契约键 "A.1-1"（normkey 形）/ 源侧键 "A.1.1"，
+        # 两级 "A.1"（Leinster 体例）也可。canon = (字母, 节号[, 条目号])，
+        # 字母保留原样（str 元组与 int 元组互比安全：仅同方案内部比较）。
+        m = re.match(r'^([A-Za-z])[.\-·，．]+(\d+)(?:[.\-·，．]+(\d+))?$',
+                     str(key).strip())
+        if not m:
+            return None
+        c = (m.group(1).upper(), int(m.group(2)))
+        if m.group(3):
+            c = c + (int(m.group(3)),)
+        return c
     if primary_type == ORDINAL_THREE_LEVEL:
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', key)
         return tuple(int(x) for x in m.groups()) if m else None
@@ -449,7 +484,9 @@ def _composite_key(primary_type, label, canon):
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
                         ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
-                        ORDINAL_CN3LAB, ORDINAL_ROSS):
+                        ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP):
+        # ORDINAL_APP：Weibel 附录 Definition A.1.1 与 Exercise A.1.1 同号并存，
+        # 无标签复合键会把两类折叠、假绿。
         return (_canon_label(str(label)).lower(), canon)
     return canon
 
@@ -568,7 +605,7 @@ def insert_item(tree, key, label, page, canon, snippet=""):
     name = (f"{key} {title}".strip()) if title else key
     node = _node(key, itype, name, page)
     sec_key = None
-    if _PRIMARY == ORDINAL_THREE_LEVEL and len(canon) >= 2:
+    if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP) and len(canon) >= 2:
         sec_key = f"{canon[0]}.{canon[1]}"
     sn = _section_node(tree, sec_key) if sec_key else None
     if sn is None:
@@ -764,6 +801,10 @@ def step2_sections(ch, start, end, ext, cfg, tree):
       * missing_sections：落在 book_structure 最后一个已写节之后的整节缺失。
     二者合并即「源有而 book_structure 无」的遗漏章节集合。
     """
+    if not str(ch)[:1].isdigit():
+        # 附录字母章：D 层数字节号解析域之外，源侧节查漏跳过（不做无意义扫描，
+        # 也避免回填路径 int("A") 崩溃）。
+        return [], {"continuity": [], "tail": [], "skipped": "appendix-letter-chapter"}
     md = synthetic_section_md(tree)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(md)
@@ -828,7 +869,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     #    三级号 1.3-5）。ignore 审计（run_audit）仍会在报告中展示该条目供复核。
     try:
         from key_parse import normkey as _normkey
-        _ign = _load_ignore_file(os.path.join(ext, f'ignore_ch{ch}.json'))
+        _ign = _load_ignore_file(os.path.join(ext, f'ignore_{chapter_label(ch)}.json'))
     except Exception:
         _ign = {}
     if _ign:
@@ -904,7 +945,7 @@ def _run_b_layer(ch, start, end, ext, cfg, tree, source_items):
     # 同语义）：否则预检管线里登记的稀疏号豁免对 B 层不可见，闸门永 FAIL。
     try:
         from dataclasses import replace as _dc_replace
-        extra = _load_ignore_file(os.path.join(ext, f'ignore_ch{ch}.json'))
+        extra = _load_ignore_file(os.path.join(ext, f'ignore_{chapter_label(ch)}.json'))
         if extra:
             cfg = _dc_replace(cfg, ignore=sorted(set(cfg.ignore) | set(extra)))
     except Exception:
@@ -948,9 +989,36 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     # Only exercise-block ordering issues are exempt (some books have genuine
     # non-sequential exercise numbering). B 层 blocking 条目现为字符串消息
     # （"  WARN (BLOCKING): ..."）；保留旧 dict 格式的豁免判断，非 dict 视为真 blocking。
+    #
+    # 🔴 练习号豁免（共享计数器书）：正文各标签共享节内计数器、练习另持**独立**
+    # 节内计数器（Weibel 实测：Definition 10.3.1 与 Exercise 10.3.1 同节并存）。
+    # 合并视图的合成 md 只含非练习条目，练习号在该视图下必然呈现为「缺号」，
+    # 但契约**确实含有**该号（exercise 节点）——不是遗漏。凡缺号命中契约练习
+    # 键 → 豁免；真正的缺号（契约全无该号）仍阻断，交 agent 回填/登记 ignore。
+    ex_keys = set()
+
+    def _collect_ex(n):
+        if n.type == "exercise":
+            ex_keys.add(str(n.key))
+        for k in n.sub_sec:
+            _collect_ex(k)
+
+    _collect_ex(ch_node_after)
+    _ex_gap_re = re.compile(r"(\d+(?:\.\d+)*)\s*缺号\s*(\d+)")
+
+    def _is_exercise_gap(b):
+        if not isinstance(b, str):
+            return False
+        m = _ex_gap_re.search(b)
+        if not m:
+            return False
+        sec, num = m.group(1), m.group(2)
+        return f"{sec}-{num}" in ex_keys or f"{sec}.{num}" in ex_keys
+
     real_b_blocking = [
         b for b in b_blocking
         if not (isinstance(b, dict) and b.get("exercise_block_only", False))
+        and not _is_exercise_gap(b)
     ]
     passed = (not sec_left) and (not readable_left) and (not real_b_blocking)
     return {
@@ -1003,7 +1071,7 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         # 的情形：从 manual_overrides 取回 agent 凭书补写的条目，回填进契约。
         # 这样校验逻辑既能「检测」缺口、又能「填回」，无需借助 ignore 隐藏真实缺项。
         if _mo_mod is not None:
-            mo_path = os.path.join(ext, f"manual_overrides_ch{ch}.json")
+            mo_path = os.path.join(ext, f"manual_overrides_{chapter_label(ch)}.json")
             mo_list = _mo_mod.load_manual_overrides(mo_path)
             if mo_list:
                 for mo in mo_list:
@@ -1065,13 +1133,13 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     }
 
     os.makedirs(report_dir, exist_ok=True)
-    with open(os.path.join(report_dir, f"ch{ch}_completeness_report.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(report_dir, f"{chapter_label(ch)}_completeness_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
     n_read = sum(1 for m in missing_items if m["status"] == "readable")
     n_agent = sum(1 for m in missing_items if m["status"] == "needs_agent")
     n_ref = sum(1 for m in missing_items if m["status"] == "reference")
-    print(f"ch{ch}: contract(items={len(contract_items)}, sections={len(contract_sections)}) | "
+    print(f"{chapter_label(ch)}: contract(items={len(contract_items)}, sections={len(contract_sections)}) | "
           f"missing(sections={len(missing_sections)}[{len(sec_detail.get('continuity', []))}cont/{len(sec_detail.get('tail', []))}tail], "
           f"items={len(missing_items)}[{n_read}r/{n_ref}ref/{n_agent}a])"
           + (f" | BACKFILLED(items={len(backfilled_items)}, sections={len(backfilled_sections)})" if backfill else "")
@@ -1107,10 +1175,12 @@ def main():
         report_dir = os.path.join(ext, "completeness_reports")
 
     cfg_path = os.path.join(ext, "verify_config.json")
+    loader_obj = None
     try:
         loader = ConfigLoader(ext, os.path.dirname(ext.rstrip("/")) or ext)
         loader.require_complete()
         book = loader.book
+        loader_obj = loader
     except Exception:
         if not os.path.exists(cfg_path):
             print("verify_config.json not found")
@@ -1149,10 +1219,14 @@ def main():
 
     for ch in (want or sorted(rng, key=_rng_sort_key)):
         if ch not in rng:
-            print(f"ch{ch} SKIP (not in chapter_map)")
+            print(f"{chapter_label(ch)} SKIP (not in chapter_map)")
             continue
         s, e = rng[ch]
-        check_chapter(ext, ch, s, e, book, backfill, report_dir)
+        # 附录章路由：字母章号（或章名含 Appendix/附录）切到 appendix 配置
+        # （type 13 字母章位），与 build_structure / verify 的 per-chapter 路由
+        # 同一机制；正文章零变化。
+        cfg_ch = loader_obj.config_for_chapter(ch) if loader_obj is not None else book
+        check_chapter(ext, ch, s, e, cfg_ch, backfill, report_dir)
     return 0
 
 

@@ -175,14 +175,15 @@ def parse_book(start, end, ext, chnum=None):
 
 
 def main():
-    ch, start, end, md, ext = (int(sys.argv[1]), int(sys.argv[2]),
+    from data.book_structure.book_structure import norm_chapter_key, chapter_label
+    ch, start, end, md, ext = (norm_chapter_key(sys.argv[1]), int(sys.argv[2]),
                                int(sys.argv[3]), sys.argv[4], sys.argv[5])
     md_secs = parse_md(md)
     book_secs = parse_book(start, end, ext, ch)
     all_secs = sorted(set(md_secs) | set(book_secs),
                       key=lambda x: [int(z) for z in x.split('.')])
     problems = 0
-    print('=== 条数核对: %s (ch%d, pages %d-%d) ===' % (md, ch, start, end))
+    print('=== 条数核对: %s (%s, pages %d-%d) ===' % (md, chapter_label(ch), start, end))
     for sec in all_secs:
         md_t = md_secs.get(sec, {})
         bk_t = book_secs.get(sec, {})

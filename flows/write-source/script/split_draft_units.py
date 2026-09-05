@@ -3,7 +3,7 @@
 背景（2026-08-31 用户需求重构）
 ------------------------------
 写源阶段 agent「总是不按照草稿总结来总结」。为根治，把整章草稿 ``draft_ch{N}.md``
-**细分为按写作顺序排列的单元文件目录** ``units/ch{N}/``：每个单元是一个独立 md
+**细分为按写作顺序排列的单元文件目录** ``units/ch{N}/``（附录章 ``units/appendix{X}/``，本文件各 ``ch{N}`` 处附录章同理换 ``appendix{X}``，判据统一走 ``chapter_label``）：每个单元是一个独立 md
 文件（章标题 / 节标题 / 描述散文 / 单个编号项 各一单元），agent **必须逐个改好**
 （强制门控，见 ``gate_units.py``），最后用 ``merge_units.py`` 拼接成最终章 md。
 
@@ -61,11 +61,11 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import (chapter_json_path, list_chapter_keys)
+from data.book_structure.book_structure import (chapter_json_path, chapter_label, list_chapter_keys,
+                                                unit_dir_name)
 import render_draft as _rd
 
 OUT_SUB = os.path.join(_ac.OUT_DIR_NAME, "units")     # book_structure/units
-UNITS_DIR = "ch%s"                                    # units/ch{N}
 
 
 def _is_block(el):
@@ -218,9 +218,9 @@ def split_chapter(ext, ch_key, language, force=False):
     _rd._CTX["prev"] = "heading"
 
     units = _emit_units(node, language)
-    out_dir = os.path.join(ext, OUT_SUB, UNITS_DIR % ch_key)
+    out_dir = os.path.join(ext, OUT_SUB, unit_dir_name(ch_key))
     if os.path.isdir(out_dir) and any(True for _ in os.scandir(out_dir)) and not force:
-        print("[split_draft_units] ch%s 已存在 units 目录，跳过（--force 覆盖）。" % ch_key)
+        print("[split_draft_units] %s 已存在 units 目录，跳过（--force 覆盖）。" % chapter_label(ch_key))
         return os.path.join(out_dir, "manifest.json")
     # 🔴 --force 必须清空旧 units 目录，否则上一 run 残留的孤儿/内容 bleed 文件
     # 会留存在磁盘（manifest 已不含它们，但文件仍在），造成 merge/verify 噪声。
@@ -252,7 +252,7 @@ def split_chapter(ext, ch_key, language, force=False):
     mpath = os.path.join(out_dir, "manifest.json")
     with open(mpath, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
-    print("[split_draft_units] ch%s -> %d units (%s)" % (ch_key, len(units), out_dir))
+    print("[split_draft_units] %s -> %d units (%s)" % (chapter_label(ch_key), len(units), out_dir))
     return mpath
 
 

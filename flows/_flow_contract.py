@@ -20,6 +20,8 @@ import re
 import subprocess
 import sys
 
+from data.book_structure.book_structure import chapter_label, unit_dir_name
+
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
 # --------------------------------------------------------------------------
@@ -324,7 +326,7 @@ class physical_evidence:
         🔴 仅"分章契约 ch{N}.json 存在"不足以落账——章节 / 定理定义等缺项的
         查漏回填闸门（structure.md 第 2–4 步，`check_structure_completeness.py`）
         必须对全部章节跑过且 `gate.passed == true`（报告落
-        `<extract_dir>/completeness_reports/ch{N}_completeness_report.json`），
+        `<extract_dir>/completeness_reports/{ch{N},appendix{X}}_completeness_report.json`），
         防止 `flow_runner run write_source structure` 只跑 build_structure 就
         跳过闸门落账。
         """
@@ -342,7 +344,7 @@ class physical_evidence:
         reports_missing, not_passed = [], []
         for k in keys:
             rp = os.path.join(ex, "completeness_reports",
-                              f"ch{k}_completeness_report.json")
+                              f"{chapter_label(k)}_completeness_report.json")
             if not os.path.exists(rp):
                 reports_missing.append(k)
                 continue
@@ -377,7 +379,7 @@ class physical_evidence:
         for k in keys:
             fname = (f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json")
             jp = os.path.join(sub, fname)
-            mp = os.path.join(sub, "units", f"ch{k}", "manifest.json")
+            mp = os.path.join(sub, "units", unit_dir_name(k), "manifest.json")
             if not os.path.exists(jp):
                 missing.append(k)
                 continue
@@ -611,7 +613,7 @@ class physical_evidence:
             return False, "缺 chapter_map.json（config 步未完成）"
         gate_fail, no_units, empty_units = [], [], []
         for k in keys:
-            units_dir = os.path.join(ex, "book_structure", "units", f"ch{k}")
+            units_dir = os.path.join(ex, "book_structure", "units", unit_dir_name(k))
             mpath = os.path.join(units_dir, "manifest.json")
             if not os.path.exists(mpath):
                 no_units.append(k)
@@ -633,7 +635,7 @@ class physical_evidence:
         if gate_fail:
             k, prob = gate_fail[0]
             return False, (f"{len(gate_fail)} 章单元门控未通过（须逐个把单元改好、"
-                           f"DONE + 质量校验通过后重跑 gate_units）: ch{k} {prob}")
+                           f"DONE + 质量校验通过后重跑 gate_units）: {chapter_label(k)} {prob}")
         note = f"；{len(empty_units)} 章单元清单为空: {empty_units[:4]}" if empty_units else ""
         return True, f"{len(keys)} 章单元门控全部通过（每 item 改好，一个不漏）{note}"
 
@@ -642,7 +644,7 @@ class physical_evidence:
     @staticmethod
     def _src_manifest(ex, key):
         """读源单元 manifest；不存在返回 None。"""
-        p = os.path.join(ex, "book_structure", "units", f"ch{key}", "manifest.json")
+        p = os.path.join(ex, "book_structure", "units", unit_dir_name(key), "manifest.json")
         if not os.path.exists(p):
             return None
         try:
@@ -686,7 +688,7 @@ class physical_evidence:
             return True, "中文源书：无翻译阶段，全部章跳过"
         gate_fail, parity_fail = [], []
         for k in todo:
-            tdir = os.path.join(ex, "book_structure", "units-translate", f"ch{k}")
+            tdir = os.path.join(ex, "book_structure", "units-translate", unit_dir_name(k))
             tmanifest_path = os.path.join(tdir, "manifest.json")
             if not os.path.exists(tmanifest_path):
                 gate_fail.append((k, "缺 units-translate/manifest.json"
@@ -716,10 +718,10 @@ class physical_evidence:
         if gate_fail:
             k, prob = gate_fail[0]
             return False, (f"{len(gate_fail)} 章翻译单元门控未通过"
-                           f"（gate_units --units-dir units-translate）: ch{k} {prob}")
+                           f"（gate_units --units-dir units-translate）: {chapter_label(k)} {prob}")
         if parity_fail:
             k, prob = parity_fail[0]
-            return False, f"{len(parity_fail)} 章 1:1 同构闸未通过: ch{k} {prob}"
+            return False, f"{len(parity_fail)} 章 1:1 同构闸未通过: {chapter_label(k)} {prob}"
         return True, (f"{len(todo)} 章翻译清单就绪 + 门控 + 同构闸全部通过"
                       f"（tag/图片/编号项与源单元 1:1）")
 
@@ -762,7 +764,7 @@ class physical_evidence:
             except Exception:
                 pass
         ignore_set = set()
-        ignore_path = os.path.join(ex, f"ignore_ch{k}.json")
+        ignore_path = os.path.join(ex, f"ignore_{chapter_label(k)}.json")
         if os.path.exists(ignore_path):
             try:
                 ignore_data = json.load(open(ignore_path, encoding="utf-8"))
@@ -808,11 +810,11 @@ class physical_evidence:
         if missing:
             (k, lang) = missing[0]
             return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_all 拼接）: "
-                           f"ch{k} [{lang}]" + (f" 等 {len(missing)} 组" if len(missing) > 1 else ""))
+                           f"{chapter_label(k)} [{lang}]" + (f" 等 {len(missing)} 组" if len(missing) > 1 else ""))
         if missing_names:
             k, lang, miss = missing_names[0]
             return False, (f"{len(missing_names)} 组 md 相对结构契约漏骨架节/编号项: "
-                           f"ch{k} [{lang}] 缺 {len(miss)} 项（如 {miss[:4]}）；"
+                           f"{chapter_label(k)} [{lang}] 缺 {len(miss)} 项（如 {miss[:4]}）；"
                            f"须回归对应单元目录（units / units-translate）补齐后重拼"
                            f"（若条目为 OCR 噪声误收，走 manage_ignore 机制，勿编造）")
         if degraded:

@@ -7,8 +7,9 @@
 | 配置文件 | 作用 | 生成 / 维护 | 说明文档 |
 |---------|------|------------|------|
 | `verify_config.json` | 书级配置：编号形态 `ordinal`（含图序标 Figure 组）、语言 `language`、公式序标 `formula`、忽略章节 `ignore` 等；`verify_chapter.py` / `flows/write-source/structure/script/scan_skeleton` 的**唯一配置源** | `verify_config/make_config.py` 半自动生成，或手填 | [`verify_config/verify_config.md`](./verify_config/verify_config.md) |
+| `appendix_verify_config.json` | **可选**附录专用配置：仅当本书附录与正文编号体例不一致（如字母章位 `Definition A.1.1`）时使用；缺失则附录章回退主 `verify_config.json`（零回归）。`ConfigLoader` 对附录章自动路由到此文件 | `verify_config/make_config.py` 只扫附录页区间半自动生成，或手填 | [`verify_config/verify_config.md` §附录专用配置](./verify_config/verify_config.md) |
 | `figure_embed_overrides.json` | 图嵌入锚点覆盖（图注无条目号时手动指定精确锚点） | `build_figure_index.py`（`../data/figure_index`）自动产出骨架，或手填 | [`figure_embed_overrides.md`](../data/figure_embed_overrides/figure_embed_overrides.md) |
-| `ignore_ch{N}.json` / `ignore_fig_ch{N}.json` | 每章 verify 忽略键（条目级）/ 图片噪声豁免键（图片级） | 手填（`--ignore` / `--ignore-figure`）或 `ignore_chN/manage_ignore.py` | [`ignore_chN/ignore_chN.md`](./ignore_chN/ignore_chN.md) |
+| `ignore_ch{N}.json` / `ignore_fig_ch{N}.json`（附录章文件名段为 `appendix{X}`，如 `ignore_appendix{A}.json`，判据 `chapter_label`） | 每章 verify 忽略键（条目级）/ 图片噪声豁免键（图片级） | 手填（`--ignore` / `--ignore-figure`）或 `ignore_chN/manage_ignore.py` | [`ignore_chN/ignore_chN.md`](./ignore_chN/ignore_chN.md) |
 | `manual_overrides_ch{N}.json` | 每章抽取覆盖（OCR 漏识条目的人工补写登记，解除 B 层序列缺口 BLOCKING） | 手填（`flows/write-source/structure/script/extract_items --manual`） | [`manual_overrides_chN/manual_overrides_chN.md`](./manual_overrides_chN/manual_overrides_chN.md) |
 | `figure_manual_chN.json` | 手动补图声明（DocLayout-YOLO 漏判的图的位置 / 旋转 / 图注） | 手填（`figure_manual_chN/apply_manual_figures.py`） | [`figure_manual_chN/figure_manual_chN.md`](./figure_manual_chN/figure_manual_chN.md) |
 

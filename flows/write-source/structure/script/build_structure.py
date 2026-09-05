@@ -3,14 +3,15 @@
 设计（2026-08-29 用户最终确认，替代全书单文件方案）
 ------------------------------
 每章一个文件：``<extract_dir>/book_structure/ch{N}.json``（附录 ``appendix{X}.json``），
-顶层即该章 ``chapter`` 节点（无书根包装）；**纯骨架**（叶子 ``sub_sec=[]``，无
-description / proof / 内容块）。正文内容由 ``attach_content``（第 5 步）挂入后写回
-同一文件——分章文件是结构契约唯一真源；全书单文件 ``book_structure.json`` 已废弃。
+顶层即该章 ``chapter`` 节点（无书根包装）。本脚本**一步产出含内容的完整契约**
+（骨架 + description / proof / 内容块同进程挂入后写回同一文件，幂等可重跑）——
+分章文件是结构契约唯一真源；全书单文件 ``book_structure.json`` 已废弃、不读取。
+``attach_content.py`` 的 attach CLI 仅保留为全章重挂的手动维护入口。
 节点 schema 见 ``flows/write-source/structure/structure.md`` 与
 ``data/book_structure/book_structure.py``（BookStructure / StructureNode）。
 
-增量：每章文件独立，``build_structure <ext> [ch ...]`` 只重建指定章；不传 <ch>
-即全量重建（重跑会覆盖已挂内容，须随后重跑 attach_content）。
+增量：每章文件独立，``build_structure <ext> [ch ...]`` 只重建指定章（附录章传
+字母章号，如 ``build_structure <ext> A``）；不传 <ch> 即全量重建。
 
 
 为什么需要它
@@ -91,12 +92,14 @@ from extract_items_hum import extract_items_hum
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
-                              ORDINAL_HUM,
+                              ORDINAL_HUM, ORDINAL_APP,
                               ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label, normkey
 from data.book_structure.book_structure import (BookStructure, StructureNode,
-                                                chapter_json_path)
+                                                chapter_json_path,
+                                                norm_chapter_key,
+                                                chapter_label)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +473,13 @@ def _chapter_local_sections_from_markdown(ext, ch):
     cross-checks these against the source)."""
     book_dir = os.path.dirname(ext.rstrip("/")) or ext
     cands = []
-    for pat in (f"Chapter{ch}_*.md", f"chapter{ch}_*.md", f"第{ch}章_*.md"):
+    # 小结 md 命名随章型：数字章 Chapter{N}_*.md / 第N章_*.md，
+    # 附录章 Appendix{X}_*.md / 附录X_*.md（merge_units._final_md_name 同源）。
+    if str(ch)[:1].isdigit():
+        pats = (f"Chapter{ch}_*.md", f"chapter{ch}_*.md", f"第{ch}章_*.md")
+    else:
+        pats = (f"Appendix{ch}_*.md", f"appendix{ch}_*.md", f"附录{ch}_*.md")
+    for pat in pats:
         cands.extend(glob.glob(os.path.join(book_dir, pat)))
     out = []
     if not cands:
@@ -561,6 +570,12 @@ def _real_subsections_from_markdown(ext, ch):
     cands = []
     for pat in (f"Chapter{ch}_*.md", f"chapter{ch}_*.md"):
         cands.extend(glob.glob(os.path.join(book_dir, pat)))
+    if str(ch)[:1].isdigit():
+        cands.extend(glob.glob(os.path.join(book_dir, f"第{ch}章_*.md")))
+    else:
+        # 附录章小结 md 命名同 merge_units._final_md_name（Appendix{X}_*.md / 附录X_*.md）
+        cands.extend(glob.glob(os.path.join(book_dir, f"Appendix{ch}_*.md")))
+        cands.extend(glob.glob(os.path.join(book_dir, f"附录{ch}_*.md")))
     if not cands:
         return None
     nums = set()
@@ -817,12 +832,16 @@ def _extract_items(ext, ch, start, end, book, manual=None):
                     kept.append(item)
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
-    if primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en":
+    if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
+            or primary == ORDINAL_APP:
         # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The
         # generic three-level extractor is CN-oriented and captures unlabeled
         # exercise numbers (`3.1.1`) as items; route to the label-first EN3
         # extractor, which requires an Example/Definition label and so naturally
-        # excludes exercises.
+        # excludes exercises.  ORDINAL_APP（附录字母章位，type 13）的条目印成
+        # `Definition A.1.1` / 裸 `A.1.5`（Weibel Appendix A），同属 label-first
+        # 三级形态，由 extract_items_en3 的附录正则（EN3_APP_RE / EN3_APP_BARE_*）
+        # 覆盖——键仍走 normkey 裸号（"A.1-1"），类型由节点 type 承载。
         # KEY FORMAT (root-cause fix, 2026-08-19): the book's primary_type is
         # ORDINAL_THREE_LEVEL (NOT ORDINAL_EN3), so the completeness checker's
         # _canon_key parses its keys as pure-numeric `C.S-N` tuples — a label
@@ -844,6 +863,25 @@ def _extract_items(ext, ch, start, end, book, manual=None):
             it = dict(it)
             it["key"] = normkey(num)
             kept.append(it)
+        # ---- Merge manual overrides（OCR 漏识真实条目的 agent 回填通道）----
+        # 与 (ORDINAL_EN, ORDINAL_EN3) 分支的合并同构，但键保持本分支的裸号
+        # normkey 形（"6.3.7" → "6.3-7"）：missing_label_policy 的约定是序列洞
+        # 经 manual_overrides 恢复；此前本分支不消费 manual，重建契约时手工
+        # 恢复的条目会被静默丢弃、洞复现（Weibel ch6/ch10 实测）。
+        if manual:
+            existing = {it["key"]: idx for idx, it in enumerate(kept)}
+            for mo in manual:
+                mk = normkey(str(mo.get("key", "")))
+                if not mk:
+                    continue
+                item = {"key": mk, "page": mo.get("page"),
+                        "label": mo.get("label", ""), "text": mo.get("text", ""),
+                        "agent_recovered": True}
+                if mk in existing:
+                    kept[existing[mk]] = item
+                else:
+                    kept.append(item)
+            kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
     if primary in (ORDINAL_GM, ORDINAL_ROMAN):
         items, _, _ = extract_items_gm(ext, ch, start, end, manual_overrides=manual)
@@ -983,7 +1021,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 字母头是 §N 内的子块 → 按父节聚合，稍后挂到 section 节点的 letter_subs
     # 元数据上（条目仍平铺 sub_sec，不引入第三层容器）。其余书无 SUB 行，零回归。
     _ch_name = _chapter_title(cm, ch)
-    _is_appendix = ('Appendix' in _ch_name) or ('附录' in _ch_name)
+    # 附录章判定与 ConfigLoader.is_appendix_chapter 同源（双信号）：章名含
+    # Appendix/附录，或章键非数字（字母章位 A/B…）。仅认章名会在 chapter_map
+    # 只填裸标题（如 Weibel 附录 name="Category Theory Language"，"Appendix A"
+    # 序标由字母键承载）时漏判，附录字母节升格与 §N 免疫全部失效。
+    _is_appendix = ('Appendix' in _ch_name) or ('附录' in _ch_name) \
+        or (not str(ch)[:1].isdigit())
     letter_sub_blocks = {}   # parent(str) -> [(page, letter, title)]
     _appendix_letter_secs = []   # [(p, 'SEC', L, title)] 附录字母节升格行
     if any(r[1] == "SUB" for r in rows):
@@ -1332,6 +1375,29 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             entries.sort(key=lambda x: (x[0], x[1]))
             snode["letter_subs"] = [e[2] for e in entries]
 
+    # 4c) 🔴 manual_overrides 裁定条目优先于幻影子节：标题前置条目
+    # （"Yoneda Embedding 1.6.10 ..."）的号行会被 scan_skeleton 误读为
+    # 三段子节头（sec node "1.6.10"），而同号的真条目又经 overrides 回填
+    # ——若不清除幻影子节，同号在契约中出现两次（section + item），B 层
+    # 查重直接判顺序错乱。凡 overrides 键命中三段子节键且其父节存在
+    # （本书小节为两段号）→ 移除幻影子节，让 override 条目归位。
+    if manual:
+        for mo in manual:
+            mk = normkey(str(mo.get("key", "")))
+            # 幻影子节的键是点号形（OCR 原样 "1.6.10"），override 键归一为
+            # 短横形（"1.6-10"）——两种形态都要查。
+            for gk in {mk, mk.replace("-", ".")}:
+                if gk not in sec_nodes or len(re.findall(r"\d+", gk)) != 3:
+                    continue
+                ghost = sec_nodes.pop(gk)
+                if gk in all_sec_nums:
+                    all_sec_nums.remove(gk)
+                derived_sec_firstpage.pop(gk, None)
+                sec_pos.pop(gk, None)
+                for parent in list(sec_nodes.values()):
+                    if ghost in parent.get("sub_sec") or []:
+                        parent["sub_sec"].remove(ghost)
+
     # 5) 条目/练习挂到章节
     chapter_bucket = []  # 无章节可挂时归章级（置于最前）
 
@@ -1466,6 +1532,18 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     sub = chapter_bucket + ordered_secs
 
     ch_title = _chapter_title(cm, ch)
+    # 附录章名归一（命名单点）：契约章名约定 "{key} {title}"，下游
+    # render_draft/_final_md_name 据此渲染 "# Appendix A: title" /
+    # "AppendixA_title.md"。chapter_map 若登记 "Appendix A: Category Theory
+    # Language"（或 "附录A：…"），title 已含序标，直接拼接会得到双前缀
+    # "A Appendix A: …" → 渲染 "# Appendix A: Appendix A: …" / 文件名
+    # "AppendixA_Appendix_A.md"。故剥离 title 首部的 "Appendix {ch}" / "附录{ch}"
+    # （含冒号）；剥后为空（仅登记 "Appendix A"）时保留原样退化，不产生空标题。
+    _m_app = re.match(r'^\s*(?:appendi(?:x|ces)\s+%s|附录\s*%s)\b\s*[:：]?\s*(.*)$'
+                      % (re.escape(str(ch)), re.escape(str(ch))),
+                      ch_title or '', re.IGNORECASE)
+    if _m_app and _m_app.group(1).strip():
+        ch_title = _m_app.group(1).strip()
     ch_name = (f"{ch} {ch_title}".strip()) if ch_title else str(ch)
     chapter = _node(str(ch), "chapter", ch_name, start)
     chapter["sub_sec"] = sub
@@ -1485,7 +1563,9 @@ def main():
         print(__doc__)
         return 2
     ext = args[0]
-    want = [int(x) for x in args[1:]]
+    # 章号归一：数字章 → int，附录字母章（"A"/"B"…）保留原串。裸 int() 会让
+    # `build_structure <ext> A` 直接 ValueError（附录章无法定点重建）。
+    want = [norm_chapter_key(x) for x in args[1:]]
 
     # 🔒 上游闸：structure 依赖已修复的 page_*.json 与 config；MM Repair 未完成
     # （缺 _extraction_done.json）则禁止生成结构契约，否则会基于未修复页抽项，
@@ -1533,11 +1613,15 @@ def main():
     built = 0
     for ch in (want or sorted(rng, key=_chapter_sort_key)):
         if ch not in rng:
-            print("ch%-3s SKIP (not in chapter_map)" % ch)
+            print("%-9s SKIP (not in chapter_map)" % chapter_label(ch))
             continue
         start, end = rng[ch]
         manual = _loader_obj.manual_for_chapter(ch) if _loader_obj else None
-        chapter = build_chapter(ext, ch, start, end, book, cm, manual=manual)
+        # 附录章路由：ConfigLoader 在手时按章取配置——附录章（字母键或章名含
+        # Appendix/附录）由 config_for_chapter 切到 appendix_verify_config.json
+        # 的体例（如 ORDINAL_APP 字母章位），正文章零变化。
+        book_ch = _loader_obj.config_for_chapter(ch) if _loader_obj else book
+        chapter = build_chapter(ext, ch, start, end, book_ch, cm, manual=manual)
         node = StructureNode.from_dict(chapter)
         node.recompute_pages()
         out = chapter_json_path(ext, str(ch))
@@ -1550,9 +1634,9 @@ def main():
                      if _["type"] not in ("exercise", "section", "chapter"))
         n_ex = sum(1 for _ in _iter_items(chapter) if _["type"] == "exercise")
         n_sec = sum(1 for _ in _iter_items(chapter) if _["type"] == "section")
-        print("ch%-3s BUILD | sections=%d items=%d exercises=%d "
+        print("%-9s BUILD | sections=%d items=%d exercises=%d "
               "text=%d formula=%d image=%d proof=%d desc=%d noise=%d -> %s"
-              % (ch, n_sec, n_item, n_ex,
+              % (chapter_label(ch), n_sec, n_item, n_ex,
                  stats["text"], stats["formula"], stats["image"],
                  stats["proof"], stats["description"], stats["noise_dropped"],
                  os.path.basename(out)))

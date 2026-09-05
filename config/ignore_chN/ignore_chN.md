@@ -1,6 +1,6 @@
 # `ignore_ch{N}.json` / `ignore_fig_ch{N}.json` 配置说明
 
-> 每章一个的 verify 豁免配置文件，位于本书 `_extract/`。不进 skill 目录。`verify_chapter.py` 经 `--ignore <ext>/ignore_ch{N}.json`、`--ignore-figure <ext>/ignore_fig_ch{N}.json` 传入；脚本会自动合并同章两份文件（存在即读）。
+> 每章一个的 verify 豁免配置文件，位于本书 `_extract/`。不进 skill 目录。`verify_chapter.py` 经 `--ignore <ext>/ignore_ch{N}.json`、`--ignore-figure <ext>/ignore_fig_ch{N}.json` 传入；脚本会自动合并同章两份文件（存在即读）。**附录章**文件名段走 `chapter_label`：`ignore_appendix{X}.json`（X=A..Z），`manage_ignore.py --chapter A` 即读写该文件；"ch" 只属于数字章。
 
 ## 结构
 
@@ -57,7 +57,7 @@
     - 📌 **证据标记约定（强制）**：要让序列洞 ignore 走 ACCEPTED 而非 SUSPECT，其理由字符串**必须包含**上述四个标记之一（推荐开头写 `VERIFIED-SPARSE ...`）。原因须明确指出该节在源书中的真实编号断点（如「§4.9 实际编号 4.9-1、4.9-2，随后直接跳到 4.9-4，page_280 末为 4.9-2、page_281 起为 4.9-4 Definition」），使后续审计 / 人工复核可一键确认。
 - **B 层护栏**：`item_numbering_integrity` 的 `emit` 已加护栏——`ignore` 仅当被忽略编号在 .md 中**真实存在**（现令牌头）时才抑制；若被忽略的是序列洞（编号不存在），不再静默放行，而发出 `[IGNORE-SUSPECT]` 警告交由 agent 复核。
 - **写书前校验**：`check_structure_completeness.py` 会在报告中附 `ignore_audit` 字段（SUSPECT 数），CLI 输出 `IGNORE-AUDIT(suspect=N)`，便于写书前发现误用。
-- **🔴 B 层（D/B 结构完整性域）校验流程强制最后一步**：本审计只作用于**编号 ignore**（B 层 `item_numbering_integrity` 消费集合），是 D 层（§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，**不是对所有 17 层的全局末步**——Q 层 `formula.ignore`、E 层 `ignore_fig` 各有独立命名空间，不在此审计范围。`verify_chapter.py`（单章模式审该章、`--all` 模式审全书）已在 B 层收尾**自动执行本审计**，且仅当存在编号 ignore 时才生效（无编号 ignore 静默跳过）；出现 SUSPECT 时整体退出码非 0，校验不得判 PASS。即"有编号 ignore 的 D/B 校验流程就必须 agent 审计"不是建议而是流程硬步骤——登记 / 修改编号 ignore 后跑 `verify_chapter.py`，收尾的 `[IGNORE-AUDIT]` 报告即本步证据；SUSPECT 须先经 `manual_overrides` 补回或补举证再重验。
+- **🔴 B 层（D/B 结构完整性域）校验流程强制最后一步**：本审计只作用于**编号 ignore**（B 层 `item_numbering_integrity` 消费集合），是 D 层（§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，**不是对所有校验层的全局末步**——Q 层 `formula.ignore`、E 层 `ignore_fig` 各有独立命名空间，不在此审计范围。`verify_chapter.py`（单章模式审该章、`--all` 模式审全书）已在 B 层收尾**自动执行本审计**，且仅当存在编号 ignore 时才生效（无编号 ignore 静默跳过）；出现 SUSPECT 时整体退出码非 0，校验不得判 PASS。即"有编号 ignore 的 D/B 校验流程就必须 agent 审计"不是建议而是流程硬步骤——登记 / 修改编号 ignore 后跑 `verify_chapter.py`，收尾的 `[IGNORE-AUDIT]` 报告即本步证据；SUSPECT 须先经 `manual_overrides` 补回或补举证再重验。
 
 ## 维护脚本
 

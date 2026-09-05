@@ -84,7 +84,7 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 - 章节查漏复用 `section_continuity` 公共能力，与 verify 端同源。
 
 ### 产物
-`<extract_dir>/completeness_reports/ch<N>_completeness_report.json`，含：
+`<extract_dir>/completeness_reports/ch<N>_completeness_report.json`（附录章 `appendix<X>_completeness_report.json`，文件名段 = `chapter_label`），含：
 `contract_items / raw_items_scanned / raw_sections_present / missing_sections /
 missing_items[{key,label,page,snippet,canon,has_label,status}] / backfilled_items / backfilled_sections /
 section_detail{continuity,tail} / b_layer{blocking,b_gap_warnings,b_tail_warnings} /
@@ -105,12 +105,12 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
   "sub_sec": [ /* 仅 chapter / section 含此键，递归同结构 */ ]
 }
 ```
-- **顶层**为书对象（`key=-1, type=-1, name=<书名>, page_start/page_end=<全书起止页>），`sub_sec` 内按章顺序嵌套 `type:"chapter"` 节点；章/`section` 递归继续挂 `sub_sec`。全文件只有一个 JSON 对象，单文件承载全书章节。
+- **顶层即该章 `chapter` 节点（无书根包装）**；书根仅由 `BookStructure.load` 聚合各分章文件时在内存构造（`key=-1, type=-1`）。历史全书单文件 `book_structure.json` 已废弃、不读取。
 - **`name` 带序标**：序标位置随书（前/后皆可），与原文一致；只含标题不含正文内容。
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：叶子 `== page_start`；容器（chapter/section）取**末代子孙页**。
 
-### 内容块与派生节点（第 5 步产出，仅分章内容契约）
+### 内容块与派生节点（第 1 步随契约产出，仅分章内容契约）
 
 分章文件顶层即该章 `chapter` 节点；其 `sub_sec`（含章 / 节的 `sub_sec`）在**文档顺序**下混合四类元素：① 结构节点（与单文件同 schema）、② `description` 节点（描述信息，与定理同级）、③ `proof` 节点（证明，条目子节点）、④ 内容块（`text` / `formula`+`display` / `image`）。
 

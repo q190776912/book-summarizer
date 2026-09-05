@@ -25,7 +25,7 @@ registered in `verify/script/register_all.py` and orchestrated by
 Exit 0 only when there is NO truly-missing item AND NO B-layer blocking issue
 AND NO KaTeX error AND (if figure_index.json present) NO missing-figure gap AND
 NO invalid figure AND NO quote-block continuity gap (G-layer).
-Referenced by write-source 步骤 7（批量校验硬闸）。
+Referenced by write-source 步骤 8（批量校验硬闸）。
 """
 import os
 import sys
@@ -119,6 +119,9 @@ def _section_num_from_filename(fn):
     return sec
 
 
+from data.book_structure.book_structure import chapter_label
+
+
 def _appendix_letter(book_dir, ch):
     """Return 'A'..'Z' when the structure contract names chapter `ch`
     ``Appendix <L> ...`` (math-textbook back-matter units), else None.
@@ -203,7 +206,7 @@ def _merge_section_files(section_files):
 
 def _merged_temp_path(book_dir, ch, section_files):
     """Write merged chapter content to a temp file and return its path."""
-    tmp = os.path.join(book_dir, f'._verify_merged_ch{ch}.md')
+    tmp = os.path.join(book_dir, f'._verify_merged_{chapter_label(ch)}.md')
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(_merge_section_files(section_files))
     return tmp
@@ -356,7 +359,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
 
         groups = chapter_md_groups(book_dir, ch)
         if not groups:
-            print(f"Ch{ch}: SKIP — no .md file found")
+            print(f"{chapter_label(ch)}: SKIP — no .md file found")
             continue
 
         for grp in groups:
@@ -423,7 +426,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
         qf = len(r.get('q_fabricated', []) or [])
         qi = len(r.get('q_inconsistent', []) or [])
         qm = len(r.get('q_missing', []) or [])
-        print(f"  Ch{str(r['ch']):>2s}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
+        print(f"  {chapter_label(r['ch']):>9s}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
               f"FgMiss:{fgmiss} FgInv:{fginv} F:{f_n} Osub:{osub} "
               f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
 
@@ -583,7 +586,7 @@ def _main_impl():
             if len(pos_pf) < 5:
                 print("Usage: verify_chapter.py --preflight <ch> <start> <end> <md_file> <extract_dir>")
                 sys.exit(2)
-            ok = print_preflight([_norm_win(pos_pf[3])], label='ch%s' % pos_pf[0])
+            ok = print_preflight([_norm_win(pos_pf[3])], label=chapter_label(pos_pf[0]))
         sys.exit(0 if ok else 1)
 
     # --all mode: verify all chapters
@@ -654,7 +657,7 @@ def _main_impl():
               "[--manual overrides.json] [--ignore noise.json] [--ignore-figure fig_noise.json]")
         print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json]")
         print("  <extract_dir> is REQUIRED — the book's _extract folder (e.g. D:\\study\\book\\<书名>\\_extract).")
-        print("  --manual: path to manual_overrides_ch{N}.json (added to extract_items items)")
+        print("  --manual: path to manual_overrides_ch{N}.json / manual_overrides_appendix{X}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
         print("  --fix: 已默认禁用（2026-08-28）。须与 --fix-force 同用才执行全层自动修复")
@@ -668,7 +671,10 @@ def _main_impl():
 
     manual_path = _flag_value('--manual')
 
-    ch = int(args[0]); start = int(args[1]); end = int(args[2])
+    # 章号归一：数字章 → int，附录字母章（"A"/"B"…）保留原串（裸 int() 会对
+    # 附录章 ValueError，单章校验无法定点跑附录）。
+    from data.book_structure.book_structure import norm_chapter_key
+    ch = norm_chapter_key(args[0]); start = int(args[1]); end = int(args[2])
     md = args[3]
     ext = _norm_win(args[4])
     book_dir_single = os.path.dirname(ext) if ext else None
@@ -680,7 +686,7 @@ def _main_impl():
             res = fix_all_layers(md, book_dir=book_dir_single, force=True)
             parts = [f"{k}={v}" for k, v in res.items() if v > 0]
             if parts:
-                print(f"[FIX] Ch{ch}: {', '.join(parts)}")
+                print(f"[FIX] {chapter_label(ch)}: {', '.join(parts)}")
         else:
             print("[FIX] 未执行：PREFLIGHT 门未通过。")
     r = verify_one(ch, start, end, md, ext, book_dir_single, extra_ignore=extra_ignore)

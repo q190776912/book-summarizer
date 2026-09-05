@@ -21,7 +21,7 @@
 
 ---
 
-## 单元化写作流程（write-source 步骤 4–6，2026-08-31 起）
+## 单元化写作流程（write-source 步骤 4–7，2026-08-31 起；步骤 6 = 英文书翻译单元）
 
 > 写源阶段不再基于「整章草稿」写作，而是**以拆分出的单元为底稿，在步骤 5
 > 逐个改好**。步骤 6 只是纯脚本拼接，**不再需要 agent 参与**。
@@ -41,12 +41,12 @@
   - **裸数学/箭头**：`katex_heuristics.find_bare_math_errors` / `find_raw_arrow_errors`
     （同 verify F 层）
   - **证明过长**：`verbose_gates.check_verbose_proofs`（同 verify P 层）
-  - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify H 层）
-  - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
+  - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify F 层，fixer 代号 H）
+  - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify F 层，fixer 代号 G）
   - **OCR 残留**：verify 不覆盖的 OCR 公式模式（`\ensuremath` `\pmb` 等）由薄封装补充
   ——拦模型瞎改就标 DONE。只有全部单元都改对（每个 item 都不漏）才 exit 0，否则列出
-  未达标清单。未过 gate 严禁进入步骤 6 拼接。
-- **拼接**（步骤 6，纯脚本无 agent）：`merge_units.py` 按 manifest 顺序合并全部
+  未达标清单。未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。
+- **拼接**（步骤 7，纯脚本无 agent）：`merge_units.py` 按 manifest 顺序合并全部
   单元为最终 `ChapterN_*.md` / `第N章_*.md`，并按本文件 [V-F](#v-f-格式与块引用f-层母文档)
   规则重建条目级 `---` 分隔线（节标题前 / item↔item / item↔desc 之间加 `---`；
   章/节标题之下第一元素、连续 desc 不加；堆叠 `---` 自动合并）。
@@ -297,8 +297,8 @@ Common patterns (after correction):
 - **例与证明分两行（同一连续块引用内）**：`> **例**` 行只含例子描述，其证明必须另起 `> **证明梗概**：` 行，不得同行（同行导致块内换行困难、校验难定位）。
 - **连续例必须在顶层用 `---` 分隔**：即使多个例共享同一 `>` 块（续行连接），每个 `> **例**` 之间也须用顶层 `---` + 空行断开，每个例独占独立块引用（否则 I 层漏检、阅读看不出边界）。
 - **例块连续性**：例的陈述与证明必须在同一连续 blockquote 中，禁止裸空行（无 `>` 的纯空行）或裸 `$$`（无 `>` 的展示公式）打断；需留白用 `>`（空引用行），需公式用 `> $$`。
-- **半包例子可自动修复**：若例子头带了 `>` 但正文（方程组/文字）留在顶层裸奔（即"只有第一行有 `>`"），属半包缺陷。`tools/wrap_examples_bq.py` 与 `verify --fix` 的 G 层 fixer 现均能识别并整段收进 `>` 块（幂等；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）；但 G 层 DETECTOR（`check_g_quote_continuity`）会先判 FAIL，需跑 `--fix`（强制启用）或该工具修复。`wrap_examples_bq` 旧版只匹配顶层 `**例/Example**` 头、会跳过已带 `>` 的头导致永远修不动，此盲区已在两处脚本修正。
-- **证明块下方缺 `---` 可自动修复（中英文 Proof 均识别）**：`> **证明**` / `> **Proof sketch**` 等证明块（正文已整体在 `>` 内）结束后，若紧接描述性散文而无 `---` 分隔（视觉上"证明像吞了后续描述"），`verify --fix` 的 G 层 fixer（`fix_blockquote_continuity._ensure_proof_separator`）会自动在证明块下方插 `---`（幂等，重跑不重复插入；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。证明检测已双语化：`bq_core.PROOF_RE`/`PROF_LINE_RE`/`NESTED_BQ_RE`、`struct_labels.G_PF_RE`、`fix_blockquote_continuity._SAME_LINE_EX_PROOF_RE` 现均覆盖 中文 证明/证明思路/证明梗概/证明概要 与 英文 Proof/Proof sketch/Proof outline/Proof of …；块扩展遇到新的 `>` item 头（例/Proof/定理等）即停止，避免把后续例块吞入证明。
+- **半包例子可自动修复**：若例子头带了 `>` 但正文（方程组/文字）留在顶层裸奔（即"只有第一行有 `>`"），属半包缺陷。`tools/wrap_examples_bq.py` 与 `verify --fix` 的 F 层 fixer（代号 G）现均能识别并整段收进 `>` 块（幂等；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）；但 G 层 DETECTOR（`check_g_quote_continuity`）会先判 FAIL，需跑 `--fix`（强制启用）或该工具修复。`wrap_examples_bq` 旧版只匹配顶层 `**例/Example**` 头、会跳过已带 `>` 的头导致永远修不动，此盲区已在两处脚本修正。
+- **证明块下方缺 `---` 可自动修复（中英文 Proof 均识别）**：`> **证明**` / `> **Proof sketch**` 等证明块（正文已整体在 `>` 内）结束后，若紧接描述性散文而无 `---` 分隔（视觉上"证明像吞了后续描述"），`verify --fix` 的 F 层 fixer（代号 G；`fix_blockquote_continuity._ensure_proof_separator`）会自动在证明块下方插 `---`（幂等，重跑不重复插入；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。证明检测已双语化：`bq_core.PROOF_RE`/`PROF_LINE_RE`/`NESTED_BQ_RE`、`struct_labels.G_PF_RE`、`fix_blockquote_continuity._SAME_LINE_EX_PROOF_RE` 现均覆盖 中文 证明/证明思路/证明梗概/证明概要 与 英文 Proof/Proof sketch/Proof outline/Proof of …；块扩展遇到新的 `>` item 头（例/Proof/定理等）即停止，避免把后续例块吞入证明。
 
 ### V-K KaTeX 规则与公式序标（F 层 C 子层 + Q 层）
 
@@ -375,9 +375,7 @@ Common patterns (after correction):
 
 - **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](_extract/figure/ch01_...png)`（2026-09-01 起 figure 已在书根，勿加 `_extract/` 前缀）。
 
-- **机器兜底与已知坑**（写源避坑即可，无需手跑）：
-  - `flows/script/embed_figures.py`（write-source 步骤 3 强制脚本）会自动：块内缩进（顶层 `<img>` 补 `>`）、连续性修复（块内裸空行转 `> `）、flex 包装；三步幂等。
-  - **已知遗留**：顶层图片 `</div>` 后不会自动补空行，会导致 C 层报 "missing blank line after `</div>`"——手动在 `</div>` 与 `---` 间补一个空行即可（块内 `> </div>` 形态无需处理）。
+- **现状（2026-08-29 嵌图子流程废弃）**：图片经内容化契约的 image 块随单元继承，格式由 `render_draft.py` / `merge_units.py` 渲染；`flows/script/embed_figures.py` 仅存留作格式逻辑参考，不再是流程步骤。手写时仍须遵守本节块引用与分隔规则。
 
 ### V-M OCR 漏标条目处理
 
@@ -399,7 +397,7 @@ Common patterns (after correction):
 | **D**（section-continuity） | [V-S](#v-s-结构完整性d--b--o-层)：所有源有节落地、不得断/缺、无序号标书按位置比 | `verify/section_continuity/section_continuity.md` |
 | **B**（item_numbering_integrity） | [V-I](#v-i-编号项收录b-层--硬性要求-3-5) + [V-S](#v-s-结构完整性d--b--o-层)：条目必录、不编造、首项+连续性、顺序单调不减、ignore 审计铁律 | `verify/item_numbering_integrity/item_numbering_integrity.md` |
 | **O**（subitem_continuity） | [V-S](#v-s-结构完整性d--b--o-层)：块内子编号连续 | `verify/subitem_continuity/subitem_continuity.md` |
-| **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、`_extract/` 路径 | `verify/figure_completeness/figure_completeness.md` |
+| **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、书根相对 `figure/` 路径 | `verify/figure_completeness/figure_completeness.md` |
 | **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档) + [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
 | **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 已并入 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
 | **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号暂 FAIL | `verify/formula_tag/formula_tag.md` |

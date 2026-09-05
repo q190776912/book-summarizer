@@ -148,11 +148,12 @@ def assign_chapter(det_all, ch, start, end, out_dir):
     the list of assigned entries (label-filled) for this chapter."""
     fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     def _ch_tag(c):
-        # 章号文件名标签：数字章补零两位，字母章（附录 A/B…）原样大写
+        # 章号文件名标签（chapter_label 同判据）：数字章 "ch" + 补零两位，
+        # 附录字母章（附录 A/B…）为 "appendix" + 大写字母——附录不叫 ch。
         try:
-            return f"{int(c):02d}"
+            return f"ch{int(c):02d}"
         except (TypeError, ValueError):
-            return str(c).upper()
+            return f"appendix{str(c).upper()}"
 
     _tag = _ch_tag(ch)
     os.makedirs(fig_dir, exist_ok=True)
@@ -169,7 +170,7 @@ def assign_chapter(det_all, ch, start, end, out_dir):
     existing_idx = load_figure_index(out_dir)
     protected = {e["file"] for e in existing_idx
                  if e.get("chapter") == ch and e.get("source") == "manual"}
-    for f in glob.glob(os.path.join(fig_dir, f"ch{_tag}_*")):
+    for f in glob.glob(os.path.join(fig_dir, f"{_tag}_*")):
         rel = "figure/" + os.path.basename(f)
         if rel not in protected:
             try:
@@ -196,10 +197,10 @@ def assign_chapter(det_all, ch, start, end, out_dir):
                 used_refs.add(used_refs_add)
 
         if label:
-            base = f"ch{_tag}_fig{label}.png"
+            base = f"{_tag}_fig{label}.png"
         else:
             unnamed_k += 1
-            base = f"ch{_tag}_unnamed_{unnamed_k:02d}.png"
+            base = f"{_tag}_unnamed_{unnamed_k:02d}.png"
 
         src = os.path.join(fig_dir, os.path.basename(det["file"]))
         dst = os.path.join(fig_dir, base)
@@ -215,9 +216,9 @@ def assign_chapter(det_all, ch, start, end, out_dir):
                     continue
                 # duplicate label from two detections -> _2 suffix
                 k = 2
-                while os.path.exists(os.path.join(fig_dir, f"ch{_tag}_fig{label}_{k}.png")):
+                while os.path.exists(os.path.join(fig_dir, f"{_tag}_fig{label}_{k}.png")):
                     k += 1
-                base = f"ch{_tag}_fig{label}_{k}.png"
+                base = f"{_tag}_fig{label}_{k}.png"
                 dst = os.path.join(fig_dir, base)
             os.rename(src, dst)
 

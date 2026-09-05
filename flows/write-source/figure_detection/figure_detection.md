@@ -17,7 +17,7 @@
    - 图号前缀由 `verify_config.json` 的 `ordinal` Figure 组决定（`lib.figure_io.load_fig_labels` 从 Figure 组 `name` 读取）；**带序标（图 X.X / Fig X.X / Scheme X.X 等）的图，会把其下方 caption（标号 + 说明）一并裁入同一张图；无标号 caption 的图只裁图本身**（"有标号才一起扣、没标号就算"）。
    - 公式 / 文本框**不裁**（extract 文本阶段已用 MFD + PaddleOCR 覆盖，模型不同）。
 2. **分配（assignment）**：`python assign_figures.py <pdf> --out <extract> --book`
-   - 读 `figure_detect.json` + 章内 OCR 图注，给每张检测到的图赋语义号：优先从 caption 文本提 `图X.X.X`，否则同页最近 `图X.X.X` 位置匹配；匹配到的重命名为 `figure/chNN_figX.X.X.png`，未匹配为 `figure/chNN_unnamed_K.png`，写出 `figure_index.json` + `figure_index.md`。
+   - 读 `figure_detect.json` + 章内 OCR 图注，给每张检测到的图赋语义号：优先从 caption 文本提 `图X.X.X`，否则同页最近 `图X.X.X` 位置匹配；匹配到的重命名为 `figure/chNN_figX.X.X.png`（附录章 `figure/appendix{X}_figX.X.X.png`），未匹配为 `figure/chNN_unnamed_K.png`（附录章 `appendix{X}_unnamed_K.png`），写出 `figure_index.json` + `figure_index.md`。
 
 ## 本阶段规则（🔴 内联）
 - **规则1 — Figure 组必须显式配置（最高优先级）**：图号前缀由 `ordinal` 的 Figure 组 `name` 决定，因此该组**强制显式**——自定义前缀→Figure 组 `name` 非空、无图序标→不放 Figure 组（回落默认）或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"。Figure 组 `name` 决定图号前缀识别：缺组则退化默认前缀，自定义前缀书的 caption 合并会漏；显式空数组 `[]` 标记则表示"本书确无图号"，下游返回零匹配、不会误匹配默认 `Figure`/`图` 等词。

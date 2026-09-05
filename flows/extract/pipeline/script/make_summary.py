@@ -106,7 +106,9 @@ def main():
         for f in fails:
             detail = (f"M={f.get('M')} B={f.get('B')} K={f.get('K')} Dmiss={f.get('Dmiss')} "
                       f"G={f.get('G')} EG={f.get('EG')} FgMiss={f.get('FgMiss')} FgInv={f.get('FgInv')}")
-            lines.append(f"- 第{f['ch']}章 ({f['file']}): {detail}")
+            _ch = f.get("ch")
+            _ch_disp = (f"第{_ch}章" if str(_ch)[:1].isdigit() else f"附录{_ch}")
+            lines.append(f"- {_ch_disp} ({f['file']}): {detail}")
         lines.append("")
     if not any_fail:
         lines.append("_无未通过章节_")

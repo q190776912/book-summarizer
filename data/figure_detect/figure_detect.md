@@ -3,9 +3,9 @@
 PDF 抽取阶段 1 的**原始检测**记录，由图检测模型（MFD）逐页产出，按章增量追加。
 
 ## 生成脚本
-- **无 in-skill 构造器**：`figure_detect.json` 由外部图检测工具（MFD / PDF-Extract-Kit）产出，
-  本 skill **仅消费**它 —— `build_figure_index.py` 读取它来合成 `figure_index.json`，并不写出它。
-- 落盘：`<book>/_extract/figure_detect.json`（外部工具写出，非本 skill 生成）。
+- **构造器**：`figure_detect.json` 由 in-skill `flows/script/extract_figures.py` 的检测阶段写出（底层用 PDF-Extract-Kit / MFD 权重），
+  随后由 `build_figure_index.py` 读取它来合成 `figure_index.json`。
+- 落盘：`<book>/_extract/figure_detect.json`（`extract_figures.py` 检测阶段写出）。
 
 ## 数据结构（每条约）
 ```json

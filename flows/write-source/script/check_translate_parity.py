@@ -48,7 +48,7 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import list_chapter_keys
+from data.book_structure.book_structure import chapter_label, list_chapter_keys, unit_dir_name
 import split_draft_units as _split
 import gate_units as _gate
 
@@ -109,14 +109,14 @@ def _collect(body, rx):
 
 def check_chapter_parity(ext, ch_key):
     """比对单章源单元与翻译单元。返回 (ok, problems)。"""
-    src_dir = os.path.join(ext, _ac.OUT_DIR_NAME, SRC_SUB, _split.UNITS_DIR % ch_key)
-    tgt_dir = os.path.join(ext, _ac.OUT_DIR_NAME, TGT_SUB, _split.UNITS_DIR % ch_key)
+    src_dir = os.path.join(ext, _ac.OUT_DIR_NAME, SRC_SUB, unit_dir_name(ch_key))
+    tgt_dir = os.path.join(ext, _ac.OUT_DIR_NAME, TGT_SUB, unit_dir_name(ch_key))
     problems = []
     if not os.path.isdir(tgt_dir):
-        return False, ["ch%s 缺 units-translate 目录（先跑 init_translate_units.py 初始化清单）。" % ch_key]
+        return False, ["%s 缺 units-translate 目录（先跑 init_translate_units.py 初始化清单）。" % chapter_label(ch_key)]
     smp, tmp = (os.path.join(d, "manifest.json") for d in (src_dir, tgt_dir))
     if not (os.path.exists(smp) and os.path.exists(tmp)):
-        return False, ["ch%s 源/译 manifest.json 缺失。" % ch_key]
+        return False, ["%s 源/译 manifest.json 缺失。" % chapter_label(ch_key)]
     with open(smp, encoding="utf-8") as f:
         src_m = json.load(f)
     with open(tmp, encoding="utf-8") as f:
@@ -177,8 +177,8 @@ def check_chapter_parity(ext, ch_key):
 
     if problems:
         return False, problems
-    return True, ["ch%s 翻译同构通过：%d 个单元（tag / 图 / 节号 / 条目号 / 无漂移）"
-                  % (ch_key, len(su))]
+    return True, ["%s 翻译同构通过：%d 个单元（tag / 图 / 节号 / 条目号 / 无漂移）"
+                  % (chapter_label(ch_key), len(su))]
 
 
 def main():
@@ -203,7 +203,7 @@ def main():
             print("[PASS] " + detail[0])
         else:
             all_ok = False
-            print("[FAIL] ch%s 翻译同构未通过（%d 处）：" % (k, len(detail)))
+            print("[FAIL] %s 翻译同构未通过（%d 处）：" % (chapter_label(k), len(detail)))
             for d in detail[:40]:
                 print("  - " + d)
             if len(detail) > 40:

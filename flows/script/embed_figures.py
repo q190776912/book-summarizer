@@ -677,7 +677,8 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
 
         if not dry_run:
             write_lines(p, lines)
-        print(f"[ch{ch}] {'DRY ' if dry_run else ''}embedded {len(ins)} new figure(s) "
+        _ch_disp = f"ch{ch}" if str(ch)[:1].isdigit() else f"appendix{ch}"
+        print(f"[{_ch_disp}] {'DRY ' if dry_run else ''}embedded {len(ins)} new figure(s) "
               f"into {os.path.basename(p)}"
               + (f"; scan: {n_indent} in-block indent, {n_cont} continuity fix, {n_sbs} side-by-side" if do_scan else ""))
         total_ins.extend(ins)
@@ -741,7 +742,8 @@ def main():
         total_placed += len(ins)
         total_skip += len(skipped)
         for fname, reason in skipped:
-            print(f"  skip ch{ch}: {fname} -> {reason}")
+            _ch_disp = f"ch{ch}" if str(ch)[:1].isdigit() else f"appendix{ch}"
+            print(f"  skip {_ch_disp}: {fname} -> {reason}")
 
     print(f"\nNewly placed: {total_placed}; Skipped (no ref / already present): {total_skip}")
 

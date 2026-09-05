@@ -6,8 +6,8 @@
 
 - PDF 文本提取（MFD 公式检测 → MFR 公式识别 → OCR 正文）→ MM Repair 修复 OCR 噪声
 - 章节骨架扫描 + 编号条目抽取 + 内容挂载 → 分章契约 `book_structure/ch{N}.json`（写作契约）
-- 按契约写源语言初稿 → 派生翻译版 → 多层校验（结构 / 编号 / 格式 / KaTeX / 公式对账）至 PASS
-- 图检测 + 分配 + 嵌图（DocLayout-YOLO）
+- 按契约逐单元写源语言稿 →（英文书）逐单元翻译（1:1 同构闸）→ 拼接源+译两版 → 多层校验（结构 / 编号 / 格式 / KaTeX / 公式对账）至 PASS
+- 图检测 + 分配（DocLayout-YOLO；图片经契约 image 块随单元继承，嵌图子流程已废弃）
 
 ## 前置要求（Windows）
 
@@ -57,13 +57,15 @@
 python tools/flow_runner.py run "<corpus_root>/<书名>" prep env
 python tools/flow_runner.py run "<corpus_root>/<书名>" extract place_pdf
 python tools/flow_runner.py run "<corpus_root>/<书名>" extract extract_text   # 后台提取（Windows 用 PowerShell 启动写法，见 extract.md）
-# ... extract.mm_repair → write_source: config（chapter_map + verify_config）→ figure_detection → structure（完整性闸门）→ draft（基本总结草稿）
+# ... extract.mm_repair → write_source: config → build_chapter_map（OCR 证据算章界）→ figure_detection → structure（完整性闸门）→ draft（拆分单元，每 item 一单元）
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source config
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source build_chapter_map
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source figure_detection
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source structure
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source draft
-# 3. 写源语言初稿 →（仅英文书）逐单元翻译 → 拼接源+译两版 → 批量校验（一次覆盖两版）
+# 3. 逐单元改好 →（仅英文书）逐单元翻译 → 拼接源+译两版 → 批量校验（一次覆盖两版）
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source write_chapters
+python tools/flow_runner.py run "<corpus_root>/<书名>" write_source translate_chapters   # 仅英文书
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source merge_all
 python tools/flow_runner.py run "<corpus_root>/<书名>" write_source verify_source
 ```

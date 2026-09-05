@@ -3,7 +3,7 @@
 背景（2026-08-31 用户需求重构）
 ------------------------------
 拆分脚本 ``split_draft_units.py`` 把整章草稿切成按写作顺序的单元文件
-（``units/ch{N}/NNNN_<type>.md``，4 位编号）；agent 经 ``gate_units.py`` 强制门控逐个改好后，
+（``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章目录 ``units/appendix{X}/``）；agent 经 ``gate_units.py`` 强制门控逐个改好后，
 本脚本把这些单元**按 manifest 顺序拼接**成最终的源语言章 md
 （``ChapterN_*.md`` / ``第N章_*.md``），并按 ``docs/writing-rules.md`` V-F 的
 「条目级 ``---`` 分隔线」规则在单元之间重建分隔线。
@@ -63,7 +63,7 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import chapter_json_path
+from data.book_structure.book_structure import chapter_json_path, chapter_label, unit_dir_name
 import render_draft as _rd
 import split_draft_units as _split
 import gate_units as _gate
@@ -114,18 +114,18 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
     缺失）即**直接抛错拒绝拼接**，防止 agent 绕过门控直接 merge。仅调试场景
     可传 ``require_gate=False`` 跳过。
     """
-    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, _split.UNITS_DIR % ch_key)
+    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(ch_key))
     mpath = os.path.join(out_dir, "manifest.json")
     if not os.path.exists(mpath):
-        raise SystemExit("[merge_units] ch%s 缺 %s/manifest.json（先 "
-                         "split_draft_units / init_translate_units 初始化清单）。" % (ch_key, units_sub))
+        raise SystemExit("[merge_units] %s 缺 %s/manifest.json（先 "
+                         "split_draft_units / init_translate_units 初始化清单）。" % (chapter_label(ch_key), units_sub))
     if require_gate:
         ok_g, gdet = _gate.gate_chapter(ext, ch_key, units_sub=units_sub)
         if not ok_g:
             raise SystemExit(
-                "[merge_units] 🔴 强制门控未通过（ch%s / %s），拒绝拼接：\n%s\n"
+                "[merge_units] 🔴 强制门控未通过（%s / %s），拒绝拼接：\n%s\n"
                 "须先把全部单元按 writing-rules 改好 / 译好（首行 DONE + 质量校验通过）、"
-                "重跑 gate_units 通过后再 merge。" % (ch_key, units_sub, gdet))
+                "重跑 gate_units 通过后再 merge。" % (chapter_label(ch_key), units_sub, gdet))
     with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     language = manifest.get("language") or "cn"
@@ -148,8 +148,8 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
     for u in manifest.get("units") or []:
         up = os.path.join(out_dir, u["file"])
         if not os.path.exists(up):
-            raise SystemExit("[merge_units] ch%s 缺单元文件 %s（须先 gate_units 门控）。"
-                             % (ch_key, u["file"]))
+            raise SystemExit("[merge_units] %s 缺单元文件 %s（须先 gate_units 门控）。"
+                             % (chapter_label(ch_key), u["file"]))
         utype = u["type"]
         body = _read_body(up)
         # 分隔线状态机（V-F：条目级 ---，标题下第一元素不加）
@@ -181,7 +181,7 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
         lines = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in lines]
     with open(out_md, "w", encoding="utf-8") as f:
         f.write("\n".join(lines).rstrip() + "\n")
-    print("[merge_units] ch%s (%s) -> %s" % (ch_key, units_sub, out_md))
+    print("[merge_units] %s (%s) -> %s" % (chapter_label(ch_key), units_sub, out_md))
     return out_md
 
 
@@ -210,14 +210,14 @@ def main():
         fails, done, skipped = [], 0, 0
         for k in list_chapter_keys(ext):
             if units_sub != "units" and not os.path.exists(os.path.join(
-                    ext, _ac.OUT_DIR_NAME, units_sub, _split.UNITS_DIR % k, "manifest.json")):
+                    ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(k), "manifest.json")):
                 skipped += 1
                 continue
             try:
                 merge_chapter(ext, k, out_md=None, clean_cjk=clean_cjk, units_sub=units_sub)
                 done += 1
             except SystemExit as e:
-                print("[merge_units] ch%s 拼接失败: %s" % (k, e))
+                print("[merge_units] %s 拼接失败: %s" % (chapter_label(k), e))
                 fails.append(k)
         if fails:
             print("[merge_units] 🔴 %d 章拼接失败: %s（须修复单元后重跑）" % (len(fails), fails))

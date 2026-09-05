@@ -3,7 +3,7 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-在 extract 的 **MM Repair 全部完成**后（文本提取 100% 且全部稳定批次经模式 A+B 已 `mm_repair_apply` 写回 `page_*.json`；若用户拒绝视觉识别则模式 A 由模式 B / `MM_UNAVAILABLE` 替代，见 [`extract/mm_repair`](../mm_repair/mm_repair.md) Step 1；完成标记 `_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性完成两件事：
+在 extract 的 **MM Repair 全部完成**后（文本提取 100% 且全部稳定批次经模式 A+B 已 `mm_repair_apply` 写回 `page_*.json`；若用户拒绝视觉识别则模式 A 由模式 B / `MM_UNAVAILABLE` 替代，见 [`extract/mm_repair`](../../extract/mm_repair/mm_repair.md) Step 1；完成标记 `_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性完成两件事：
 
 1. **建章节映射** `_extract/chapter_map.json`（Step 1，统一在本阶段生成，不再轮询期间早建）；
 2. **生成书级配置** `_extract/verify_config.json`（Step 2–3）——它是 `verify_chapter.py` / `flows/write-source/structure/script/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。
@@ -27,7 +27,7 @@
      python tools/build_chapter_map.py <extract_dir>
      ```
      它扫描 `page_*.json` 自动定位每章真实起点（"Chapter N" 标题匹配 / 裸标题回退）、推断 `end`（下一章起点-1），写回 `chapter_map.json` 并产出 `chapter_map.build_report.md` 供 agent 判断。
-   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；但 agent **不再手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../../data/chapter_map/chapter_map.md)）。
+   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；但 agent **不再手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../data/chapter_map/chapter_map.md)）。
    - 它是后续"某章是否已可写"、`make_config.py` 编号判定（罗马数字章号 / 每章 `ordinal` / `chapter_first`）、figure 按章分配与 `build_structure` 页区间读取的**唯一判定依据**。
    - 🔴 **生成后 agent 判断（强制）**：读 `chapter_map.build_report.md`——确认 `CORRECTED` 值；若有 `UNDTECTED` 章（检测器未能从 OCR 定位起点），在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具。全章 `start`/`end` 非 null 才放行进入 Step 2–3 与下游 write-source（与"规则 B：暴露真实缺陷、禁止掩盖"一脉相承）。
 
@@ -70,13 +70,14 @@
   - `UNDTECTED` 章（检测器未能从 OCR 定位起点）→ **必须**在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具；
   - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成，不再有独立的校验脚本闸步。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `ordinal` 必须含 Figure 组（自定义前缀→`name` 非空、无图序标→不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
-- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–9，原 7 已并入 4）。
+- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–9，原 7 已并入 4；**附录字母章位三级 = 13**，见该文档 §附录专用配置）。
+- **附录与正文体例不一致**：若本书附录编号体例与正文不同（如正文数字三级 `Theorem 10.9.13`、附录字母章位 `Definition A.1.1`），`make_config.py` 会**只扫附录页区间**额外生成 `_extract/appendix_verify_config.json`（`ConfigLoader` 对附录章自动路由到此文件，正文零回归）。若附录与正文同体例则**不生成**该文件（回退主配置）。`chapter_map.json` 中附录章须以字母章号（`"ch": "A"`）或章名含 `Appendix`/`附录` 登记，否则检测器无法识别其为附录。详见 [`../../../config/verify_config/verify_config.md` §附录专用配置](../../../config/verify_config/verify_config.md)。
 
 ## 出口条件
 - 出口：`_extract/chapter_map.json` 存在且含章节（作为 make_config 编号判定与下游页区间依据，先行产出）；`_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式；**`ordinal` 含 Figure 组必现**——有自定义前缀则 Figure 组 `name` 非空、无图序标则不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
 
 ## 相关代码（路径相对 skill 根目录）
-- `../../../../data/chapter_map/chapter_map.py`：chapter_map 模板工具（数据结构见 `../../../../data/chapter_map/chapter_map.md`）。
+- `data/chapter_map/chapter_map.py`：chapter_map 模板工具（数据结构见 `data/chapter_map/chapter_map.md`，相对本文件 `../../../data/chapter_map/`）。
 - `../../../config/verify_config/make_config.py`：半自动配置生成（**公用配置脚本**，与流程解耦，说明见 `../../../config/verify_config/verify_config.md`）。
 - `../../../verify/script/verify_chapter.py`：消费配置做校验（`ConfigLoader.require_complete()`）。
 - `../../../config/verify_config/verify_config.py`：`BookConfig` / `GroupConfig` 数据模型（schema 实现 SSOT）。

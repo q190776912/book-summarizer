@@ -43,7 +43,10 @@ from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 def _dispatch_items(ctx):
     """编号项来源：统一读分章契约（structure 产物，SSOT，经 BookStructure.load 聚合为书对象）。
     旧书须先重跑 build_structure 生成 JSON，不再回退抽取器（无兼容性代码）。"""
-    items = read_structure_items(ctx.ext_dir, ctx.ch)
+    # primary_type 透传：附录章（ORDINAL_APP / type 13）据此把字母章位键
+    # `A.1.1` 规范化成 `定义A.1-1`；其余书零影响。
+    items = read_structure_items(ctx.ext_dir, ctx.ch,
+                                 primary_type=getattr(ctx.config, 'primary_type', None))
     if items is None:
         # 旧书未生成 JSON：不保留兼容性代码。verify 前应先对本书跑 build_structure；
         # 此处给空列表，由 B 层如实报「缺失项」提示该书尚未生成契约。

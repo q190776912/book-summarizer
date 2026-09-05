@@ -33,6 +33,25 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set, Union
 
 
+# --- 附录专用配置（appendix-prefixed book config） -------------------------
+# 一些书的附录与正文体例不一致（章位是字母而非数字、标签词不同、小节层级不同、
+# 计数器重置边界不同……），把两者的编号约定挤进同一份 `verify_config.json` 必然
+# 顾此失彼（要么正文假红、要么附录假绿）。因此允许（且推荐）为附录单独落一份
+# 同名前缀配置：
+#
+#     <extract_dir>/appendix_verify_config.json
+#
+# 语义：
+#   * 文件**缺失** → 附录章回退主配置，行为与今天完全一致（零回归）；
+#   * 文件**存在** → 附录章（字母章号 A/B/C…、或章名含 Appendix/附录 的章）
+#     一律走这份配置；正文章不受影响。
+# 生成：由 `config/verify_config/make_config.py` 只扫附录页区间产出（须人工核对）。
+APPENDIX_CONFIG_NAME = 'appendix_verify_config.json'
+# 附录章名识别（章名口径；字母章号另有 `is_appendix_chapter` 的键形判据）。
+APPENDIX_NAME_RE = re.compile(r'(?:^|[^A-Za-z])(?:appendix|appendices)\b|附录',
+                              re.IGNORECASE)
+
+
 class ConfigError(Exception):
     """Raised when the per-book verify configuration is incomplete/invalid.
 
@@ -101,22 +120,38 @@ ORDINAL_HUM = 12             # EN subsection-keyed BARE/LETTER items (Humphreys�
                           #   sections_global=true），节头原书印裸 "9. Axiomatics" 形态
                           #   （无 § 前缀），由 scan_skeleton 的 SEC_GLOBAL_PLAIN 分支识别。
 
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12)
+ORDINAL_APP = 13              # APPENDIX LETTER-CHAPTER three-level (附录体例).
+                              #   附录的章位是**字母**而非数字：条目形如
+                              #   `Definition A.1.1` / `Examples A.1.3` / `A.1.5` /
+                              #   `Theorem A.6.2`（章位 A/B/C… + 节.号 两段数字），
+                              #   节标题形如 `A.1 Categories` / `A.6 Adjoint Functors`。
+                              #   Weibel《An Introduction to Homological Algebra》
+                              #   Appendix A 即此体例——其正文是数字三级
+                              #   （`Theorem 10.9.13`，type 3），附录却换成字母章位，
+                              #   这正是「附录与正文格式不一致、需要独立 verify_config」
+                              #   的典型场景（见 APPENDIX_CONFIG_NAME）。
+                              #   与 type 5（roman，`Label I.2.3`）的区别：type 5 的
+                              #   章位是**罗马数字串**（I/II/III/IV…，可多字符且只取
+                              #   IVXLCDM 字符集），type 13 的章位是**单个字母**
+                              #   （A/B/C…，可含 C/D/M 等与罗马字符同形的字母），
+                              #   二者正则不可混用，故独立成码。
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
     4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
-    12: 'hum',
+    12: 'hum', 13: 'app',
 }
 # Numbering depth (numeric components) per ordinal code.
 # 🔴 唯一真源在 `lib.numbering`（2026-08-29 去重）：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
 from lib.numbering import ORDINAL_DEPTH  # noqa: F401  (re-exported)
+from data.book_structure.book_structure import chapter_label  # noqa: E402
 # Structural style per ordinal code (None = common depth-driven parsing).
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
-                     11: None, 12: None}
+                     11: None, 12: None, 13: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
 ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
-                            10: 'cn', 11: 'en', 12: 'en'}
+                            10: 'cn', 11: 'en', 12: 'en', 13: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -208,6 +243,11 @@ ORDINAL_SECTION_TYPES = {
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
     9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
+    # ORDINAL_APP（13）：附录章的节印 `A.1` / `A.2`（字母章位 + 节号两段）。
+    # 通用 D 层路径按「token 首分量 == 章号」投影，而附录章号是字母 'A'、
+    # 数字节号首分量是 1/2/…，二者永不相等 ⇒ D 层对附录章自然 vacuous PASS
+    #（缺节由 P 层「位置/数量」闸门与结构完整性查漏负责），无假红。
+    13: [1, 2],
     # Humphreys GTM 9：章=文件一级、节=全书全局单序标 §1..§27（原书印裸
     # "9. Axiomatics" 无 § 前缀）、小节 N.M 不作契约层级（条目键内嵌小节定位）。
     12: [1, 1],
@@ -731,6 +771,10 @@ class ConfigLoader:
 
     Sources (all under <book>/_extract/ unless noted):
       * verify_config.json  — main per-book config (-> BookConfig)
+      * appendix_verify_config.json — OPTIONAL appendix-only config
+                              (-> BookConfig). Consumed for appendix chapters
+                              via `config_for_chapter`; absent -> the main
+                              config is used unchanged (zero regression).
       * chapter_map.json    — per-chapter page ranges + names
       * figure_index.json   — figure index (for figure layers)
       * ignore_ch{N}.json / ignore_fig_ch{N}.json — per-chapter noise (auto)
@@ -750,17 +794,31 @@ class ConfigLoader:
         self.verify_config_path: Optional[str] = None
         self.verify_config_has_ordinal: bool = False
         self.book = self._load_verify_config()
+        # 附录专用配置（可选）：缺失即回退主配置，行为与历史完全一致。
+        self.appendix_verify_config_path: Optional[str] = None
+        self.appendix_has_ordinal: bool = False
+        self.appendix_book: Optional[BookConfig] = None
+        (self.appendix_book, self.appendix_verify_config_path,
+         self.appendix_has_ordinal) = self._load_config_file(APPENDIX_CONFIG_NAME)
         self.chapters = self._load_chapter_map()
         self.figure_index = self._load_figure_index()
         # Optional extra ignore entries supplied via CLI (--ignore / --ignore-figure);
         # merged into every chapter's resolved ignore set.
         self.extra_ignore: Set[str] = set(extra_ignore or [])
 
-    # ---- verify_config.json ----
-    def _load_verify_config(self) -> BookConfig:
+    # ---- verify_config.json / appendix_verify_config.json ----
+    def _load_config_file(self, fname: str):
+        """Read ONE book-level config JSON.
+
+        Returns ``(BookConfig, path_or_None, has_ordinal)``.  Used for both
+        `verify_config.json` (the mandatory main config) and
+        `appendix_verify_config.json` (the optional appendix override) so the two
+        go through the EXACT same provenance gate — an appendix config may never
+        be a hand-written side door around MM Repair.
+        """
         candidates = [
-            os.path.join(self.extract_dir, 'verify_config.json'),
-            os.path.join(self.book_dir, 'verify_config.json'),
+            os.path.join(self.extract_dir, fname),
+            os.path.join(self.book_dir, fname),
         ]
         data: Dict[str, Any] = {}
         hit_path: Optional[str] = None
@@ -779,8 +837,7 @@ class ConfigLoader:
         # (hard error) from "file absent" (warning + default) — `BookConfig.from_dict`
         # silently defaults ordinal to a single uncat group, so we cannot infer
         # absence from the resolved value alone.
-        self.verify_config_path = hit_path
-        self.verify_config_has_ordinal = (
+        has_ordinal = (
             isinstance(data.get('ordinal'), list) and len(data.get('ordinal')) > 0
         )
         # 🔒 上游闸（防"agent 手搓 config 当地基"事故）：verify_config.json 只应来自
@@ -793,19 +850,80 @@ class ConfigLoader:
             if not os.path.exists(marker):
                 raise ConfigError(
                     f"[CONFIG] BLOCKED: {self.extract_dir} 缺 _extraction_done.json"
-                    f"（MM Repair 未完成标记）。verify_config.json 不能被加载/消费——"
+                    f"（MM Repair 未完成标记）。{fname} 不能被加载/消费——"
                     f"它只应来自 make_config.py 在 MM Repair 完成后生成的版本。\n"
                     f"  先完成 MM Repair（模式 A+B 写回 page_*.json，apply 真完成写出"
                     f" _extraction_done.json），或对该书运行\n"
                     f"    python tools/flow_runner.py bootstrap <book_dir>\n"
                     f"  依据物理证据补写完成标记后再跑 verify。严禁手写/手改配置绕过。"
                 )
-        return BookConfig.from_dict(data)
+        return BookConfig.from_dict(data), hit_path, has_ordinal
+
+    def _load_verify_config(self) -> BookConfig:
+        cfg, hit_path, has_ordinal = self._load_config_file('verify_config.json')
+        self.verify_config_path = hit_path
+        self.verify_config_has_ordinal = has_ordinal
+        return cfg
+
+    def is_appendix_chapter(self, ch) -> bool:
+        """True iff chapter `ch` is a book appendix unit.
+
+        Three independent signals, in order:
+          1. the chapter_map entry's NAME declares it (``Appendix A`` / ``附录A``);
+          2. the chapter key is NOT numeric — a LETTER chapter (``A``/``B``/…).
+             This mirrors the contract naming already used everywhere
+             (``chapter_json_name`` / ``unit_dir_name`` split on
+             ``key[:1].isdigit()`` → ``ch{N}.json`` vs ``appendix{X}.json``), so
+             the config router and the structure writer can never disagree.
+
+        A numeric chapter whose name says "Appendix" (rare: some books number
+        their appendices) is still caught by signal 1.  Non-appendix books are
+        completely unaffected: every main chapter has a numeric key and a plain
+        name, so this returns False for all of them.
+        """
+        if ch is None:
+            return False
+        key = str(ch).strip()
+        if not key:
+            return False
+        info = self.chapters.get(ch)
+        if info is None:
+            info = self.chapters.get(key)
+        if info is not None and APPENDIX_NAME_RE.search(
+                f"{info.name or ''} {info.name_en or ''} {info.name_cn or ''}"):
+            return True
+        return not key[:1].isdigit()
 
     def require_complete(self, allow_absent: bool = True) -> None:
         """Validate per-book verify-config completeness (rule H gate).
 
-        Rules:
+        The MAIN config (`verify_config.json`) keeps its historic contract:
+          * File absent:
+              - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
+              - allow_absent=False -> raise ConfigError.
+          * File present but `ordinal` missing/illegal -> raise ConfigError (hard error).
+
+        The APPENDIX config (`appendix_verify_config.json`) is OPTIONAL: absent
+        means "the book's appendices share the main text's convention" and the
+        main config is used (zero regression).  When PRESENT it is put through
+        the EXACT same gates — an appendix config is a config, never a side door.
+
+        `BookConfig.from_dict` already does most sanitising/inference, so this is
+        a backstop consistency check mainly guarding hand-written mistakes.
+        """
+        self._require_one(self.book, self.verify_config_path,
+                          self.verify_config_has_ordinal, allow_absent,
+                          'verify_config.json')
+        if self.appendix_verify_config_path is not None:
+            self._require_one(self.appendix_book, self.appendix_verify_config_path,
+                              self.appendix_has_ordinal, True,
+                              APPENDIX_CONFIG_NAME)
+
+    def _require_one(self, cfg: BookConfig, cfg_path: Optional[str],
+                     has_ordinal: bool, allow_absent: bool, fname: str) -> None:
+        """Apply the completeness gates to ONE loaded config file.
+
+        Rules (identical for the main and the appendix config):
           * File absent:
               - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
               - allow_absent=False -> raise ConfigError.
@@ -815,37 +933,32 @@ class ConfigLoader:
             role 1) -> raise ConfigError.  Depth is DERIVED from each role code
             via SECTION_TYPE_DEPTH, so there is NO separate depth field to check
             (and a stale `section_depths` key in the JSON is ignored).
-
-        `BookConfig.from_dict` already does most sanitising/inference, so this is
-        a backstop consistency check mainly guarding hand-written mistakes.
         """
         import warnings
 
-        cfg = self.book
-
         # --- file presence ---
-        if self.verify_config_path is None:
+        if cfg_path is None:
             if allow_absent:
                 warnings.warn(
-                    "[CONFIG] 未找到 verify_config.json，沿用默认单个 uncat 组"
+                    f"[CONFIG] 未找到 {fname}，沿用默认单个 uncat 组"
                     "（type 0，无默认编号方案——「no default type」规则）。"
                     "新流程要求在源语言全部初稿完成后，用 config/verify_config/make_config.py 生成 "
-                    "<book>/_extract/verify_config.json（至少含 ordinal）。",
+                    f"<book>/_extract/{fname}（至少含 ordinal）。",
                     stacklevel=2,
                 )
                 return
             raise ConfigError(
-                "[CONFIG] 未找到 verify_config.json，且 allow_absent=False。"
-                "请先创建 <book>/_extract/verify_config.json（至少含 ordinal）。"
+                f"[CONFIG] 未找到 {fname}，且 allow_absent=False。"
+                f"请先创建 <book>/_extract/{fname}（至少含 ordinal）。"
             )
 
-        # --- ordinal array present & every group legal (1..6 / 8 / 9) ---
+        # --- ordinal array present & every group legal (1..6 / 8 / 9 / 10..13) ---
         # `from_dict` already rejects the old int/str/levels formats and appends a
-        # default uncat group, so `verify_config_has_ordinal` (== "ordinal is a
-        # non-empty list") is the reliable "was it declared" signal.
-        if not self.verify_config_has_ordinal:
+        # default uncat group, so `has_ordinal` (== "ordinal is a non-empty list")
+        # is the reliable "was it declared" signal.
+        if not has_ordinal:
             raise ConfigError(
-                f"[CONFIG] {self.verify_config_path} 未声明 ordinal 数组"
+                f"[CONFIG] {cfg_path} 未声明 ordinal 数组"
                 f"（应为 GroupConfig 数组，例如 "
                 f'[{{"type": 3, "name": ["uncat"], "scope": 2}}]）。'
                 f" 旧版整型 ordinal 已废弃，请运行 "
@@ -854,11 +967,11 @@ class ConfigLoader:
         for gi, g in enumerate(cfg.ordinal):
             if g.type not in ORDINAL_CODES:
                 raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].type={g.type}"
+                    f"[CONFIG] {cfg_path} ordinal[{gi}].type={g.type}"
                     f" 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）。")
             if g.scope not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
                 raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} ordinal[{gi}].scope={g.scope}"
+                    f"[CONFIG] {cfg_path} ordinal[{gi}].scope={g.scope}"
                     f" 非法（应 1/2/3）。")
                 # --- section_types (only the role codes; depth is derived) ----------
         # `from_dict` already filters codes against SECTION_ROLE_CODES and forces
@@ -869,19 +982,19 @@ class ConfigLoader:
             for code in cfg.section_types:
                 if code not in SECTION_ROLE_CODES:
                     raise ConfigError(
-                        f"[CONFIG] {self.verify_config_path} section_types 含非法角色码 "
+                        f"[CONFIG] {cfg_path} section_types 含非法角色码 "
                         f"{code}（应在 {SECTION_ROLE_CODES}）。"
                     )
             if cfg.section_types[0] not in (0, 1):
                 raise ConfigError(
-                    f"[CONFIG] {self.verify_config_path} section_types[0] 必须为 0 或 1"
+                    f"[CONFIG] {cfg_path} section_types[0] 必须为 0 或 1"
                     f"（0=无序号标书的首层小节，1=章首分量）。"
                 )
             # Sanity: every declared role must resolve to a known depth.
             for code in cfg.section_types:
                 if code not in SECTION_TYPE_DEPTH:
                     raise ConfigError(
-                        f"[CONFIG] {self.verify_config_path} section_types 含未登记角色码 "
+                        f"[CONFIG] {cfg_path} section_types 含未登记角色码 "
                         f"{code}；请在 SECTION_TYPE_DEPTH 中登记其分段深度。")
 
     # ---- chapter_map.json ----
@@ -952,16 +1065,21 @@ class ConfigLoader:
 
     def ignore_for_chapter(self, ch: int) -> Set[str]:
         """Resolved ignore set for a chapter: book-level ignore + per-chapter
-        ignore_ch{N}.json + ignore_fig_ch{N}.json + CLI extra ignore."""
+        ignore_ch{N}.json / ignore_appendix{X}.json + ignore_fig_* + CLI extra.
+        侧车文件名段统一走 ``chapter_label``：数字章 ``ch{N}``、附录章
+        ``appendix{X}``（"ch" 只属于数字章）。"""
         out: Set[str] = set(self.book.ignore)
-        out |= set(_load_ignore_file(os.path.join(self.extract_dir, f'ignore_ch{ch}.json')))
-        out |= set(_load_ignore_file(os.path.join(self.extract_dir, f'ignore_fig_ch{ch}.json')))
+        out |= set(_load_ignore_file(os.path.join(
+            self.extract_dir, f'ignore_{chapter_label(ch)}.json')))
+        out |= set(_load_ignore_file(os.path.join(
+            self.extract_dir, f'ignore_fig_{chapter_label(ch)}.json')))
         out |= self.extra_ignore
         return out
 
     def manual_for_chapter(self, ch: int) -> List[Dict[str, Any]]:
         """Resolved manual overrides for a chapter: book-level manual file +
-        per-chapter manual_overrides_ch{N}.json."""
+        per-chapter manual_overrides_ch{N}.json /
+        manual_overrides_appendix{X}.json（文件名段 = ``chapter_label``）."""
         out: List[Dict[str, Any]] = []
         if self.book.manual and os.path.exists(self.book.manual):
             try:
@@ -971,7 +1089,8 @@ class ConfigLoader:
                     out.extend(data)
             except Exception:
                 pass
-        per = os.path.join(self.extract_dir, f'manual_overrides_ch{ch}.json')
+        per = os.path.join(self.extract_dir,
+                           f'manual_overrides_{chapter_label(ch)}.json')
         if os.path.exists(per):
             try:
                 with open(per, 'r', encoding='utf-8') as f:
@@ -986,5 +1105,18 @@ class ConfigLoader:
         """A per-chapter BookConfig with the resolved ignore set applied.
 
         Used to build each chapter's VerifyContext so the layer sees one
-        unified `ignore` (no field-by-field passthrough)."""
-        return replace(self.book, ignore=list(self.ignore_for_chapter(ch)))
+        unified `ignore` (no field-by-field passthrough).
+
+        🔴 Appendix routing: an APPENDIX chapter is served
+        `appendix_verify_config.json` (when that file exists) instead of the main
+        `verify_config.json`, because appendices routinely print a DIFFERENT
+        numbering convention than the body (letter chapter slot `A.1.1` vs digit
+        `10.9.13`, different label sets, different counter reset scope, …).
+        Only the per-chapter `ignore` set is merged on top of whichever base
+        config was selected, so `ignore_chA.json` keeps working unchanged.
+        Books with no appendix config are byte-for-byte unaffected.
+        """
+        base = self.book
+        if self.appendix_book is not None and self.is_appendix_chapter(ch):
+            base = self.appendix_book
+        return replace(base, ignore=list(self.ignore_for_chapter(ch)))

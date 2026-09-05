@@ -743,7 +743,12 @@ def main():
         print(__doc__)
         return 2
     extract_dir = args[0]
-    want = [int(x) for x in args[1:]]
+    # 章号归一：数字章 → int，附录字母章（"A"/"B"…）保留原串；排序用
+    # chapter_sort_key（数字章在前按数值、附录字母章排末尾）。
+    from data.book_structure.book_structure import (norm_chapter_key,
+                                                    chapter_sort_key,
+                                                    chapter_label)
+    want = [norm_chapter_key(x) for x in args[1:]]
 
     # Numbering mode is auto-detected from the book's verify_config.json
     # (the single source of truth for `ordinal`); no direct file read / CLI
@@ -777,15 +782,15 @@ def main():
     if isinstance(chapters, dict):
         # keyed by chapter number (string)
         for k, c in chapters.items():
-            rng[int(k)] = (int(c['start']), int(c['end']))
+            rng[norm_chapter_key(k)] = (int(c['start']), int(c['end']))
     else:
         for c in chapters:
             n = c.get('num', c.get('ch', c.get('chapter', c.get('n'))))
-            rng[int(n)] = (int(c['start']), int(c['end']))
+            rng[norm_chapter_key(n)] = (int(c['start']), int(c['end']))
 
-    for ch in (want or sorted(rng)):
+    for ch in (want or sorted(rng, key=chapter_sort_key)):
         if ch not in rng:
-            print('ch%-3d SKIP (not in chapter_map)' % ch)
+            print('%-9s SKIP (not in chapter_map)' % chapter_label(ch))
             continue
         start, end = rng[ch]
         rows = scan(extract_dir, ch, start, end, mode, section_depths=section_depths)
@@ -812,8 +817,8 @@ def main():
             print('%-5s %-11s p%-4d %s' % (kind, num, p, title))
         n_item = sum(1 for r in rows if r[1] == 'ITEM')
         n_ex = sum(1 for r in rows if r[1] == 'EXER')
-        print('ch%-3d | secs=%s items=%d exercises=%d'
-              % (ch, secs, n_item, n_ex))
+        print('%-9s | secs=%s items=%d exercises=%d'
+              % (chapter_label(ch), secs, n_item, n_ex))
     return 0
 
 

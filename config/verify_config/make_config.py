@@ -77,7 +77,9 @@ import re
 import glob
 
 sys.stdout.reconfigure(encoding='utf-8')
-from verify_config import ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_HUM
+from typing import List
+from verify_config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT,
+                           ORDINAL_HUM, ORDINAL_APP)
 
 
 def _is_fig_kw(name):
@@ -140,15 +142,27 @@ _SEP_RE = re.compile(r'[.\-–·/．－〜]')
 # 导致 make_config 误生成 [1,2] 覆盖正确的手写 [0]）。OCR 点号变体（en-dash /
 # fullwidth-hyphen / fullwidth-dot / middle-dot / wave-dash）保留为合法分隔符。
 _SEC_HEAD_RE = re.compile(r'^(?:§|8)?\s*(\d+(?:[.–·．－〜]\d+)*)')
+# 附录字母章号节标题：`A.1 Categories` / `A.6 Adjoint Functors`（章位为单字母）。
+_SEC_HEAD_APP_RE = re.compile(r'^\s*([A-Za-z])\s*[.–·．－〜]\s*(\d+(?:[.–·．－〜]\d+)*)')
+# 附录节标题的长度上限：超过即判为「编号条目」（`A.1.5 A morphism …`）而非标题。
+# 实测最长真标题 `A.5 Limits and Colimits (see Chapter 2, section 6)` = 50 字符。
+APPENDIX_HEAD_MAX = 60
 _LABEL_KW_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)')
 
 
-def _section_header_depth(txt, max_depth=4):
+def _section_header_depth(txt, max_depth=4, letter_chapter=False):
     """If `txt` is a GENUINE section header, return its component-count depth
     (>= 2); otherwise None.
+
+    `letter_chapter=True` switches to the APPENDIX shape, where the chapter slot
+    is a LETTER: ``A.1 Categories`` / ``A.6 Adjoint Functors`` (2 components).
+    Such a heading is also required to be SHORT (<= `APPENDIX_HEAD_MAX` chars) —
+    in an appendix the bare ITEM lines (``A.1.5 A morphism f: B -> C is called
+    monic if…``) carry the very same 3-component letter shape, and only length
+    separates a title from a numbered entry.
 
     A genuine section header is a dotted number (>= 2 components) followed by a
     non-label TITLE — e.g. ``20.5 Sparse Polynomial``, ``20.5.1 Eigenfunctions``,
@@ -165,13 +179,38 @@ def _section_header_depth(txt, max_depth=4):
     never produce an absurd hierarchy; roles 5/6 were never observed in any
     book and were dropped.
     """
-    m = _SEC_HEAD_RE.match(txt)
+    if letter_chapter:
+        m = _SEC_HEAD_APP_RE.match(txt)
+        if not m:
+            return None
+        if len(txt) > APPENDIX_HEAD_MAX:
+            return None          # 长行 = 编号条目（A.1.5 …）而非节标题
+        comps: List[str] = [m.group(1).upper()]
+        comps += [x for x in _SEP_RE.split(m.group(2)) if x]
+    else:
+        m = _SEC_HEAD_RE.match(txt)
+        if not m:
+            return None
+        comps = [x for x in _SEP_RE.split(m.group(1)) if x]
+    return _header_depth_from_comps(txt, m, comps, max_depth)
+
+
+def _header_depth_from_comps(txt, m, comps, max_depth):
+    """Shared tail of `_section_header_depth`: validate the parsed components.
+
+    `comps[0]` may be a LETTER when the caller parsed an appendix heading
+    (`A.1 Categories` -> ``['A', '1']``); every LATER segment must be numeric.
+    """
     if not m:
         return None
-    comps = [x for x in _SEP_RE.split(m.group(1)) if x]
-    # 🔴 防御：每个序标段必须是纯数字（挡掉 `6i`、`2x` 这类带字母的数学碎片，
-    # 即便它们绕过了上面的分隔符限制）。
-    if not comps or not all(c.isdigit() for c in comps):
+    if not comps:
+        return None
+    # 🔴 防御：除可能的字母章位外，每个序标段必须是纯数字（挡掉 `6i`、`2x` 这类
+    # 带字母的数学碎片，即便它们绕过了上面的分隔符限制）。
+    tail_digits = comps[1:] if not comps[0].isdigit() else comps
+    if not all(c.isdigit() for c in tail_digits):
+        return None
+    if not (comps[0].isdigit() or (len(comps[0]) == 1 and comps[0].isalpha())):
         return None
     if len(comps) < 2 or len(comps) > max_depth:
         return None
@@ -186,7 +225,8 @@ def _section_header_depth(txt, max_depth=4):
     return len(comps)
 
 
-def _detect_section_hierarchy(extract_dir, max_depth=4):
+def _detect_section_hierarchy(extract_dir, max_depth=4, pages=None,
+                              letter_chapter=False):
     """Return the D-layer `section_types` (role-code) list for this book.
 
     The returned list enumerates the nested section levels present in the
@@ -210,9 +250,15 @@ def _detect_section_hierarchy(extract_dir, max_depth=4):
 
     `max_depth` bounds the hierarchy (default 4, matching the SECTION_ROLE_CODES
     cap); roles 5/6 are not emitted (never observed in the corpus).
+
+    `pages` restricts the scan to an explicit list of `page_*.json` paths (the
+    APPENDIX generator passes only the appendix page range — an appendix
+    routinely uses a different section shape than the body, and mixing the two
+    ranges would fabricate levels neither part actually has).
     """
     depths = set()
-    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -223,7 +269,8 @@ def _detect_section_hierarchy(extract_dir, max_depth=4):
             txt = blk_text(b).strip() if isinstance(b, dict) else ''
             if not txt:
                 continue
-            d = _section_header_depth(txt, max_depth=max_depth)
+            d = _section_header_depth(txt, max_depth=max_depth,
+                                      letter_chapter=letter_chapter)
             if d is not None:
                 depths.add(d)
     return [1] + sorted(d for d in depths if d >= 2)
@@ -304,7 +351,7 @@ LABEL_FORMS = [
 ]
 
 
-def _build_label_heading_regexes():
+def _build_label_heading_regexes(letter_chapter=False):
     """Build, per canonical label, ONE regex that captures BOTH the label text
     and the adjacent numeric key (so we can later tell which labels share a
     counter).  Longer raw forms are tried first (e.g. 注记 before 注) so the
@@ -315,13 +362,26 @@ def _build_label_heading_regexes():
       * number-first: ``1.5-3 Label``  -> groups (num, label)
     CN forms matched literally; EN forms word-boundary + IGNORECASE.  Returns a
     list of ``(canon_idx, regex, form_by_lower)``.
+
+    `letter_chapter=True` (APPENDIX scan) additionally accepts a LETTER chapter
+    slot — ``Definition A.1.1`` — plus a plural label (``Examples A.1.3``).
+    The letter arm is deliberately anchored with a lookahead
+    (``[A-Za-z](?=[sep]\\d)``) so it can NEVER absorb a stray word character:
+    without it ``Examples A.1.3`` would match the label ``Example`` and then
+    read the leftover ``s`` as the number.  The digit arm is byte-identical to
+    the default, so the main-text scan is unaffected.
     """
     out = []
     for ci, (canon, forms) in enumerate(LABEL_FORMS):
         ordered = sorted(forms, key=len, reverse=True)   # longest first
         label_alt = '|'.join(re.escape(f) for f in ordered)
         form_by_lower = {f.lower(): f for f in forms}
-        num = r'\d[\d.\-–·/．－〜]*'
+        if letter_chapter:
+            num = (r'(?:\d[\d.\-–·/．－〜]*'
+                   r'|[A-Za-z](?=[.\-–·／/．－〜]\d)[\d.\-–·/．－〜]*)')
+            label_alt = r'(?:' + label_alt + r')(?:es|s)?'
+        else:
+            num = r'\d[\d.\-–·/．－〜]*'
         rx = re.compile(
             r'(' + label_alt + r')\s*(' + num + r')'
             r'|(' + num + r')\s+(' + label_alt + r')',
@@ -374,11 +434,30 @@ def _is_crossref_prefix(pre):
         r'(见|由|根据|参考|参见|据|依照|按|cf\.|see\b|below\b|viz\.|e\.g\.|i\.e\.)', pre))
 
 
-def _parse_comps(numstr):
-    """Parse a matched numeric key ('1.5-3') into a tuple of ints."""
+def _parse_comps(numstr, letter_chapter=False):
+    """Parse a matched numeric key ('1.5-3') into a tuple of ints.
+
+    With `letter_chapter=True` the FIRST component may be an appendix LETTER
+    ('A.1.1' -> ``('A', 1, 1)``); every later component must still be numeric
+    (otherwise it is an OCR fragment, not a numbering path).  Mixing a str
+    chapter slot with int tail components keeps the counter-grouping logic
+    (which only reads ``comps[-1]`` / ``comps[:-1]``) working unchanged.
+    """
     parts = [p for p in SEP_SPLIT_RE.split(numstr) if p]
     if not parts:
         return None
+    if letter_chapter and parts[0][:1].isalpha():
+        head, rest = parts[0][0].upper(), parts[0][1:]
+        comps: List = [head]
+        if rest:
+            if not rest.isdigit():
+                return None
+            comps.append(int(rest))
+        try:
+            comps.extend(int(x) for x in parts[1:])
+        except ValueError:
+            return None
+        return tuple(comps)
     try:
         return tuple(int(x) for x in parts)
     except ValueError:
@@ -445,7 +524,7 @@ def _formula_tail_clean(tail):
     return re.fullmatch(r"[\s\.\,\;\)\]\}\:\'\"\u3002\uff0c\uff1b]*", tail) is not None
 
 
-def detect_formula(extract_dir):
+def detect_formula(extract_dir, pages=None):
     """Full-scan EVERY page_*.json and infer the book's formula numbering.
 
     Counts standalone single-component ``(N)``/``（N）`` vs two-component
@@ -461,13 +540,16 @@ def detect_formula(extract_dir):
     present — written only after mode A+B are applied back to ``page_*.json``,
     NOT merely when background text extraction reaches 100%); otherwise returns
     None rather than guessing from a partial / un-repaired extraction.
+
+    `pages` restricts the scan (appendix generator passes the appendix range).
     """
     if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
         print('[make_config] MM Repair 未完成（缺 _extraction_done.json），'
               '跳过 formula 探测；请完成 MM Repair（模式 A+B 写回 page_*.json）后再生成配置。')
         return None
 
-    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
     single_count = 0
     dotted_count = 0
     single_nums = []  # ints in page order, for per-section-reset fallback
@@ -569,7 +651,7 @@ for _canon, _forms in LABEL_FORMS:
     for _f in _forms:
         _FORM_CANON[_f.lower()] = _canon
 
-def _group_headings_by_counter(headings, depth):
+def _group_headings_by_counter(headings, depth, strict_reset=True):
     """Group detected ``(canon_idx, raw_form, comps)`` headings into counters.
 
     Every detected entry-type family (Definition/Theorem/Lemma/Corollary/
@@ -645,7 +727,8 @@ def _group_headings_by_counter(headings, depth):
         if canon == ref_canon:
             continue
         forms = sort_forms(data["forms"])
-        if _shares_main_counter(data["comps"], ref_comps):
+        if _shares_main_counter(data["comps"], ref_comps,
+                                strict_reset=strict_reset):
             primary += forms
         else:
             groups.append(forms)
@@ -653,7 +736,7 @@ def _group_headings_by_counter(headings, depth):
     return groups
 
 
-def _shares_main_counter(cand_comps, main_comps):
+def _shares_main_counter(cand_comps, main_comps, strict_reset=True):
     """True iff the candidate family shares the SAME ascending counter as the
     main types (so it should merge into the primary group).  False (its OWN
     group) when it runs on an INDEPENDENT parallel sequence.
@@ -688,8 +771,13 @@ def _shares_main_counter(cand_comps, main_comps):
         # duplicate number in the same window => parallel independent counters
         if any(n in mnums for n in cnums):
             return False
-        # resets to 1 within a running window => its own sequence
-        if min(cnums) == 1:
+        # resets to 1 within a running window => its own sequence.
+        # strict_reset=False（契约证据通路）跳过本规则：共享计数器书
+        # （Weibel 正文）不同标签**轮流**当节首条目，候选窗内 min==1 是常态，
+        # 按此判据会把 Definition/Theorem 全拆散、制造数百幻影缺号；
+        # 「同窗重复号」判据已足以鉴别真正的平行计数器（练习 10.3.1 vs
+        # Definition 10.3.1 同窗共存）。
+        if strict_reset and min(cnums) == 1:
             return False
     if shared == 0:
         return False
@@ -789,7 +877,66 @@ def _ordinal_from_chapter_map(extract_dir):
     return None
 
 
-def _detect_ordinal_from_pages(extract_dir):
+_CONTRACT_TYPE_TO_FORM = {
+    "definition": "Definition", "theorem": "Theorem", "lemma": "Lemma",
+    "corollary": "Corollary", "proposition": "Proposition",
+    "example": "Example", "remark": "Remark", "axiom": "Axiom",
+}
+
+
+def _contract_counter_evidence(extract_dir):
+    """结构契约（book_structure/ch{N}.json）已存在时，用契约条目本身作为
+    计数器分组证据 —— 比 ordinal 探测阶段的 OCR 标题扫描干净得多（OCR 漏识
+    / 字符混淆会让 _shares_main_counter 的证据稀疏化，Weibel 实测被误判成
+    5 个独立计数组）。
+
+    返回 ``[(form, comps)]``（仅数字章；附录字母章走 letter_chapter 专属
+    生成器，不在此列）或 None（无契约 / 无可用条目）。**练习条目不纳入**
+    证据（exercise 不在 _CONTRACT_TYPE_TO_FORM）：练习计数器由
+    `_detect_exercise_counter` / `_detect_appendix_exercise` 专属检测并
+    单列组，与 LABEL_FORMS 刻意不含 Exercise 的口径一致。
+    """
+    from data.book_structure.book_structure import BookStructure
+    try:
+        bs = BookStructure.load(extract_dir)
+    except Exception:
+        return None
+    if bs is None:
+        return None
+    out = []
+
+    def walk(n):
+        if n.type in ("chapter", "section"):
+            for k in n.sub_sec:
+                walk(k)
+            return
+        form = _CONTRACT_TYPE_TO_FORM.get(str(n.type))
+        if not form:
+            return
+        nums = re.findall(r"\d+", str(n.key))
+        if len(nums) < 2:
+            return
+        out.append((form, tuple(int(x) for x in nums)))
+
+    for c in bs.chapters:
+        if not str(c.key)[:1].isdigit():
+            continue  # 附录字母章键的窗口语义不同，交 letter_chapter 生成器
+        walk(c)
+    # 同号去重：深层书的子项（如 Weibel ch9 的 `Corollary 9.3.3.1`）被抽取器
+    # 展平成三段键后与宿主条目（Theorem 9.3-3）同号不同族——这属书的层级
+    # 深度问题，不是「平行计数器」证据；按窗口首次出现保留，其余丢弃，
+    # 否则重复号会让 _shares_main_counter 把正文族误拆成多组。
+    seen = set()
+    deduped = []
+    for form, comps in out:
+        if comps in seen:
+            continue
+        seen.add(comps)
+        deduped.append((form, comps))
+    return deduped or None
+
+
+def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     """Full-scan EVERY page_*.json and (a) vote on the numbering FAMILY and
     (b) detect which entry-type labels appear as numbered headings, then GROUP
     them by whether they share ONE ascending counter.
@@ -808,6 +955,11 @@ def _detect_ordinal_from_pages(extract_dir):
     form lists (one per counter), primary group first; ``lang`` is the detected
     language or None.
 
+    `pages` restricts the scan to an explicit list of `page_*.json` paths (the
+    APPENDIX generator passes the appendix range only).  `letter_chapter=True`
+    enables the appendix letter-slot numbering detection (``Definition A.1.1``)
+    and lets the family vote elect ``ORDINAL_APP`` (13).
+
     Phase guard: only runs AFTER MM Repair is finished (`_extraction_done.json`
     present).  If MM Repair is incomplete we RAISE — never return a degraded
     default (that was the backdoor that let a half-repaired book get a config).
@@ -818,9 +970,10 @@ def _detect_ordinal_from_pages(extract_dir):
             '禁止返回退化默认；须先完成 MM Repair（模式 A+B 写回 page_*.json，'
             'apply 真完成写出 _extraction_done.json）再生成配置。'
             '严禁手写/手改 verify_config.json 绕过本护栏。')
-    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
     counts = {'cn_three': 0, 'en_three': 0, 'en': 0, 'cn_two': 0}
-    label_res = _build_label_heading_regexes()
+    label_res = _build_label_heading_regexes(letter_chapter=letter_chapter)
     headings = []   # (canon_idx, raw_form, comps_tuple)
     seen_en = False
     seen_cn = False
@@ -864,7 +1017,7 @@ def _detect_ordinal_from_pages(extract_dir):
                     if _is_crossref_prefix(prefix) or not _is_header_boundary(tail):
                         continue
                     form = form_by_lower.get(lab_txt.lower(), lab_txt)
-                    comps = _parse_comps(numstr)
+                    comps = _parse_comps(numstr, letter_chapter=letter_chapter)
                     if not comps:
                         continue
                     headings.append((ci, form, comps))
@@ -879,10 +1032,18 @@ def _detect_ordinal_from_pages(extract_dir):
     # three-level > two-level > single-level.  A PURE single-level book (every
     # detected entry is "Label N", e.g. Silverman) must NOT fall through to the
     # default type 3 — it votes type 1 here.
-    n_single = sum(1 for h in headings if len(h[2]) == 1)
-    n_two = sum(1 for h in headings if len(h[2]) == 2)
-    n_three = sum(1 for h in headings if len(h[2]) >= 3)
-    if n_three > 0 and n_three >= n_two and n_three >= n_single:
+    # 附录字母章号（`A.1.1`）——首分量是 str 而非 int，独立成族 ORDINAL_APP(13)。
+    n_app = sum(1 for h in headings
+                if len(h[2]) >= 2 and isinstance(h[2][0], str))
+    n_single = sum(1 for h in headings
+                   if len(h[2]) == 1 and not isinstance(h[2][0], str))
+    n_two = sum(1 for h in headings
+                if len(h[2]) == 2 and not isinstance(h[2][0], str))
+    n_three = sum(1 for h in headings
+                  if len(h[2]) >= 3 and not isinstance(h[2][0], str))
+    if n_app > 0 and n_app >= n_single and n_app >= n_two and n_app >= n_three:
+        family = ORDINAL_APP
+    elif n_three > 0 and n_three >= n_two and n_three >= n_single:
         family = 3
     elif n_two > 0 and n_two >= n_single:
         # CN two-level (type 2) vs EN two-level (type 4)
@@ -931,6 +1092,15 @@ def _detect_ordinal_from_pages(extract_dir):
     depth = ORDINAL_DEPTH.get(family, 3)
     if depth >= 2:
         headings = [h for h in headings if len(h[2]) >= 2]
+    # 计数器分组的证据优先级：结构契约（若已生成）> OCR 标题扫描。契约条目
+    # 是去噪后的权威样本（键 + 类型俱全），共享/平行计数器的判别不再受 OCR
+    # 漏识干扰；无契约（首次 config，先于 structure）时保持原 OCR 路径零回归。
+    # 仅主配置走此通路；附录 letter_chapter 配置由专属生成器处理。
+    _contract_evidence = None
+    if not letter_chapter and depth >= 2:
+        _contract_evidence = _contract_counter_evidence(extract_dir)
+        if _contract_evidence:
+            headings = [(0, f, comps) for (f, comps) in _contract_evidence]
     # group by shared counter.  Single-level (type 1) books reset their
     # counter per chapter, so the page scan has NO chapter window to separate
     # shared vs independent counters (the window logic in _shares_main_counter
@@ -938,7 +1108,10 @@ def _detect_ordinal_from_pages(extract_dir):
     if family == 1:
         groups = _group_single_level(headings)
     else:
-        groups = _group_headings_by_counter(headings, depth)
+        # 契约证据是完备样本：min==1 的 reset 判据关闭（共享计数器书各标签
+        # 轮流当节首，见 _shares_main_counter 注释）。
+        groups = _group_headings_by_counter(
+            headings, depth, strict_reset=not _contract_evidence)
     if family == ORDINAL_HUM:
         # config_setting 规则5（ORDINAL_HUM = 12，Humphreys《Intro to Lie Algebras
         # and Representation Theory》GTM 9）：正文条目头只印裸标签（"Lemma." /
@@ -952,7 +1125,7 @@ def _detect_ordinal_from_pages(extract_dir):
     return family, groups, lang, cm_chapter_first
 
 
-def _detect_exercise_counter(extract_dir):
+def _detect_exercise_counter(extract_dir, pages=None):
     """Detect a PRESERVED (interleaved) first-level exercise counter.
 
     Exercises come in two flavors per writing-rules §习题（练习）收录规则:
@@ -977,7 +1150,8 @@ def _detect_exercise_counter(extract_dir):
         r'\b(?:Exercises?|Problems?|习题|练习|问题)\b', re.IGNORECASE)
     # bare "N. <text>" — a number, a dot, then an alphabetic / Han start.
     BARE_RE = re.compile(r'(?:^|(?<=[)\]}\s])|[\s])(\d+)\.\s*[A-Za-z一-鿿]')
-    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
     # Pass 1: mark consolidated-exercise zone pages (header page +/- 2).
     zone = set()
     for pg in pages:
@@ -992,6 +1166,7 @@ def _detect_exercise_counter(extract_dir):
                 zone.update(range(pno - 2, pno + 3))
                 break
     # Pass 2: look for bare consecutive ordinal runs on NON-zone pages.
+    run = [1, None]   # [当前连续长度, 上一序号]（跨页/跨块延续）
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -1000,6 +1175,7 @@ def _detect_exercise_counter(extract_dir):
             continue
         pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
         if pno in zone:
+            run[0], run[1] = 1, None   # 进入练习区页：run 重置
             continue
         for b in data.get('text', []):
             if not isinstance(b, dict):
@@ -1007,15 +1183,44 @@ def _detect_exercise_counter(extract_dir):
             text = blk_text(b)
             if not text:
                 continue
+            # 连续序号 run 跨块累计（每条练习通常独占一个块，按块重置会让
+            # run 永远到不了 3）：prev_num/run 为函数级状态，块间延续。
             nums = [int(x) for x in BARE_RE.findall(text)]
-            run = 1
-            for i in range(1, len(nums)):
-                if nums[i] == nums[i - 1] + 1:
-                    run += 1
-                    if run >= 3:
-                        return True
+            for i, nnum in enumerate(nums):
+                if i > 0 and nnum == nums[i - 1] + 1:
+                    run[0] += 1
+                elif i == 0 and run[1] is not None and nnum == run[1] + 1:
+                    run[0] += 1
                 else:
-                    run = 1
+                    run[0] = 1
+                run[1] = nnum
+                if run[0] >= 3:
+                    return True
+    return False
+
+
+# Appendix exercises print a LETTER chapter slot (`Exercise A.1.1`) and are NOT
+# part of LABEL_FORMS (which deliberately omits Exercise to avoid cross-reference
+# fabrication).  Detect them separately so the appendix config can carry an
+# Exercise group — a preserved/interleaved appendix exercise counter is a real
+# verified sequence, exactly like a body one.
+_APP_EX_RE = re.compile(
+    r'(?i)\bexercise\b\s*[A-Z]\.\d+\.\d+|\b[A-Z]\.\d+\.\d+\s+exercise\b')
+
+
+def _detect_appendix_exercise(extract_dir, pages):
+    """True iff the appendix page range contains preserved `Exercise A.S.N`
+    headings (letter chapter slot).  Only consulted for the appendix config."""
+    for pg in (pages or []):
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            text = blk_text(b) if isinstance(b, dict) else ''
+            if _APP_EX_RE.search(text or ''):
+                return True
     return False
 
 
@@ -1043,6 +1248,251 @@ def detect_labels(extract_dir):
             seen.add(x)
             res.append(x)
     return res
+
+
+# --- appendix chapter detection --------------------------------------------
+# 附录章定位：与 ConfigLoader.is_appendix_chapter 严格同源（章名含
+# Appendix/附录，或章号为字母 A/B/C…）。优先读 chapter_map（已登记的附录），
+# 缺失时回退 OCR 扫描 "Appendix X" / "附录X" 标题页。
+_APPENDIX_NAME_RE = re.compile(r'(?:^|[^A-Za-z])(?:appendix|appendices)\b|附录',
+                               re.IGNORECASE)
+_APPENDIX_OCR_RE = re.compile(r'^\s*Appendi(?:x|ces)\s+([A-Z])\b', re.IGNORECASE)
+
+
+def _chapter_map_appendix_chapters(extract_dir):
+    """chapter_map.json 中已登记的附录章（章名或字母章号）。"""
+    cm_p = os.path.join(extract_dir, 'chapter_map.json')
+    if not os.path.exists(cm_p):
+        return []
+    try:
+        cm = json.load(open(cm_p, encoding='utf-8-sig'))
+    except Exception:
+        return []
+    nodes = cm.get('chapters') if isinstance(cm, dict) else cm
+    if not isinstance(nodes, list):
+        return []
+    out = []
+    for e in nodes:
+        if not isinstance(e, dict):
+            continue
+        ch = e.get('ch', e.get('num', e.get('chapter')))
+        name = f"{e.get('name','')} {e.get('name_en','')} {e.get('name_cn','')}"
+        key = str(ch)
+        if _APPENDIX_NAME_RE.search(name) or (key and not key[:1].isdigit()):
+            out.append({'ch': ch, 'name': e.get('name') or e.get('name_en') or name,
+                        'start': e.get('start'), 'end': e.get('end')})
+    out.sort(key=lambda d: (str(d['ch']) if d['ch'] is not None else ''))
+    return out
+
+
+def _ocr_appendix_chapters(extract_dir):
+    """chapter_map 未登记附录时，从 OCR 定位 `Appendix X` 标题页（取首个命中页）。"""
+    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')),
+                   key=lambda p: int(re.search(r'page_(\d+)\.json', p).group(1)))
+    hits = {}
+    for p in pages:
+        try:
+            data = json.load(open(p, encoding='utf-8'))
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            txt = b.get('text', '') if isinstance(b, dict) else ''
+            m = _APPENDIX_OCR_RE.match(txt.strip())
+            if m:
+                letter = m.group(1).upper()
+                if letter not in hits:
+                    hits[letter] = int(re.search(r'page_(\d+)\.json', p).group(1))
+    if not hits:
+        return []
+    last = int(re.search(r'page_(\d+)\.json', pages[-1]).group(1))
+    # 多附录（A、B…）：每个附录的 end = 下一附录起点 - 1（末附录到全书末页）。
+    # 旧实现一律给 end=全书末页，会把后面附录的页也算进前面附录的扫描区间。
+    letters = sorted(hits.items())
+    out = []
+    for i, (letter, start) in enumerate(letters):
+        end = letters[i + 1][1] - 1 if i + 1 < len(letters) else last
+        out.append({'ch': letter, 'name': f'Appendix {letter}',
+                    'start': start, 'end': end})
+    return out
+
+
+def _detect_appendix_chapters(extract_dir):
+    """返回本书附录章列表（含章号/名称/页区间）。无附录返回 []。"""
+    out = _chapter_map_appendix_chapters(extract_dir)
+    if not out:
+        out = _ocr_appendix_chapters(extract_dir)
+    return out
+
+
+def _appendix_page_files(extract_dir, app_chapters):
+    """附录章覆盖的 page_*.json 文件列表（按 start..end 区间并集）。"""
+    nums = set()
+    for c in app_chapters:
+        s = c.get('start')
+        e = c.get('end')
+        if isinstance(s, int) and isinstance(e, int):
+            for n in range(s, e + 1):
+                nums.add(n)
+    if not nums:
+        return None
+    files = []
+    for n in sorted(nums):
+        fp = os.path.join(extract_dir, f'page_{n:03d}.json')
+        if os.path.exists(fp):
+            files.append(fp)
+    return files or None
+
+
+def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
+                      is_appendix=False, pages=None):
+    """Detection + assembly for ONE book-config (main or appendix).
+
+    Shared by `main()` (the mandatory `verify_config.json`) and the optional
+    `appendix_verify_config.json` so the two can never drift in schema.  Returns
+    ``(config_dict, family, groups, ordinal, depth)``; the caller writes/presents.
+
+    `pages` restricts the scan to an explicit page range (appendix generator
+    passes ONLY the appendix pages); `letter_chapter` enables the appendix
+    letter-slot numbering detection (`Definition A.1.1`).
+    """
+    family, groups, lang, cm_chapter_first = _detect_ordinal_from_pages(
+        extract_dir, pages=pages, letter_chapter=letter_chapter)
+    ordinal = family
+    language = (lang if lang
+                else (ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
+                      if ordinal is not None else 'cn'))
+    depth = ORDINAL_DEPTH.get(ordinal, 3) if ordinal is not None else 3
+    formula_cfg = detect_formula(extract_dir, pages=pages)
+    # scope: 三级（type 3/5/13）按「节」重置计数器 → scope=3；其余按章重置 → 2。
+    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 13: 3}
+    ordinal_arr = []
+    if ordinal is not None:
+        if is_appendix:
+            # 🔴 附录：所有标签共享「按节(A.S)重置」的计数器（Weibel Appendix A：
+            # A.1.1, A.1.2 … 然后 A.2.1 重置），合并为单个 group、scope=3，
+            # 避免字母章位窗口把每个 (A.S) 拆成独立 group。
+            all_labels = []
+            for g in groups:
+                for nm in g:
+                    if nm and nm not in all_labels:
+                        all_labels.append(nm)
+            scope = 3
+            ordinal_arr.append({"type": ORDINAL_APP,
+                                "name": all_labels or ["uncat"], "scope": 3})
+        else:
+            scope = SCOPE_BY_TYPE.get(ordinal, 2)
+            for name in groups:
+                ordinal_arr.append({
+                    "type": ordinal,
+                    "name": name if name else ["uncat"],
+                    "scope": scope,
+                })
+    if not cm_chapter_first and ordinal_arr:
+        if len(ordinal_arr) > 1:
+            merged = []
+            for g in ordinal_arr:
+                for nm in g["name"]:
+                    if nm not in merged:
+                        merged.append(nm)
+            ordinal_arr = [{"type": ordinal, "name": merged, "scope": scope}]
+        sole = ordinal_arr[0]
+        for extra in ("Table", "Figure"):
+            if extra not in sole["name"]:
+                sole["name"].append(extra)
+    if _detect_exercise_counter(extract_dir, pages=pages):
+        ordinal_arr.append({
+            "type": 1,
+            "name": ["练习", "习题", "Exercise", "Problem"],
+            "scope": 3,
+        })
+    if ordinal == ORDINAL_HUM and not any(
+            any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        ordinal_arr.append({"type": 1, "name": ["Figure"], "scope": 1})
+    if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        for g in _load_old_ordinal(cfg_path):
+            if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+                if ordinal is not None:
+                    ordinal_arr.append({
+                        "type": ordinal,
+                        "name": g.get("name") or ["Figure"],
+                        "scope": SCOPE_BY_TYPE.get(ordinal, 2),
+                    })
+                else:
+                    ordinal_arr.append(g)
+                break
+    config = {
+        "ordinal": ordinal_arr,
+        "strict": True,
+        "language": language,
+    }
+    config["chapter_first"] = bool(cm_chapter_first)
+    config["section_scoped"] = bool(not cm_chapter_first)
+    if formula_cfg is not None:
+        config["formula"] = formula_cfg
+    config["_provenance"] = {
+        "generated_by": "make_config.py",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "mm_repair_done": True,
+        "appendix": bool(is_appendix),
+        "warning": ("手写/手改本文件无效；须由 make_config.py 在 MM Repair 完成后生成，"
+                    "且下游 ConfigLoader 会校验 _extraction_done.json 与 _provenance。"),
+    }
+    sd = _detect_section_hierarchy(extract_dir, pages=pages,
+                                  letter_chapter=letter_chapter)
+    if ordinal == ORDINAL_HUM:
+        sd = [1, 1]
+    config["section_types"] = sd
+    if ordinal == ORDINAL_HUM:
+        config["sections_global"] = True
+    return config, family, groups, ordinal, depth
+
+
+def _generate_appendix_verify_config(extract_dir):
+    """Generate `<extract_dir>/appendix_verify_config.json` for appendix chapters.
+
+    Only runs when the book has appendix chapter(s) — located via
+    `_detect_appendix_chapters` (chapter_map registration OR OCR fallback).  The
+    scan is RESTRICTED to the appendix page range so an appendix that prints a
+    DIFFERENT numbering convention than the body (letter chapter slot `A.1.1`
+    vs digit `10.9.13`, different label sets, different counter-reset scope) is
+    detected on its own terms.  When no appendix numbering is detected the file
+    is NOT written (the body config stays authoritative — zero regression).
+    """
+    app_chapters = _detect_appendix_chapters(extract_dir)
+    if not app_chapters:
+        print("[make_config] 未检出附录章，跳过 appendix_verify_config.json"
+              "（回退主配置，零回归）。")
+        return
+    app_pages = _appendix_page_files(extract_dir, app_chapters)
+    if not app_pages:
+        print("[make_config] 检出附录章但无可用页区间，跳过"
+              " appendix_verify_config.json。")
+        return
+    app_cfg_path = os.path.join(extract_dir, 'appendix_verify_config.json')
+    app_config, app_family, app_groups, app_ordinal, app_depth = _build_config_dict(
+        extract_dir, app_cfg_path, letter_chapter=True, is_appendix=True,
+        pages=app_pages)
+    if not app_ordinal or app_ordinal != ORDINAL_APP:
+        # 附录页区间未检出字母章位体例（可能本书附录与正文同体例）→ 不写文件，
+        # 避免生成一份与主配置等价的冗余配置。
+        print(f"[make_config] 附录页区间检出编号族={app_ordinal}（非字母章位 type 13），"
+              f"视为与正文同体例，跳过 appendix_verify_config.json。")
+        return
+    # 附录保留式练习计数器（`Exercise A.1.1`，字母章位）不在 LABEL_FORMS 中，
+    # 单独探测后并入附录配置，确保附录练习序列也被校验。
+    if _detect_appendix_exercise(extract_dir, app_pages):
+        app_config["ordinal"].append(
+            {"type": ORDINAL_APP, "name": ["Exercise"], "scope": 3})
+    with open(app_cfg_path, 'w', encoding='utf-8') as f:
+        json.dump(app_config, f, ensure_ascii=False, indent=2)
+    labels = [nm for g in app_config.get('ordinal', []) for nm in g.get('name', [])]
+    print(f"⚠️ 已生成附录配置（letter-chapter 体例 ordinal={app_ordinal}，"
+          f"depth={app_depth}）:")
+    print(f"   附录章: {[c['ch'] for c in app_chapters]}  "
+          f"页区间: {app_pages[0]!r}..{app_pages[-1]!r}")
+    print(f"   标签组名: {labels}")
+    print(f"   文件路径: {app_cfg_path}")
+    print(f"   文件内容: {json.dumps(app_config, ensure_ascii=False)}")
 
 
 def main():
@@ -1089,188 +1539,16 @@ def main():
     # AND the book's language (derived from which label forms were seen).
     # Labels that ascend together share ONE group; labels with an independent
     # counter get their OWN group — that is what the `ordinal` ARRAY is for.
-    family, groups, lang, cm_chapter_first = _detect_ordinal_from_pages(extract_dir)
-    ordinal = family
-    # Language: prefer the form-derived language (an EN three-level book like
-    # Kreyszig is type 3 but EN); fall back to the type->language default when
-    # no label form was detected.  When no ordinal family was matched at all
-    # (ordinal is None) there is no type to derive a language from -> default cn.
-    language = (lang if lang
-                else (ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
-                      if ordinal is not None else 'cn'))
-    depth = ORDINAL_DEPTH.get(ordinal, 3) if ordinal is not None else 3
-    # best-effort formula detection (full-book, whole-book aggregation; only
-    # when the whole extraction is done — see detect_formula's phase guard).
-    formula_cfg = detect_formula(extract_dir)
-    # v2 schema: `ordinal` is a LIST of GroupConfig dicts — one per counter.
-    # `scope` and `depth` are two DISTINCT axes:
-    #   * `depth` = number of numbering components (form-driven from ORDINAL_DEPTH).
-    #   * `scope` = ascending-range / counter-reset boundary:
-    #       1 = book-wide, 2 = chapter-wide reset, 3 = section-wide reset.
-    #   Three-level numbering (type 3 / 5) resets the per-item counter PER
-    #   SECTION (1.5-1, 1.5-2 … then 1.6-1), so it MUST use scope=3.  Two-level
-    #   numbering (type 2 / 4 / 6) resets PER CHAPTER, so scope=2.
-    # Every group shares the book's detected `type`/`depth`/`scope`; only `name`
-    # differs (which labels share THIS counter). Different groups NEVER merge.
-    # (An earlier version hard-coded scope=2 for every book, which silently
-    # broke three-level books like Kreyszig — item_numbering_integrity then
-    # expected the item counter to continue across sections instead of
-    # restarting at 1, producing false "missing item" gaps.)
-    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2}
-    ordinal_arr = []
-    if ordinal is not None:
-        # Only build ordinal groups when a numbering family was actually
-        # matched.  There is deliberately NO fallback `uncat` group here: if no
-        # ordinal numbering was detected we emit an EMPTY array (the caller
-        # omits the key) rather than fabricating a default `{"type": 3}` entry.
-        scope = SCOPE_BY_TYPE.get(ordinal, 2)
-        for name in groups:
-            ordinal_arr.append({
-                "type": ordinal,
-                "name": name if name else ["uncat"],
-                "scope": scope,
-            })
-    # 🔴 Section-scoped books (chapter_first == False) — the source prints
-    # "Theorem 8.1" = §8 item 1, NOT "Theorem 1.5" = ch.1 item 5 — number ALL
-    # their entries (text items Definition/Example/Theorem/Lemma/Corollary AND
-    # graphic slots Table/Figure) in ONE shared per-section counter.  This is
-    # NOT type-4-specific: ANY book whose first numbering component is the
-    # SECTION (regardless of its `ordinal` type code) shares this behaviour.
-    # Proof from the real OCR (Fraleigh §1): 1.3 Example, 1.4 Definition,
-    # 1.5 Example, …, 1.13 Theorem, 1.15 Theorem, 1.19 Example, 1.20 Table,
-    # 1.22 Figure — one continuous 1.3→…→1.N sequence spanning every label.
-    # The label-centric scan cannot see this (it puts each label into its own
-    # independent counter group), which would make item_numbering_integrity
-    # falsely report hundreds of "missing item" gaps (every number owned by a
-    # different label).  For a section-scoped book we therefore COLLAPSE the
-    # detected labels into ONE group AND fold "Table"/"Figure" into that group's
-    # `name`, so the B-layer verifies the full counter (text + graphic slots)
-    # as a single continuous sequence.
-    #   · Table is preserved in the written .md (a verified text entry), so it
-    #     legitimately belongs to the ordinal counter.
-    #   · Figure is verified via the embedding flow, so it too belongs here.
-    #   · Applies to EVERY section-scoped type, not only type 4.
-    # ⚠️ Coupling: this only works if the STRUCTURE types these nodes as
-    # "Table"/"Figure" (not "uncat"), so `group_for_label` maps them into this
-    # merged group.  build_structure must assign those types (see
-    # flows/write-source/structure/script/extract_items_en.py SECTION_LABELS).
-    if not cm_chapter_first and ordinal_arr:
-        # Collapse multiple detected label groups into one shared counter.
-        if len(ordinal_arr) > 1:
-            merged = []
-            for g in ordinal_arr:
-                for nm in g["name"]:
-                    if nm not in merged:
-                        merged.append(nm)
-            ordinal_arr = [{"type": ordinal, "name": merged, "scope": scope}]
-        # Fold the shared-counter graphic labels (see comment above).  Applies
-        # to the single surviving group whether or not a collapse happened.
-        sole = ordinal_arr[0]
-        for extra in ("Table", "Figure"):
-            if extra not in sole["name"]:
-                sole["name"].append(extra)
-    # Preserved (interleaved) exercise counter — detected separately from the
-    # label-centric scan, because preserved exercises have NO "Exercise N" label
-    # prefix (and LABEL_FORMS is deliberately free of Exercise to avoid
-    # cross-reference fabrication).  `_detect_exercise_counter` only fires for
-    # preserved exercises OUTSIDE a consolidated "Exercises/练习" zone, so it
-    # returns False for Fraleigh (all exercises there are consolidated blocks).
-    # Writing-rules §习题: preserved exercises ARE verified items, so when a
-    # genuine preserved counter exists we declare a type:1 (first-level) group
-    # labelled with the exercise words.
-    if _detect_exercise_counter(extract_dir):
-        ordinal_arr.append({
-            "type": 1,
-            "name": ["练习", "习题", "Exercise", "Problem"],
-            "scope": 3,
-        })
-    # 🔴 ORDINAL_HUM（Humphreys GTM 9）图号体例：全书仅 "Figure 1"/"Figure 2"…
-    # 单段整数（按小节重编，§9.3 与 §21.3 各有一个 Figure 1）。Figure 组用
-    # type 1（单段全局整数解析），使 figure_io 能从 caption 解析出图号。
-    if ordinal == ORDINAL_HUM and not any(
-            any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
-        ordinal_arr.append({"type": 1, "name": ["Figure"], "scope": 1})
-    # 🔴 Figure convention now lives INSIDE `ordinal` (no separate `figure`
-    # block). make_config only regenerates text-label groups, so a `--force`
-    # regeneration would otherwise DROP a pre-existing Figure group and silently
-    # lose the book's figure prefix / component convention.  Carry any dedicated
-    # Figure group over from the old config — UNLESS a figure keyword is already
-    # present (section-scoped books already have "Figure" folded into their
-    # merged text group above, so we must not append a second one).
-    if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
-        # 🔴 FIX (user-reported): the carried-over Figure group must inherit the
-        # book's detected numbering `type`/`scope`, NOT the legacy `type` copied
-        # verbatim from the old config.  A figure's component count equals the
-        # book's item-numbering depth (Strogatz figures are `Figure 1.1.1` = 3
-        # components, same as its type-3 items), so the Figure group must carry
-        # the same `type`/`scope` as every other ordinal group.  Copying the old
-        # `type: 2` into a type-3 book made figure_io parse `Figure 1.1.1` as a
-        # 2-component label (components=2), silently dropping the section
-        # component — a real config bug.  We preserve only the figure *prefix*
-        # (`name`) from the old config and re-derive `type`/`scope` from `ordinal`.
-        # When no numbering family was detected (ordinal is None) we keep the
-        # legacy group verbatim as a safe fallback rather than fabricating one.
-        for g in _load_old_ordinal(cfg_path):
-            if any(_is_fig_kw(nm) for nm in g.get("name", [])):
-                if ordinal is not None:
-                    ordinal_arr.append({
-                        "type": ordinal,
-                        "name": g.get("name") or ["Figure"],
-                        "scope": SCOPE_BY_TYPE.get(ordinal, 2),
-                    })
-                else:
-                    ordinal_arr.append(g)
-                break
-    config = {
-        "ordinal": ordinal_arr,
-        "strict": True,
-        "language": language,
-    }
-    # chapter_first: is the FIRST numeric component of an item key the CHAPTER
-    # (True, the ORDINAL_EN / ORDINAL_EN3 default) or the SECTION (False, a
-    # section-based book whose source prints "Theorem 8.1" = §8 item 1)?  Pulled
-    # from chapter_map.json; defaults True when absent.  section_scoped: when
-    # the book is section-based EN, the extractor ALSO captures NUMBER-FIRST
-    # headings ("26.4 Lemma") and numbered graphics ("Table 1.20") — needed for
-    # such sources; a normal chapter-based EN book keeps its prior behavior.
-    config["chapter_first"] = bool(cm_chapter_first)
-    config["section_scoped"] = bool(not cm_chapter_first)
-    if formula_cfg is not None:
-        config["formula"] = formula_cfg
-    # 🔒 证明戳：声明本文件由 make_config 在 MM Repair 完成后生成。下游
-    # ConfigLoader 会校验 _extraction_done.json 与本戳——手写/手改的文件无此戳，
-    # 将被拒绝加载（杜绝 Fraleigh 式"agent 手搓 config 当地基"事故）。
-    config["_provenance"] = {
-        "generated_by": "make_config.py",
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "mm_repair_done": True,
-        "warning": ("手写/手改本文件无效；须由 make_config.py 在 MM Repair 完成后生成，"
-                    "且下游 ConfigLoader 会校验 _extraction_done.json 与 _provenance。"),
-    }
-    # Explicit section hierarchy (D-layer).  NOT inferred from the ordinal type
-    # (that would wrongly force every type-3/5/8 book to 3 levels); instead we
-    # scan the raw OCR to see whether the deepest level k is a genuine section
-    # (e.g. `#### §1.1.1`) or just the item counter (Kreyszig `1.3-4`).  This
-    # overrides the ORDINAL_SECTION_TYPES fallback so Kreyszig-shaped books get
-    # the correct [1, 2] instead of the over-verifying [1, 2, 3].
-    sd = _detect_section_hierarchy(extract_dir)
-    # The detected depths ARE the built-in role codes (role N == depth N), so
-    # write `section_types` directly.  Depth is derived via SECTION_TYPE_DEPTH
-    # in verify_config.py and is never stored as a separate `section_depths`.
-    if ordinal == ORDINAL_HUM:
-        # Humphreys GTM 9：节为全书全局单序标 §1..§27（原书印裸 "9. Axiomatics"
-        # 无 § 前缀），小节 N.M 不作契约层级（条目键已内嵌小节定位）。OCR 层级
-        # 探测会把 N.M 小节头误判为二级节 → 强制覆盖为 [1,1]（章 + 全局节）。
-        sd = [1, 1]
-    config["section_types"] = sd
-    # 🔴 ORDINAL_HUM：全局单序标书需 sections_global=true（D 层 global 路径 +
-    # build_structure 字母子块语境），与 Arnold 书同语义。仅在 hum 书发射，
-    # 其余书零回归。
-    if ordinal == ORDINAL_HUM:
-        config["sections_global"] = True
+    config, family, groups, ordinal, depth = _build_config_dict(extract_dir, cfg_path)
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+    # 🔴 附录专用配置（appendix_verify_config.json）：仅扫附录页区间，体例与正文
+    # 不一致时独立生成（字母章位 `A.1.1` / 不同的标签集 / 不同的计数器重置边界）。
+    # 缺附录章 → 不生成（回退主配置，零回归）。生成同样打 _provenance 戳 + 同样
+    # 走 ConfigLoader 的 _extraction_done.json 上游闸（无手写侧门）。
+    _generate_appendix_verify_config(extract_dir)
 
     print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
     print(f"   小节层级 section_types={config['section_types']} "

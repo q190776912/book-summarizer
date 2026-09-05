@@ -169,6 +169,11 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
     stray `Remark 2.3.4` inside chapter 1 is dropped.  Returns items shaped like
     the other extractors: {key, label, page, text}.
     """
+    # 附录字母章位：字母章（chapter="A"/"B"/…）抽取**本字母**的条目；
+    # 数字章保持 legacy 只认 "A"（正文章页区间内不应出现附录条目，防御性保留）。
+    # 旧实现硬编码 "A"，有 Appendix B 的书（如 Weibel 同型书）会整附录漏抽。
+    _ch_s = str(chapter).strip()
+    _app_letter = _ch_s.upper() if (_ch_s and _ch_s[:1].isalpha()) else "A"
     # 块首装饰字符（Brin & Stuck 用 * 标记难题："*Exercise 1.2.4 ..."），
     # 不剥离会被「块首判定」整条漏抽；括号 ( 不在白名单——"(Exercise 2.1.3)"
     # 是交叉引用，必须保持拒绝。
@@ -217,7 +222,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         # 字母位只认 A（附录 A 体例）。
         if not _rest_ok(txt, m):
             return
-        if (m.group(2) or "").upper() != "A":
+        if (m.group(2) or "").upper() != _app_letter:
             return
         label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
         if label == "Example" and not want_examples:
@@ -233,7 +238,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         # 附录无标签定义（"A.1.4 Small categories" / "Small categories A.1.4"）：
         # 粗体号 + 词目、省略 Definition 词，Weibel 附录惯例归 Definition。仅 A 生效。
         letter = (m.group(1) or "").upper()
-        if letter != "A":
+        if letter != _app_letter:
             return
         n = m.group(2)
         mpart = m.group(3)
@@ -278,7 +283,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
                 _emit_app(txt, m, p)
             # 🔴 Weibel 附录无标签定义（三级 letter 号，省略 Definition 词）：
             # 仅在附录章（字母位 A）生效，避免误伤正文章（其首分量为数字）。
-            if chapter == "A":
+            if _ch_s[:1].isalpha():
                 for m in EN3_APP_BARE_RE.finditer(txt):
                     if txt[:m.start()].strip(_DECOR + " \t"):
                         continue

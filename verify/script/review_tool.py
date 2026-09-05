@@ -13,6 +13,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
+from data.book_structure.book_structure import chapter_label
 
 # review_tool.py - Automated Chapter Review Tool (book-agnostic)
 # All execution lives inside main(), guarded by `if __name__ == "__main__"`,
@@ -84,7 +85,7 @@ def review_chapter(extract_items, verify_chapter, chapter_map, book_dir, extract
 
     # Step2: Locate this chapter's ignore file (in the book's _extract folder)
     ignore_file = None
-    ig_path = os.path.join(extract_dir, f"ignore_ch{chapter}.json")
+    ig_path = os.path.join(extract_dir, f"ignore_{chapter_label(chapter)}.json")
     if os.path.exists(ig_path):
         ignore_file = ig_path
 

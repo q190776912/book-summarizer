@@ -43,7 +43,7 @@ from lib.regexlib import (
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
-    ORDINAL_ROSS, ORDINAL_HUM,
+    ORDINAL_ROSS, ORDINAL_HUM, ORDINAL_APP,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -214,6 +214,33 @@ ENTRY_RE_EN3_APP_C = re.compile(
     r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')'
     r'\s*([A-Z])' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
+
+# --- ORDINAL_APP (type 13)：附录字母章号三级体例 --------------------------------
+# 附录标签集在 COMBINED_LABEL_KINDS 基础上额外纳入 Exercise：附录练习常印成
+# `Exercise A.4.1`（字母章位），而 Exercise 不在 COMBINED_LABEL_KINDS 中（避免正文
+# 交叉引用被误当编号项）。仅附录分支扩展，正文解析零影响。
+APP_LABEL_KINDS = tuple(COMBINED_LABEL_KINDS) + ('Exercise',)
+# 附录的章位是**单个字母**而非数字，条目形如
+#   `Definition A.1.1` / `Examples A.1.3` / `Theorem A.6.2`   （标签在前）
+#   `A.1.5` / `A.4.3`                                          （裸号，原书只印编号）
+# 节标题形如 `A.1 Categories` / `A.6 Adjoint Functors`。
+# 规范键 = 规范中文标签 + `A.S-N`（如 `定义A.1-1`）；裸号条目键 = `A.1-5`。
+# 与 type 5（roman，`Label I.2.3`）刻意分开：roman 章位是罗马数字串
+# （`[IVXLCDM]+`，可多字符），附录章位是单字母（可含 C/D/M 等罗马同形字母），
+# 二者正则不可混用。
+ENTRY_RE_APP_C = re.compile(
+    r'\*\*(' + '|'.join(APP_LABEL_KINDS) + r')'
+    r'\s*([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
+PROSE_RE_APP_C = re.compile(
+    r'(?<![A-Za-z0-9])(' + '|'.join(APP_LABEL_KINDS) + r')(?![A-Za-z])'
+    r'\s*([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
+    re.IGNORECASE)
+# 裸号条目（原书只印 `A.1.5`）：md 写 `**A.1.5**`。刻意不收裸号**散文引用**——
+# 正文里 `A.1.1` 这类零散大写字母+数字组合（矩阵元 / 习题号 / 公式号）太多，
+# 放进 all_keys 只会给 A 层 EXTRA 刷屏。
+ENTRY_RE_APP_BARE_C = re.compile(
+    r'\*\*([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 
 
 
@@ -432,6 +459,21 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                 for m in PROSE_RE_ROSS_SINGLE.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(_ross_canon(m.group(1), m.group(2)))
+            elif t == ORDINAL_APP:
+                # 附录字母章号三级（type 13）：`**Definition A.1.1**` → `定义A.1-1`；
+                # 裸号 `**A.1.5**` → `A.1-5`。与契约侧
+                # `structure_io.read_structure_items` 的附录分支同构。
+                for m in ENTRY_RE_APP_C.finditer(line):
+                    key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                           f".{m.group(3)}-{m.group(4)}")
+                    entries.add(key); allk.add(key)
+                for m in ENTRY_RE_APP_BARE_C.finditer(line):
+                    key = f"{m.group(1).upper()}.{m.group(2)}-{m.group(3)}"
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_APP_C.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                                 f".{m.group(3)}-{m.group(4)}")
             elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"

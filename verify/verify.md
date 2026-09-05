@@ -5,7 +5,7 @@
 > `write-source`（步骤 8）引用本流程对**源语言 + 翻译语言两组 md** 一次性校验（源版与翻译版共用同一套校验）。
 >
 > **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 8 个校验层模块，
-> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`、`../flows/write-source`
+> 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
 ## 目的
@@ -13,7 +13,7 @@
 ## 前置
 - 待校验语言的全部章节初稿写完。
 - `_extract/verify_config.json` 完整合法（含 `formula` map 若书有公式）。
-- `ctx.language` 由 config 的 `language` 字段决定（`en` / `cn`），仅作记录与标签语言提示；**EN/CN 的实际校验目标由文件名约定决定**（`ChapterN_*.md` 为英文源版、`第N章_*.md` 为中文派生版），`--scheme en` 控制英文两级编号比对。各校验层不依赖 `language` 切换逻辑，故无需为不同语言写两套校验。
+- `ctx.language` 由 config 的 `language` 字段决定（`en` / `cn`），仅作记录与标签语言提示；**EN/CN 的实际校验目标由文件名约定决定**（`ChapterN_*.md` 为英文源版、`第N章_*.md` 为中文派生版）。各校验层不依赖 `language` 切换逻辑，故无需为不同语言写两套校验。
 
 ## 校验层注册表（SSOT）
 所有校验层脚本在 `verify/<snake>/script/<snake>.py`，子流程文档 `<snake>.md` 在 `verify/<snake>/` 目录内（与 `script/` 并列），

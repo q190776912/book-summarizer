@@ -31,7 +31,7 @@
 - **每章 ignore 形状**：`ignore_ch{N}.json` 同时接受 list（纯键列表）与 dict（键 -> 登记理由；B 层 / IGNORE-AUDIT 惯例形状），Q 层两者都合并进本章忽略集——登记公式噪声时优先用 dict 附理由以便人审。
 
 ## 步骤（语义与检查内容）
-- **门控（opt-in）**：`BookConfig.formula` 为 `None`（默认）时整层 no-op——返回中性 `q_*` 元数据、不写报告、不计入 FAIL，确保既有 16 层与已完工书目零变化。仅当某书在 `verify_config.json` 显式配置 `formula` map 后才启用。
+- **门控（opt-in）**：`BookConfig.formula` 为 `None`（默认）时整层 no-op——返回中性 `q_*` 元数据、不写报告、不计入 FAIL，确保既有全部校验层与已完工书目零变化。仅当某书在 `verify_config.json` 显式配置 `formula` map 后才启用。
 - **配置形状**（与条目序标 `ordinal` 配置同构，非平铺字段）：
   ```json
   "formula": {"type": 3, "scope": 2, "ignore": []}

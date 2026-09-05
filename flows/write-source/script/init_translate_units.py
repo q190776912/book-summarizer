@@ -55,13 +55,12 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import list_chapter_keys
+from data.book_structure.book_structure import chapter_label, list_chapter_keys, unit_dir_name
 import split_draft_units as _split
 import gate_units as _gate
 
 # 与源单元目录同级别（book_structure/units-translate），结构一致
 OUT_SUB = os.path.join(_ac.OUT_DIR_NAME, "units-translate")
-UNITS_DIR = "ch%s"
 
 # 源 → 目标语言映射（仅外语书派生翻译）
 _TARGET = {"en": "cn"}
@@ -81,28 +80,28 @@ def init_chapter(ext, ch_key, force=False, scaffold=False):
     src_hash 快照）；不复制正文，除非 scaffold=True（补齐缺失单元为源文骨架 DRAFT）。
     返回 manifest 路径；中文书/无需翻译返回 None。
     """
-    src_dir = os.path.join(ext, _ac.OUT_DIR_NAME, "units", _split.UNITS_DIR % ch_key)
+    src_dir = os.path.join(ext, _ac.OUT_DIR_NAME, "units", unit_dir_name(ch_key))
     mpath = os.path.join(src_dir, "manifest.json")
     if not os.path.exists(mpath):
-        raise SystemExit("[init_translate_units] ch%s 缺 units/manifest.json（先跑 "
-                         "split_draft_units + agent 改好单元）。" % ch_key)
+        raise SystemExit("[init_translate_units] %s 缺 units/manifest.json（先跑 "
+                         "split_draft_units + agent 改好单元）。" % chapter_label(ch_key))
     with open(mpath, encoding="utf-8") as f:
         src_manifest = json.load(f)
     src_lang = src_manifest.get("language") or "cn"
     tgt_lang = _target_language(src_lang)
     if tgt_lang is None:
-        print("[init_translate_units] ch%s 源语言=%s（中文书无翻译阶段），跳过。"
-              % (ch_key, src_lang))
+        print("[init_translate_units] %s 源语言=%s（中文书无翻译阶段），跳过。"
+              % (chapter_label(ch_key), src_lang))
         return None
 
     # 🔴 翻译硬闸：源单元必须全部 DONE + 单元级质量校验通过
     ok_g, gdet = _gate.gate_chapter(ext, ch_key)
     if not ok_g:
-        raise SystemExit("[init_translate_units] 🔴 ch%s 源单元未过门控，拒绝初始化翻译清单：\n"
+        raise SystemExit("[init_translate_units] 🔴 %s 源单元未过门控，拒绝初始化翻译清单：\n"
                          "%s\n须先把源单元按 writing-rules 改好（DONE + 质量校验通过）。"
-                         % (ch_key, gdet))
+                         % (chapter_label(ch_key), gdet))
 
-    out_dir = os.path.join(ext, OUT_SUB, UNITS_DIR % ch_key)
+    out_dir = os.path.join(ext, OUT_SUB, unit_dir_name(ch_key))
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {
@@ -110,7 +109,7 @@ def init_chapter(ext, ch_key, force=False, scaffold=False):
         "language": tgt_lang,
         "source_language": src_lang,
         "source_units_dir": os.path.join(_ac.OUT_DIR_NAME, "units",
-                                         _split.UNITS_DIR % ch_key).replace("\\", "/"),
+                                         unit_dir_name(ch_key)).replace("\\", "/"),
         "final_md": "",
         "units": [],
     }
@@ -144,8 +143,8 @@ def init_chapter(ext, ch_key, force=False, scaffold=False):
     mpath_out = os.path.join(out_dir, "manifest.json")
     with open(mpath_out, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
-    print("[init_translate_units] ch%s manifest 已初始化（%d 单元，%s→%s）%s"
-          % (ch_key, len(manifest["units"]), src_lang, tgt_lang,
+    print("[init_translate_units] %s manifest 已初始化（%d 单元，%s→%s）%s"
+          % (chapter_label(ch_key), len(manifest["units"]), src_lang, tgt_lang,
              "；补齐 %d 个源文骨架" % n_scaffold if n_scaffold else ""))
     return mpath_out
 

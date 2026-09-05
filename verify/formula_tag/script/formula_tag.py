@@ -1618,7 +1618,8 @@ class QLayer(VerifyLayer):
         # whose "Figure 3.2"-style entries would collide with real formula
         # norms like `\tag{3.2}`) gives a per-chapter-scoped, coverage-preserving
         # way to register formula noise without the global-ignore breadth cost.
-        _pic = os.path.join(ctx.ext_dir, f'ignore_ch{ctx.ch}.json')
+        from data.book_structure.book_structure import chapter_label
+        _pic = os.path.join(ctx.ext_dir, f'ignore_{chapter_label(ctx.ch)}.json')
         if os.path.exists(_pic):
             try:
                 _pic_data = json.load(open(_pic, encoding='utf-8'))

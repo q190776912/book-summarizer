@@ -15,6 +15,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
+from data.book_structure.book_structure import chapter_label, norm_chapter_key
+
 r"""
 Ignore list manager for book-summarizer skill.
 
@@ -73,8 +75,8 @@ def load_ignore_raw(path):
 
 
 def add_keys(ext, ch, keys):
-    """Add keys to ignore_ch{N}.json."""
-    ipath = os.path.join(ext, f'ignore_ch{ch}.json')
+    """Add keys to ignore_ch{N}.json / ignore_appendix{X}.json."""
+    ipath = os.path.join(ext, f'ignore_{chapter_label(ch)}.json')
     ignore = load_ignore_dict(ipath)
     added = []
     for k in keys:
@@ -84,17 +86,17 @@ def add_keys(ext, ch, keys):
             added.append(k)
     if added:
         save_ignore(ipath, ignore)
-        print(f"[ignore_ch{ch}.json] Added {len(added)} key(s): {', '.join(added)}")
+        print(f"[ignore_{chapter_label(ch)}.json] Added {len(added)} key(s): {', '.join(added)}")
     else:
-        print(f"[ignore_ch{ch}.json] No new keys added (all already present)")
+        print(f"[ignore_{chapter_label(ch)}.json] No new keys added (all already present)")
     return added
 
 
 def remove_keys(ext, ch, keys):
-    """Remove keys from ignore_ch{N}.json."""
-    ipath = os.path.join(ext, f'ignore_ch{ch}.json')
+    """Remove keys from ignore_ch{N}.json / ignore_appendix{X}.json."""
+    ipath = os.path.join(ext, f'ignore_{chapter_label(ch)}.json')
     if not os.path.exists(ipath):
-        print(f"[ignore_ch{ch}.json] File does not exist")
+        print(f"[ignore_{chapter_label(ch)}.json] File does not exist")
         return []
     ignore = load_ignore_dict(ipath)
     removed = []
@@ -105,21 +107,21 @@ def remove_keys(ext, ch, keys):
             removed.append(k)
     if removed:
         save_ignore(ipath, ignore)
-        print(f"[ignore_ch{ch}.json] Removed {len(removed)} key(s): {', '.join(removed)}")
+        print(f"[ignore_{chapter_label(ch)}.json] Removed {len(removed)} key(s): {', '.join(removed)}")
     else:
-        print(f"[ignore_ch{ch}.json] No matching keys to remove")
+        print(f"[ignore_{chapter_label(ch)}.json] No matching keys to remove")
     return removed
 
 
 def list_keys(ext, ch):
-    """List all keys in ignore_ch{N}.json."""
-    ipath = os.path.join(ext, f'ignore_ch{ch}.json')
+    """List all keys in ignore_ch{N}.json / ignore_appendix{X}.json."""
+    ipath = os.path.join(ext, f'ignore_{chapter_label(ch)}.json')
     if not os.path.exists(ipath):
-        print(f"[ignore_ch{ch}.json] File does not exist (empty)")
+        print(f"[ignore_{chapter_label(ch)}.json] File does not exist (empty)")
         return []
     ignore = load_ignore_dict(ipath)
     if ignore:
-        print(f"[ignore_ch{ch}.json] {len(ignore)} key(s):")
+        print(f"[ignore_{chapter_label(ch)}.json] {len(ignore)} key(s):")
         for k in sorted(ignore.keys()):
             reason = ignore[k]
             if reason:
@@ -127,23 +129,35 @@ def list_keys(ext, ch):
             else:
                 print(f"  {k}")
     else:
-        print(f"[ignore_ch{ch}.json] Empty")
+        print(f"[ignore_{chapter_label(ch)}.json] Empty")
     return list(ignore.keys())
 
 
 def list_all(ext):
-    """List all ignore_ch{N}.json files in extract dir."""
+    """List per-chapter ignore files (ignore_ch{N}.json / ignore_appendix{X}.json).
+
+    文件名残段 → 章键：``ignore_ch<N>`` → 数字章 ``<N>``、``ignore_appendix<X>``
+    → 附录章 ``<X>``（chapter_label 再逆推出同一文件名）。其余前缀不认（防止
+    旧式 ``ignore_chA.json`` 之类违规命名被误读成双前缀标签）。"""
     for fname in sorted(os.listdir(ext)):
-        if fname.startswith('ignore_ch') and fname.endswith('.json'):
-            ch = fname[len('ignore_ch'):-len('.json')]
-            list_keys(ext, ch)
-            print()
+        if not fname.endswith('.json'):
+            continue
+        stem = fname[:-len('.json')]
+        if stem.startswith('ignore_appendix'):
+            ch = stem[len('ignore_appendix'):]
+        elif stem.startswith('ignore_ch') and stem[len('ignore_ch'):][:1].isdigit():
+            ch = stem[len('ignore_ch'):]
+        else:
+            continue
+        list_keys(ext, ch)
+        print()
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="Manage per-chapter ignore lists (ignore_ch{N}.json)",
+        description="Manage per-chapter ignore lists "
+                        "(ignore_ch{N}.json / ignore_appendix{X}.json)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -154,7 +168,9 @@ Examples:
 """
     )
     parser.add_argument('--extract', required=True, help='Path to book _extract directory')
-    parser.add_argument('--chapter', type=int, help='Chapter number (required for add/remove/list)')
+    parser.add_argument('--chapter', type=norm_chapter_key,
+                        help='Chapter number or appendix letter A/B/… '
+                             '(required for add/remove/list)')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--add', help='Comma-separated keys to add to ignore list')
     group.add_argument('--remove', help='Comma-separated keys to remove from ignore list')

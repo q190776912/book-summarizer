@@ -3,7 +3,7 @@
 背景（2026-08-31 用户需求重构）
 ------------------------------
 写源阶段 agent「总是不按照草稿总结来总结」。拆分脚本 ``split_draft_units.py``
-把整章草稿切成按写作顺序的单元文件（``units/ch{N}/NNNN_<type>.md``，4 位编号），agent
+把整章草稿切成按写作顺序的单元文件（``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章 ``units/appendix{X}/``），agent
 **必须逐个把单元按 writing-rules 改好**。本脚本是这一步的**强制门控**：只有全部
 单元都被改好（每个 item 都不漏）才放行，之后才能进入 ``merge_units.py`` 拼接。
 
@@ -61,11 +61,38 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import list_chapter_keys
+from data.book_structure.book_structure import chapter_label, list_chapter_keys, unit_dir_name
 import split_draft_units as _split
 import check_unit_quality as _quality
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
+
+_KEY_NUM_RE = re.compile(r"(\d+(?:\.\d+)*)-(\d+)$")
+
+
+def _check_numbering(units):
+    """B 层编号预检：同一节内 item 编号是否递增。返回问题列表。"""
+    from collections import defaultdict
+    sections = defaultdict(list)
+    for u in units:
+        if u["type"] != "item":
+            continue
+        m = _KEY_NUM_RE.search(u["key"])
+        if m:
+            sec = m.group(1)
+            num = int(m.group(2))
+            sections[sec].append((num, u["file"], u["key"]))
+    problems = []
+    for sec, items in sorted(sections.items()):
+        items.sort(key=lambda x: x[0])
+        for i in range(1, len(items)):
+            prev_num, prev_file, prev_key = items[i - 1]
+            cur_num, cur_file, cur_key = items[i]
+            if cur_num <= prev_num:
+                problems.append(
+                    "编号不递增：节 %s 内 %s（%d）排在 %s（%d）之后" % (
+                        sec, cur_key, cur_num, prev_key, prev_num))
+    return problems
 
 
 def _hash_text(text):
@@ -96,11 +123,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     ``units-translate``（翻译单元；2026-09-03 起翻译并入本流程，
     与源单元共用同一门控与同一套单元级质量校验，语言无关不重复造轮子）。
     """
-    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, _split.UNITS_DIR % ch_key)
+    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(ch_key))
     mpath = os.path.join(out_dir, "manifest.json")
     if not os.path.exists(mpath):
-        return False, "ch%s 缺 %s/manifest.json（先跑 split_draft_units / "
-        "init_translate_units）。" % (ch_key, units_sub)
+        return False, "%s 缺 %s/manifest.json（先跑 split_draft_units / "
+        "init_translate_units）。" % (chapter_label(ch_key), units_sub)
     with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     units = manifest.get("units") or []
@@ -124,7 +151,7 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         # DONE：item / desc 单元必须「写对」——质量校验通过（公式闭合 / 无裸数学 /
         # 结构标签 / 无明显 OCR 残留）。🔴 2026-09-01 起判断标准是"写对"而非"重写"：
         # 不再看内容指纹是否变化，而是看单元是否符合写作要求（拦"瞎改就标 DONE"）。
-        if utype in ("item", "desc"):
+        if utype in ("item", "desc", "exercise"):
             ok_q, qproblems = _quality.check_body(utype, u.get("name") or "", body)
             if not ok_q:
                 problems.append("单元 %s（%s %s）质量未达标（写错/格式破坏）：%s" % (
@@ -135,11 +162,14 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             continue
         if fn not in present_files:
             problems.append("多余文件 %s（不在 manifest 中，请移除）" % fn)
+    # B 层编号预检：同一节内编号是否递增
+    numbering_probs = _check_numbering(units)
+    problems.extend(numbering_probs)
     if problems:
-        return False, "ch%s 门控未通过（%d 处）：\n  %s" % (
-            ch_key, len(problems), "\n  ".join(problems))
-    return True, "ch%s 门控通过：%d 个单元全部改好（含 %d 个编号项）" % (
-        ch_key, len(units), sum(1 for u in units if u["type"] == "item"))
+        return False, "%s 门控未通过（%d 处）：\n  %s" % (
+            chapter_label(ch_key), len(problems), "\n  ".join(problems))
+    return True, "%s 门控通过：%d 个单元全部改好（含 %d 个编号项）" % (
+        chapter_label(ch_key), len(units), sum(1 for u in units if u["type"] == "item"))
 
 
 def main():

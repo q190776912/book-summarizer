@@ -81,8 +81,35 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | 6 | gm | 2 | 两级，章内本地从 1 起号（无章过滤，每章重置计数器） | `Definition 1.1` / `Theorem 1.2` / `Remark 1.5`（章.号，章内从 1 起） | Gelfand–Manin |
 | 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题用字母位 `N.M.A`） | `Theorem 1.2.3` / `Exercise 1.2.A` / `Proposition 4.5.B`（章.节.号） | Vakil《Foundations of Algebraic Geometry》 |
 | 9 | en3 | 3 | EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | `Remark 1.1.1` / `Definition 2.3.4` / `Theorem 3.2.1`（章.节.号） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
+| 13 | app | 3 | 附录**字母章位**三级：章位是**单字母**（A/B/C…）而非数字，条目 `Label A.S.N`、节标题 `A.S`（如 `A.1 Categories` / `A.6 Adjoint Functors`） | `Definition A.1.1` / `Theorem A.6.2` / `Example A.3.4` / `Exercise A.4.1`（字母章位.节.号） | Weibel《An Introduction to Homological Algebra》Appendix A |
 
 > `depth`（段数）一律由 `type` 经 `ORDINAL_DEPTH` 派生，上表「段数(depth)」列即为其唯一来源；配置里**不要**再写 `depth` 字段。
+
+## 附录专用配置：`appendix_verify_config.json`
+
+> 一些书的**附录与正文编号体例不一致**（最典型：正文是数字三级 `Theorem 10.9.13`，附录却换成字母章位 `Definition A.1.1`；标签集、小节层级、计数器重置边界也可能不同）。把两者的约定硬塞进同一份 `verify_config.json` 必然顾此失彼。因此允许（且推荐）为附录单独落一份**同名前缀**配置：`<extract_dir>/appendix_verify_config.json`。
+
+- **文件缺失** → 附录章回退主 `verify_config.json`，行为与历史**完全一致（零回归）**。
+- **文件存在** → `ConfigLoader` 对**附录章**（判定见下）一律改走这份配置；正文章不受影响。
+- **生成**：由 `make_config.py` 只扫附录页区间半自动产出（同样打 `_provenance` 戳，同样过 `_extraction_done.json` 上游闸——**无手写侧门**）。人工核对后可直接用。
+- **校验**：`require_complete()` 对附录配置套用**同一套闸门**（ordinal 必为合法数组、type∈合法码、section_types 角色码合法）。附录配置不合规会被同样拒绝。
+
+### 附录章的判定（`ConfigLoader.is_appendix_chapter`）
+
+与分章契约的命名（`chapter_json_name` / `unit_dir_name` 依 `key[:1].isdigit()` 把数字章写成 `ch{N}.json`、字母章写成 `appendix{X}.json`）**严格同源**，两个信号任一命中即视为附录章：
+
+1. `chapter_map.json` 章名含 `Appendix` / `附录`（如 `Appendix A`）；
+2. 章号**非数字**（字母章 `A`/`B`/…）——与契约写盘命名一致，配置路由与结构写盘永不分歧。
+
+非附录书完全不受影响：每个正文章都是数字章号 + 普通章名，`is_appendix_chapter` 一律返回 `False`。
+
+### 路由（`ConfigLoader.config_for_chapter`）
+
+附录章以 `appendix_verify_config.json` 为基底配置（若有），再叠加该章的侧车 ignore（文件名段走 `chapter_label`：数字章 `ignore_ch{N}.json`、附录章 `ignore_appendix{A}.json`）解析结果。正文配置不含附录章节、附录配置不含正文章节，互不污染。
+
+### 键规范化（md 侧 / 契约侧）
+
+`type 13` 的条目键形如 `定义A.1-1`（规范中文标签 + 字母章位 `A.S` + `-` + 条目号 `N`）。`lib/key_parse.py`（md 侧 `keys_in_md`）与 `verify/script/structure_io.py`（契约侧 `read_structure_items`）均按同一规则把 `Definition A.1.1` / `A.1.1`（裸号）规范化为该键，确保 B 层对账无误。与 `type 5`（roman，`I.2.3`）刻意分开：roman 章位是**罗马数字串**（多字符、`[IVXLCDM]+`），附录章位是**单字母**（可含 C/D/M 等罗马同形字母），二者正则不可混用。
 
 ## 如何选定每个 group 的 `type`（判定树）
 
@@ -104,7 +131,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈{1,2,3,4,5,6,8,9}（`depth` 由 `type` 派生，不再单独校验；type 7 已并入 type 4 + `chapter_first:false`）、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type`∈{1,2,3,4,5,6,8,9,13}（`depth` 由 `type` 派生，不再单独校验；type 7 已并入 type 4 + `chapter_first:false`；type 13 = 附录字母章位三级）、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## 顶层字段：`chapter_first` / `section_scoped`

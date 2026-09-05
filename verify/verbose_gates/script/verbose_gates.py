@@ -107,7 +107,7 @@ DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 # 否则三级小节号会被截断为两级、或三级 `###`/四级 `####` 标题根本不被扫描，
 # 导致 p-layer-missing-sec 把真实存在的小节误报为缺失（回归：commit 5390e5d
 # 把契约源切到分章契约后未同步放宽此正则）。
-SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*(\d+(?:\.\d+)*(?:-[A-Za-z])?)')
+SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*([A-Za-z](?:\.\d+)+|\d+(?:\.\d+)*)')
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。

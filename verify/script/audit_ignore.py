@@ -183,7 +183,8 @@ def _collect_ignore(ext):
                         entries.append((str(kk), vv if isinstance(vv, str) else "", "verify_config.json"))
                 else:
                     entries.append((str(k), "", "verify_config.json"))
-    for fp in sorted(glob.glob(os.path.join(ext, "ignore_ch*.json"))):
+    for fp in sorted(glob.glob(os.path.join(ext, "ignore_ch*.json"))
+                             + glob.glob(os.path.join(ext, "ignore_appendix*.json"))):
         try:
             data = json.load(open(fp, encoding="utf-8"))
         except Exception:

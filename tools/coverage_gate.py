@@ -10,10 +10,26 @@
 三个指标（章级）
   ratio      压缩比 = md 正文词数 ÷ 源正文词数
              （两侧都剔除展示公式；源侧另剔除页眉页脚 / 参考文献 / 作者机构块）
-  term_cov   术语覆盖率 = 源侧「稀有内容词」（源频 ≤ RARE_MAX，长度 ≥ 4，非停用词）
-             在 md 中出现的比例（未加权，每个词一票 → 漏掉一个概念就扣分）
-  var_cov    变量覆盖率 = 源侧 LaTeX 符号（希腊字母 / 带下标标识符 / 算符）
-             在 md 中出现的比例
+  term_cov   术语覆盖率 = 源侧「稀有内容词」在 md 中出现的比例。
+             分母口径：源频 ∈ [rare_min, rare_max]（默认 2–3）、长度 ≥ 4、
+             非停用/常见词、且非 OCR 碎片。
+             - 排除 hapax（源频=1）：OCR 书上 hapax 绝大多数是识别错字或
+               断词残留，把它们计入分母等于要求总结「复述 OCR 错字」，
+               与 writing-rules「严禁照抄 OCR 文本流」冲突。
+             - 排除 OCR 碎片：无元音 / 5+ 辅音连缀 / 三连重复字符。
+             未加权，每个词一票 → 漏掉一个概念就扣分。
+  var_cov    变量覆盖率 = 源侧 LaTeX 数学对象在 md 中出现的比例。
+             只认：希腊字母、具名算符/集合/空间命令、带下标的裸标识符；
+             排除结构/环境命令（`\\left` `\\frac` …）、字体样式开关
+             （`\\bf` `\\rm` `\\it` …）、关系符（`\\le` `\\ne` …）与函数
+             （`\\ln` `\\arg` `\\max` …）——后者是排版/运算记号，不是数学对象。
+
+译文口径
+  `--scheme cn` 且源为非中文（即 md 是译本）时，词表语言不通，覆盖度
+  **不可直接对 OCR 源测**（实测 term_cov 恒落在 0.01–0.13 的假红区）。
+  此时自动改测同章源语言母版 `ChapterN_*.md` 并在行下标注；
+  找不到母版则该章记 N/A，不参与 PASS/FAIL 判定。译本与母版的 1:1 同构
+  由 `check_translate_parity` 把关，不归本工具管。
 
 用法
     python tools/coverage_gate.py <extract_dir> <chapter_md> <chapter_no> [选项]
@@ -23,7 +39,8 @@
     --ratio MIN        压缩比下限（默认 0.55）
     --term MIN         术语覆盖率下限（默认 0.80）
     --var MIN          变量覆盖率下限（默认 0.85）
-    --rare-max N       稀有词频上限（默认 3）
+    --rare-max N       术语词频上界（默认 3）
+    --rare-min N       术语词频下界（默认 2；设为 1 可退回含 hapax 的旧口径）
     --json             以 JSON 输出，便于脚本消费
     --show-missing N   列出未覆盖的术语 / 变量（默认 0 = 不列）
 
@@ -183,6 +200,69 @@ infty partial nabla forall exists emptyset top log exp sin cos tan max min sup i
 dim ker im re im hat tilde bar vec dot ddot check breve acute grave
 """.split())
 
+# 定界 / 尺寸 / 占位 / 箭头 / 杂符（排版件，不是数学对象）
+LATEX_DELIM = set("""Big bigg Bigg bigl bigr Bigl Bigr biggl biggr Biggl Biggr bigm Bigm
+Vert vert mid nmid lVert rVert lvert rvert langle rangle lceil rceil lfloor rfloor
+lbrace rbrace lbrack rbrack lgroup rgroup lmoustache rmoustache
+lefteqn vphantom phantom hphantom rule everymath sideset displaylimits ensuremath
+cfrac dfrac tfrac boxed mathstrut strut smash vspace* hspace* qquad
+colon dots hdots dotsc dotsb dotsm dotsi ddotso copyright dag ddag pounds
+bowtie sqcup sqcap sqsupset sqsubseteq sqsupseteq circledcirc circledast
+doteq triangle triangleleft triangleright bigtriangleup bigtriangledown
+star bullet circ dagger ddagger backslash prime second minute degree angle measuredangle
+nearrow searrow swarrow nwarrow hookrightarrow hookleftarrow rightharpoonup
+xrightarrow xleftarrow xleftrightarrow xRightarrow xLeftarrow xleftrightarrow
+longmapsto longrightarrow longleftarrow Longmapsto Longrightarrow Longleftarrow
+Downarrow Uparrow updownarrow downarrow uparrow leftrightarrow
+sqsubset sqsupset blacktriangle blacktriangledown varnothing emptyset
+models perp parallel nparallel asymp simeq cong ncong doteqdot
+llless gggtr lll ggg gtrless lessgtr
+""".split())
+
+# 字体 / 样式 / 间距开关（OCR 或排版残留，不是数学对象）
+LATEX_STYLE = set("""bf it sf tt sp em rm sc sl bm bold mdseries upshape normalsize
+bfseries itshape sffamily ttfamily scshape slshape textbf textit textsf texttt textsc
+displaystyle scriptstyle textstyle small large Large LARGE huge Huge tiny footnotesize
+nonumber notag center centering raggedright hfill hfil vfill vspace hspace medskip
+bigskip smallskip noindent newline arraystretch darraystretch
+cal frak bb scr scrs mathfrak mathfrak mathit mathsf mathtt mathnormal pmb
+Tilde Tilde Dot Hat Vec Bar Check Breve Acute Grave Widehat Widetilde
+tilde dot hat vec bar check breve acute grave widehat widetilde overline underline
+overbrace underbrace overrightarrow overleftarrow overleftrightarrow underrightarrow
+underleftarrow xleftarrow overparen underparen substack subarray
+""".split())
+
+# 具名算符 / 函数（不是变量）
+LATEX_OPERATORS = set("""arg deg det dim exp gcd hom ker lcm lim ln lg log max min inf
+sup sin cos tan sec csc cot sinh cosh tanh coth arcsin arccos arctan sinh cosh
+Pr Im Re Res Tr tr diag span supp range null rank ord sgn sign const id Id
+operatorname* mathop
+""".split())
+
+# 关系符缩写（不是数学对象）
+LATEX_RELATIONS = set("""le ge ne ll gg nl leq geq neq lneq gneq lleq ggeq leqslant
+geqslant nleq ngeq nless ngtrlesssim gtrsim llss gmgg
+""".split())
+
+# 希腊字母（唯一被认作"数学对象"的短命令）
+# 规范形 = GREEK_BASE；OCR/UniMERNet 常吐出 `\upalpha` `\varGamma` `\varepsilon`
+# 等变体，比对前一律经 GREEK_ALIAS 归一（writing-rules V-C 允许记号归一）。
+GREEK_BASE = set("""alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu
+nu xi pi rho sigma tau upsilon phi chi psi omega
+Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega""".split())
+
+GREEK_ALIAS = {}
+for _g in list(GREEK_BASE):
+    for _pre in ("up", "var", "Up", "Var", "displaystyle"):
+        GREEK_ALIAS[_pre + _g] = _g
+GREEK_ALIAS.update({"varepsilon": "epsilon", "vartheta": "theta", "varpi": "pi",
+                    "varrho": "rho", "varsigma": "sigma", "varphi": "phi"})
+
+GREEK_NAMES = GREEK_BASE | set(GREEK_ALIAS)
+
+# 拉丁词元音（含 y，避免 rhythm / syzygy 被误判为碎片）
+VOWELS = set("aeiouy")
+
 FORMULA_TOKEN_RE = re.compile(r"\\([a-zA-Z]+)|([a-zA-Z])(?:\s*_\s*\{?([0-9a-zA-Z])\}?)?")
 
 REF_HEADINGS = TAIL_CUT_HEADINGS
@@ -284,9 +364,23 @@ def dehyphenate(lines):
 
 
 def load_chapter_map(extract_dir):
-    p = os.path.join(extract_dir, "chapter_map.json")
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)["chapters"]
+    r"""归一化章节记录：`[{ch:int, name, name_en, start, end}, …]`。
+
+    on-disk 存在两种形态（A `{"chapters":[...]}` / B `{"1":{…}}`），统一走
+    `data.chapter_map.chapter_map.load_chapter_records`，避免只认其一而在
+    另一形态上直接 "chapter N not found"（Kreyszig / Leinster 等书是 B 形态）。
+    """
+    from data.chapter_map.chapter_map import load_chapter_records
+    out = []
+    for c in load_chapter_records(os.path.join(extract_dir, "chapter_map.json")):
+        try:
+            n = int(str(c.get("ch")).strip())
+        except (TypeError, ValueError):
+            continue
+        out.append({"ch": n, "name": c.get("name", ""),
+                    "name_en": c.get("name_en", ""),
+                    "start": c.get("start"), "end": c.get("end")})
+    return out
 
 
 def chapter_source(extract_dir, ch, start, end, extra_headings=()):
@@ -302,54 +396,125 @@ def chapter_source(extract_dir, ch, start, end, extra_headings=()):
 
 
 def chapter_title_words(chapters, ch):
+    """章标题特征词（中英两个字段都取），用于识别页眉噪声行。"""
     for c in chapters:
         if c.get("ch") == ch:
-            return set(w.lower() for w in re.findall(r"[A-Za-z]{4,}", c.get("name", "")))
+            text = "%s %s" % (c.get("name", ""), c.get("name_en", ""))
+            return set(w.lower() for w in re.findall(r"[A-Za-z]{4,}", text))
     return set()
 
 
 # ── 指标 ────────────────────────────────────────────────────────────────
+def latex_symbol_freqs(latex_list):
+    """符号 → 在整章公式中的出现次数（每条公式内先去重，避免同一式堆叠计数）。"""
+    from collections import Counter
+    c = Counter()
+    for lat in latex_list:
+        if lat:
+            c.update(latex_symbols([lat]))
+    return c
+
+
 def strip_display_math(md):
     return re.sub(r"\$\$.*?\$\$", " ", md, flags=re.S)
 
 
 def content_words(text, cjk=True):
-    """内容词：剔停用词 + 常见英语词（只留像"专业/内容词"的 token）。"""
-    ws = [w.lower() for w in WORD_RE.findall(text)]
-    ws = [w for w in ws if w not in STOP and w not in COMMON]
+    """内容词：剔停用词 + 常见英语词（只留像"专业/内容词"的 token）。
+
+    同时产出每个含连字符词的「去连字符」副本（如 `phase-amplitude` →
+    `phaseamplitude`），使摘要侧正确书写的连字符复合词能与源侧 OCR 误连写
+    的同一词（`phaseamplitude`）对齐——否则只因排版连字符差异就扣分，属
+    假阴性。源侧与摘要侧对称处理，不会制造假阳性。
+    """
+    raw = [w.lower() for w in WORD_RE.findall(text)]
+    ws = [w for w in raw if w not in STOP and w not in COMMON]
+    joined = [w.replace("-", "") for w in raw if "-" in w and w not in STOP and w not in COMMON]
+    ws += joined
     if cjk:
         ws += [c for c in CJK_RE.findall(text) if c not in CJK_STOP]
     return ws
 
 
-def rare_terms(src_words, rare_max):
+def is_ocr_fragment(word):
+    r"""OCR 碎片启发式（只对拉丁词生效）：无元音 / 5+ 辅音连缀 / 三连重复字符。
+
+    公式区被当作正文识别时会吐出 `rnxm` `iiii` `eike` 这类碎片，它们天然是
+    hapax，若计入分母就等于要求总结"复述 OCR 错字"——与 V-P 第 1 条
+    「剔除 OCR 噪声」直接冲突。故术语分母显式排除之。
+    """
+    if len(word) < 4 or not word.isascii():
+        return False
+    w = word.lower()
+    if not (set(w) & VOWELS):
+        return True
+    run = 0
+    for c in w:
+        run = run + 1 if c not in VOWELS else 0
+        if run >= 5:
+            return True
+    return bool(re.search(r"(.)\1\1", w))
+
+
+def rare_terms(src_words, rare_max, rare_min=2):
+    """术语分母 = 源频落在 [rare_min, rare_max] 且非 OCR 碎片的内容词。
+
+    为什么有下界 rare_min（默认 2）：源频 = 1 的 hapax 在 OCR 书上绝大多数是
+    识别错字或断词残留（实测 Koopman 全书 2600 个 missing term 中 87% 是
+    hapax），要求总结复述 80% 的 hapax 等价于要求逐字照抄原书，与
+    writing-rules「严禁照抄 OCR 文本流」冲突。真正的章内术语几乎总会出现
+    2 次以上，故默认只统计出现 2–3 次的稀有词。
+    """
     from collections import Counter
     cnt = Counter(src_words)
-    return [w for w, n in cnt.items() if n <= rare_max]
+    return [w for w, n in cnt.items()
+            if rare_min <= n <= rare_max and not is_ocr_fragment(w)]
+
+
+# 字体 / 重音命令：包裹一个变量（如 `\mathbf{L}_i`、`\bar{x}_i`），其右花括号
+# 会把「基字母」与「下标」切开，导致正则只抓到裸字母、下标被当成独立碎片。
+# 比对前先把这些命令连同其花括号一起脱掉，保留内部内容（如 `\mathbf{L}_i`
+# → `L_i`），使基字母与下标重新贴合。嵌套花括号（极少见）不在覆盖范围内。
+_FONT_ACCENT = re.compile(
+    r"\\(?:mathbf|boldsymbol|bm|mathsf|mathtt|mathit|mathrm|mathnormal|"
+    r"mathfrak|mathscr|mathbfit|vec|bar|tilde|hat|dot|ddot|overline|"
+    r"widehat|widetilde|check|breve|acute|grave)\s*\{([^{}]*)\}")
+
+def _unwrap_font(s):
+    return _FONT_ACCENT.sub(r"\1", s)
 
 
 def latex_symbols(latex_list):
-    """从源公式抽取数学对象符号（去重）。"""
+    """从源公式抽取数学对象符号（去重）。
+
+    只保留：希腊字母、长度 ≥3 且非结构/样式/算符/关系命令的具名命令、
+    以及带下标的裸标识符。字体开关（`\\bf` `\\rm`）、关系符（`\\le` `\\ne`）、
+    函数（`\\ln` `\\arg`）一律不算数学对象。
+
+    注意：先用 `_unwrap_font` 脱掉字体/重音命令的外壳，否则
+    `\\mathbf{L}_i` 会被切成裸 `L` + 下标 `i` 两截，使摘要侧几乎所有
+    「粗体下标符号」都被误判为缺失（源侧多为无粗体的 `L_i`）。
+    """
     syms = set()
     for lat in latex_list:
         if not lat:
             continue
-        s = lat
-        for m in FORMULA_TOKEN_RE.finditer(s):
+        lat = _unwrap_font(lat)
+        for m in FORMULA_TOKEN_RE.finditer(lat):
             cmd, bare, sub = m.group(1), m.group(2), m.group(3)
             if cmd:
-                if cmd in LATEX_STRUCT:
+                canon = GREEK_ALIAS.get(cmd, cmd)
+                if canon in GREEK_BASE:
+                    syms.add("\\" + canon)
                     continue
-                # 只保留"像变量"的命令：希腊字母 / 花体字母 / 常见算符名
-                if len(cmd) <= 2 or cmd in (
-                        "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon",
-                        "zeta", "eta", "theta", "vartheta", "iota", "kappa",
-                        "lambda", "mu", "nu", "xi", "pi", "rho", "varrho",
-                        "sigma", "varsigma", "tau", "upsilon", "phi", "varphi",
-                        "chi", "psi", "omega", "Gamma", "Delta", "Theta",
-                        "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi",
-                        "Omega"):
-                    syms.add("\\" + cmd)
+                # 短命令（≤2 字母）只可能是字体/关系/函数缩写，不是数学对象
+                if len(cmd) <= 2:
+                    continue
+                if cmd in LATEX_STRUCT or cmd in LATEX_STYLE \
+                        or cmd in LATEX_OPERATORS or cmd in LATEX_RELATIONS \
+                        or cmd in LATEX_DELIM:
+                    continue
+                syms.add("\\" + canon)
             elif bare:
                 syms.add(bare + ("_" + sub if sub else ""))
     return syms
@@ -361,7 +526,26 @@ def latex_symbols_in_md(md):
     return latex_symbols(spans)
 
 
-def evaluate(extract_dir, md_path, ch, thresholds, rare_max=3):
+def _cjk_ratio(text):
+    if not text:
+        return 0.0
+    return len(re.findall(r"[\u4e00-\u9fff]", text)) / len(text)
+
+
+def _find_source_md(md_path, ch):
+    """在同目录找同章的源语言 md（`Chapter<N>_*.md`）。"""
+    d = os.path.dirname(os.path.abspath(md_path))
+    if not os.path.isdir(d):
+        return None
+    pat = re.compile(r"^Chapter0*%d_.*\.md$" % int(ch))
+    for fn in sorted(os.listdir(d)):
+        if pat.match(fn):
+            return os.path.join(d, fn)
+    return None
+
+
+def evaluate(extract_dir, md_path, ch, thresholds, rare_max=3, rare_min=2,
+             sym_min=2):
     chapters = load_chapter_map(extract_dir)
     meta = next((c for c in chapters if c.get("ch") == ch), None)
     if meta is None:
@@ -381,42 +565,72 @@ def evaluate(extract_dir, md_path, ch, thresholds, rare_max=3):
         md = f.read()
 
     src_text = " ".join(lines)
-    md_text = strip_display_math(md)
 
-    sw = content_words(src_text)
-    mw = content_words(md_text)
-    mset = set(mw)
+    # 译文口径：源非中文而 md 是中文 → 词表语言不通，覆盖度不可直接对 OCR 源测
+    # （实测会把 term_cov 压到 0.01–0.13 这类恒红假灯）。改测同章源语言母版；
+    # 译文本身与母版的 1:1 同构由 check_translate_parity 把关。
+    eval_md, translated = md_path, False
+    if _cjk_ratio(md) >= 0.15 and _cjk_ratio(src_text) < 0.15:
+        alt = _find_source_md(md_path, ch)
+        if alt:
+            eval_md, translated = alt, True
+            with open(alt, encoding="utf-8") as f:
+                md = f.read()
 
-    ratio = len(mw) / len(sw) if sw else 0.0
+    na = (translated is False and _cjk_ratio(md) >= 0.15
+          and _cjk_ratio(src_text) < 0.15)
+    if na:
+        ratio = term_cov = var_cov = None
+        mw, sw, terms, src_syms = [], [], [], set()
+    else:
+        md_text = strip_display_math(md)
+        sw = content_words(src_text)
+        mw = content_words(md_text)
+        mset = set(mw)
 
-    terms = rare_terms(sw, rare_max)
-    t_hit = [t for t in terms if t in mset]
-    term_cov = len(t_hit) / len(terms) if terms else 1.0
+        ratio = len(mw) / len(sw) if sw else 0.0
 
-    src_syms = latex_symbols(formulas)
-    md_syms = latex_symbols_in_md(md)
-    v_hit = sorted(src_syms & md_syms)
-    var_cov = len(v_hit) / len(src_syms) if src_syms else 1.0
+        terms = rare_terms(sw, rare_max, rare_min)
+        t_hit = [t for t in terms if t in mset]
+        term_cov = len(t_hit) / len(terms) if terms else 1.0
 
-    missing_terms = sorted(t for t in terms if t not in mset)
-    missing_vars = sorted(src_syms - md_syms)
+        # 符号分母同 rare_min 口径：整章只出现 1 次的符号（多为 OCR 一次性
+        # 误识或孤立排版件）不计入分母，避免用单个噪声符号卡住整章。
+        src_syms = {s for s, n in latex_symbol_freqs(formulas).items()
+                    if n >= sym_min}
+        md_syms = latex_symbols_in_md(md)
+        var_cov = len(src_syms & md_syms) / len(src_syms) if src_syms else 1.0
+
+    from collections import Counter
+    cnt = Counter(sw)
+    n_hapax = sum(1 for _, n in cnt.items() if n < rare_min)
+    n_frag = sum(1 for w, n in cnt.items()
+                 if rare_min <= n <= rare_max and is_ocr_fragment(w))
+
+    def _ok(v, th):
+        return True if v is None else v >= th
 
     res = {
         "chapter": ch,
         "md": os.path.basename(md_path),
+        "eval_md": os.path.basename(eval_md) if eval_md else "",
+        "translated": translated,
+        "na": na,
         "src_words": len(sw),
         "md_words": len(mw),
-        "ratio": round(ratio, 3),
+        "ratio": None if ratio is None else round(ratio, 3),
         "terms": len(terms),
-        "term_cov": round(term_cov, 3),
+        "term_cov": None if term_cov is None else round(term_cov, 3),
         "vars": len(src_syms),
-        "var_cov": round(var_cov, 3),
-        "pass": (ratio >= thresholds["ratio"]
-                 and term_cov >= thresholds["term"]
-                 and var_cov >= thresholds["var"]),
+        "var_cov": None if var_cov is None else round(var_cov, 3),
+        "hapax_dropped": n_hapax,
+        "ocr_frag_dropped": n_frag,
+        "pass": (_ok(ratio, thresholds["ratio"])
+                 and _ok(term_cov, thresholds["term"])
+                 and _ok(var_cov, thresholds["var"])),
         "thresholds": dict(thresholds),
-        "missing_terms": missing_terms,
-        "missing_vars": missing_vars,
+        "missing_terms": sorted(t for t in terms if t not in set(mw)),
+        "missing_vars": sorted(src_syms - latex_symbols_in_md(md)) if not na else [],
     }
     return res
 
@@ -433,7 +647,11 @@ def main(argv=None):
     ap.add_argument("--ratio", type=float, default=0.55)
     ap.add_argument("--term", type=float, default=0.80)
     ap.add_argument("--var", type=float, default=0.85)
-    ap.add_argument("--rare-max", type=int, default=3)
+    ap.add_argument("--rare-max", type=int, default=3,
+                    help="术语词频上界（默认 3）")
+    ap.add_argument("--rare-min", type=int, default=2,
+                    help="术语词频下界（默认 2）：源频=1 的 hapax 在 OCR 书上"
+                         "绝大多数是识别错字，不计入分母")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--show-missing", type=int, default=0, metavar="N")
     a = ap.parse_args(argv)
@@ -461,7 +679,8 @@ def main(argv=None):
     results = []
     for ch, md_path in jobs:
         try:
-            results.append(evaluate(a.extract_dir, md_path, ch, th, a.rare_max))
+            results.append(evaluate(a.extract_dir, md_path, ch, th,
+                                    a.rare_max, a.rare_min))
         except FileNotFoundError as e:
             print("[coverage_gate] %s" % e, file=sys.stderr)
             return 2
@@ -469,15 +688,24 @@ def main(argv=None):
     if a.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     else:
+        def f2(v):
+            return "n/a " if v is None else "%.2f" % v
+
+        verdict = lambda r: ("N/A" if r["na"] else ("PASS" if r["pass"] else "FAIL"))
+
         print("%-4s %-9s %-8s %-8s %-8s %-8s %-8s %s" % (
             "ch", "md", "src_w", "md_w", "ratio", "term_cov", "var_cov", "verdict"))
         print("-" * 78)
         for r in results:
-            print("%-4d %-9s %-8d %-8d %-8.2f %-8.2f %-8.2f %s" % (
+            print("%-4d %-9s %-8d %-8d %-8s %-8s %-8s %s" % (
                 r["chapter"], r["md"][:9], r["src_words"], r["md_words"],
-                r["ratio"], r["term_cov"], r["var_cov"],
-                "PASS" if r["pass"] else "FAIL"))
+                f2(r["ratio"]), f2(r["term_cov"]), f2(r["var_cov"]), verdict(r)))
+            if r["translated"]:
+                print("      ^ 译文：指标以源语言母版 %s 计（译文同构由 "
+                      "check_translate_parity 把关）" % r["eval_md"])
             if a.show_missing:
+                print("      术语分母=%d（剔除 hapax %d / OCR 碎片 %d）" % (
+                    r["terms"], r["hapax_dropped"], r["ocr_frag_dropped"]))
                 if r["missing_terms"]:
                     print("      missing terms (%d): %s" % (
                         len(r["missing_terms"]),
@@ -486,14 +714,18 @@ def main(argv=None):
                     print("      missing vars (%d): %s" % (
                         len(r["missing_vars"]),
                         " ".join(r["missing_vars"][:a.show_missing])))
-        n_fail = sum(1 for r in results if not r["pass"])
+        n_fail = sum(1 for r in results if not r["pass"] and not r["na"])
+        n_na = sum(1 for r in results if r["na"])
         if len(results) > 1:
+            def avg(key):
+                vs = [r[key] for r in results if r[key] is not None]
+                return sum(vs) / len(vs) if vs else float("nan")
+
             print("-" * 78)
-            print("AVG ratio=%.2f term=%.2f var=%.2f   FAIL=%d/%d" % (
-                sum(r["ratio"] for r in results) / len(results),
-                sum(r["term_cov"] for r in results) / len(results),
-                sum(r["var_cov"] for r in results) / len(results),
-                n_fail, len(results)))
+            print("AVG ratio=%.2f term=%.2f var=%.2f   FAIL=%d/%d%s" % (
+                avg("ratio"), avg("term_cov"), avg("var_cov"),
+                n_fail, len(results),
+                "   N/A=%d" % n_na if n_na else ""))
 
     return 0 if all(r["pass"] for r in results) else 1
 

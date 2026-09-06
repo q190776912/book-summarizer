@@ -224,7 +224,12 @@ def main():
             return 1
         print("[merge_units] --all 完成: %d 章拼接, %d 章跳过（无翻译单元）" % (done, skipped))
         return 0
-    ch = argv[1]
+    ch = argv[1].strip()
+    m_ch = re.match(r"^(?:ch|appendix)(.+)$", ch, re.I)
+    if m_ch:                       # 容错 "ch3" / "appendixA" → "3" / "A"
+        ch = m_ch.group(1)
+    from data.book_structure.book_structure import norm_chapter_key
+    ch = norm_chapter_key(ch)      # "3" → int 3，"A" → "A"（unit_dir_name 契约键型）
     out_md = None
     if len(argv) > 2 and argv[2] == "-o":
         out_md = argv[3] if len(argv) > 3 else None

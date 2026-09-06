@@ -578,13 +578,13 @@ def check_verbose_proofs(lines):
                     break
             # 已分条枚举（步数不限）→ 豁免，不计入违规
             if _is_enumerated(buf):
-                i = j
+                i = max(j, i + 1)      # 防死循环：PROOF_OPEN_RE.search 命中但行本身非 `>` 行时 j==i，必须保证前进
                 continue
             text = ' '.join(buf)
             if len(text) > VERBOSE_PROOF_CHARS:
                 out.append(f"  x L{i+1}: 证明/注记/解答块过长且未分条（{len(text)} 字，疑似逐段翻译原书 proof）"
                            f"— 须压成核心步骤 1. 2. 3. …（步数按实际需数，Tier 3）：{text[:60]}…")
-            i = j
+            i = max(j, i + 1)          # 防死循环：行中 `> **证明**` 使 search 命中但内层立即 break（j==i），必须保证前进
             continue
         i += 1
     return out

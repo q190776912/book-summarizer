@@ -11,10 +11,11 @@
 
 用法（v0 = 折行规划器，只读不写）:
     python tools/wrap_long_formulas.py <book_dir> [threshold_chars]            # 列出待折行公式（文件 + \tag + 行长）
-    python tools/wrap_long_formulas.py <book_dir> 100 --json <out.json>        # 计划写 JSON
+    python tools/wrap_long_formulas.py <book_dir> 60 --json <out.json>         # 计划写 JSON
 说明:
-    · 该工具当前只产出折行计划；实际折行按 docs/writing-rules.md「超长显示公式折行」
-      手改或复核计划后执行（断行点只在顶层 =/+/-(见写作规则 #18)，不切矩阵/\left..\right）。
+    · 该工具**只产出折行计划**（只读，不改文件）；实际折行按 docs/writing-rules.md
+      「超长显示公式折行」执行（断行点只在顶层 =/+/-，不切矩阵 \\left..\\right）。
+      注意：落点应是**源单元**（units/chN/*.md），不是成品 md——成品由 merge_units 再生。
     · 每章校验时的同款检测已内置于 verify F 层（long_formula_rows, WARN）。
 """
 import glob
@@ -23,9 +24,14 @@ import os
 import re
 import sys
 
-THRESH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
+# 🔴 长度度量统一复用 scan_long_formulas 的实现，勿在本文件另写一份
+# （两份度量一旦分叉，planner 的折行目标宽度与 detector 的判定阈值就对不上。）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from scan_long_formulas import (row_metrics, rendered_rows, _split_top_rows,
+                                DEFAULT_W, DEFAULT_H)
+
+THRESH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else DEFAULT_W
 BOOK = sys.argv[1] if len(sys.argv) > 1 else '.'
-APPLY = '--apply' in sys.argv
 JSON_OUT = None
 if '--json' in sys.argv:
     k = sys.argv.index('--json')
@@ -42,10 +48,14 @@ UNWRAP_ENVS = ('matrix', 'array', 'cases', 'CD', 'smallmatrix', 'pmatrix',
 
 
 def vis_len(latex):
-    s = TAG_RE.sub('', latex)
-    s = CMD.sub('', s)
-    s = re.sub(r'[{}]', '', s)
-    return len(s.replace('\\', ''))
+    """渲染宽度（🔴 与 scan_long_formulas 同口径）。
+
+    旧实现是「去掉 \\tag / 命令名 / 花括号后数字符」，与 scan 的旧 vis_len 一样：
+    逐源码行测量、环境名（`bmatrix`）当可见字符、矩阵与分式按横向累加、
+    `\\sum`/`\\int` 等符号计 0 —— 对「一个 aligned 行被折成多行书写」的公式
+    （如 18.11）系统性漏报。现统一走 row_metrics。
+    """
+    return row_metrics(latex)[0]
 
 
 # ---------------------------------------------------------------- 断点探测
@@ -243,8 +253,9 @@ def _process_block(buf, is_bq, tgt):
         inner = m.group(2)
         pre = txt_body[:m.start()]
         post = txt_body[m.end():]
-        raw_rows = re.split(r'\\\\(?=\s)', inner)
-        raw_rows = [r.rstrip() for r in raw_rows]
+        # 🔴 环境感知切分：朴素 re.split(r'\\\\') 会把 bmatrix 内部的分隔符也切开，
+        #    使一个渲染行碎成数段、每行都显得"不够长"从而不触发折行。
+        raw_rows = [r.rstrip() for r in _split_top_rows(inner)]
         if not raw_rows:
             return None, ('skip', 'env-parse')
         new_rows = []
@@ -308,7 +319,10 @@ def main():
                 if not TAG_RE.search(body):
                     i = j + 1
                     continue
-                vis = max((vis_len(x) for x in buf), default=0)
+                # 🔴 按【渲染行】取最宽：逐源码行取 max 会漏掉「一个长行被折成
+                #    多行书写」的公式（如 18.11：源行最长 39，整行渲染宽度 71）。
+                rows = rendered_rows(body)
+                vis = max((row_metrics(r)[0] for r in rows), default=0)
                 if vis > THRESH:
                     hits.append((i, j, buf, vis))
                 i = j + 1

@@ -333,7 +333,7 @@ Common patterns (after correction):
     - **折行位置**：只在**顶层**（花括号深度 0、括号深度 0、不在 `\left…\right` 内）的二元运算符 `=` / `+` / `-` 处断行；绝不切进分数、矩阵、指数、`\text{…}` 内部；断行不改任何数学语义与 `\tag{原编号}`。
     - **写法**：长行包进 `\begin{aligned}…\end{aligned}`——首行保留左侧对齐，续行用 `& \qquad <运算符> …`（示例：`\frac{\mathrm{d}\nu}{\mathrm{d}t} &= \frac{1}{T K_{eff} K_m}\{\cdots \right. \\ &\qquad \left. - P_0 - P_1 - \cdots \},`）。
     - **不可折环境**（`matrix`/`array`/`cases`/交换图 `\begin{CD}` 等整块宽度天然超界）：不做硬折行，靠查看器横向滚动兜底（CSS `.katex-display { overflow-x: auto; }`）。
-    - **批量折行工具**：`tools/wrap_long_formulas.py <book_dir> [阈值]`（先出 dry-run 计划供审，确认后再落盘）。
+    - **批量折行工具**：`tools/wrap_long_formulas.py`——规划 `python tools/wrap_long_formulas.py <units_dir> [阈值]`（只读，列待折公式）；折行落盘 `python tools/wrap_long_formulas.py <units_dir> --apply [--tgt 45] [--dry]`（原地改写 `<dir>` 下 `*.md`）。🔴 `<units_dir>` 传**源单元目录**（`units/chN`；译文 `units-translate/chN` 同样处理），不传书根目录——成品 md 由 `merge_units` 再生，先改单元再重拼。落盘内置守卫：折后须 w≤60 且 h≤8、确有改善、`\tag` 原样、内容逐字保真、定界符配对，任一不满足即 SKIP（宁可不折）。
 
 **公式序标（编号 1:1 真实性，Q 层校验）**
 

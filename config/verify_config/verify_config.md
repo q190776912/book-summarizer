@@ -85,27 +85,38 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 
 > `depth`（段数）一律由 `type` 经 `ORDINAL_DEPTH` 派生，上表「段数(depth)」列即为其唯一来源；配置里**不要**再写 `depth` 字段。
 
-## 附录专用配置：`appendix_verify_config.json`
+## 分章配置 map：verify_config.json 的 `ch` / `appendix` / `supplement`
 
-> 一些书的**附录与正文编号体例不一致**（最典型：正文是数字三级 `Theorem 10.9.13`，附录却换成字母章位 `Definition A.1.1`；标签集、小节层级、计数器重置边界也可能不同）。把两者的约定硬塞进同一份 `verify_config.json` 必然顾此失彼。因此允许（且推荐）为附录单独落一份**同名前缀**配置：`<extract_dir>/appendix_verify_config.json`。
+> 一些书的**正文 / 附录 / 补篇三者编号体例不一致**（最典型：正文是数字三级 `Theorem 10.9.13`，附录/补篇换成字母章位 `Definition A.1.1` / `Theorem S.1.1`；标签集、小节层级、计数器重置边界也可能不同）。把三者约定硬塞进同一份扁平配置必然顾此失彼。因此 `verify_config.json` 写成**外层 map**，由 `chapter_map` 的 `kind` 路由到对应子配置：
 
-- **文件缺失** → 附录章回退主 `verify_config.json`，行为与历史**完全一致（零回归）**。
-- **文件存在** → `ConfigLoader` 对**附录章**（判定见下）一律改走这份配置；正文章不受影响。
-- **生成**：由 `make_config.py` 只扫附录页区间半自动产出（同样打 `_provenance` 戳，同样过 `_extraction_done.json` 上游闸——**无手写侧门**）。人工核对后可直接用。
-- **校验**：`require_complete()` 对附录配置套用**同一套闸门**（ordinal 必为合法数组、type∈合法码、section_types 角色码合法）。附录配置不合规会被同样拒绝。
+```json
+{
+  "ch":        { "ordinal": [...], ... },   // kind=1 正文章
+  "appendix":  { "ordinal": [...], ... },   // kind=2 附录章（可选）
+  "supplement":{ "ordinal": [...], ... }    // kind=3 补篇章（可选）
+}
+```
 
-### 附录章的判定（`ConfigLoader.is_appendix_chapter`）
+- **顶层带 `ordinal`（旧扁平格式）** → 视作只有正文；缺失的 appendix/supplement 回退主配置，行为与历史**完全一致（零回归）**。
+- **顶层是 map（含 `ch`）** → 按 kind 路由：kind=1→`ch`、kind=2→`appendix`、kind=3→`supplement`；某类缺省即回退 `ch`。
+- **生成**：由 `make_config.py` 分别扫各 kind 的页区间半自动产出（同样打 `_provenance` 戳、同样过 `_extraction_done.json` 上游闸——**无手写侧门**）；检测偏差直接改 `verify_config.json` 本身即可（`make_config.py` 在文件已存在且非 `--force` 时跳过，不会覆盖手动修改）。
+- **校验**：`require_complete()` 对三类子配置套用**同一套闸门**（ordinal 必为合法数组、type∈合法码、section_types 角色码合法）。
 
-与分章契约的命名（`chapter_json_name` / `unit_dir_name` 依 `key[:1].isdigit()` 把数字章写成 `ch{N}.json`、字母章写成 `appendix{X}.json`）**严格同源**，两个信号任一命中即视为附录章：
+### 章类判定与路由（`ConfigLoader.chapter_kind` / `config_for_chapter`）
 
-1. `chapter_map.json` 章名含 `Appendix` / `附录`（如 `Appendix A`）；
-2. 章号**非数字**（字母章 `A`/`B`/…）——与契约写盘命名一致，配置路由与结构写盘永不分歧。
+与分章契约命名（`chapter_label` 依 `kind` 把数字章写成 `ch{N}`、附录章 `appendix{X}`、补篇章 `supplement{S}`）**严格同源**：
 
-非附录书完全不受影响：每个正文章都是数字章号 + 普通章名，`is_appendix_chapter` 一律返回 `False`。
+1. `chapter_map.json` 显式 `kind`（1 章 / 2 附录 / 3 补篇）优先；
+2. 章名含 `Appendix`/`附录` 或 `Supplement`/`补篇`；
+3. 章号**非数字**（字母章 `A`/`B`/`S`/…）回退为附录。
+
+🔴 **Supplement（补篇）与 Appendix（附录）是两个不同概念**——Katok 书的 Supplement（S.x.y 编号）是补篇而非附录。二者分别落键（`appendix` / `supplement`）、分别路由、分别命名（侧车 `ignore_appendix{A}.json` / `ignore_supplement{S}.json`、契约 `appendix{A}.json` / `supplement{S}.json`），**绝不可让 Supplement 回退到 Appendix 配置或被称作 appendix**。
+
+非字母章书完全不受影响：每个正文章都是数字章号 + 普通章名，`chapter_kind` 一律返回 `KIND_CHAPTER`。
 
 ### 路由（`ConfigLoader.config_for_chapter`）
 
-附录章以 `appendix_verify_config.json` 为基底配置（若有），再叠加该章的侧车 ignore（文件名段走 `chapter_label`：数字章 `ignore_ch{N}.json`、附录章 `ignore_appendix{A}.json`）解析结果。正文配置不含附录章节、附录配置不含正文章节，互不污染。
+按 kind 选定基底子配置（缺省回退 `ch`），再叠加该章侧车 ignore（文件名段走 `chapter_label`：数字章 `ignore_ch{N}.json`、附录章 `ignore_appendix{A}.json`、补篇章 `ignore_supplement{S}.json`）。三类配置互不污染。
 
 ### 键规范化（md 侧 / 契约侧）
 

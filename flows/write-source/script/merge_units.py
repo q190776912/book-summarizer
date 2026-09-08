@@ -85,7 +85,13 @@ def _read_body(path):
 
 
 def _final_md_name(ch_key, language, chapter_name):
-    """由章号 + 语种 + 契约章名生成最终文件名（数字章 / 附录章）。"""
+    """由章号 + 语种 + 契约章名生成最终文件名。
+
+    三类走向（🔴 按 kind 判定，2026-09-08 起 Supplement 不再被称作 Appendix）：
+      章 kind=1      Chapter4_*.md        / 第4章_*.md
+      附录 kind=2    AppendixA_*.md       / 附录A_*.md
+      补篇 kind=3    SupplementS_*.md     / 补篇S_*.md
+    """
     rest = ""
     m = _CH_NAME.match(chapter_name or "")
     num = str(ch_key)
@@ -93,7 +99,16 @@ def _final_md_name(ch_key, language, chapter_name):
         num = m.group(1)
         rest = m.group(2).strip()
     rest = re.sub(r'[\\/:*?"<>|\r\n\s]+', "_", rest).strip(" _")
-    if num[:1].isdigit():
+    kind = 2
+    try:
+        from book_structure import chapter_kind
+        kind = chapter_kind(int(num) if num.isdigit() else num)
+    except Exception:
+        kind = 1 if num[:1].isdigit() else 2
+    if kind == 3:
+        return ("Supplement%s_%s.md" % (num, rest)) if language == "en" \
+            else ("补篇%s_%s.md" % (num, rest))
+    if kind == 1:
         return ("Chapter%s_%s.md" % (num, rest)) if language == "en" \
             else ("第%s章_%s.md" % (num, rest))
     return ("Appendix%s_%s.md" % (num, rest)) if language == "en" \
@@ -203,6 +218,14 @@ def main():
         print(__doc__)
         return 2
     ext = argv[0]
+    # 🔴 灌注 kind 注册表：文件名/H1 的 Chapter / Appendix / Supplement 三分 relying
+    # 于 chapter_map 的显式 kind（而非「章号是否数字」猜测）。未灌注会静默回落旧
+    # 形态判据，把 Supplement 写成 Appendix。
+    try:
+        from book_structure import prime_chapter_kinds
+        prime_chapter_kinds(ext)
+    except Exception:
+        pass
     if merge_all:
         # 🔴 全章批量拼接（flow_runner merge_all 步模板）：源版 + 翻译版各跑一遍。
         # 翻译版（units-translate）对缺 manifest 的章自动跳过（中文源书 / 未派生章）。

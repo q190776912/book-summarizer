@@ -16,10 +16,11 @@ Usage:
 """
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
     if (_c / "SKILL.md").exists():
@@ -33,6 +34,70 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 from json_data import JsonData
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 章类语义（kind）—— 与「序标（num）」正交的**唯一真源**
+# ═══════════════════════════════════════════════════════════════════════════
+# 历史包袱：chapter_map 曾以 `ch` 键承载章号，字母值（A/S…）被全链路一律解释为
+# 「附录」。这对 Katok《Introduction to the Modern Theory of Dynamical Systems》
+# 不成立——它的 Supplement（S.x.y 编号）不是附录。（2026-09-08 用户裁定：弃用
+# `ch` 键，改用显式 `kind` + `num`。）
+#
+#   kind = 1  章（chapter）        num = 数字（0/1/2…；罗马见于少数书）
+#   kind = 2  附录（appendix）     num = 字母 A/B/…（个别书用数字）
+#   kind = 3  补篇（supplement）   num = 字母 S/…（个别书用数字）
+#
+# 🔴 `kind` 是语义，`num` 是印刷序标：二者不可互推。Supplement 与 Appendix 的
+# 目录名 / 文件名 / H1 标题 / 配置路由一律按 kind 分流，不再按「是否数字」猜。
+KIND_CHAPTER = 1
+KIND_APPENDIX = 2
+KIND_SUPPLEMENT = 3
+
+KIND_NAME = {KIND_CHAPTER: "chapter", KIND_APPENDIX: "appendix",
+             KIND_SUPPLEMENT: "supplement"}
+KIND_BY_NAME = {"chapter": KIND_CHAPTER, "ch": KIND_CHAPTER,
+                "appendix": KIND_APPENDIX, "app": KIND_APPENDIX,
+                "supplement": KIND_SUPPLEMENT, "suppl": KIND_SUPPLEMENT,
+                "sup": KIND_SUPPLEMENT}
+
+_SUPPLEMENT_RE = re.compile(r"\b(supplement|supplementary|补篇|增补)\b", re.I)
+_APPENDIX_RE = re.compile(r"\b(appendix|appendices|附录|附\s*录)\b", re.I)
+
+
+def normalize_kind(raw_kind: Any, num: Any, *names: str) -> int:
+    """把任意写法的 kind 归一为 KIND_*；缺省时**按书-infected 证据推断**。
+
+    优先级：显式 `kind`（整数码或名字串）> 章名/'num' 语义信号 > 形态回退
+    （非数字 num 一律视为附录，保持历史书零回归）。
+    """
+    if raw_kind is not None and raw_kind != "":
+        if isinstance(raw_kind, (int, float, bool)) and not isinstance(raw_kind, bool):
+            try:
+                k = int(raw_kind)
+                if k in KIND_NAME:
+                    return k
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(raw_kind, str):
+            k = KIND_BY_NAME.get(raw_kind.strip().lower())
+            if k is not None:
+                return k
+    blob = " ".join(str(n or "") for n in names)
+    if _SUPPLEMENT_RE.search(blob):
+        return KIND_SUPPLEMENT
+    if _APPENDIX_RE.search(blob):
+        return KIND_APPENDIX
+    s = str(num if num is not None else "").strip()
+    return KIND_APPENDIX if (s and not s[:1].isdigit()) else KIND_CHAPTER
+
+
+def normalize_num(raw_num: Any) -> Any:
+    """nun 归一：数字串 → int；其余（字母/罗马/其它序标）→ 原串去空白。"""
+    s = str(raw_num if raw_num is not None else "").strip()
+    if s.isdigit():
+        return int(s)
+    return s
 
 
 @dataclass
@@ -110,8 +175,49 @@ def load_chapter_map_raw(path: str) -> dict:
 #   B（legacy flat dict，ChapterMap.to_dict() 产出）：{"1": {"name":…,…}, …}
 # 只认其一的工具会在另一形态上直接报 "chapter N not found"
 # （实测：dump_chapter_source.py 只认 B、dump_chapter_ocr.py 只认 A）。
+def _canon_record(num: Any, kind: Any, name: Any, name_en: Any, start: Any, end: Any,
+                  extra: Optional[dict] = None) -> dict:
+    """构造一条规范记录（`# ruff: noqa` 见下方字段契约）。
+
+    返回字段（🔴 单一真源，消费方不得自行拼 ['ch']）：
+      num        int|str   印刷序标（数字章为 int，字母/罗马为 str）
+      num_str    str       num 的字符串形态（文件名 / 键比较用）
+      kind       int       KIND_CHAPTER / KIND_APPENDIX / KIND_SUPPLEMENT
+      kind_name  str       "chapter" / "appendix" / "supplement"
+      is_appendix / is_supplement   bool
+      name / name_en / name_cn / start / end
+      ch         int|str   ⚠️ **遗留别名**（= num），仅供未迁移的旧消费方读取；
+                           新写的 on-disk chapter_map.json **不再出现这个键**。
+    """
+    n = normalize_num(num)
+    k = normalize_kind(kind, n, name, name_en, (extra or {}).get("name_cn"), str(num))
+    rec = {
+        "num": n,
+        "num_str": str(n),
+        "kind": k,
+        "kind_name": KIND_NAME[k],
+        "is_appendix": k == KIND_APPENDIX,
+        "is_supplement": k == KIND_SUPPLEMENT,
+        "name": name or "",
+        "name_en": name_en or "",
+        "name_cn": (extra or {}).get("name_cn", "") or "",
+        "start": start,
+        "end": end,
+    }
+    rec["ch"] = n  # legacy alias
+    return rec
+
+
 def iter_chapter_records(raw: dict) -> List[dict]:
-    """把任一形态的 chapter_map 归一化成 `[{ch,name,name_en,start,end}, …]`。"""
+    """把任一形态的 chapter_map 归一化成规范记录列表。
+
+    on-disk 允许三种形态：
+      A（canonical，2026-09-08 起）  {"chapters": [{"kind":1,"num":4,…}, …]}
+      B（legacy list）              {"chapters": [{"ch":4,…}, …]}
+      C（legacy flat dict）         {"1": {"name":…}, "A": {"name":…}, …}
+    🔴 A 是唯一推荐形态：`kind` + `num` 显式区分「章 / 附录 / 补篇」与「印刷序标」；
+    B/C 因缺 `kind` 只能推断（字母 num → 附录），仅为旧书读取兼容保留。
+    """
     if not isinstance(raw, dict):
         return []
     out: List[dict] = []
@@ -119,19 +225,18 @@ def iter_chapter_records(raw: dict) -> List[dict]:
         for c in raw["chapters"]:
             if not isinstance(c, dict):
                 continue
-            ch = c.get("ch", c.get("num", c.get("chapter")))
+            num = c.get("num", c.get("ch", c.get("chapter")))
             start = c.get("start", c.get("start_page", c.get("pdf_start")))
             end = c.get("end", c.get("end_page", c.get("pdf_end")))
-            out.append({"ch": ch, "name": c.get("name", ""),
-                        "name_en": c.get("name_en", c.get("title", "")),
-                        "start": start, "end": end})
+            out.append(_canon_record(
+                num, c.get("kind"), c.get("name", ""),
+                c.get("name_en", c.get("title", "")), start, end, c))
         return out
     for k, v in raw.items():
         if not isinstance(v, dict):
             continue
-        out.append({"ch": k, "name": v.get("name", ""),
-                    "name_en": v.get("name_en", ""),
-                    "start": v.get("start"), "end": v.get("end")})
+        out.append(_canon_record(v.get("num", k), v.get("kind"), v.get("name", ""),
+                                 v.get("name_en", ""), v.get("start"), v.get("end"), v))
     return out
 
 
@@ -149,9 +254,17 @@ def find_chapter(path_or_dir, chapter) -> dict:
     """按章号取一条归一化记录；找不到直接 SystemExit。"""
     recs = load_chapter_records(path_or_dir)
     for c in recs:
-        if str(c.get("ch")) == str(chapter):
+        if str(c.get("num")) == str(chapter):
             return c
     raise SystemExit(f"chapter {chapter} not found in {path_or_dir}")
+
+
+def kind_of(path_or_dir, chapter) -> int:
+    """某章的 kind（KIND_*）。未知章回退 KIND_CHAPTER。"""
+    try:
+        return int(find_chapter(path_or_dir, chapter).get("kind", KIND_CHAPTER))
+    except SystemExit:
+        return KIND_CHAPTER
 
 
 def main() -> None:

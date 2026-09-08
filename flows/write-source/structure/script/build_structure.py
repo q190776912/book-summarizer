@@ -1563,6 +1563,12 @@ def main():
         print(__doc__)
         return 2
     ext = args[0]
+    # 🔴 灌注 kind 注册表（Chapter/Appendix/Supplement 三分依赖 chapter_map 的显式 kind）
+    try:
+        from book_structure import prime_chapter_kinds
+        prime_chapter_kinds(ext)
+    except Exception:
+        pass
     # 章号归一：数字章 → int，附录字母章（"A"/"B"…）保留原串。裸 int() 会让
     # `build_structure <ext> A` 直接 ValueError（附录章无法定点重建）。
     want = [norm_chapter_key(x) for x in args[1:]]

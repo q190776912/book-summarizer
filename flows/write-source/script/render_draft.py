@@ -108,12 +108,29 @@ _CH_NAME = re.compile(r'^([0-9A-Za-z]+)\s+(.+)$', re.DOTALL)
 
 
 def _chapter_heading(node, language):
+    """`# 第N章 …` / `# Chapter N: …`；附录 `# 附录A` / `# Appendix A: …`；
+    补篇 `# 补篇S` / `# Supplement S: …`。
+
+    🔴 kind 判据（2026-09-08）：不再用「数字与否」猜——Supplement（S.x.y 编号）
+    不是附录。优先取 node 自带的 ``kind``（契约节点可携带），其次查进程级 kind
+    注册表（由 chapter_map 灌注），最后回退旧形态判据。
+    """
     name = (node.get("name") or "").strip()
     m = _CH_NAME.match(name)
     if not m:
         return "# " + name
     num, rest = m.group(1), m.group(2).strip()
-    if num.isdigit():
+    kind = node.get("kind")
+    if kind is None:
+        try:
+            from book_structure import chapter_kind
+            kind = chapter_kind(int(num) if num.isdigit() else num)
+        except Exception:
+            kind = None
+    if kind == 3:
+        return ("# 补篇%s %s" % (num, rest)) if language == "cn" \
+            else ("# Supplement %s: %s" % (num, rest))
+    if num.isdigit() and kind != 2:
         return ("# 第%s章 %s" % (num, rest)) if language == "cn" \
             else ("# Chapter %s: %s" % (num, rest))
     return ("# 附录%s %s" % (num, rest)) if language == "cn" \

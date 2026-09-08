@@ -28,6 +28,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from chapter_map import KIND_APPENDIX, KIND_CHAPTER, KIND_SUPPLEMENT
+
 # 书根节点的占位 key / type（非真实章节/条目）
 ROOT_KEY = -1
 ROOT_TYPE = -1
@@ -46,28 +48,93 @@ OUT_SUBDIR = "book_structure"
 LEGACY_JSON_NAME = "book_structure.json"      # 仅用于报错提示（不再读取）
 
 
-def chapter_json_name(key: Any) -> str:
-    """章号 → 分章契约文件名：数字章 ``ch{N}.json`` / 附录章 ``appendix{X}.json``。"""
-    k = str(key)
-    return f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json"
+_KIND_PREFIX = {KIND_CHAPTER: "ch", KIND_APPENDIX: "appendix",
+                KIND_SUPPLEMENT: "supplement"}
 
 
-def unit_dir_name(key: Any) -> str:
-    """章号 → 单元子目录名：数字章 ``ch{N}`` / 附录章 ``appendix{X}``。"""
-    k = str(key)
-    return f"ch{k}" if k[:1].isdigit() else f"appendix{k}"
+def chapter_prefix(kind: Any = None) -> str:
+    """kind → 名称前缀（``ch`` / ``appendix`` / ``supplement``）。
 
-
-def chapter_label(key: Any) -> str:
-    """章号的显示标签 / 侧车文件名段：数字章 ``ch{N}``、附录章 ``appendix{X}``。
-
-    与 :func:`chapter_json_name` / :func:`unit_dir_name` 同一判据（首字符是否
-    数字）。打印章号、拼接随章侧车文件名（ignore_* / manual_overrides_* /
-    figure 文件基名等）一律经此函数——附录的称呼是 appendix，
-    "ch" 只属于数字章（日志里打成 "chA" 是错误称呼）。
+    🔴 2026-09-08 起 Supplement（补篇）不再被称作 appendix：Katok 书的
+    Supplement（S.x.y 编号）是补篇而非附录。判据改为显式 ``kind``，
+    只在缺失时回退「非数字 → appendix」（旧书零回归）。
     """
-    k = str(key)
-    return f"ch{k}" if k[:1].isdigit() else f"appendix{k}"
+    try:
+        k = int(kind)
+    except (TypeError, ValueError):
+        k = KIND_CHAPTER
+    return _KIND_PREFIX.get(k, "appendix")
+
+
+def chapter_kind(key: Any, kind: Any = None) -> int:
+    """解析章的 kind（KIND_*）——与 :func:`chapter_label` 同一判据的唯一出口。"""
+    return _resolve_kind(key, kind)
+
+
+def _resolve_kind(key: Any, kind: Any) -> int:
+    """``kind`` 显式优先 > 进程级 kind 注册表（由 chapter_map 灌注）
+    > 形态回退（数字 → 章 / 非数字 → 附录）。"""
+    if kind is not None:
+        try:
+            k = int(kind)
+            if k in _KIND_PREFIX:
+                return k
+        except (TypeError, ValueError):
+            pass
+    k = _PRIMED_KINDS.get(str(key).strip())
+    if k is not None:
+        return k
+    s = str(key).strip()
+    return KIND_CHAPTER if (s[:1].isdigit() if s else False) else KIND_APPENDIX
+
+
+def chapter_json_name(key: Any, kind: Any = None) -> str:
+    """章 → 分章契约文件名：``ch{N}.json`` / ``appendix{X}.json`` /
+    ``supplement{S}.json``。"""
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}.json"
+
+
+def unit_dir_name(key: Any, kind: Any = None) -> str:
+    """章 → 单元子目录名：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``。"""
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}"
+
+
+def chapter_label(key: Any, kind: Any = None) -> str:
+    """章的显示标签 / 侧车文件名段：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``。
+
+    与 :func:`chapter_json_name` / :func:`unit_dir_name` 同一判据（见
+    :func:`_resolve_kind`）。打印章号、拼接随章侧车文件名（ignore_* /
+    manual_overrides_* / figure 文件基名等）一律经此函数——
+    "ch" 只属于章，附录 appendix、补篇 supplement 各有其名。
+    """
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}"
+
+
+# ── 进程级 kind 注册表（由 chapter_map.json 灌注） ─────────────────────────
+# 🔴 背景：kind 是 chapter_map 的属性，但 ``chapter_label`` 等 SSOT 的调用方
+# （25 个文件 / 77 处）历来只传章号。逐处改签名风险远大于灌注一张表：入口脚本
+# 启动时调用 :func:`prime_chapter_kinds` 一次， thereafter 全部调用点自动得到
+# 正确前缀；未灌注时静默回退旧形态判据（零回归）。
+_PRIMED_KINDS: Dict[str, int] = {}
+
+
+def prime_chapter_kinds(extract_dir: Optional[str] = None) -> Dict[str, int]:
+    """读 ``chapter_map.json`` 把 ``{num_str: kind}`` 灌进进程级注册表并返回它。
+
+    幂等（重复调用只是重读）。文件缺失 / 损坏时返回既有内容（不抛）。
+    """
+    if not extract_dir:
+        return dict(_PRIMED_KINDS)
+    p = os.path.join(extract_dir, "chapter_map.json")
+    if not os.path.isfile(p):
+        return dict(_PRIMED_KINDS)
+    try:
+        from chapter_map import load_chapter_map_raw, iter_chapter_records
+        for rec in iter_chapter_records(load_chapter_map_raw(p)):
+            _PRIMED_KINDS[str(rec.get("num")).strip()] = int(rec.get("kind"))
+    except Exception:
+        pass
+    return dict(_PRIMED_KINDS)
 
 
 def chapter_json_path(ext_dir: str, key: Any) -> str:
@@ -108,6 +175,8 @@ def list_chapter_keys(ext_dir: str) -> List[str]:
                 continue
             if fn.startswith("ch") and fn[2:-5].isdigit():
                 keys.append(((0, int(fn[2:-5]), ""), fn[2:-5]))
+            elif fn.startswith("supplement") and len(fn) > len("supplement.json"):
+                keys.append(((1, 0, fn[10:-5]), fn[10:-5]))
             elif fn.startswith("appendix") and len(fn) > len("appendix.json"):
                 keys.append(((1, 0, fn[8:-5]), fn[8:-5]))
     return [k for _, k in sorted(keys)]

@@ -80,6 +80,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from verify_config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_HUM, ORDINAL_APP)
+from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
 
 def _is_fig_kw(name):
@@ -1316,18 +1317,83 @@ def _ocr_appendix_chapters(extract_dir):
     return out
 
 
-def _detect_appendix_chapters(extract_dir):
-    """返回本书附录章列表（含章号/名称/页区间）。无附录返回 []。"""
-    out = _chapter_map_appendix_chapters(extract_dir)
-    if not out:
-        out = _ocr_appendix_chapters(extract_dir)
+def _chapter_map_special_chapters(extract_dir, kind):
+    """chapter_map.json 中显式登记为指定 kind 的章（kind=2 附录 / kind=3 补篇）。"""
+    cm_p = os.path.join(extract_dir, 'chapter_map.json')
+    if not os.path.exists(cm_p):
+        return []
+    try:
+        cm = json.load(open(cm_p, encoding='utf-8-sig'))
+    except Exception:
+        return []
+    nodes = cm.get('chapters') if isinstance(cm, dict) and 'chapters' in cm else []
+    if not nodes and isinstance(cm, dict):
+        nodes = [dict(e, **({'ch': k} if ('ch' not in e and 'num' not in e and 'chapter' not in e) else {}))
+                 for k, e in cm.items() if isinstance(e, dict)]
+    out = []
+    for e in nodes:
+        if not isinstance(e, dict):
+            continue
+        k = int(e.get('kind', 1) or 1)
+        if k != kind:
+            continue
+        ch = e.get('ch', e.get('num', e.get('chapter')))
+        if ch is None:
+            continue
+        out.append({'ch': ch, 'name': e.get('name') or e.get('name_en') or '',
+                    'start': e.get('start'), 'end': e.get('end')})
+    out.sort(key=lambda d: str(d['ch']))
     return out
 
 
-def _appendix_page_files(extract_dir, app_chapters):
-    """附录章覆盖的 page_*.json 文件列表（按 start..end 区间并集）。"""
+_SUPPLEMENT_OCR_RE = re.compile(r'^\s*Suppleme(?:nt|ntary)\s+([A-Z])\b', re.IGNORECASE)
+
+
+def _ocr_supplement_chapters(extract_dir):
+    """chapter_map 未登记补篇时，从 OCR 定位 `Supplement X` 标题页。"""
+    pages = sorted(glob.glob(os.path.join(extract_dir, 'page_*.json')),
+                   key=lambda p: int(re.search(r'page_(\d+)\.json', p).group(1)))
+    hits = {}
+    for p in pages:
+        try:
+            data = json.load(open(p, encoding='utf-8'))
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            txt = b.get('text', '') if isinstance(b, dict) else ''
+            m = _SUPPLEMENT_OCR_RE.match(txt.strip())
+            if m:
+                letter = m.group(1).upper()
+                if letter not in hits:
+                    hits[letter] = int(re.search(r'page_(\d+)\.json', p).group(1))
+    if not hits:
+        return []
+    last = int(re.search(r'page_(\d+)\.json', pages[-1]).group(1))
+    letters = sorted(hits.items())
+    out = []
+    for i, (letter, start) in enumerate(letters):
+        end = letters[i + 1][1] - 1 if i + 1 < len(letters) else last
+        out.append({'ch': letter, 'name': f'Supplement {letter}',
+                    'start': start, 'end': end})
+    return out
+
+
+def _detect_special_chapters(extract_dir, kind):
+    """返回本书指定 kind 的章列表（含章号/名称/页区间）。无则返回 []。
+
+    优先读 chapter_map 显式 kind；缺失时按 kind 选 OCR 回退（附录→"Appendix X"、
+    补篇→"Supplement X"）。"""
+    out = _chapter_map_special_chapters(extract_dir, kind)
+    if not out:
+        out = (_ocr_appendix_chapters(extract_dir) if kind == KIND_APPENDIX
+               else _ocr_supplement_chapters(extract_dir))
+    return out
+
+
+def _special_page_files(extract_dir, chapters):
+    """指定章覆盖的 page_*.json 文件列表（按 start..end 区间并集）。"""
     nums = set()
-    for c in app_chapters:
+    for c in chapters:
         s = c.get('start')
         e = c.get('end')
         if isinstance(s, int) and isinstance(e, int):
@@ -1345,14 +1411,15 @@ def _appendix_page_files(extract_dir, app_chapters):
 
 def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
                       is_appendix=False, pages=None):
-    """Detection + assembly for ONE book-config (main or appendix).
+    """Detection + assembly for ONE book-config (main / appendix / supplement).
 
-    Shared by `main()` (the mandatory `verify_config.json`) and the optional
-    `appendix_verify_config.json` so the two can never drift in schema.  Returns
-    ``(config_dict, family, groups, ordinal, depth)``; the caller writes/presents.
+    Shared by `main()` (the mandatory `verify_config.json` "ch" sub-config) and
+    the optional `appendix` / `supplement` sub-configs so they never drift in
+    schema.  Returns ``(config_dict, family, groups, ordinal, depth)``; the
+    caller writes/presents (assembled into the outer map by `main()`).
 
-    `pages` restricts the scan to an explicit page range (appendix generator
-    passes ONLY the appendix pages); `letter_chapter` enables the appendix
+    `pages` restricts the scan to an explicit page range (special generator
+    passes ONLY that kind's pages); `letter_chapter` enables the letter-slot
     letter-slot numbering detection (`Definition A.1.1`).
     """
     family, groups, lang, cm_chapter_first = _detect_ordinal_from_pages(
@@ -1447,52 +1514,54 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     return config, family, groups, ordinal, depth
 
 
-def _generate_appendix_verify_config(extract_dir):
-    """Generate `<extract_dir>/appendix_verify_config.json` for appendix chapters.
+def _generate_special_verify_configs(extract_dir):
+    """Generate appendix/supplement sub-configs (letter-chapter convention) by
+    scanning EACH kind's page range independently.
 
-    Only runs when the book has appendix chapter(s) — located via
-    `_detect_appendix_chapters` (chapter_map registration OR OCR fallback).  The
-    scan is RESTRICTED to the appendix page range so an appendix that prints a
-    DIFFERENT numbering convention than the body (letter chapter slot `A.1.1`
-    vs digit `10.9.13`, different label sets, different counter-reset scope) is
-    detected on its own terms.  When no appendix numbering is detected the file
-    is NOT written (the body config stays authoritative — zero regression).
+    🔴 Supplement（kind=3）与 Appendix（kind=2）是不同概念，分别按 chapter_map 的
+    kind 检出、分别生成子配置（同走 ``_build_config_dict(letter_chapter=True)`` 的
+    字母章位体例检测）；二者在 verify_config.json 外层 map 中分别落键
+    ``"appendix"`` / ``"supplement"``，绝不混称。返回
+    ``{"appendix": cfg|None, "supplement": cfg|None}``。
+
+    仅当某类页区间检出字母章位体例（ORDINAL_APP=13）才产出子配置；否则回退主配置。
     """
-    app_chapters = _detect_appendix_chapters(extract_dir)
-    if not app_chapters:
-        print("[make_config] 未检出附录章，跳过 appendix_verify_config.json"
-              "（回退主配置，零回归）。")
-        return
-    app_pages = _appendix_page_files(extract_dir, app_chapters)
-    if not app_pages:
-        print("[make_config] 检出附录章但无可用页区间，跳过"
-              " appendix_verify_config.json。")
-        return
-    app_cfg_path = os.path.join(extract_dir, 'appendix_verify_config.json')
-    app_config, app_family, app_groups, app_ordinal, app_depth = _build_config_dict(
-        extract_dir, app_cfg_path, letter_chapter=True, is_appendix=True,
-        pages=app_pages)
-    if not app_ordinal or app_ordinal != ORDINAL_APP:
-        # 附录页区间未检出字母章位体例（可能本书附录与正文同体例）→ 不写文件，
-        # 避免生成一份与主配置等价的冗余配置。
-        print(f"[make_config] 附录页区间检出编号族={app_ordinal}（非字母章位 type 13），"
-              f"视为与正文同体例，跳过 appendix_verify_config.json。")
-        return
-    # 附录保留式练习计数器（`Exercise A.1.1`，字母章位）不在 LABEL_FORMS 中，
-    # 单独探测后并入附录配置，确保附录练习序列也被校验。
-    if _detect_appendix_exercise(extract_dir, app_pages):
-        app_config["ordinal"].append(
-            {"type": ORDINAL_APP, "name": ["Exercise"], "scope": 3})
-    with open(app_cfg_path, 'w', encoding='utf-8') as f:
-        json.dump(app_config, f, ensure_ascii=False, indent=2)
-    labels = [nm for g in app_config.get('ordinal', []) for nm in g.get('name', [])]
-    print(f"⚠️ 已生成附录配置（letter-chapter 体例 ordinal={app_ordinal}，"
-          f"depth={app_depth}）:")
-    print(f"   附录章: {[c['ch'] for c in app_chapters]}  "
-          f"页区间: {app_pages[0]!r}..{app_pages[-1]!r}")
-    print(f"   标签组名: {labels}")
-    print(f"   文件路径: {app_cfg_path}")
-    print(f"   文件内容: {json.dumps(app_config, ensure_ascii=False)}")
+    out = {"appendix": None, "supplement": None}
+    for kind, key, label in ((KIND_APPENDIX, "appendix", "附录"),
+                             (KIND_SUPPLEMENT, "supplement", "补篇")):
+        chs = _detect_special_chapters(extract_dir, kind)
+        if not chs:
+            print(f"[make_config] 未检出{label}章，跳过 verify_config.json 的 "
+                  f"\"{key}\" 子配置（回退主配置，零回归）。")
+            continue
+        pages = _special_page_files(extract_dir, chs)
+        if not pages:
+            print(f"[make_config] 检出{label}章但无可用页区间，跳过 \"{key}\" 子配置。")
+            continue
+        cfg, family, groups, ordinal, depth = _build_config_dict(
+            extract_dir, os.path.join(extract_dir, 'verify_config.json'),
+            letter_chapter=True, is_appendix=True, pages=pages)
+        if not ordinal or ordinal != ORDINAL_APP:
+            # 该类页区间未检出字母章位体例（可能本书该类与正文同体例）→ 不产出，
+            # 避免一份与主配置等价的冗余子配置。
+            print(f"[make_config] {label}页区间检出编号族={ordinal}（非字母章位 type 13），"
+                  f"视为与正文同体例，跳过 \"{key}\" 子配置。")
+            continue
+        # 字母章位保留式练习计数器（`Exercise A.1.1` / `Exercise S.1.1`）不在
+        # LABEL_FORMS 中，单独探测后并入，确保练习序列也被校验。
+        if _detect_appendix_exercise(extract_dir, pages):
+            cfg["ordinal"].append({"type": ORDINAL_APP, "name": ["Exercise"], "scope": 3})
+        out[key] = cfg
+        labels = [nm for g in cfg.get('ordinal', []) for nm in g.get('name', [])]
+        print(f"⚠️ 已生成{label}配置（letter-chapter 体例 ordinal={ordinal}，"
+              f"depth={depth}）：")
+        print(f"   {label}章: {[c['ch'] for c in chs]}  "
+              f"页区间: {pages[0]!r}..{pages[-1]!r}")
+        print(f"   标签组名: {labels}")
+        print(f"   子配置内容: {json.dumps(cfg, ensure_ascii=False)}")
+    return out
+
+
 
 
 def main():
@@ -1541,20 +1610,26 @@ def main():
     # counter get their OWN group — that is what the `ordinal` ARRAY is for.
     config, family, groups, ordinal, depth = _build_config_dict(extract_dir, cfg_path)
 
+    # 🔴 附录 / 补篇子配置：分别按 chapter_map 的 kind 扫对应页区间生成（字母章位
+    # 体例），Supplement 与 Appendix 分别落键，绝不混称。缺某一类则回退主配置。
+    special = _generate_special_verify_configs(extract_dir)
+
+    # ---- 组装外层 map：{"ch": 正文, "appendix": 附录, "supplement": 补篇} ----
+    out_map = {"ch": config}
+    if special.get("appendix") is not None:
+        out_map["appendix"] = special["appendix"]
+    if special.get("supplement") is not None:
+        out_map["supplement"] = special["supplement"]
+
     with open(cfg_path, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+        json.dump(out_map, f, ensure_ascii=False, indent=2)
 
-    # 🔴 附录专用配置（appendix_verify_config.json）：仅扫附录页区间，体例与正文
-    # 不一致时独立生成（字母章位 `A.1.1` / 不同的标签集 / 不同的计数器重置边界）。
-    # 缺附录章 → 不生成（回退主配置，零回归）。生成同样打 _provenance 戳 + 同样
-    # 走 ConfigLoader 的 _extraction_done.json 上游闸（无手写侧门）。
-    _generate_appendix_verify_config(extract_dir)
-
-    print(f"⚠️ 已生成起始配置（best-effort 检测 ordinal={ordinal}，depth={depth}）。")
-    print(f"   小节层级 section_types={config['section_types']} "
+    print(f"⚠️ 已生成起始配置（外层 map：ch/appendix/supplement；"
+          f"正文 best-effort 检测 ordinal={ordinal}，depth={depth}）。")
+    print(f"   正文小节层级 section_types={config.get('section_types')} "
           f"（角色码即层级深度，depth 由 SECTION_TYPE_DEPTH 派生，避免默认回退过度校验）。")
     print(f"   文件路径: {cfg_path}")
-    print(f"   文件内容: {json.dumps(config, ensure_ascii=False)}")
+    print(f"   文件内容: {json.dumps(out_map, ensure_ascii=False)}")
     if groups and groups != [["uncat"]]:
         print(f"   · 检出 {sum(len(g) for g in groups)} 个标签词，按『是否同计数器』分为 {len(groups)} 个 group：")
         for gi, g in enumerate(groups):

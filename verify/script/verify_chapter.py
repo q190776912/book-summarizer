@@ -155,21 +155,33 @@ def chapter_md_groups(book_dir, ch):
     """Return per-language verification groups for chapter `ch`.
 
     A group is a list of .md files that together form one language's full
-    chapter: either the single merged file (第N章_*.md / ChapterN_*.md if it
-    still exists) or the rule-D section files sorted by section number.
-    Appendix units (structure name contains "Appendix <L>") additionally
-    accept `Appendix{L}_*.md` (en) / `附录{L}_*.md` (zh).
-    Returns [] if none found.
+    chapter: either the single merged file or the rule-D section files sorted
+    by section number.  Naming follows the chapter kind (2026-09-08):
+      kind=1 chapter    → 第N章_*.md / ChapterN_*.md
+      kind=2 appendix   → + 附录L_*.md / AppendixL_*.md
+      kind=3 supplement → + 补篇L_*.md / SupplementL_*.md   (L = 章字母位)
     """
     groups = []
     pats = [
-        (f'第{ch}章_*.md', f'第{ch}章*.md'),       # zh
-        (f'Chapter{ch}_*.md', f'Chapter{ch}_*.md'),  # en
+        (f'第{ch}章_*.md', f'第{ch}章*.md'),       # zh chapter
+        (f'Chapter{ch}_*.md', f'Chapter{ch}_*.md'),  # en chapter
     ]
-    lab = _appendix_letter(book_dir, ch)
-    if lab:
+    # kind-aware appendix/supplement letter patterns（letter = 章字母位本身）。
+    kind = 1
+    try:
+        from book_structure import chapter_kind, prime_chapter_kinds
+        prime_chapter_kinds(os.path.join(book_dir, '_extract'))
+        kind = chapter_kind(ch)
+    except Exception:
+        kind = 1 if str(ch)[:1].isdigit() else 2
+    if kind == 2:
+        lab = str(ch)
         pats.append((f'附录{lab}_*.md', f'附录{lab}*.md'))          # zh appendix
         pats.append((f'Appendix{lab}_*.md', f'Appendix{lab}_*.md'))  # en appendix
+    elif kind == 3:
+        lab = str(ch)
+        pats.append((f'补篇{lab}_*.md', f'补篇{lab}*.md'))            # zh supplement
+        pats.append((f'Supplement{lab}_*.md', f'Supplement{lab}_*.md'))  # en supplement
     for merged_pat, sec_pat in pats:
         merged = [f for f in glob.glob(os.path.join(book_dir, merged_pat))
                   if _section_num_from_filename(f) is None]
@@ -226,7 +238,7 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     ``require_complete(allow_absent=True)`` warn+default safety net — that is a
     deliberate carve-out, not a verify path.)
     """
-    # 🔒 上游闸补充：verify 依赖分章契约（book_structure/ch{N}.json / appendix{X}.json）
+    # 🔒 上游闸补充：verify 依赖分章契约（book_structure/ch{N}.json / appendix{X}.json / supplement{S}.json）
     # 作为编号项基准（2026-08-29 重构后为唯一格式，旧版全书单文件已废弃）。
     # 缺失说明 structure 子流程未跑完（或跳步），禁止校验——否则 data_provider
     # 无基准、编号项查漏失效。这是"上一步没做完不能进下一步"在 verify 端的落地。
@@ -234,7 +246,7 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     if not list_chapter_keys(ext):
         bs = os.path.join(ext, "book_structure")
         raise ConfigError(
-            f"[verify] BLOCKED: 缺分章契约 {bs}{os.sep}ch{{N}}.json / appendix{{X}}.json"
+            f"[verify] BLOCKED: 缺分章契约 {bs}{os.sep}ch{{N}}.json / appendix{{X}}.json / supplement{{S}}.json"
             f"（structure 子流程未产出，或产出为零章）。"
             f"须先完成 structure 子流程（build_structure + 完整性闸门）"
             f"再跑 verify。严禁跳步。"
@@ -606,6 +618,12 @@ def _main_impl():
             sys.exit(2)
         ext = _norm_win(pos[i + 1])
         book_dir = _norm_win(pos[i + 2])
+        # 🔴 灌注 kind 注册表（Chapter/Appendix/Supplement 三分依赖显式 kind）
+        try:
+            from book_structure import prime_chapter_kinds
+            prime_chapter_kinds(ext)
+        except Exception:
+            pass
 
         # Apply --fix --fix-force to all chapters before verification
         # (plain --fix is disabled by default; see _fix_disabled_hint)
@@ -657,7 +675,7 @@ def _main_impl():
               "[--manual overrides.json] [--ignore noise.json] [--ignore-figure fig_noise.json]")
         print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json]")
         print("  <extract_dir> is REQUIRED — the book's _extract folder (e.g. D:\\study\\book\\<书名>\\_extract).")
-        print("  --manual: path to manual_overrides_ch{N}.json / manual_overrides_appendix{X}.json (added to extract_items items)")
+        print("  --manual: path to manual_overrides_ch{N}.json / manual_overrides_appendix{X}.json / manual_overrides_supplement{S}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
         print("  --fix: 已默认禁用（2026-08-28）。须与 --fix-force 同用才执行全层自动修复")

@@ -207,6 +207,11 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     callers not passing it keep exact prior behavior.
     """
     items = []
+    # 已抓到的条目 key（同一次调用 = 同一章）。用于识别「续行型交叉引用」：
+    # 见下方 key 重复处的守卫。
+    seen_keys = set()
+    # (标签, 章号) -> 该桶已抓到的最大编号元组；同标签编号必须严格递增。
+    _max_per_label = {}
     # Section-scoped books also accept numbered graphics (Table/Figure) as items.
     lab_labels = SECTION_LABELS if section_scoped else EN_LABELS
     if extra_labels:
@@ -324,6 +329,39 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     after = txt[m.end():].lstrip()
                     if after and after[0].isascii() and after[0].islower():
                         continue
+                # 🔴 续行型交叉引用守卫（Han-Lin《Elliptic PDEs》实测）：上一行
+                # 末是 "…Applying Lemma"、编号与后半句被 OCR 折到块首时，新块以
+                # "Lemma 1.26 to any ball B_R(0)…" 开头，形态与真条头完全一致
+                # （块首 + 标签 + 编号），但它是上一句的后半截。判据二条同时成立
+                # 才拒：① 同一 key 在本章前面**已作为条目抓过**（书不会把同一编号
+                # 的条目陈述两遍）；② 编号后的文字以小写字母开头或直接无标题
+                # （真陈述以大写/标题词起头，如 "Lemma 1.10 Suppose…"）。
+                # 只拒重复且接排的那一处，首次出现与大写起头的重复都不动，
+                # 故不会误杀真条目（不同标签共享号段的书按完整 key 判别，
+                # "Theorem 1.5" 与 "Lemma 1.5" 互不影响）。
+                # 大小写/OCR 噪声归一后再比对（真条头常全大写 "LEMMA 1.26"，
+                # 折行续句常是 "Lemma 1.26"，不作归一等于判不出重复）。
+                if re.sub(r'\s+', ' ', key).lower() in seen_keys:
+                    _dup_after = txt[m.end():].lstrip()
+                    if (not _dup_after
+                            or (_dup_after[0].isascii() and _dup_after[0].islower())):
+                        continue
+                # 🔴 同标签编号单调守卫（Han-Lin《Elliptic PDEs》实测）：章内计数器
+                # 书里同一标签的编号必**严格递增**。凡是编号不高于「该标签本章已抓到
+                # 的最大编号」的候选，都是页末句被折行后落在块首的**交叉引用后半截**
+                # （"…we may apply THEOREM 6.8 to L+μ" / "COROLLARY 4.2 implies u ∈
+                # C^{δ0}"）或同一条目的重复行，不是新条目。按 (标签, 章号) 分桶只比
+                # 段内号，故不同标签各自计数（Koopman 型并行计数器）与按节重排的
+                # section_scoped 书都不受影响——后者本规则不启用。
+                if not section_scoped:
+                    _lab_norm = str(label).strip().lower()
+                    _bucket = (_lab_norm, n1) if (not single and m.group(3) is not None) \
+                        else (_lab_norm,)
+                    _comp = (n1, n2) if (not single and m.group(3) is not None) else (n1,)
+                    if _comp <= _max_per_label.get(_bucket, (-(1 << 30),)):
+                        continue
+                    _max_per_label[_bucket] = _comp
+                seen_keys.add(re.sub(r'\s+', ' ', key).lower())
                 snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
                 items.append({"key": key, "label": label,
                               "page": p, "text": snippet})

@@ -50,7 +50,8 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as ac
-from data.book_structure.book_structure import chapter_label
+from data.book_structure.book_structure import (
+    chapter_label, prime_chapter_kinds)
 
 
 def _norm_text(s):
@@ -262,6 +263,9 @@ def main(argv=None):
     if not os.path.exists(os.path.join(ext, "_extraction_done.json")):
         print("[check_content_completeness] BLOCKED: 缺 _extraction_done.json。")
         return 2
+    # 2026-09-08：按 chapter_map 灌注 kind 注册表（Supplement 等字母章
+    # 的契约文件名走 supplement{X}.json，与 SSOT chapter_label 同源）。
+    prime_chapter_kinds(ext)
     keys = ac.list_chapter_keys(ext)
     if chapters:
         want = {str(c) for c in chapters}

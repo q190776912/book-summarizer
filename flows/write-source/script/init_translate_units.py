@@ -160,7 +160,7 @@ def main():
     ext = argv[0]
     # 🔴 灌注 kind 注册表（Chapter/Appendix/Supplement 三分依赖 chapter_map 的显式 kind）
     try:
-        from book_structure import prime_chapter_kinds
+        from data.book_structure.book_structure import prime_chapter_kinds
         prime_chapter_kinds(ext)
     except Exception:
         pass

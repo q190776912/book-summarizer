@@ -61,7 +61,8 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import chapter_label, list_chapter_keys, unit_dir_name
+from data.book_structure.book_structure import (
+    chapter_label, list_chapter_keys, prime_chapter_kinds, unit_dir_name)
 import split_draft_units as _split
 import check_unit_quality as _quality
 
@@ -186,6 +187,7 @@ def main():
         print(__doc__)
         return 2
     ext = argv[0]
+    prime_chapter_kinds(ext)  # 🔴 灌注 kind 注册表（Supplement 前缀依赖 chapter_map）
     try:
         chapters = [int(x) for x in argv[1:]]
     except ValueError:

@@ -906,11 +906,48 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
         elif (not is_ref) == (not prev_ref) and it["page"] < prev["page"]:
             best[ck] = it
 
+    # 🔴 共享计数器豁免（Han-Lin《Elliptic PDEs》实测）：配置把多个标签并进**同一个
+    # ordinal group**（= 它们共享一个升序计数器）时，同一编号全书只会出现一次。
+    # 若该编号已以**另一标签**落在契约里（契约有 评注4.2），源侧又扫到
+    # "Corollary 4.2 implies u ∈ C^{δ0}…"（章末 Notes 里的交叉引用/折行续句），
+    # 那不是遗漏条目——回填会造出重复编号、B 层随即报顺序错乱。故判为
+    # shared_counter：闸门不拦、不回填，但仍在报告里留痕供复核。
+    def _shared_groups():
+        out = []
+        for g in getattr(cfg, "ordinal", None) or []:
+            names = getattr(g, "name", None) or []
+            if len(names) > 1:
+                out.append({str(x).lower() for x in names}
+                           | {str(_canon_label(str(x))).lower() for x in names})
+        return out
+
+    _shared = _shared_groups()
+    if _shared:
+        canon_labels = {}
+        for _ck in contract_items:
+            if (isinstance(_ck, tuple) and len(_ck) == 2
+                    and isinstance(_ck[1], tuple)):
+                _canon, _lab = _ck[1], str(_ck[0]).lower()
+            else:
+                _canon, _lab = tuple(_ck) if isinstance(_ck, tuple) else _ck, ''
+            canon_labels.setdefault(_canon, set()).add(_lab)
+
     missing_items = []
     for ck, it in best.items():
         if ck in contract_items:
             continue
         c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
+        if _shared and c in canon_labels:
+            _cand = {str(it["label"]).lower(),
+                     str(_canon_label(str(it["label"]))).lower()}
+            if any(_cand & grp and (canon_labels[c] & grp) for grp in _shared):
+                missing_items.append({
+                    "key": it["key"], "label": it["label"], "page": it["page"],
+                    "snippet": it["snippet"], "canon": list(c),
+                    "has_label": it.get("has_label", False),
+                    "status": "shared_counter",
+                })
+                continue
         garbled = not (len(c) >= 1 and all(isinstance(x, int) for x in c)
                        and (len(c) < 2 or c[1] <= 60) and (len(c) < 3 or c[2] <= 200))
         is_ref = bool(_REF_RE.search(it.get("snippet", "")))

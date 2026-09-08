@@ -48,6 +48,7 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
   - `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本**自动回填**；
   - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
   - `needs_agent`（OCR 字母↔数字无法干净还原）→ 交 agent 凭读图 / 知识回填（沿用 `config/manual_overrides_chN` + `（OCR无法识别）`，见 `verify/missing_label_policy.md`）。
+  - `shared_counter`（共享计数器书专属）：该编号已以**另一标签**落在契约里（契约 `评注4.2`，源侧又扫到 `Corollary 4.2 implies…`）。共享一个升序计数器时同号全书只出现一次，源侧这处必是交叉引用/折行续句 → 不回填、闸门不拦，仅留痕供复核（Han-Lin《Elliptic PDEs》ch4 实测）。
 
 确认 `readable` 项无误后，**先备份再写回**：
 ```powershell

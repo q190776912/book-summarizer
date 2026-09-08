@@ -95,13 +95,31 @@ def _is_fig_kw(name):
     return low in ("fig", "figure")
 
 
-def _load_old_ordinal(cfg_path):
-    """Return the `ordinal` array from an existing verify_config.json, or []."""
+def _load_old_ordinal(cfg_path, section_key="ch"):
+    """Return the `ordinal` array from an existing verify_config.json, or [].
+
+    🔴 map-aware（2026-09-08 修复）: 最新 schema 把每个子配置嵌套在外层键
+    ``"ch"`` / ``"appendix"`` / ``"supplement"`` 下, ``ordinal`` 不再位于顶层。
+    若事后对「已转 map 格式」的书重跑 ``make_config.py --force``, 旧顶层
+    ``ordinal`` 读取会落空、Figure 组丢失 —— 这是转格式引入的回归。改读
+    ``data[section_key]["ordinal"]`` 即可按子配置保真回贴; section_key 由
+    ``_build_config_dict`` 透传（正文="ch", 附录/补篇=各自键）。
+
+    旧扁平格式（顶层有 ``ordinal``）仍走原分支, 零回归。
+    """
     try:
         with open(cfg_path, encoding="utf-8") as f:
-            return (json.load(f) or {}).get("ordinal", []) or []
+            data = json.load(f) or {}
     except Exception:
         return []
+    # map-format: 读匹配子配置的 ordinal
+    if isinstance(data, dict) and any(k in data for k in ("ch", "appendix", "supplement")):
+        sub = data.get(section_key)
+        if isinstance(sub, dict):
+            return sub.get("ordinal", []) or []
+        return []
+    # legacy flat format: 顶层 ordinal
+    return data.get("ordinal", []) or []
 
 # --- section hierarchy (D-layer) -------------------------------------------
 # `section_types` (ORDINAL-DEPTH codes, NOT "chapter/section" role names) MUST
@@ -216,6 +234,14 @@ def _header_depth_from_comps(txt, m, comps, max_depth):
     if len(comps) < 2 or len(comps) > max_depth:
         return None
     rest = txt[m.end():].lstrip()
+    # 🔴 容忍序标后的点号（AMS 体例「1.1. Guide」/ do Carmo「1-2. Parametrized
+    # Curves」）：数字段后紧跟句点再接标题。此处必须与消费方
+    # ``scan_skeleton._section_header_info`` 的 lstrip('.．。') 口径一致——
+    # 两边不一致时（本函数严格、scan_skeleton 宽松）会产生「节头能抓但
+    # section_types 只给 [1]」，下游按 depths 过滤后整本书的小节全漏
+    # （Han-Lin《Elliptic PDEs》实测：1.1. Guide / 1.2. Mean Value Properties
+    # 全部漏检，契约退化为一个页码页眉冒充的伪节）。
+    rest = rest.lstrip('.．。').lstrip()
     if not rest or not rest[0].isalnum():
         return None  # number with no following title -> not a header line
     title = rest[:12]
@@ -1410,7 +1436,7 @@ def _special_page_files(extract_dir, chapters):
 
 
 def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
-                      is_appendix=False, pages=None):
+                      is_appendix=False, pages=None, section_key="ch"):
     """Detection + assembly for ONE book-config (main / appendix / supplement).
 
     Shared by `main()` (the mandatory `verify_config.json` "ch" sub-config) and
@@ -1421,6 +1447,11 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     `pages` restricts the scan to an explicit page range (special generator
     passes ONLY that kind's pages); `letter_chapter` enables the letter-slot
     letter-slot numbering detection (`Definition A.1.1`).
+
+    `section_key` ("ch" / "appendix" / "supplement") tells `_load_old_ordinal`
+    which sub-config's `ordinal` to preserve on a `--force` regenerate — so the
+    map-format nesting (latest schema) round-trips zero-regression instead of
+    dropping the Figure group.
     """
     family, groups, lang, cm_chapter_first = _detect_ordinal_from_pages(
         extract_dir, pages=pages, letter_chapter=letter_chapter)
@@ -1476,7 +1507,7 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
             any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
         ordinal_arr.append({"type": 1, "name": ["Figure"], "scope": 1})
     if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
-        for g in _load_old_ordinal(cfg_path):
+        for g in _load_old_ordinal(cfg_path, section_key):
             if any(_is_fig_kw(nm) for nm in g.get("name", [])):
                 if ordinal is not None:
                     ordinal_arr.append({
@@ -1540,7 +1571,8 @@ def _generate_special_verify_configs(extract_dir):
             continue
         cfg, family, groups, ordinal, depth = _build_config_dict(
             extract_dir, os.path.join(extract_dir, 'verify_config.json'),
-            letter_chapter=True, is_appendix=True, pages=pages)
+            letter_chapter=True, is_appendix=True, pages=pages,
+            section_key=key)
         if not ordinal or ordinal != ORDINAL_APP:
             # 该类页区间未检出字母章位体例（可能本书该类与正文同体例）→ 不产出，
             # 避免一份与主配置等价的冗余子配置。

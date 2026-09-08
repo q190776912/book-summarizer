@@ -101,7 +101,7 @@ def _final_md_name(ch_key, language, chapter_name):
     rest = re.sub(r'[\\/:*?"<>|\r\n\s]+', "_", rest).strip(" _")
     kind = 2
     try:
-        from book_structure import chapter_kind
+        from data.book_structure.book_structure import chapter_kind
         kind = chapter_kind(int(num) if num.isdigit() else num)
     except Exception:
         kind = 1 if num[:1].isdigit() else 2
@@ -222,7 +222,7 @@ def main():
     # 于 chapter_map 的显式 kind（而非「章号是否数字」猜测）。未灌注会静默回落旧
     # 形态判据，把 Supplement 写成 Appendix。
     try:
-        from book_structure import prime_chapter_kinds
+        from data.book_structure.book_structure import prime_chapter_kinds
         prime_chapter_kinds(ext)
     except Exception:
         pass

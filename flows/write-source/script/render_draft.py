@@ -99,7 +99,13 @@ def _book_language(ext):
     p = os.path.join(ext, "verify_config.json")
     try:
         with open(p, encoding="utf-8-sig") as f:
-            return (json.load(f).get("language") or "cn").lower()
+            d = json.load(f)
+        lang = d.get("language")
+        if not lang and isinstance(d.get("ch"), dict):
+            # 2026-09-08 map 格式（kind 路由 ch/appendix/supplement）：
+            # 正文章语言在 "ch" 子配置内。
+            lang = d["ch"].get("language")
+        return (lang or "cn").lower()
     except Exception:
         return "cn"
 

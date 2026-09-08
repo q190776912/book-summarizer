@@ -20,7 +20,8 @@ import re
 import subprocess
 import sys
 
-from data.book_structure.book_structure import chapter_label, unit_dir_name
+from data.book_structure.book_structure import (
+    chapter_label, prime_chapter_kinds, unit_dir_name)
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -137,7 +138,11 @@ class physical_evidence:
 
     @staticmethod
     def _extract_dir(book_dir, extract_dir):
-        return extract_dir or os.path.join(book_dir, "_extract")
+        ex = extract_dir or os.path.join(book_dir, "_extract")
+        # 2026-09-08：按 chapter_map.json 灌注 kind 注册表，使 chapter_label /
+        # unit_dir_name 对 Supplement（kind=3）等字母章返回正确前缀（幂等、零回归）。
+        prime_chapter_kinds(ex)
+        return ex
 
     @staticmethod
     def pages_all_landed(book_dir, extract_dir):
@@ -266,7 +271,13 @@ class physical_evidence:
             d = json.load(open(p, encoding="utf-8"))
         except Exception as e:
             return False, f"verify_config.json 非法 JSON: {e}"
-        if not (isinstance(d.get("ordinal"), list) and len(d.get("ordinal")) > 0):
+        # 2026-09-08 起 verify_config.json 支持外层 map 格式（kind 路由：
+        # "ch"/"appendix"/"supplement" 各含子配置；见 ConfigLoader 零回归语义）。
+        # 顶层 ordinal → 旧扁平格式；顶层 map → 正文章 ordinal 在 "ch" 键内。
+        cfg = d if isinstance(d.get("ordinal"), list) else d.get("ch")
+        if not (isinstance(cfg, dict)
+                and isinstance(cfg.get("ordinal"), list)
+                and len(cfg.get("ordinal")) > 0):
             return False, "verify_config.json 缺 ordinal 数组"
         return True, "chapter_map.json + verify_config.json（含 ordinal 数组）就绪"
 
@@ -338,7 +349,7 @@ class physical_evidence:
             return False, "缺 chapter_map.json（config 步未完成）"
         missing = [k for k in keys
                    if not os.path.exists(os.path.join(
-                       sub, ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k))]
+                       sub, chapter_label(k) + ".json"))]
         if missing:
             return False, f"缺分章骨架 {len(missing)} 章: {missing[:4]}"
         reports_missing, not_passed = [], []
@@ -377,7 +388,7 @@ class physical_evidence:
             return False, "缺 chapter_map.json（config 步未完成）"
         missing, stale = [], []
         for k in keys:
-            fname = (f"ch{k}.json" if k[:1].isdigit() else f"appendix{k}.json")
+            fname = chapter_label(k) + ".json"
             jp = os.path.join(sub, fname)
             mp = os.path.join(sub, "units", unit_dir_name(k), "manifest.json")
             if not os.path.exists(jp):
@@ -748,8 +759,7 @@ class physical_evidence:
     def _contract_names_missing(ex, k, md_files):
         """结构契约骨架节 + 编号项在 md 组中的在位核对；返回缺失名列表。"""
         contract_path = os.path.join(
-            ex, "book_structure",
-            ("ch%s.json" if k[:1].isdigit() else "appendix%s.json") % k)
+            ex, "book_structure", chapter_label(k) + ".json")
         if not os.path.exists(contract_path):
             return None
         try:

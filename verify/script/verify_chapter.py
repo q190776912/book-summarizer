@@ -169,7 +169,7 @@ def chapter_md_groups(book_dir, ch):
     # kind-aware appendix/supplement letter patterns（letter = 章字母位本身）。
     kind = 1
     try:
-        from book_structure import chapter_kind, prime_chapter_kinds
+        from data.book_structure.book_structure import chapter_kind, prime_chapter_kinds
         prime_chapter_kinds(os.path.join(book_dir, '_extract'))
         kind = chapter_kind(ch)
     except Exception:
@@ -620,7 +620,7 @@ def _main_impl():
         book_dir = _norm_win(pos[i + 2])
         # 🔴 灌注 kind 注册表（Chapter/Appendix/Supplement 三分依赖显式 kind）
         try:
-            from book_structure import prime_chapter_kinds
+            from data.book_structure.book_structure import prime_chapter_kinds
             prime_chapter_kinds(ext)
         except Exception:
             pass

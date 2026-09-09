@@ -1130,7 +1130,7 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                         backfilled_items.append({"key": mk, "where": where,
                                                  "page": mo.get("page"), "source": "manual_override"})
         if backfilled_items or backfilled_sections:
-            # 回填后写回分章契约（2026-08-29 重构）：ch{N}.json 是"骨架+内容"
+            # 回填后写回分章契约：ch{N}.json 是"骨架+内容"
             # 完整契约——先丢 raw 保真视图（树已被原地修改），重建该章内容
             # （build_chapter_contract 幂等重挂，新回填条目也获得 text/formula
             # 内容块），再写回单章文件。不走 bs.save()（会把全书按内存树

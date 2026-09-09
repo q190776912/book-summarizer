@@ -5,7 +5,7 @@
 ## 目的
 在 extract 的 **MM Repair 全部完成**后（文本提取 100% 且全部稳定批次经模式 A+B 已 `mm_repair_apply` 写回 `page_*.json`；若用户拒绝视觉识别则模式 A 由模式 B / `MM_UNAVAILABLE` 替代，见 [`extract/mm_repair`](../../extract/mm_repair/mm_repair.md) Step 1；完成标记 `_extraction_done.json` 存在），依据**源 `page_*.json`** 一次性完成两件事：
 
-1. **建章节映射** `_extract/chapter_map.json`（Step 1，统一在本阶段生成，不再轮询期间早建）；
+1. **建章节映射** `_extract/chapter_map.json`（Step 1，统一在本阶段生成）；
 2. **生成书级配置** `_extract/verify_config.json`（Step 2–3）——它是 `verify_chapter.py` / `flows/write-source/structure/script/scan_skeleton` 的**唯一配置源**，也是后续批量校验的硬性前置。
 
 图检测子流程依赖本书 `ordinal` 里的 **Figure 组**（`{"type":<段数>,"name":[图号前缀词],"scope":<段数>}`；`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号段数 components）来确定图号前缀与段数；缺 Figure 组时回落默认前缀 `["图","Figure","Fig"]`，自定义前缀书须在 Figure 组 `name` 显式列出。🔴 仅文本 100% 落盘但未完成 MM Repair（尤其模式 A 视觉审读，若用户拒绝视觉识别则以模式 B / `MM_UNAVAILABLE` 替代）时不得跑本步——`chapter_map` 章边界与 `formula` map 都依赖校正后的页面。
@@ -27,7 +27,7 @@
      python tools/build_chapter_map.py <extract_dir>
      ```
      它扫描 `page_*.json` 自动定位每章真实起点（"Chapter N" 标题匹配 / 裸标题回退）、推断 `end`（下一章起点-1），写回 `chapter_map.json` 并产出 `chapter_map.build_report.md` 供 agent 判断。
-   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；但 agent **不再手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../data/chapter_map/chapter_map.md)）。
+   - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；agent **不手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../data/chapter_map/chapter_map.md)）。
    - 它是后续"某章是否已可写"、`make_config.py` 编号判定（罗马数字章号 / 每章 `ordinal` / `chapter_first`）、figure 按章分配与 `build_structure` 页区间读取的**唯一判定依据**。
    - 🔴 **生成后 agent 判断（强制）**：读 `chapter_map.build_report.md`——确认 `CORRECTED` 值；若有 `UNDTECTED` 章（检测器未能从 OCR 定位起点），在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具。全章 `start`/`end` 非 null 才放行进入 Step 2–3 与下游 write-source（与"规则 B：暴露真实缺陷、禁止掩盖"一脉相承）。
 
@@ -49,7 +49,7 @@
    ```
 
 ## 本阶段规则（🔴 内联）
-- **规则0 — chapter_map 统一在本阶段生成、且只建一次**：不再在 extract 轮询期间早建（旧 extract/chapter_map 子流程已并入本步）；**全书的 chapter_map 只生成一份**，不重复生成（除非用户明确要改章节划分）。判定"某章可写"的硬标准：`info.end <= current_max_page`（该章末页已落盘；extract 出口时全书页必已齐）。
+- **规则0 — chapter_map 统一在本阶段生成、且只建一次**：**全书的 chapter_map 只生成一份**，不重复生成（除非用户明确要改章节划分）。判定"某章可写"的硬标准：`info.end <= current_max_page`（该章末页已落盘；extract 出口时全书页必已齐）。
 - **规则1 — 书级配置强制前置（最高优先级）**：`verify_chapter.py` 由 `ConfigLoader.require_complete()` 强制：
   - 文件缺失 → **不能用默认配置，必须重新配置**（`make_config --force` 或手填），不得静默沿用默认 `ordinal`；
   - 文件存在但缺 `ordinal` → 硬报错 `exit 2`；
@@ -68,9 +68,9 @@
 - **规则6 — chapter_map 一步生成 + agent 判断（🔴 强制）**：Step 1 用 `build_chapter_map.py` 一步从 OCR 算出正确 `start`/`end` 写回 `chapter_map.json`，**不得**让人从 TOC 手抄印刷页号当 PDF 页号。生成后 agent **必须**审阅 `chapter_map.build_report.md`：
   - `CORRECTED` 值（检测值 ≠ 原 TOC 粗略值）→ 确认接受（已自动写入）；
   - `UNDTECTED` 章（检测器未能从 OCR 定位起点）→ **必须**在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具；
-  - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成，不再有独立的校验脚本闸步。
+  - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `ordinal` 必须含 Figure 组（自定义前缀→`name` 非空、无图序标→不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
-- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（1–9，原 7 已并入 4；**附录字母章位三级 = 13**，见该文档 §附录专用配置）。
+- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（合法值 {1,2,3,4,5,6,8,9,13}：两级序标 + `chapter_first:false` 组合用 `type 4`；**附录字母章位三级 = 13**，见该文档 §附录专用配置）。
 - **附录与正文体例不一致**：若本书附录编号体例与正文不同（如正文数字三级 `Theorem 10.9.13`、附录字母章位 `Definition A.1.1`），`make_config.py` 会**只扫附录页区间**额外生成 `_extract/appendix_verify_config.json`（`ConfigLoader` 对附录章自动路由到此文件，正文零回归）。若附录与正文同体例则**不生成**该文件（回退主配置）。`chapter_map.json` 中附录章须以字母章号（`"ch": "A"`）或章名含 `Appendix`/`附录` 登记，否则检测器无法识别其为附录。详见 [`../../../config/verify_config/verify_config.md` §附录专用配置](../../../config/verify_config/verify_config.md)。
 
 ## 出口条件
@@ -83,4 +83,4 @@
 - `../../../config/verify_config/verify_config.py`：`BookConfig` / `GroupConfig` 数据模型（schema 实现 SSOT）。
 
 ## 子流程
-- [`extract/config_setting`](config_setting.md) 为 extract 的 config 子流程本体；chapter_map 建映射已并入本流程 Step 1，无独立子流程文档。
+- 无独立子文档——本文件即 write-source 步骤 1 的 config 子流程本体（chapter_map 建映射 = Step 1，配置生成 = Step 2–3）。

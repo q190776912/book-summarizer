@@ -15,7 +15,7 @@
 | `figure_index.json` | [figure_index/](figure_index) | `FigureIndex` | 构造器（同时产出 `figure_embed_overrides.json`） |
 | `figure_embed_overrides.json` | [figure_embed_overrides/](figure_embed_overrides) | `FigureEmbedOverrides` | 构造器（由 `figure_index` 生成器写入） |
 | `repairs.json` | [repairs/](repairs) | `Repairs` | 构造器 |
-| `book_structure/ch{N}.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/write-source/structure/script/build_structure.py` 一步产出含内容完整契约并写回；`attach_content.py` 的 attach CLI 仅保留为全章重挂手动维护入口）。按章分文件（数字章 `ch{N}.json` / 附录 `appendix{X}.json`），`sub_sec` 混合内容块 `{"text"}` / `{"formula","display"}` / `{"image"}` 与 description / proof 派生节点，详见 [book_structure.md](book_structure/book_structure.md)；`BookStructure.load` 聚合读取；历史单文件 `book_structure.json` 已废弃、**不读取、无兼容回退** |
+| `book_structure/ch{N}.json` | [book_structure/](book_structure) | `BookStructure` / `StructureNode` | 构造器（`flows/write-source/structure/script/build_structure.py` 一步产出含内容完整契约并写回；`attach_content.py` 的 attach CLI 仅保留为全章重挂手动维护入口）。按章分文件（数字章 `ch{N}.json` / 附录 `appendix{X}.json`），`sub_sec` 混合内容块 `{"text"}` / `{"formula","display"}` / `{"image"}` 与 description / proof 派生节点，详见 [book_structure.md](book_structure/book_structure.md)；`BookStructure.load` 聚合读取；整书单文件 `book_structure.json` **不是合法产物，不读取、无兼容回退** |
 
 ## 外部 / 流程产物（无 in-skill 构造器）
 

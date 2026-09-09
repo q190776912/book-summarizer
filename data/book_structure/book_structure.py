@@ -10,8 +10,8 @@
   ``attach_content`` 挂入正文内容（description / proof 派生节点与
   text / formula / image 内容块）后**写回同一文件**。
 - 节点 schema：``key / type / name / page_start / page_end / sub_sec``（递归）；
-  ``sub_sec`` 顺序即书中实际顺序。全书单文件 ``book_structure.json`` 已废弃
-  （历史书由 :meth:`BookStructure.load` 只读兼容回退）。
+  ``sub_sec`` 顺序即书中实际顺序。整书单文件 ``book_structure.json`` 不是合法
+  产物，不被读取（无兼容回退）。
 
 本模块是结构 JSON 的**唯一权威模型**：所有读写 / 遍历 / 回填都经本类，
 脚本不再裸操作 json 字典（见 ``verify/script/structure_io.py``、
@@ -43,9 +43,9 @@ _DERIVED_TYPES = ("description", "proof")
 
 # 分章契约的落位子目录与命名（数字章 ch{N}.json / 附录章 appendix{X}.json）
 OUT_SUBDIR = "book_structure"
-# 旧版全书单文件 book_structure.json 已废弃（2026-08-29 分章契约重构）：
-# 不再做任何读取兼容，BookStructure.load 只认分章文件。
-LEGACY_JSON_NAME = "book_structure.json"      # 仅用于报错提示（不再读取）
+# 整书单文件 book_structure.json 不是合法产物：不做任何读取兼容，
+# BookStructure.load 只认分章文件。
+LEGACY_JSON_NAME = "book_structure.json"      # 仅用于报错提示（不读取）
 
 
 _KIND_PREFIX = {KIND_CHAPTER: "ch", KIND_APPENDIX: "appendix",
@@ -373,8 +373,8 @@ class BookStructure:
     """书结构契约的加载 / 保存 / 查询门面。
 
     ``load`` 聚合分章文件 ``ch{N}.json`` / ``appendix{X}.json`` 为内存书对象；
-    ``save`` 拆分写回各分章文件。无分章文件时 load 返回 None——旧版全书单
-    文件 ``book_structure.json`` 已废弃（2026-08-29），不再读取。
+    ``save`` 拆分写回各分章文件。无分章文件时 load 返回 None——整书单
+    文件 ``book_structure.json`` 不被读取（无兼容回退）。
     """
 
     def __init__(self, root: StructureNode, book_dir: Optional[str] = None,

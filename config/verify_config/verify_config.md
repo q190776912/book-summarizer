@@ -142,7 +142,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈{1,2,3,4,5,6,8,9,13}（`depth` 由 `type` 派生，不再单独校验；type 7 已并入 type 4 + `chapter_first:false`；type 13 = 附录字母章位三级）、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type`∈{1,2,3,4,5,6,8,9,13}（`depth` 由 `type` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 4；type 13 = 附录字母章位三级）、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## 顶层字段：`chapter_first` / `section_scoped`

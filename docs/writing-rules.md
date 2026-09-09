@@ -3,7 +3,7 @@
 
 # 写作规则（Formatting & Content Rules）
 
-> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片流水线见 `../flows/write-source/figures/figures.md`，校验关卡见 `../verify/verify.md`。
+> 本文档是 `book-summarizer` skill 的格式参考。工作流步骤见 `SKILL.md`，图片规则见本文件 [V-E](#v-e-图片归属e-层) 小节，校验关卡见 `../verify/verify.md`。
 
 ---
 
@@ -21,10 +21,10 @@
 
 ---
 
-## 单元化写作流程（write-source 步骤 4–7，2026-08-31 起；步骤 6 = 英文书翻译单元）
+## 单元化写作流程（write-source 步骤 4–7；步骤 6 = 英文书翻译单元）
 
-> 写源阶段不再基于「整章草稿」写作，而是**以拆分出的单元为底稿，在步骤 5
-> 逐个改好**。步骤 6 只是纯脚本拼接，**不再需要 agent 参与**。
+> 写源阶段**以拆分出的单元为底稿，在步骤 5 逐个改好**。步骤 7（拼接）只是纯脚本，
+> **无 agent 参与**。
 
 - **拆分**（步骤 4，纯脚本）：`split_draft_units.py` 把内容化分章契约拆成
   按写作顺序的单元目录 `units/ch{N}/`——**每个编号项（定义/定理/例等，含其内部
@@ -34,7 +34,7 @@
   单元内容（公式重写 / Tier 压缩 / 格式落地）——**全部写作要求在此落实**，
   并把首行 `DRAFT` 改为 `DONE`。**禁止跳过任何单元。**
 - **🔴 强制门控**（步骤 5 末尾，脚本）：`gate_units.py` 核对每个单元「存在 +
-  首行 DONE + **单元级质量校验通过**」——🔴 2026-09-01 起判断标准是**「写对」
+  首行 DONE + **单元级质量校验通过**」——判断标准是**「写对」
   而非「重写」**：`check_unit_quality.py` 对每个 item/desc 单元校验——全部引用
   verify 已有检测函数，不重复造轮子：
   - **公式闭合**：`check_katex.check_display_math_closure`（同 verify F 层）
@@ -245,7 +245,7 @@ Common patterns (after correction):
 - **习题（练习）收录规则**（判定标准 = 有无专门习题小标题归拢）：
   - **有专门习题小标题的集中习题块**（`### 练习` / `## §1.11 习题` / `**习题**` / `Exercises` / `Problems` 下罗列的编号题）→ **一律省略**，直接跳过、不写注记；整节都是习题的节同理省略。
   - **无标题、穿插出现的习题**（散落正文条目间，或节末无标题归拢）→ **保留**，原位写出题目（OCR 噪声须重写正确 LaTeX），可附提示。
-  - ⚠️ 校验口径：集中习题块节点标 `consolidated:true` 并在 verify 真相集排除（既不写也不校验）；被保留的穿插练习**既写也纳入编号项校验**（真实条目，漏写/跳号应被发现）。早期"练习一律不校验"的表述作废。
+  - ⚠️ 校验口径：集中习题块节点标 `consolidated:true` 并在 verify 真相集排除（既不写也不校验）；被保留的穿插练习**既写也纳入编号项校验**（真实条目，漏写/跳号应被发现）。
 
 ### V-S 结构完整性（D / B / O 层）
 
@@ -263,11 +263,11 @@ Common patterns (after correction):
 
 ### V-P 反照抄与自造结构闸门（P 层，不可 `--fix`）
 
-> P 层 7 道闸门中，p_exer_block / p_missing_sec / p_extra_item / p_bare_item 已分别并入 [V-I](#v-i-编号项收录b-层--硬性要求-3-5) / [V-S](#v-s-结构完整性d--b--o-层) D.B / [V-S](#v-s-结构完整性d--b--o-层) B / [V-I](#v-i-编号项收录b-层--硬性要求-3-5)，此处只列 P 层独有的写作约束：
+> p_exer_block / p_missing_sec / p_extra_item / p_bare_item 的写作约束分别在 [V-I](#v-i-编号项收录b-层--硬性要求-3-5) / [V-S](#v-s-结构完整性d--b--o-层)（D.B / B），此处只列 P 层独有的写作约束：
 
 1. **剔除 OCR 噪声（p_noise）**：页眉 / 页脚 / 版权行（如 "Foundations of Algebraic Geometry"、"Published by …"、"© 2024 …"、孤立页码行）不得混进正文。取 `page_text()` 后人工剔除此噪声。
 2. **🔴 顶层纯散文不得整段照抄（p_verbose）**：顶层纯散文段（不含 `**` 标签条目/例/练习/注记忠实内容、且**不含公式**）段数 ≥6 → FAIL。忠实描述须"改写表述"而非整段照抄（Tier 1/2/3 分级），但**承载数学（`$...$`/`$$`/含公式）的顶层段落豁免**（视为 Tier 2 须保留公式与概念）。含公式段落不算 padding。
-   - 🔴 **判定的是"照抄"，不是"写得长"**（2026-08-28 用户裁决：**优先保证可读性，不以纯字数论处**）。纯长度只是代理，会与 Tier 2「保留全部变量/公式/概念 + 基本描述」直接冲突——忠实但已改写的密集数学散文天然偏长，被纯长度闸门误杀后只能靠删内容过关。故单段违规须满足二者之一：
+   - 🔴 **判定的是"照抄"，不是"写得长"**（判定原则：**优先保证可读性，不以纯字数论处**）。纯长度只是代理，会与 Tier 2「保留全部变量/公式/概念 + 基本描述」直接冲突——忠实但已改写的密集数学散文天然偏长，被纯长度闸门误杀后只能靠删内容过关。故单段违规须满足二者之一：
      - **改写不足**：长度 > 450 字 **且** 与源书 `page_*.json` 的 8-gram **字面重合率 ≥ 60%**（逐字照搬原文）→ 须改写表述（保留全部变量/公式/概念）；
      - **可读性硬顶**：长度 > 1200 字的墙式散文，无论重合率一律违规 → 须分段。
    - 换言之：**改写得好的长段不违规**；只有"照抄"和"墙式不分段"才违规。
@@ -297,7 +297,7 @@ Common patterns (after correction):
 - **例与证明分两行（同一连续块引用内）**：`> **例**` 行只含例子描述，其证明必须另起 `> **证明梗概**：` 行，不得同行（同行导致块内换行困难、校验难定位）。
 - **连续例必须在顶层用 `---` 分隔**：即使多个例共享同一 `>` 块（续行连接），每个 `> **例**` 之间也须用顶层 `---` + 空行断开，每个例独占独立块引用（否则 I 层漏检、阅读看不出边界）。
 - **例块连续性**：例的陈述与证明必须在同一连续 blockquote 中，禁止裸空行（无 `>` 的纯空行）或裸 `$$`（无 `>` 的展示公式）打断；需留白用 `>`（空引用行），需公式用 `> $$`。
-- **半包例子可自动修复**：若例子头带了 `>` 但正文（方程组/文字）留在顶层裸奔（即"只有第一行有 `>`"），属半包缺陷。`tools/wrap_examples_bq.py` 与 `verify --fix` 的 F 层 fixer（代号 G）现均能识别并整段收进 `>` 块（幂等；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）；但 G 层 DETECTOR（`check_g_quote_continuity`）会先判 FAIL，需跑 `--fix`（强制启用）或该工具修复。`wrap_examples_bq` 旧版只匹配顶层 `**例/Example**` 头、会跳过已带 `>` 的头导致永远修不动，此盲区已在两处脚本修正。
+- **半包例子可自动修复**：若例子头带了 `>` 但正文（方程组/文字）留在顶层裸奔（即"只有第一行有 `>`"），属半包缺陷。`tools/wrap_examples_bq.py` 与 `verify --fix` 的 F 层 fixer（代号 G）现均能识别并整段收进 `>` 块（幂等；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）；但 G 层 DETECTOR（`check_g_quote_continuity`）会先判 FAIL，需跑 `--fix`（强制启用）或该工具修复。两个脚本均同时匹配顶层 `**例/Example**` 头与已带 `>` 的例头。
 - **证明块下方缺 `---` 可自动修复（中英文 Proof 均识别）**：`> **证明**` / `> **Proof sketch**` 等证明块（正文已整体在 `>` 内）结束后，若紧接描述性散文而无 `---` 分隔（视觉上"证明像吞了后续描述"），`verify --fix` 的 F 层 fixer（代号 G；`fix_blockquote_continuity._ensure_proof_separator`）会自动在证明块下方插 `---`（幂等，重跑不重复插入；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。证明检测已双语化：`bq_core.PROOF_RE`/`PROF_LINE_RE`/`NESTED_BQ_RE`、`struct_labels.G_PF_RE`、`fix_blockquote_continuity._SAME_LINE_EX_PROOF_RE` 现均覆盖 中文 证明/证明思路/证明梗概/证明概要 与 英文 Proof/Proof sketch/Proof outline/Proof of …；块扩展遇到新的 `>` item 头（例/Proof/定理等）即停止，避免把后续例块吞入证明。
 
 ### V-K KaTeX 规则与公式序标（F 层 C 子层 + Q 层）
@@ -328,7 +328,7 @@ Common patterns (after correction):
     - **(B) ASCII 数学写成纯文本**（强制）：概率/期望/方差算符 `Pr{`/`Pr(`/`E[`/`Var(`/`Cov(`，单字母函数调用 `X(t)`/`p_k(n)`/`f(x+y)`，变量+下标数字 `x0`/`t1`/`y2`。必须包进 `$...$`（如 `设 $p_{k}(n)=\Pr\{\text{…}\}$`、`$X(t)$ is continuous`、`初始位置 $x_{0}$`、`$\mathbb{E}[X]$`）。
     - 本规则与 #8（Unicode 箭头/关系字形）、#9（裸 LaTeX 命令）共同构成「数学必须渲染」三道防线。
 18. **🔴 超长显示公式行 → `\tag` 重叠（折行规则；F 层 `long_formula_rows` 每章自动 WARN）**：带 `\tag` 的显示公式，若**渲染行**宽度超阈值（默认 60 可视单位）或**整块过高**（> 8 个渲染行），须**改公式排版、不改编号**：
-    - **🔴 判定口径（2026-09-06 修正，勿退回旧写法）**：按**渲染行**测量——先把 `$$` 块按顶层 `\\` 切分（跳过 `bmatrix` / `cases` 等嵌套环境内部的分隔符），把被折行书写的源码拼接回一整行再量宽；堆叠结构（列向量、分式）按竖向取 max 而非横向累加；`\sum` / `\int` 等符号按 1 字形计宽。旧口径是**逐源码行取 max**，会使「一个长行被折成多行书写」的公式系统性漏报——实例：18.11 最长源行仅 39（远低于旧阈值 100），整行渲染宽度实为 71。度量实现的**单一来源**是 `tools/scan_long_formulas.py`，F 层 `long_row_check.py` 与规划器 `wrap_long_formulas.py` 均复用它，**勿各写一份**。
+    - **🔴 判定口径：按渲染行测量**——先把 `$$` 块按顶层 `\\` 切分（跳过 `bmatrix` / `cases` 等嵌套环境内部的分隔符），把被折行书写的源码拼接回一整行再量宽；堆叠结构（列向量、分式）按竖向取 max 而非横向累加；`\sum` / `\int` 等符号按 1 字形计宽。**勿按「逐源码行取 max」测量**——那会把「一个长行被折成多行书写」的公式系统性漏报（同一公式的最长源码行可能远短于其真实渲染宽度，肉眼明显过宽却判合格）。度量实现的**单一来源**是 `tools/scan_long_formulas.py`，F 层 `long_row_check.py` 与规划器 `wrap_long_formulas.py` 均复用它，**勿各写一份**。
     - **判定**：`verify_chapter.py` 跑每章即报 `F-LAYER FORMAT · long_formula_rows (WARN, non-blocking)`（含行号 / `\tag{}` / 可视宽度）；批量预检 `tools/scan_long_formulas.py <book_dir> [宽度阈值] [--height N]`（默认 60 / 8）。
     - **折行位置**：只在**顶层**（花括号深度 0、括号深度 0、不在 `\left…\right` 内）的二元运算符 `=` / `+` / `-` 处断行；绝不切进分数、矩阵、指数、`\text{…}` 内部；断行不改任何数学语义与 `\tag{原编号}`。
     - **写法**：长行包进 `\begin{aligned}…\end{aligned}`——首行保留左侧对齐，续行用 `& \qquad <运算符> …`（示例：`\frac{\mathrm{d}\nu}{\mathrm{d}t} &= \frac{1}{T K_{eff} K_m}\{\cdots \right. \\ &\qquad \left. - P_0 - P_1 - \cdots \},`）。
@@ -368,15 +368,15 @@ Common patterns (after correction):
   </div>
   ```
   - `width="X%"` = `(bbox_crop_w + 16) / 1653 × 100`（bbox 来自 `figure_index.json`，+16 为 8px 裁剪余量；1653px = A4 页面 200 DPI 宽）。
-  - 路径相对书根；🔴 2026-09-01 起 `figure/` 目录与总结 md 同级（在书根下），链接即 `figure/chNN_...png`（非 `_extract/figure/...`）。
+  - 路径相对书根；🔴 `figure/` 目录与总结 md 同级（在书根下），链接即 `figure/chNN_...png`（勿加 `_extract/` 前缀）。
   - 图块单独成行，放在条目后或证明内；**图块后接 `---`** 才算条目正式收尾。
   - 多图并排放在同一 flex 容器（总宽 ≤100% 自动并排）；图在 `>` 块内时容器每行均带 `>` 前缀。
 
 - **caption → 条目编号解析**（`figure_index.json` 的 `caption` 常带 OCR 噪声）：含 `定理N.S-N`/`引理`/`命题`/`推论`/`例N.S-N`/`定义N.S-N` → 锚定该条目粗体标签；含 `例N`/`例a`（单级）→ 锚定 `**例N**`/`**例a**`；仅含 `图N` 无条目编号 → 按页面位置找到 `## §` 节作"节末尾补充图"，或放弃；完全无法解析 → 放弃嵌入。
 
-- **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](_extract/figure/ch01_...png)`（2026-09-01 起 figure 已在书根，勿加 `_extract/` 前缀）。
+- **反例**：把与某例无关的图堆在节末；把独立示意图放无关位置；嵌入后未用 `---` 与下一条目分隔；写成 `](_extract/figure/ch01_...png)`（figure 已在书根，勿加 `_extract/` 前缀）。
 
-- **现状（2026-08-29 嵌图子流程废弃）**：图片经内容化契约的 image 块随单元继承，格式由 `render_draft.py` / `merge_units.py` 渲染；`flows/script/embed_figures.py` 仅存留作格式逻辑参考，不再是流程步骤。手写时仍须遵守本节块引用与分隔规则。
+- **嵌入方式**：图片经内容化契约的 image 块随单元继承，格式由 `render_draft.py` / `merge_units.py` 渲染；`flows/script/embed_figures.py` 仅作格式逻辑参考，不是流程步骤。手写时仍须遵守本节块引用与分隔规则。
 
 ### V-M OCR 漏标条目处理
 
@@ -400,7 +400,7 @@ Common patterns (after correction):
 | **O**（subitem_continuity） | [V-S](#v-s-结构完整性d--b--o-层)：块内子编号连续 | `verify/subitem_continuity/subitem_continuity.md` |
 | **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、书根相对 `figure/` 路径 | `verify/figure_completeness/figure_completeness.md` |
 | **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档) + [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
-| **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 已并入 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
+| **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 见 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
 | **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号暂 FAIL | `verify/formula_tag/formula_tag.md` |
 | **OCR 漏标** | [V-M](#v-m-ocr-漏标条目处理) | `verify/missing_label_policy.md` |
 

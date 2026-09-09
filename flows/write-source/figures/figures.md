@@ -1,28 +1,25 @@
-> 🔴 **本子流程已废弃（2026-08-29）**：图片经内容化分章契约的 image 块随基本总结草稿继承到最终 md（内容完整性闸门 `verify/script/check_content_completeness.py` 保证齐备），write-source 不再单独嵌图。本文档保留供参考。
+# Sub-flow: write-source / figures（图片嵌入格式逻辑参考 · 非流程步骤）
 
-# Sub-flow: write-source / figures（图片嵌入 SSOT · write-source 阶段）
-
-> 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
-> 🔴 **本子流程已废弃，以下历史内容不再承载任何现行规则**——现行图片规则 SSOT 是 `docs/writing-rules.md` 的 V-E 小节（图片经内容化分章契约 image 块随草稿继承）。本文件仅作格式逻辑参考保留。
-
-> 🔴 **（已废弃的旧行为）** 嵌图不再是 write-source 的步骤；图片由内容完整性闸门（`check_content_completeness.py`）保证随草稿继承。
+> 🔴 **本文件不是 write-source 的流程步骤**：write-source 不单独嵌图——图片经内容化分章契约的 `image` 块随单元继承到最终 md（齐备性由内容完整性闸门 `verify/script/check_content_completeness.py` 保证）。现行图片**写作规则 SSOT** 是 `docs/writing-rules.md` 的 V-E 小节，机器判定 SSOT 是 `verify/figure_completeness/figure_completeness.md`。
+>
+> **本文件的现行用途**：①「手动补图（`figure_manual_chN.json`）」remediation 流程仍然现行有效；② 其余内容（嵌入脚本逻辑 / flex 容器格式 / 图归属规则）仅作 `flows/script/embed_figures.py` 与格式规则的逻辑参考。
 
 ## 目的
-把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目（定义/定理/引理/命题/推论/例/证明）引用到的图，嵌入到该条目处；未引用的图不写入。本子流程（write-source 阶段）**只负责嵌图**；其上游的检测 / 命名由 extract 阶段的 `figure_detection` 子流程完成，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**（检测 / 命名规则由 extract 阶段文档承载，本文件不重复）。手动补图作为命名环节的 remediation 也在此说明。
+把上游 figure_detection 子流程（write-source 步骤 2）产出的 `figure_index.json` 中、被某条目（定义/定理/引理/命题/推论/例/证明）引用到的图，嵌入到该条目处；未引用的图不写入。本参考文档只覆盖**嵌图逻辑**；检测 / 命名由 figure_detection 子流程完成，产物 `figure_index.json` + `figure/*.png` 即其**输入契约**（检测 / 命名规则见 `figure_detection/figure_detection.md`，本文件不重复）。手动补图作为命名环节的 remediation 也在此说明。
 
 ## 前置
-- 图片流水线检测 / 命名已跑（或历史数据已补图）：上游产出 `figure_index.json` + `figure/*.png` 已存在（输入契约）。
+- 图片流水线检测 / 命名已跑：上游产出 `figure_index.json` + `figure/*.png` 已存在（输入契约）。
 - 该章 `.md` 初稿已写好。
 
 ## 步骤（有序，脚本自动化、幂等）
 
-本子流程（write-source 阶段）只负责**嵌图**：把上游 `figure_detection` 子流程（extract 阶段）产出的 `figure_index.json` 中、被某条目引用到的图，嵌入到该条目处。上游的**检测（Detection）与命名（Assignment）**由 extract 阶段的 `figure_detection` 子流程统一执行，产物 `figure_index.json` + `figure/*.png` 即本子流程的**输入契约**：
+本参考文档只覆盖**嵌图**：把 figure_detection 子流程（write-source 步骤 2）产出的 `figure_index.json` 中、被某条目引用到的图，嵌入到该条目处。上游的**检测（Detection）与命名（Assignment）**由 figure_detection 子流程统一执行，产物 `figure_index.json` + `figure/*.png` 即其**输入契约**：
 
 - `figure/chNN_figX.X.X.png`（已命名图；附录章基名为 `appendix{X}_figX.X.X.png`，`chNN_` 只属数字章）
 - `figure/chNN_unnamed_K.png`（已检测、无图号）
 - `figure_index.json`：每条约 `chapter`/`page`/`fig_idx`/`label`/`bbox`/`conf`/`file`/`caption`/`source`
 
-> 本子流程不重复描述检测 / 命名细节（不伸手进 extract 阶段），只消费其产物。
+> 本文件不重复描述检测 / 命名细节，只消费其产物。
 
 ### 阶段 1：嵌入（Embedding，write-source / Step 3）
 ```bash
@@ -44,7 +41,7 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 手动图在**每次 assignment 重跑时都会被保留**（`assign_figures.py` 不删 `source="manual"` 的条目/文件）。
 
 ### 工作流衔接（上游 figure_detection 子流程）
-图检测 / 命名由 extract 阶段的独立子流程 `figure_detection` 负责，待 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`）配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即本子流程的**输入契约**。本子流程不重复描述检测 / 命名细节，只消费其产物并嵌图。本书确实无图时，`figure_index.json` 保持缺失，本子流程也随之跳过。
+图检测 / 命名由独立子流程 `figure_detection`（write-source 步骤 2）负责，待 `ordinal` 的 Figure 组（图号前缀 `name` + 段数 `type`）配置就绪后运行一次全本，产出 `figure_index.json` + `figure/*.png`——即嵌图逻辑的**输入契约**。本文件不重复描述检测 / 命名细节，只消费其产物。本书确实无图时，`figure_index.json` 保持缺失，嵌图随之跳过。
 
 若某章 E 层报"图 X.X.X missing"（真漏检 / 漏命名），重跑或手动补图的处置见下方「手动补图」。
 
@@ -57,13 +54,13 @@ python flows/script/embed_figures "<book_dir>" --dry-run   # 仅预览
 - 前提：`figure_index.json` 存在且含本章 `chapter` 条目，否则 SKIP（绝不阻断）；无 `figure_index.json`（未跑图片提取）的章节亦 SKIP。
 
 ## 本阶段规则（🔴 内联）
-- **flex 容器格式铁律（2026-07-27 立）**：`<div style="display:flex; ...">` 与 `<img>`、`<img>` 与 `</div>` 之间**禁止出现空行**。合法形态：
+- **flex 容器格式铁律**：`<div style="display:flex; ...">` 与 `<img>`、`<img>` 与 `</div>` 之间**禁止出现空行**。合法形态：
   ```
   <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center">
     <img src="figure/ch00_fig1.4.png" alt="图 Figure 1.4. ..." width="35.4%" height="auto">
   </div>
   ```
-  根因：早期 `wrap_images_in_flex()` 给元素尾部追加 `\n` 而 `write_lines()` 又 `"\n".join`，双重换行 = 容器内空行。现已改为无尾换行行列表，重扫即净化。🔴 2026-09-01 起 `img src` 为书根相对 `figure/xxx.png`（figure 目录与 md 同级，不再有 `_extract/` 前缀）。
+  根因：flex 容器内部出现空行会破坏布局——生成端必须输出**无尾换行的行列表**（每个元素一行、行间不叠 `\n`），重扫即净化。🔴 `img src` 为书根相对 `figure/xxx.png`（figure 目录与 md 同级，**无 `_extract/` 前缀**）。
 - **书特有覆盖映射**：图注无明确条目编号但内容明显属某条目时，在该书 `_extract/figure_embed_overrides.json` 声明精确锚点（字段 `anchors` / `is_proof`、JSON 示例与生成脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）；无此文件则纯靠启发式。
 - **自动锚点匹配的局限**（嵌入后处理）：`../../script/embed_figures.py` 用启发式匹配图注（caption）与条目标签（`**定义X.X**`, `**定理X.X**` 等）。当 OCR 图注文本噪声大、或图无文字标注（如图1.1 Venn 图只有 "图1.1" 而无 "定义1.4" 字样）时，匹配会失败，脚本输出 `no item ref`。**对此情况，必须创建 `_extract/figure_embed_overrides.json` 手动声明锚点**（字段 `anchors` / `is_proof`、JSON 示例与自动产出脚本见 [`../../../data/figure_embed_overrides/figure_embed_overrides.md`](../../../data/figure_embed_overrides/figure_embed_overrides.md)）。此文件在中文教材（Venn 图、拓扑示意图等无文字图注的图）中几乎是必选项。
 - **嵌入后 C 层 "missing blank line after `</div>`"**：顶层（非块引用内）图片的 `</div>` 后缺空行会导致 Markdown 解析器吞内容，C 层报错。详见 [`../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行`](../../../docs/writing-rules.md#已知遗留问题顶层-div-后缺空行)。

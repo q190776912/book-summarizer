@@ -1,16 +1,16 @@
 """attach_content.py — structure 子流程 Step 5：正文内容化 + 按章拆分契约
 
-职责（2026-08-29 用户需求）
---------------------------
+职责
+----
 把「描述信息 + 每个定理/定义/练习等条目的文字与公式内容」按**文档顺序**挂进结构契约的
-``sub_sec``，并**按章拆分**落盘，解决全书单文件内容化后过大的问题：
+``sub_sec``，并**按章拆分**落盘：
 
-  * **分章契约 = 结构契约唯一真源**（2026-08-29 起：``ch{N}.json`` /
-    ``appendix{X}.json``，全书单文件已废弃）：``build_structure`` 产出纯骨架后，
+  * **分章契约 = 结构契约唯一真源**（``ch{N}.json`` /
+    ``appendix{X}.json``）：``build_structure`` 产出骨架后，
     本脚本读入骨架、挂入正文内容并**写回同一文件**——verify（data_provider / B/D
     层）经 ``BookStructure.load`` 聚合读取分章文件为编号项基准。
   * 分章契约 ``sub_sec`` 内按文档顺序混合三类元素——
-      * 结构节点：与单文件同 schema（key/type/name/page_start/page_end/sub_sec）；
+      * 结构节点（key/type/name/page_start/page_end/sub_sec）；
       * ``description`` 节点：**与定理同级的描述信息**——书中大段不属于定义/定理、
         没有序标的散文（章首序言 / 节导语 / 条目证明后的尾随段落），聚合为一个节点
         （合成 key ``D{n}``，章内文档序；name 为空；页码为所含块的页区间）；

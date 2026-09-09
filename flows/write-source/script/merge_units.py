@@ -1,19 +1,19 @@
-"""merge_units.py — write-source 步骤 6 收尾：把全部单元拼接成最终章 md
+"""merge_units.py — write-source 步骤 7 收尾：把全部单元拼接成最终章 md
 
-背景（2026-08-31 用户需求重构）
-------------------------------
+背景
+----
 拆分脚本 ``split_draft_units.py`` 把整章草稿切成按写作顺序的单元文件
 （``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章目录 ``units/appendix{X}/``）；agent 经 ``gate_units.py`` 强制门控逐个改好后，
 本脚本把这些单元**按 manifest 顺序拼接**成最终的源语言章 md
 （``ChapterN_*.md`` / ``第N章_*.md``），并按 ``docs/writing-rules.md`` V-F 的
 「条目级 ``---`` 分隔线」规则在单元之间重建分隔线。
 
-🔴 **强制门控到脚本层（2026-09-01 强化）**：拼接前**默认先跑 ``gate_units`` 门控**——
+🔴 **强制门控到脚本层**：拼接前**默认先跑 ``gate_units`` 门控**——
 任一单元未改好（首行非 DONE / 质量校验未过 / 缺失）即**直接报错拒绝拼接**，防止
 agent 绕过门控直接 merge。仅调试可传 ``require_gate=False``（本脚本不暴露该开关，
 供测试 / 库调用方显式使用）。
 
-翻译版拼接（2026-09-03 起，翻译并入本流程）
+翻译版拼接（英文书；同一流程内）
 -------------------------------------------------------------
 同一脚本拼接翻译单元目录，只加 ``--units-dir units-translate``：
     python flows/write-source/script/merge_units.py <extract_dir> <ch> --units-dir units-translate
@@ -21,8 +21,8 @@ agent 绕过门控直接 merge。仅调试可传 ``require_gate=False``（本脚
   * **优先**使用翻译 manifest 的 ``final_md`` 字段（agent 可在其中写定中文标题文件名，
     如 ``第9章_非线性动力系统的Koopman模型预测控制.md``），其次 ``-o``，最后按契约章名
     自动生成（契约章名是源语言，自动生成的中文文件名会是英文标题，故推荐填 ``final_md``）；
-  * 🔴 翻译版**不清 CJK**（按 manifest language 自动判定，仅 ``en`` 才清）——原来的
-    ``--no-clean-cjk`` 行为对翻译目录自动生效。
+  * 🔴 翻译版**不清 CJK**（按 manifest language 自动判定，仅 ``en`` 才清）——
+    ``--no-clean-cjk`` 对翻译目录自动生效。
 
 分隔线状态机（与 render_draft 的 ``_CTX`` 等价，逐字对齐 V-F）：
   * ``section`` 标题之前（非首单元）**总是**加 ``---``（等价原「每节末 ``---``」）；

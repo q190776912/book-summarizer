@@ -3,14 +3,14 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-对全书做一次图检测（DocLayout-YOLO 版面检测）与图分配（语义命名 `图X.X.X`），产出 `figure_detect.json` + `figure_index.json`，供写章阶段的图嵌入消费。本子流程是 extract 阶段里**唯一读图序标（`ordinal` 的 Figure 组）** 的环节，图号前缀=该组 `name`、段数 components=该组 `type` 经 `ORDINAL_DEPTH` 派生的 `depth`，故执行前须确保 `ordinal` 含 Figure 组（或过渡 `{"figure":{"labels":[]}}` 零匹配标记）。
+对全书做一次图检测（DocLayout-YOLO 版面检测）与图分配（语义命名 `图X.X.X`），产出 `figure_detect.json` + `figure_index.json`，供写章阶段的图嵌入消费。本子流程是 write-source 中**唯一读图序标（`ordinal` 的 Figure 组）** 的环节，图号前缀=该组 `name`、段数 components=该组 `type` 经 `ORDINAL_DEPTH` 派生的 `depth`，故执行前须确保 `ordinal` 含 Figure 组（或过渡 `{"figure":{"labels":[]}}` 零匹配标记）。
 ## 前置
 - 全部 `page_*.json` 已落盘（文本提取阶段出口）。
 - `chapter_map.json` 就绪（由 config 子流程步骤 1 统一生成；检测阶段需把每页归到章节；分配阶段按章命名）。
 - `_extract/verify_config.json` 已存在且（若书图号前缀非默认）`ordinal` 含 Figure 组（`name` 列前缀词、`type` 设段数）。**缺 Figure 组则图号前缀退化为默认 `["图","Figure","Fig"]`**，自定义前缀书（Scheme / Illustration 等）会漏识 caption。
 
 ## 步骤（有序）
-> 🔴 **2026-09-01 起 figure 目录在书根 `<book>/figure/`**（与总结 md 同级）；`figure_index.json` 的 `file` 字段存 `figure/xxx.png`（相对书根）。消费方打开裁剪图经 `lib.figure_io.figure_abs()` 解析到书根。
+> 🔴 **figure 目录在书根 `<book>/figure/`**（与总结 md 同级）；`figure_index.json` 的 `file` 字段存 `figure/xxx.png`（相对书根）。消费方打开裁剪图经 `lib.figure_io.figure_abs()` 解析到书根。
 
 1. **检测（detection）**：`python extract_figures.py <pdf> --out <extract> --book`
    - 用 DocLayout-YOLO（`doclayout_yolo_ft.pt`）在全书每页框出 `figure`(class 3) / `figure_caption`(class 4)，裁图存 `figure/det_pNNN_KK.png`（**位置名，无图号**），写出 `figure_detect.json`。
@@ -38,7 +38,7 @@
 ## 已知边界
 - 跨页大图被 DocLayout-YOLO 各检出一个框，目前**不合并**，会得到两个文件名
 - 只取 `figure`(class 3) 裁，**不裁表格/公式块**（模型另有 `table`(5)/`isolate_formula`(8) 类，脚本忽略）
-- 图注序标识别**跟随本书体例**：前缀词由 `verify_config.json` 的 `ordinal` Figure 组 `name` 决定（默认 `["图","Figure","Fig"]`，可扩成 `Scheme` / `Illustration` 等），不再写死中英语词表；caption 无图号且同页邻近无该书图号时命名为 `chNN_unnamed_K.png`
+- 图注序标识别**跟随本书体例**：前缀词由 `verify_config.json` 的 `ordinal` Figure 组 `name` 决定（默认 `["图","Figure","Fig"]`，可扩成 `Scheme` / `Illustration` 等，不写死词表）；caption 无图号且同页邻近无该书图号时命名为 `chNN_unnamed_K.png`
 - `--conf` 默认 0.25；觉得误检多就调高，漏检多就调低
 - **Windows + 非 ASCII 路径的静默失败**：OpenCV 的 `cv2.imwrite` 在 Windows 上对含中文等非 ASCII 字符的路径会**静默返回 False**（已知 OpenCV 缺陷），导致检测阶段只生成 `figure_detect.json` / `figure_index.json` 元数据但 `figure/` 下没有 PNG。`extract_figures.py` 已改为 PIL 保存，回跑即修复；若 `_extract/` 已是历史遗留数据没有 PNG，可写 `regen_figures.py` 用 fitz 渲染 + PIL 裁剪，按 `figure_index.json` 的 `page+bbox+file` 重建
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """build_chapter_map.py — 一步从 OCR 生成正确的 chapter_map.json 页码。
 
-设计动机（取代旧的"手写页码 → 再脚本校验"两步法）：
+设计动机：
     章节映射的**结构真相**（章列表 + 干净 name/name_en + 附录标记）只能由人从
-    目录页校订，OCR 给不出；但**页码**可以、也必须由证据（OCR 正文）算出，不该
+    目录页校订，OCR 给不出；但**页码**必须由证据（OCR 正文）算出，不该
     让人从 TOC 手抄印刷页号（易错、且是印刷页≠PDF 页的经典坑）。
 
 本工具一次性完成"算页码"：
@@ -12,7 +12,7 @@
   2. scan_headings(page_*.json) → headings + title_lines。
   3. detect_starts(...) → 每章真实起点（Mode A "Chapter N" 标题匹配；Mode B 裸标题
      回退）。检测引擎（scan_headings / detect_starts / _ch_sort_key）已**内联于本
-     文件**，无跨文件依赖——原独立 check_chapter_map.py 已废弃删除。
+     文件**，无跨文件依赖。
   4. start = 检测值（未检出则保留 agent 值，仍无则留空标 UNDTECTED）；
      end = 推断值（下一章起点-1；末章保留 agent 值或全书末页）。
   5. 写回 chapter_map.json（保留原 on-disk 形态 A/B 与所有附加字段）+ 生成

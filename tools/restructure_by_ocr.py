@@ -65,8 +65,7 @@ APPLY = "--apply" in sys.argv[5:]
 OUT = os.path.join(EX, "_restructure_%s.out.md" % chkey)
 
 # ---------- 1) OCR 真值图 (label,num) -> section ----------
-# 契约唯一来源 = 分章契约 <extract>/book_structure/（2026-08-29 起，旧版全书
-# 单文件 book_structure.json 已废弃，不再读取）。
+# 契约唯一来源 = 分章契约 <extract>/book_structure/。
 from data.book_structure.book_structure import BookStructure
 _bs = BookStructure.load(EX)
 if _bs is None:

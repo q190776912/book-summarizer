@@ -3,7 +3,7 @@
 从 verify/data_provider/script/data_provider.py 抽出的纯数据读取逻辑；
 不再依赖抽取管线代码，仅读取其产物 JSON 文件（分章契约
 ``ch{N}.json`` / ``appendix{X}.json``，由 ``data/book_structure/book_structure.py``
-的 BookStructure 模型聚合加载；旧版全书单文件已废弃）。
+的 BookStructure 模型聚合加载）。
 exercise / chapter / section 节点被排除，返回非 exercise 的编号项列表
 （key / label / page / text）。
 """

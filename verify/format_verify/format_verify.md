@@ -22,14 +22,14 @@
 10. 检查引用块空行过多——`>` 块内连续空 `>` 行超过 1（原 N 层）。
 11. 检查标题上方空行——任意 ATX 标题（`#`…`######`）上一行非空（紧接列表项/段落）即缺空行（新规则，L 层扩展；文件首行、代码围栏与 `$$` 块内豁免）。
 
-> 上述所有阈值/形态与原有各格式校验完全一致；[`docs/writing-rules.md`](../../docs/writing-rules.md)（SSOT）定义的格式规则本来即由这些校验 + katex 子进程 + 格式管线脚本共同强制。除把输出收敛为单一 `F-LAYER FORMAT` 段（见 `report.py`）外，本层自 2026-09 起**新增一项检查**：`long_formula_rows`（显示公式行过长 → `\tag` 重叠风险，WARN 非阻断；规则/修法见 `docs/writing-rules.md`「超长显示公式折行」）。
+> 上述规则即 [`docs/writing-rules.md`](../../docs/writing-rules.md)（SSOT）定义的格式规则，由这些校验 + katex 子进程 + 格式管线脚本共同强制。本层含一项专项检查：`long_formula_rows`（显示公式行过长 → `\tag` 重叠风险，WARN 非阻断；规则/修法见 `docs/writing-rules.md`「超长显示公式折行」）。
 
 ## 规则（检测规则定义）
 
 > 每条规则给出：**语义** + **错误格式**（被判定为非法的写法）+ **正确格式**（应当写成的写法）+ 契约键 / 阻断性 / `--fix` / 原层代号。约定：结构标签（`**定义 N.N**`、`**定理 N.N**`、`**引理**`、`**推论**` 等）与陈述内容位于顶层；证明、例、注、说明等附属块一律用 `>` 块引用包裹（`> **证明**`、`> **例 N**`、`> **注**` …）。
 
 ### 检测规则1 · KaTeX 渲染校验（原 C 层，检测 + `--fix` 自动修复、阻断 FAIL）
-调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。另导出 `check_display_math_closure(lines)` 函数供单元级质量校验（`check_unit_quality.py`）复用，检测 `$$` / `> $$` 在 EOF 未闭合。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，经 `verify_chapter.py` 的 `--fix` 调用（🔴 2026-08-28 起全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 门，见下方「前置守卫」）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（🔴 独立 CLI 自 2026-09 起内置同款 PREFLIGHT 写回守卫：围栏不配对 / 块外 `\tag` 时跳过不写回）。
+调用 `verify/format_verify/script/check_katex.py` 子进程对全章每个 `$...$` / `$$...$$` 做**真实 KaTeX 渲染**，抓出渲染失败（非法命令、括号/环境不匹配、转义定界符、行内 `$` 未配对、不支持宏、嵌套块引用 `> > $$` 等）。子进程启动失败（缺失 node / katex JS 运行时）时降级为 `(False, [])`，绝不令 `verify_one` 崩溃（仅当 katex 运行时就绪时才真正校验）。另导出 `check_display_math_closure(lines)` 函数供单元级质量校验（`check_unit_quality.py`）复用，检测 `$$` / `> $$` 在 EOF 未闭合。契约键 `katex_errors`(bool) / `katex_lines`(list)。**检测 + 自动修复**：检测由 `check_katex.py` 子进程完成；修复由 `verify/format_verify/script/fix_katex.py`（code `C`，fix_order 2，纯正则/字符串变换、无需 node）经 `register_fixer` 注册，经 `verify_chapter.py` 的 `--fix` 调用（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` 并通过 PREFLIGHT 门，见下方「前置守卫」）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（🔴 独立 CLI 内置同款 PREFLIGHT 写回守卫：围栏不配对 / 块外 `\tag` 时跳过不写回）。
 
 **错误格式（KaTeX 渲染失败，阻断 FAIL）：**
 ```text
@@ -406,7 +406,7 @@ $$
 
 > `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n}`（键序固定为上述顺序，新增 `c` 为 KaTeX 自动修复）。
 >
-> 🔒 **前置守卫与 --preflight（2026-08 复盘落地）**：围栏（`\$\$`）不配对时一切按块作用域的判断都不可信——Q 层 `\$\$(.*?)\$\$` 顺序非贪婪配对，一个落单 `\$\$` 使其后所有块的奇偶归属整体翻转。因此（🔴 2026-08-28 用户裁定）：① `verify_chapter.py --preflight` 提供只读检查表（fences / blocks / \\tag in-out 三数不变量，exit code 判通过）；② **全层 `--fix` 默认禁用**——裸 `--fix` 不运行任何 fixer，仅打印指引；确需自动修复用 `--fix --fix-force`，且仍须过 PREFLIGHT 门（围栏配对 + 无块外 `\\tag`，任一不满足即使 force 也拒绝）；③ G 层 fixer 内置同款守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）——fail fast 优于静默污染（2026-08 实测：Ch1 顶层正文被吞进引用块即 G 层在错位配对下运行所致）。
+> 🔒 **前置守卫与 --preflight**：围栏（`\$\$`）不配对时一切按块作用域的判断都不可信——Q 层 `\$\$(.*?)\$\$` 顺序非贪婪配对，一个落单 `\$\$` 使其后所有块的奇偶归属整体翻转。因此（🔴）：① `verify_chapter.py --preflight` 提供只读检查表（fences / blocks / \\tag in-out 三数不变量，exit code 判通过）；② **全层 `--fix` 默认禁用**——裸 `--fix` 不运行任何 fixer，仅打印指引；确需自动修复用 `--fix --fix-force`，且仍须过 PREFLIGHT 门（围栏配对 + 无块外 `\\tag`，任一不满足即使 force 也拒绝）；③ G 层 fixer 内置同款守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）——fail fast 优于静默污染（2026-08 实测：Ch1 顶层正文被吞进引用块即 G 层在错位配对下运行所致）。
 >
 > 🔧 **修复顺序纪律（同场事故教训）**：安全顺序 = 基线还原 → 围栏修复（一次性、从后往前，禁止边修边重扫）→ 公式块以公式行/`\\tag` 为锚点整体重建（引用块内保留 `> ` 前缀，行级重建剥前缀会产生成批裸 LaTeX）→ 引用连续性 → 风格收尾 → 每步 verify。OUTSIDE 非空时禁止逐处补围栏（Ch6 实测越补越乱 12→18）。
 

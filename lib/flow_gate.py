@@ -5,7 +5,8 @@
 机制
 ----
 1. 单一真源：``FLOW_ORDER`` 定义每个 flow 的有序步骤；``FLOW_PREREQS`` 定义
-   flow 之间的主干先后（prep → extract → write_source；翻译已并入 write_source）。
+   flow 之间的主干先后（prep → extract → write_source；翻译为 write_source
+   内置步骤）。
 2. 证明账本（ledger）：``<extract_dir>/.flow_gate.json``（单卷书即
    ``<book_dir>/_extract/.flow_gate.json``）记录每步完成情况
    （done / ts / iso / evidence）。**仅 flow_runner 在证据复核通过后写 done**，
@@ -40,9 +41,10 @@ GATE_FILE = ".flow_gate.json"
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {
     "prep": ["env"],
-    # 2026-08-29 流程重构：extract 终于 MM Repair，后续步骤移入 write_source。
-    # 2026-09-03 翻译单元化：translate_chapters / merge_all 内置于 write_source，
-    # 翻译单元按需生成，verify_source 末移一次覆盖源+译两版。
+    # extract 终于 MM Repair；config / figure_detection / structure / 单元拆分
+    # 等写作前置属于 write_source。
+    # 翻译内置于 write_source：translate_chapters / merge_all 均为其步骤，
+    # 翻译单元按需生成，verify_source 末步一次覆盖源+译两版。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
                      "draft", "write_chapters", "translate_chapters",
@@ -238,7 +240,7 @@ def bootstrap(book_dir, extract_dir):
                 }, open(marker, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
             except Exception:
                 pass
-    # write_source（2026-08-29 流程重构后 config / figure_detection / structure /
+    # write_source（config / figure_detection / structure /
     # draft 归入此 flow）：只增不改——账本已 done 的步骤保持原样（verify_source
     # 等重跑型证据不在此重跑，避免历史书误清账）；仅对未 done 的步骤依物理证据
     # 回填，遇缺口即停（依赖链：config → figure → structure → draft → …）。

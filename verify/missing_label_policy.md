@@ -1,7 +1,7 @@
 # 遗漏标签处理策略（Missing-Label Policy）
 
 > 🔴 **SSOT**：本书总结中"书中存在某条重要概念（定义/定理/引理/推论/命题），但 OCR 未识别其标题，导致总结缺失该条目"时的标准处理流程。
-> 由用户 2026-08-05 制定，配套代码实现见 `item_numbering_integrity/script/item_numbering_integrity.py` 的 `_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`（2026-09 起自 data_provider 迁入 B 层；策略描述与 data_provider/data_provider.md 的「EXTRACT 只供水、B 只查漏」口径一致）；本文件只描述**策略与判定**，不重复代码。
+> 配套代码实现见 `item_numbering_integrity/script/item_numbering_integrity.py` 的 `_scan_book_category_items` / `_merged_category_first_missing` / `_merged_ocr_overmark_guard`（位于 B 层；策略描述与 data_provider/data_provider.md 的「EXTRACT 只供水、B 只查漏」口径一致）；本文件只描述**策略与判定**，不重复代码。
 
 ## 1. 适用范围
 

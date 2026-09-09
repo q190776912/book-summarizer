@@ -1,11 +1,11 @@
 """build_structure.py — 统一结构骨架生成器：按章产出分章骨架 ch{N}.json
 
-设计（2026-08-29 用户最终确认，替代全书单文件方案）
-------------------------------
+设计
+----
 每章一个文件：``<extract_dir>/book_structure/ch{N}.json``（附录 ``appendix{X}.json``），
 顶层即该章 ``chapter`` 节点（无书根包装）。本脚本**一步产出含内容的完整契约**
 （骨架 + description / proof / 内容块同进程挂入后写回同一文件，幂等可重跑）——
-分章文件是结构契约唯一真源；全书单文件 ``book_structure.json`` 已废弃、不读取。
+分章文件是结构契约唯一真源；整书单文件 ``book_structure.json`` 不是合法产物、不读取。
 ``attach_content.py`` 的 attach CLI 仅保留为全章重挂的手动维护入口。
 节点 schema 见 ``flows/write-source/structure/structure.md`` 与
 ``data/book_structure/book_structure.py``（BookStructure / StructureNode）。
@@ -1608,11 +1608,11 @@ def main():
     _loader_obj = locals().get("loader")
 
     # 每章独立落盘：<extract_dir>/book_structure/ch{N}.json（附录 appendix{X}.json）
-    # —— 2026-08-29 重构：**一步产出完整契约**——build_structure 生成骨架后立即
+    # —— **一步产出完整契约**：build_structure 生成骨架后立即
     # 调 build_chapter_contract 挂入正文内容（description / proof / text /
-    # formula / image 内容块）并写回同一文件，不再有独立的 attach_content 步骤；
-    # ch{N}.json 自此即"整章信息的唯一载体"，后续子流程只做校验与回填。
-    # 不再产出全书单文件 book_structure.json；分章文件即结构契约唯一真源。
+    # formula / image 内容块）并写回同一文件；ch{N}.json 即"整章信息的唯一载体"，
+    # 后续子流程只做校验与回填。
+    # 分章文件即结构契约唯一真源；不产出整书单文件 book_structure.json。
     from attach_content import build_chapter_contract
     out_sub = os.path.join(ext, "book_structure")
     os.makedirs(out_sub, exist_ok=True)

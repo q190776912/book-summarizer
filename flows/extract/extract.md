@@ -5,7 +5,7 @@
 ## 目的
 把 PDF 放到本书专属目录，启动**后台**文本提取流水线，并在提取进行中**并行**轮询落盘页码，对已稳定页做 MM Repair。本阶段最终产出**修复后的 `page_*.json`**（以 `_extraction_done.json` 完成标记收尾），**不做任何校验**。
 
-> 🔴 **2026-08-29 流程重构**：本阶段**终于 MM Repair**。原 Step 4–6（config 子流程 / figure_detection 子流程 / structure 子流程 + 内容化分章契约）全部**移入 write-source 源总结流程**（见 [`flows/write-source/write-source.md`](../write-source/write-source.md) 步骤 1–4）——结构完整性闸门与基本总结草稿都在写作阶段内完成。
+> 🔴 **本阶段终于 MM Repair**：config 子流程 / figure_detection 子流程 / structure 子流程 + 内容化分章契约等写作前置步骤**属于 write-source 流程**（步骤 1–4，见 [`flows/write-source/write-source.md`](../write-source/write-source.md)），不在本阶段——结构完整性闸门与基本总结草稿都在写作阶段内完成。
 
 ## 前置
 - `prep` 完成，环境 OK。

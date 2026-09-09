@@ -19,9 +19,9 @@ from data.book_structure.book_structure import BookStructure
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/verbose_gates/verbose_gates.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """verbose_gates.py — P-LAYER (order 16): anti-regression gate for content/structure defects.
 
-新增于 2026-08-02 整改后，作为「验收闸门」兜底：即使写章的 agent 无视 SKILL.md 的
-文字规则，本层也能让 verify --all 判 FAIL，杜绝 Vakil 事故（练习归拢块 / 照抄 OCR
-页眉 / 条目标题缺失 / 缺节）再次整批通过。
+本层是「验收闸门」兜底：即使写章的 agent 无视 SKILL.md 的
+文字规则，本层也能让 verify --all 判 FAIL，杜绝练习归拢块 / 照抄 OCR
+页眉 / 条目标题缺失 / 缺节 类缺陷再次整批通过。
 
 本 skill 的体例铁律（详见 SKILL.md）：
   - 习题策略（详见 `verify/verbose_gates/verbose_gates.md`「习题收录规则」）：**穿插在小节中的习题
@@ -385,7 +385,7 @@ PROOF_OPEN_RE = re.compile(
 # 注：含公式($...$/$$/\begin{})的段落视为「内容承载的描述性内容」，豁免本闸门
 # （忠实保留公式/概念的描述本就该较长，不应被误杀；见 SKILL.md Tier 2）。
 #
-# 🔴 2026-08-28 用户裁决：**优先保证可读性，不以纯字数论处**。
+# 🔴 判定原则：**优先保证可读性，不以纯字数论处**。
 # 纯长度只是代理指标，会与 Tier 2「保留全部变量/公式/概念 + 基本描述」直接冲突
 # ——忠实但已改写的密集数学散文天然偏长，被纯长度闸门误杀后 agent 只能删内容。
 # 因此长散文段必须与源书做**字面重合率**比对：
@@ -485,7 +485,7 @@ def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
     忠实保留公式的描述性内容（Tier 2 要求保留公式），不计入本闸门，避免「忠实
     描述」被误杀。
 
-    🔴 **判定「照抄」而非「写得长」**（2026-08-28，用户裁决：优先可读性，不以纯字数
+    🔴 **判定「照抄」而非「写得长」**（判定原则：优先可读性，不以纯字数
     论处）：纯散文段需同时满足「长度 > VERBOSE_PARA_CHARS」与「与源书 8-gram 字面
     重合率 ≥ VERBOSE_OVERLAP_MIN」才判违规；长度超过 VERBOSE_PARA_HARD_CHARS
     的墙式散文则无条件判违规（可读性硬顶）。传 `ext_dir`+`ch` 才会做重合率比对；

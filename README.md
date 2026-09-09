@@ -7,7 +7,7 @@
 - PDF 文本提取（MFD 公式检测 → MFR 公式识别 → OCR 正文）→ MM Repair 修复 OCR 噪声
 - 章节骨架扫描 + 编号条目抽取 + 内容挂载 → 分章契约 `book_structure/ch{N}.json`（写作契约）
 - 按契约逐单元写源语言稿 →（英文书）逐单元翻译（1:1 同构闸）→ 拼接源+译两版 → 多层校验（结构 / 编号 / 格式 / KaTeX / 公式对账）至 PASS
-- 图检测 + 分配（DocLayout-YOLO；图片经契约 image 块随单元继承，嵌图子流程已废弃）
+- 图检测 + 分配（DocLayout-YOLO；图片经契约 image 块随单元继承）
 
 ## 前置要求（Windows）
 
@@ -83,7 +83,7 @@ python tools/flow_runner.py run "<corpus_root>/<书名>" write_source verify_sou
 
 ## 架构速览
 
-- `SKILL.md`：主流程（Stage 0 prep → 1 extract → 2 write-source（含 2026-09-03 内建的翻译单元化步骤））、目录契约、写源硬闸、flow_gate
+- `SKILL.md`：主流程（Stage 0 prep → 1 extract → 2 write-source（含内建的逐单元翻译步骤））、目录契约、写源硬闸、flow_gate
 - `flows/`：各阶段流程文档（统一模板：目的/前置/步骤/规则/出口/相关代码）与脚本
 - `verify/`：通用校验引擎（多层语义校验，`verify/verify.md` 为编排权威）
 - `config/`：书籍处理过程配置（`verify_config` 生成器、`ignore_chN` 忽略清单等）

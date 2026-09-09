@@ -28,11 +28,11 @@ from data.book_structure.book_structure import (
 # --------------------------------------------------------------------------
 FLOW_ORDER = {
     "prep": ["env"],
-    # 🔴 2026-08-29 流程重构：extract 终于 MM Repair；config / figure_detection /
-    # structure / 基本总结草稿全部移入 write_source（草稿前须过 structure 完整性闸门）。
-    # 🔴 2026-09-03 翻译单元化（内置于 write_source）：翻译 = 单步 translate_chapters
+    # 🔴 extract 终于 MM Repair；config / figure_detection / structure / 单元拆分
+    # 等写作前置全部属于 write_source（草稿前须过 structure 完整性闸门）。
+    # 🔴 翻译内置于 write_source：翻译 = 单步 translate_chapters
     #（清单初始化 + agent 逐个翻译生成翻译单元 + 门控 + 1:1 同构闸）/ merge_all
-    #（一次拼接源语言 + 翻译语言两版）；verify_source 后移至末步、一次覆盖两版。
+    #（一次拼接源语言 + 翻译语言两版）；verify_source 为末步、一次覆盖两版。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
                      "draft", "write_chapters", "translate_chapters",
@@ -76,15 +76,15 @@ RUN_COMMANDS = {
         "python flows/script/extract_figures.py \"{pdf}\" --out \"{extract_dir}\" --book && "
         "python flows/script/assign_figures.py \"{pdf}\" --out \"{extract_dir}\" --book"),
     "write_source.structure": ("cmd",
-        # 2026-08-29 重构：build_structure 一步产出含内容（text/formula/image/
+        # build_structure 一步产出含内容（text/formula/image/
         # proof/description）的完整分章契约 ch{N}.json；结构完整性（章节/条目
         # 查漏回填 + gate.passed 闸门）是本步内的硬闸，见 structure.md 第 2-4 步
         "python flows/write-source/structure/script/build_structure.py \"{extract_dir}\""),
     "write_source.draft": ("cmd",
         # 基本总结草稿拆分：内容完整性闸门 + 把整章草稿细分为「每 item 一单元」
-        # 的 units/ch{N}/ 目录（2026-08-31 起取代整章 draft_ch{N}.md 输出）。
+        # 的 units/ch{N}/ 目录。
         # 完整契约已由 structure 步产出，无需再 attach；图片经契约 image 块随
-        # 单元继承。render_draft.py 降级为 split_draft_units 的渲染库（不再单独产出草稿）。
+        # 单元继承。render_draft.py 是 split_draft_units 的渲染库。
         "python verify/script/check_content_completeness.py \"{extract_dir}\" && "
         "python flows/write-source/script/split_draft_units.py \"{extract_dir}\""),
     "write_source.write_chapters": ("agent",
@@ -99,7 +99,7 @@ RUN_COMMANDS = {
         "struct_labels（结构标签）/ format_verify.check_example_blockquote_lines"
         "（example blockquote）/ OCR 残留薄封装）才 exit 0——判断标准"
         "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）。"
-        "🔴 2026-09-03 起拼接移至 merge_all 步：本步不含拼接，证据 = 每章单元门控通过。"),
+        "🔴 拼接在 merge_all 步：本步不含拼接，证据 = 每章单元门控通过。"),
     "write_source.translate_chapters": ("agent",
         "🔴 对应文档步骤 6（agent 逐个翻译单元 + 双重门控；翻译单元按需生成、"
         "不分步预派生）：① 先跑 "
@@ -116,7 +116,7 @@ RUN_COMMANDS = {
         "[ch ...]（🔴 1:1 同构闸：单元序列 / \\tag 集合 / 图片集合 / 编号项标签集合"
         "与源单元逐一相等，漏译 / 漏公式 / 漏图 / 漏编号在此被拦）。"),
     "write_source.merge_all": ("cmd",
-        # 文档步骤 7（原步骤 6 拼接后移并扩展）：一次拼接源语言 + 翻译语言两组 md。
+        # 文档步骤 7：一次拼接源语言 + 翻译语言两组 md。
         # merge_units 自带强制门控（拼接前先 gate_units，--units-dir 同步生效）。
         "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all && "
         "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all "
@@ -124,7 +124,7 @@ RUN_COMMANDS = {
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
     "write_source.verify_source": ("cmd",
-        # exit 0 才算 PASS；--all 覆盖源语言 + 翻译语言两组 .md（2026-09-03 起两版
+        # exit 0 才算 PASS；--all 覆盖源语言 + 翻译语言两组 .md（两版
         # 均已由 merge_all 写出，一次校验覆盖两版）。
         "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
 }
@@ -139,8 +139,8 @@ class physical_evidence:
     @staticmethod
     def _extract_dir(book_dir, extract_dir):
         ex = extract_dir or os.path.join(book_dir, "_extract")
-        # 2026-09-08：按 chapter_map.json 灌注 kind 注册表，使 chapter_label /
-        # unit_dir_name 对 Supplement（kind=3）等字母章返回正确前缀（幂等、零回归）。
+        # 按 chapter_map.json 灌注 kind 注册表，使 chapter_label /
+        # unit_dir_name 对 Supplement（kind=3）等字母章返回正确前缀（幂等）。
         prime_chapter_kinds(ex)
         return ex
 
@@ -271,9 +271,9 @@ class physical_evidence:
             d = json.load(open(p, encoding="utf-8"))
         except Exception as e:
             return False, f"verify_config.json 非法 JSON: {e}"
-        # 2026-09-08 起 verify_config.json 支持外层 map 格式（kind 路由：
+        # verify_config.json 支持外层 map 格式（kind 路由：
         # "ch"/"appendix"/"supplement" 各含子配置；见 ConfigLoader 零回归语义）。
-        # 顶层 ordinal → 旧扁平格式；顶层 map → 正文章 ordinal 在 "ch" 键内。
+        # 顶层 ordinal → 扁平格式（正文章）；顶层 map → 正文章 ordinal 在 "ch" 键内。
         cfg = d if isinstance(d.get("ordinal"), list) else d.get("ch")
         if not (isinstance(cfg, dict)
                 and isinstance(cfg.get("ordinal"), list)
@@ -377,9 +377,9 @@ class physical_evidence:
     def draft_ok(book_dir, extract_dir):
         """单元拆分证据：每个结构章节都有内容化分章契约 + 拆出的单元目录。
 
-        🔴 2026-08-31 重构：原「整章草稿 draft_ch{N}.md」被「每 item 一单元目录
-        units/ch{N}/」取代（split_draft_units.py）。契约必须 content 化后拆分，
-        且 manifest 晚于契约（attach 重跑后必须重拆，否则单元过期）。
+        写作底稿 = 「每 item 一单元目录 units/ch{N}/」（split_draft_units.py）。
+        契约必须 content 化后拆分，且 manifest 晚于契约（attach 重跑后必须重拆，
+        否则单元过期）。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         sub = os.path.join(ex, "book_structure")
@@ -592,8 +592,8 @@ class physical_evidence:
                 problems.append("单元 %s（%s %s）仍未处理（标记仍 DRAFT）" % (
                     u["file"], u["type"], u["key"]))
                 continue
-            # item / desc 必须「写对」——单元级质量校验通过（🔴 2026-09-01 起
-            # 判断标准是"写对"而非"重写"，不再看内容指纹变化）；章节标题只确认 DONE
+            # item / desc 必须「写对」——单元级质量校验通过（判断标准是"写对"
+            # 而非"重写"，非内容指纹比对）；章节标题只确认 DONE
             if u["type"] in ("item", "desc"):
                 body = raw[m.end():].lstrip("\r\n").rstrip("\n")
                 try:
@@ -610,12 +610,12 @@ class physical_evidence:
     def write_chapters_ok(book_dir, extract_dir):
         """写章节证据 = 每章单元门控通过（每个 item 都改好、一个不漏）。
 
-        🔴 2026-08-31 重构（死命令：不逐单元改好 = 落账被硬拒）：整章草稿
-        draft_ch{N}.md 已细分为「每 item 一单元」目录 units/ch{N}/（split_draft_units）。
-        agent 必须**逐个把单元按 writing-rules 改好**（首行 DRAFT→DONE + 质量校验
-        通过），由 gate_units.py 强制门控。
-        🔴 2026-09-03 重构（翻译单元化）：拼接移至 merge_all 步——本步证据不再
-        要求最终 md 存在与契约名在位（该核对移入 merge_all_ok，对源 + 译两版生效）。
+        🔴 死命令：不逐单元改好 = 落账被硬拒。写作底稿 = 「每 item 一单元」
+        目录 units/ch{N}/（split_draft_units 拆出）。agent 必须**逐个把单元按
+        writing-rules 改好**（首行 DRAFT→DONE + 质量校验通过），由 gate_units.py
+        强制门控。
+        🔴 拼接在 merge_all 步——本步证据不要求最终 md 存在与契约名在位
+        （该核对在 merge_all_ok，对源 + 译两版生效）。
         确保前置：draft 步未跑（缺 units/manifest.json）→ 硬拒，防 bootstrap 误回填。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
@@ -650,7 +650,7 @@ class physical_evidence:
         note = f"；{len(empty_units)} 章单元清单为空: {empty_units[:4]}" if empty_units else ""
         return True, f"{len(keys)} 章单元门控全部通过（每 item 改好，一个不漏）{note}"
 
-    # ---- 翻译单元证据（2026-09-03 翻译单元化：清单 + 门控 + 同构闸） ----
+    # ---- 翻译单元证据（清单 + 门控 + 同构闸） ----
 
     @staticmethod
     def _src_manifest(ex, key):
@@ -789,7 +789,7 @@ class physical_evidence:
 
     @staticmethod
     def merge_all_ok(book_dir, extract_dir):
-        """拼接证据（2026-09-03 起 = 原步骤 6 后移并扩展）：每个外语章有
+        """拼接证据：每个外语章有
         源语言 + 翻译语言两组最终 md，且两组的契约骨架节 + 编号项全部在位
         （merge 拼接兜底，防单元内漏项；翻译版的同名漏项由同构闸 + 此处双拦）。
 
@@ -834,7 +834,7 @@ class physical_evidence:
 
     @staticmethod
     def embed_figures_ok(book_dir, extract_dir):
-        # 宽松判定：存在 figure 目录（书根，与 md 同级，2026-09-01 起）或任一 md 含图片引用
+        # 宽松判定：存在 figure 目录（书根，与 md 同级）或任一 md 含图片引用
         figdir = os.path.join(book_dir, "figure")
         if os.path.isdir(figdir):
             return True, "figure 目录存在"
@@ -867,7 +867,7 @@ class physical_evidence:
 
     @staticmethod
     def verify_source_ok(book_dir, extract_dir):
-        # 🔴 2026-09-03 翻译单元化后为流程末步：--all 一次覆盖源语言 + 翻译语言
+        # 流程末步：--all 一次覆盖源语言 + 翻译语言
         # 两版（merge_all 已把两组 md 写出）。中文源书只有一组中文 md，语义一致。
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
         rc, err = physical_evidence._run_verify_all(ex, book_dir)

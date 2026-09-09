@@ -16,7 +16,7 @@
 
 ## 步骤（有序）
 
-> 🔴 **2026-08-29 二次重构**：**第 1 步即产出含全部正文内容的完整契约**——`build_structure` 生成骨架后**立即**调 `build_chapter_contract` 挂入 description / proof / text / formula / image 内容块并写回同一文件，`ch{N}.json` 自此就是"整章信息的唯一载体"；**不再有独立的 attach_content 内容化步骤**。后续只剩校验与回填：**第 1 步生成完整契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核**。
+> 🔴 **第 1 步即产出含全部正文内容的完整契约**——`build_structure` 生成骨架后**立即**调 `build_chapter_contract` 挂入 description / proof / text / formula / image 内容块并写回同一文件，`ch{N}.json` 就是"整章信息的唯一载体"（`attach_content.py` 的 attach CLI 仅保留为全章重挂的**手动维护入口**，不在流程步骤内）。后续只剩校验与回填：**第 1 步生成完整契约 → 第 2 步 `section_continuity` 校验遗漏章节并回填 → 第 3 步 `item_numbering_integrity` 校验遗漏定义/定理/例等重要概念并回填 → 第 4 步「完整 + 连续」闸门复核**。
 > 四步都必须在 **write-source 写书之前**完成，否则漏抓的编号项不会出现在总结 MD 里。
 > 第 2 / 3 步都建议先 `--backfill` 之前的 dry-run 报告 review，确认 `readable` 项无误后再写回。
 
@@ -106,14 +106,14 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
   "sub_sec": [ /* 仅 chapter / section 含此键，递归同结构 */ ]
 }
 ```
-- **顶层即该章 `chapter` 节点（无书根包装）**；书根仅由 `BookStructure.load` 聚合各分章文件时在内存构造（`key=-1, type=-1`）。历史全书单文件 `book_structure.json` 已废弃、不读取。
+- **顶层即该章 `chapter` 节点（无书根包装）**；书根仅由 `BookStructure.load` 聚合各分章文件时在内存构造（`key=-1, type=-1`）。整书单文件 `book_structure.json` 不是合法产物、不被读取。
 - **`name` 带序标**：序标位置随书（前/后皆可），与原文一致；只含标题不含正文内容。
 - **练习全量纳入** `type:"exercise"`（verify 展平取 key 集时过滤掉即可，不强制写作落地）。
 - **`page_end`**：叶子 `== page_start`；容器（chapter/section）取**末代子孙页**。
 
 ### 内容块与派生节点（第 1 步随契约产出，仅分章内容契约）
 
-分章文件顶层即该章 `chapter` 节点；其 `sub_sec`（含章 / 节的 `sub_sec`）在**文档顺序**下混合四类元素：① 结构节点（与单文件同 schema）、② `description` 节点（描述信息，与定理同级）、③ `proof` 节点（证明，条目子节点）、④ 内容块（`text` / `formula`+`display` / `image`）。
+分章文件顶层即该章 `chapter` 节点；其 `sub_sec`（含章 / 节的 `sub_sec`）在**文档顺序**下混合四类元素：① 结构节点、② `description` 节点（描述信息，与定理同级）、③ `proof` 节点（证明，条目子节点）、④ 内容块（`text` / `formula`+`display` / `image`）。
 
 > 🔴 **节点与内容块的完整 Schema、实书样例、字段语义（`line_start` / `indent` / `display` 等）的 SSOT 见 [`data/book_structure/book_structure.md`](../../../data/book_structure/book_structure.md) §2–§5**——本节只承载产出规则与流程语义，不重复 schema。
 
@@ -150,7 +150,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/write-source/structure/script/build_structure`：统一结构 + 内容契约生成（本子流程；第 1 步一步产出完整契约）。
-- `flows/write-source/structure/script/attach_content`：`build_chapter_contract` 内容挂载实现（由 build_structure 与 completeness 回填共用；`attach()` CLI 保留作全章重挂的手动维护入口，不再是流程步骤）。
+- `flows/write-source/structure/script/attach_content`：`build_chapter_contract` 内容挂载实现（由 build_structure 与 completeness 回填共用；`attach()` CLI 仅作全章重挂的手动维护入口）。
 - `flows/write-source/structure/script/scan_skeleton`：`SEC` / `EXER` 扫描（被 build_structure 调用）。
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` 等）：编号项抽取（被 build_structure 按 `ordinal` 调用）。
 

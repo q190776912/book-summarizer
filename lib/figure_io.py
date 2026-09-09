@@ -26,7 +26,7 @@ _NEVER_RE = re.compile(r"[^\s\S]")
 
 # A figure group's `type` encodes its numbering depth (= number of numeric
 # components = the former `figure.components`).  🔴 `components` IS `depth`.
-# 🔴 取自 `lib.numbering` 的唯一真源（2026-08-29 去重，原此处为手工镜像副本）：
+# 🔴 唯一真源在 `lib.numbering`（勿在本处复制镜像副本）：
 # 副本会与 config 侧漂移，缺条目会让 CN-三段标 figure group 静默回落默认值。
 from lib.numbering import ORDINAL_DEPTH
 
@@ -212,12 +212,12 @@ def load_figure_index(path):
 
 
 # ---------------------------------------------------------------------------
-# figure 目录统一约定（2026-09-01 用户需求：figure 目录与总结文件同级）
+# figure 目录统一约定（figure 目录与总结文件同级，位于书根）
 # ---------------------------------------------------------------------------
 def figure_dir(ext):
     """裁剪图所在目录的**书根绝对路径**：``<book_dir>/figure``（与最终 md 同级）。
 
-    🔴 2026-09-01 起 figure 目录从 ``_extract/figure/`` 提升到书根 ``<book_dir>/figure/``
+    🔴 figure 目录 = 书根 ``<book_dir>/figure/``
     （与总结文件同级），最终 md 里 ``<img src="figure/xxx.png">`` 即为书根相对路径，
     直接可渲染。``ext`` 是 ``<book_dir>/_extract``；多册书子目录同理取该书根。
     """

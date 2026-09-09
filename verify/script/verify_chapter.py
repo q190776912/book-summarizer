@@ -82,7 +82,7 @@ def _preflight_gate(md_file):
 
 
 def _fix_disabled_hint(md_file):
-    """全层 --fix 默认禁用提示（2026-08-28 用户裁定）。"""
+    """全层 --fix 默认禁用提示。"""
     print('[FIX] 全层 --fix 已默认禁用（防止 G 层在内容未归位时污染正文，'
           '2026-08 Ch1/Ch6 事故）。请改为：')
     print('      1) 单层修复：按需选择性调用对应 fixer 或手工定点修改；')
@@ -239,7 +239,7 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     deliberate carve-out, not a verify path.)
     """
     # 🔒 上游闸补充：verify 依赖分章契约（book_structure/ch{N}.json / appendix{X}.json / supplement{S}.json）
-    # 作为编号项基准（2026-08-29 重构后为唯一格式，旧版全书单文件已废弃）。
+    # 作为编号项基准（分章契约是唯一格式；整书单文件 book_structure.json 不被读取）。
     # 缺失说明 structure 子流程未跑完（或跳步），禁止校验——否则 data_provider
     # 无基准、编号项查漏失效。这是"上一步没做完不能进下一步"在 verify 端的落地。
     from data.book_structure.book_structure import list_chapter_keys

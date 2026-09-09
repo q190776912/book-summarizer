@@ -21,7 +21,7 @@ Usage:
     python verify/format_verify/script/fix_katex.py <book_dir>               # fix all .md files
     python verify/format_verify/script/fix_katex.py <book_dir> --dry-run      # preview only
     # 亦可由 `verify --fix` 自动调用（经 register_fixer('C', 2, apply_fix) 注册）
-    # 🔒 独立 CLI 自 2026-09 起内置 PREFLIGHT 守卫（与 verify_chapter --fix 对齐）：
+    # 🔒 独立 CLI 内置 PREFLIGHT 守卫（与 verify_chapter --fix 对齐）：
     #   实际写回前逐文件检查 `$$` 围栏配对 + 无块外 \\tag，任一不满足即跳过该文件
     #   不写回（fail fast 优于静默污染）；--dry-run 为只读预览，不受守卫限制。
 
@@ -636,7 +636,7 @@ def main():
         print(f'Error: {target} is not a file or directory')
         sys.exit(1)
 
-    # 🔒 PREFLIGHT 守卫（2026-09 落地，与 verify_chapter --fix 对齐）：围栏不配对
+    # 🔒 PREFLIGHT 守卫（与 verify_chapter --fix 对齐）：围栏不配对
     # 或 \tag 落在配对块外时，一切「按块」作用域的修复都不可信（错位配对下会静默
     # 污染正文）。实际写回前逐文件检查，不满足即跳过不写回；--dry-run 只读预览
     # 不受限，仍可查看修复意图。

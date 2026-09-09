@@ -23,7 +23,3 @@
 - `ignore_chN`：`ignore_chN.md`（文档）+ `manage_ignore.py`（交互式登记 / 检视 `ignore_ch{N}.json`）。
 - `figure_manual_chN`：`figure_manual_chN.md`（文档）+ `apply_manual_figures.py`（读取 `figure_manual_chN.json` 并写回 `figure_index.json`）。
 - `manual_overrides_chN`：`manual_overrides_chN.md`（文档，仅手填；由 `flows/write-source/structure/script/extract_items --manual` 加载合并）。
-
-## 历史参考
-
-- 早期 `verify_config` schema 设计分解已归档，仅供回溯（现以 `verify_config.md` / `verify_config.py` 为准）。

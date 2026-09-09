@@ -1,8 +1,8 @@
 """gate_units.py — write-source 步骤 5 强制门控：确保每个 item 单元都被 agent 改好
 
-背景（2026-08-31 用户需求重构）
-------------------------------
-写源阶段 agent「总是不按照草稿总结来总结」。拆分脚本 ``split_draft_units.py``
+背景
+----
+写作以单元粒度进行：拆分脚本 ``split_draft_units.py``
 把整章草稿切成按写作顺序的单元文件（``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章 ``units/appendix{X}/``），agent
 **必须逐个把单元按 writing-rules 改好**。本脚本是这一步的**强制门控**：只有全部
 单元都被改好（每个 item 都不漏）才放行，之后才能进入 ``merge_units.py`` 拼接。
@@ -13,8 +13,8 @@
   ② **「写对」而非「重写」**：item / desc 单元做**单元级质量校验**
      （``check_unit_quality.py``）——全部引用 verify 已有检测函数（check_katex /
      katex_heuristics / verbose_gates / struct_labels / format_verify），不重复
-     造轮子。🔴 2026-09-01 起判断标准是"写对"（是否符合写作要求），**不再看
-     内容指纹是否变化**——防止模型瞎改（公式没渲染对 / 格式破坏）就标 DONE。
+     造轮子。🔴 判断标准是"写对"（是否符合写作要求），
+     **不看内容指纹是否变化**——防止模型瞎改（公式没渲染对 / 格式破坏）就标 DONE。
      （章节标题单元本就无需改动，只确认 DONE。）
 
 完整性核对（防漏项）：

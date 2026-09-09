@@ -165,7 +165,7 @@ ORDINAL_NAME = {
     12: 'hum', 13: 'app',
 }
 # Numbering depth (numeric components) per ordinal code.
-# 🔴 唯一真源在 `lib.numbering`（2026-08-29 去重）：此处只做再导出，禁止就地改
+# 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
 from lib.numbering import ORDINAL_DEPTH  # noqa: F401  (re-exported)
 from data.book_structure.book_structure import (  # noqa: E402
@@ -411,7 +411,7 @@ class ChapterInfo:
     name: str = ''
     name_en: str = ''
     name_cn: str = ''
-    # 🔴 2026-09-08 新增：显式 kind（KIND_CHAPTER/APPENDIX/SUPPLEMENT）。
+    # 🔴 显式 kind（KIND_CHAPTER/APPENDIX/SUPPLEMENT）。
     # 旧书 chapter_map 无此字段时由 _load_chapter_map 按字母/命名字形回退。
     kind: int = 1
 

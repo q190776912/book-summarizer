@@ -7,14 +7,14 @@
 > `render_draft.py` 纯函数）。契约语义
 > （步骤 / 命令 / 已知近似）的流程侧 SSOT 见 `flows/write-source/structure/structure.md`。
 
-## 1. 格式总览（2026-08-29 用户最终确认：**分章契约是唯一真源，全书单文件已废弃**）
+## 1. 格式总览（**分章契约是唯一真源**）
 
 | 产物 | 位置 | 承载 | 消费方 |
 |------|------|------|--------|
 | **内容化分章契约（唯一格式）** | `<extract_dir>/book_structure/ch{N}.json`（数字章）/ `appendix{X}.json`（附录章） | 该章完整树 + **全部正文内容**：`text` / `formula` / `image` 内容块、`description` 描述节点、`proof` 证明子节点 | `split_draft_units`（write-source 步骤 4）→ 每 item 一单元目录 `units/ch{N}/`（附录章 `units/appendix{X}/`，下同）；verify 经 `BookStructure.load` **聚合读取**为编号项基准 |
 
-- **一步产出完整契约**（2026-08-29 二次重构）：`build_structure` 生成骨架后**同进程**挂入正文内容（description / proof 派生节点与 text / formula / image 内容块）写回同一文件，不再有独立 attach 步骤；重跑即重建整章（幂等）。
-- **无单独的全书文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；旧单文件 `book_structure.json` 已废弃（2026-08-29），不再读取（无兼容回退）。
+- **一步产出完整契约**：`build_structure` 生成骨架后**同进程**挂入正文内容（description / proof 派生节点与 text / formula / image 内容块）写回同一文件；重跑即重建整章（幂等）。
+- **只有分章文件，无整书单文件**：verify 全部消费方经 `BookStructure.load` 聚合读取分章文件；名为 `book_structure.json` 的整书单文件**不是合法产物，不会被读取**（无兼容回退）。
 - 命名单点：`chapter_json_name` / `chapter_json_path` / `list_chapter_keys`（`book_structure.py`）——数字章按数值排序在前、附录字母章按字母排后。
 
 ## 2. 结构节点 Schema
@@ -123,7 +123,7 @@
 
 - **`consolidated`**（全节点序列化必写）：`true` 仅出现在章末「Exercises / 练习」集中块内的练习节点——verify 展平**恒不产出**（不参与编号项校验），总结按习题收录规则省略；`false` 为普通节点（穿插练习保持 `false`，`iter_items(include_exercise=True)` 时纳入校验）。
 - **`letter_subs`**（仅个别 `section` 节点携带，非空才写出）：Arnold《数学方法》体例的**裸字母子块头**元数据（`"letter_subs": [{"key": "A", "name": "A 空间与时间", "page_start": 18}, …]`，按书中出现顺序）；**子块的条目仍平铺在该 section 的 `sub_sec` 下**，不引入第三层容器。
-- **遗留形态**：个别历史书 JSON 中可见 `type:"subsection"` 节点（`consolidated=true`、页码可能为 `0`）——**非规范契约类型**，现行抽取器不再产出，verify 与写作均不消费；仅作读取兼容，不必修复。
+- **遗留形态**：个别历史书 JSON 中可见 `type:"subsection"` 节点（`consolidated=true`、页码可能为 `0`）——**非规范契约类型**，抽取器不产出此类型，verify 与写作均不消费；仅作读取兼容，不必修复。
 
 ## 3. 内容块 Schema（仅内容化分章契约）
 
@@ -181,7 +181,7 @@
 ### `BookStructure`
 - `load(ext_dir, book_dir=None)`：**聚合** `book_structure/ch{N}.json` + `appendix{X}.json`
   为内存书对象（root.name = 书目录名；root 页码 = 各章 min/max）；无分章文件时返回 None
-  （旧单文件 `book_structure.json` 已废弃，不再读取）。
+  （整书单文件 `book_structure.json` 不被读取）。
 - `save(ext_dir=None)`：把 root 下各章节点**拆分写回** `ch{N}.json` / `appendix{X}.json`
   （保存前 `recompute_pages`）。
 - 其余（`new_book` / `dump_dict` / `name` / `chapters` / `find_chapter` /
@@ -197,7 +197,7 @@
 
 ## 7. 消费者（只读，不裸操作 json）
 
-全部经 `BookStructure.load` **聚合读取分章契约**（旧单文件无任何回退读取）：
+全部经 `BookStructure.load` **聚合读取分章契约**（不读取整书单文件）：
 
 - `verify/script/structure_io.py`：`read_structure_items(ext_dir, ch)` → `chapter_items` 返回编号项列表（被 `data_provider` 消费；派生节点 description / proof 已在 `iter_items` 排除）。
 - `verify/verbose_gates/script/verbose_gates.py`：`_load_contract` 取契约。
@@ -214,7 +214,7 @@
 2. **查漏回填 + 闸门**（structure 第 2–4 步）：`check_structure_completeness.py
    <extract_dir> [ch ...] --backfill` 经聚合 load 定位章节点、`replace_chapter` +
    `save` 拆分写回（先备份）；闸门 `gate.passed == true` 后放行。
-3. **正文内容化**（已并入第 1 步）：`build_structure` 一步产出骨架 + 内容；
+3. **正文内容化**（第 1 步内完成）：`build_structure` 一步产出骨架 + 内容；
    `attach_content <extract_dir> [ch ...]` 仅保留为全章重挂的**手动维护入口**
    （幂等可重跑，正常流程无需单独执行）。
 4. **单元拆分**（write-source 步骤 4）：`split_draft_units <extract_dir> [ch ...]` →

@@ -280,8 +280,7 @@ def find_after(lines, start):
 def _appendix_letter(book_dir, ch):
     """'A'..'Z' when the structure contract names chapter `ch` "Appendix <L> ...".
 
-    契约唯一来源 = 分章契约 `<extract>/book_structure/`（2026-08-29 起，
-    旧版全书单文件已废弃不再读取）。
+    契约唯一来源 = 分章契约 `<extract>/book_structure/`。
     """
     ext = os.path.join(book_dir, "_extract")
     try:

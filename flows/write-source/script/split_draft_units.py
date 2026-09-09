@@ -1,13 +1,13 @@
 """split_draft_units.py — write-source 步骤 4：把草稿拆分为「每 item 一单元」的目录
 
-背景（2026-08-31 用户需求重构）
-------------------------------
-写源阶段 agent「总是不按照草稿总结来总结」。为根治，把整章草稿 ``draft_ch{N}.md``
-**细分为按写作顺序排列的单元文件目录** ``units/ch{N}/``（附录章 ``units/appendix{X}/``，本文件各 ``ch{N}`` 处附录章同理换 ``appendix{X}``，判据统一走 ``chapter_label``）：每个单元是一个独立 md
+背景
+----
+写源以**单元粒度**进行：把整章草稿拆成**按写作顺序排列的单元文件目录**
+``units/ch{N}/``（附录章 ``units/appendix{X}/``，本文件各 ``ch{N}`` 处附录章同理换 ``appendix{X}``，判据统一走 ``chapter_label``）：每个单元是一个独立 md
 文件（章标题 / 节标题 / 描述散文 / 单个编号项 各一单元），agent **必须逐个改好**
 （强制门控，见 ``gate_units.py``），最后用 ``merge_units.py`` 拼接成最终章 md。
 
-本脚本取代原 ``render_draft.py`` 的输出（整章 ``draft_ch{N}.md``）。单元粒度与
+单元粒度与
 ``docs/writing-rules.md`` 的「item」一致：
 
   * ``chapter`` 单元：``# 章标题``（章首序言是其后独立的 ``desc`` 单元）；

@@ -570,7 +570,13 @@ class physical_evidence:
     @staticmethod
     def _units_gate_ok(units_dir, manifest):
         """单元门控核心判定（内联，避免 import 耦合）：每单元文件存在、首行
-        DONE、**质量校验通过**（写对，非仅重写）。返回 (ok, problems)。"""
+        DONE、**质量校验通过**（写对，非仅重写）。返回 (ok, problems)。
+
+        🔴 **fail-closed**：质量校验执行失败（import / 运行异常）按「未达标」
+        处理并记入 problems——绝不能因校验崩溃而放行（否则未审阅单元会整体
+        免检通过、被 mark 落账后流入拼接）。真实 KaTeX 渲染不在此重复：
+        ``gate_units.gate_chapter``（merge 前最后一道）按章批量真渲染。
+        """
         problems = []
         mark_re = re.compile(
             r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
@@ -592,15 +598,33 @@ class physical_evidence:
                 problems.append("单元 %s（%s %s）仍未处理（标记仍 DRAFT）" % (
                     u["file"], u["type"], u["key"]))
                 continue
-            # item / desc 必须「写对」——单元级质量校验通过（判断标准是"写对"
-            # 而非"重写"，非内容指纹比对）；章节标题只确认 DONE
-            if u["type"] in ("item", "desc"):
+            # item / desc / exercise 必须「写对」——单元级质量校验通过（判断
+            # 标准是"写对"而非"重写"，非内容指纹比对）；章节标题只确认 DONE
+            if u["type"] in ("item", "desc", "exercise"):
                 body = raw[m.end():].lstrip("\r\n").rstrip("\n")
                 try:
                     import check_unit_quality as _quality
-                    ok_q, qp = _quality.check_body(u["type"], u.get("name") or "", body)
-                except Exception:
-                    ok_q, qp = True, []
+                    # 单元级 tag 对账：以同章内容化契约为真值（chapter_tag_map），
+                    # 拦「漏写编号公式 / 编造编号」（Q 层是章级末步，这里提前拦）
+                    expected = None
+                    try:
+                        from data.book_structure.book_structure import (
+                            chapter_json_path, chapter_tag_map)
+                        label = os.path.basename(os.path.normpath(units_dir))
+                        cpath = chapter_json_path(
+                            os.path.dirname(os.path.normpath(units_dir)), label)
+                        if os.path.exists(cpath):
+                            with open(cpath, encoding="utf-8") as cf:
+                                expected = chapter_tag_map(json.load(cf)).get(
+                                    str(u["key"]))
+                    except Exception:
+                        expected = None  # 契约不可得 = 跳过 tag 对账（其余检查照常）
+                    ok_q, qp = _quality.check_body(
+                        u["type"], u.get("name") or "", body,
+                        expected_tags=expected)
+                except Exception as e:
+                    # 🔴 fail-closed：校验崩溃 = 该单元不合格，绝不放行
+                    ok_q, qp = False, ["质量校验执行失败（fail-closed）：%r" % (e,)]
                 if not ok_q:
                     problems.append("单元 %s（%s %s）质量未达标：%s" % (
                         u["file"], u["type"], u["key"], "；".join(qp[:4])))
@@ -672,7 +696,8 @@ class physical_evidence:
     def translate_chapters_ok(book_dir, extract_dir):
         """翻译证据 = ① 翻译清单已初始化（units-translate/ch{N}/manifest.json，
         由翻译步内 init_translate_units.py 生成——元数据 + src_hash，不复制正文）；
-        ② 翻译单元门控通过（同一套单元质量校验）；
+        ② 🔴 源单元全部修正完成（源门控通过——源先于译，源没修好译文必作废）
+        ＋翻译单元门控通过（同一套单元质量校验）；
         ③ 1:1 同构闸 check_translate_parity 通过（漏译/漏公式/漏图/漏编号在此拦截）。
 
         中文源书（无翻译阶段）自动通过。
@@ -699,6 +724,20 @@ class physical_evidence:
             return True, "中文源书：无翻译阶段，全部章跳过"
         gate_fail, parity_fail = [], []
         for k in todo:
+            # 🔴 源先于译：源单元未全部修正完成（源门控未通过）→ 翻译证据不成立。
+            # 与 gate_units 翻译前置硬闸同判据（此处为轻量 _units_gate_ok 口径）。
+            src_dir = os.path.join(ex, "book_structure", "units", unit_dir_name(k))
+            try:
+                src_manifest = json.load(open(os.path.join(src_dir, "manifest.json"),
+                                             encoding="utf-8"))
+            except Exception:
+                gate_fail.append((k, "源 units/manifest.json 缺失或非法——翻译禁止开始"))
+                continue
+            ok_src, src_prob = physical_evidence._units_gate_ok(src_dir, src_manifest)
+            if not ok_src:
+                gate_fail.append((k, "源单元未全部修正完成（源门控未通过）——先修好源单元"
+                                     "再翻译/重派生: " + (src_prob[0] if src_prob else "")))
+                continue
             tdir = os.path.join(ex, "book_structure", "units-translate", unit_dir_name(k))
             tmanifest_path = os.path.join(tdir, "manifest.json")
             if not os.path.exists(tmanifest_path):

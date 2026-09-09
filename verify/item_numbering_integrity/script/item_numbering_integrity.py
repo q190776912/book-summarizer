@@ -254,6 +254,14 @@ def _parse_entry(inner, levels, lang=None):
     inner = inner.strip()
     if _CITE_RE.match(inner):
         return None
+    # 🔴 证明标题守卫（2026-09-09，Han–Lin 实测）：**Proof of Theorem 3.8**
+    # 以 "Proof" 开头、不含数字前缀，re_label_first 不中——但下方 m3 回退
+    # （label 任意位置搜索）会命中的 "Theorem 3.8"，把该证明标题当成条目 3.8
+    # 的**又一次出现**。本书证明排在 Remark 3.12 之后（源书 p63 原版顺序），
+    # 于是去重后 8 落到 12 后面 → 假性「顺序错乱」BLOCKING。凡以证明词开头
+    # 的 span 都是证明标题而非条目，任何语言一律在此直接拒绝。
+    if _PROOF_RE.match(inner):
+        return None
     _exact, _cap, re_label_first, re_num_first = _numpath_regexes(levels)
     # Three-level books: a bare numpath with NO trailing text and NO label
     # (e.g. "**1.5-4**") is a real item header whose type is implied — count it

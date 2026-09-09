@@ -330,13 +330,25 @@ def formula_cfg(ext):
     `ORDINAL_DEPTH` 派生，不得硬编码**。各书形态差异极大（全语料实测）：
     ``(1)`` 节级重置 / ``(2.17)`` 章.号 / ``(11.1-1)`` 章.节-号 / ``(8.11a)``
     字母后缀 / 大量书右缘编号**不带括号**。段数错 → 整章编号一个都挂不上。
+
+    🔴 **配置位置（新旧两版并存）**：`make_config.py` 现行版按
+    ``{"ch": {...}, "appendix": {...}, "supplement": {...}}`` 分段落盘，
+    `formula` 落在 `ch` 段内；早期版是扁平配置、`formula` 在顶层。本函数
+    **两种都认**——先读顶层，缺失再回退 `ch` 段（正文体例）。漏掉回退会让
+    分段落盘的书（如 Katok）取到空配置 → `ncomp=None` → 段数不限 → 把页码 /
+    矩阵里的裸数字（``0`` / ``153`` / ``166``）当成公式编号挂上 tag，污染
+    单元级 tag 对账真值。
     """
     if ext not in _FORMULA_CFG_CACHE:
         ncomp = scope = None
         try:
             with open(os.path.join(ext, "verify_config.json"),
                       encoding="utf-8-sig") as f:
-                fc = json.load(f).get("formula") or {}
+                data = json.load(f) or {}
+            fc = data.get("formula")
+            if not fc and isinstance(data.get("ch"), dict):
+                fc = data["ch"].get("formula")
+            fc = fc or {}
             ncomp = ORDINAL_DEPTH.get(fc.get("type"))
             s = fc.get("scope")
             if isinstance(s, int):

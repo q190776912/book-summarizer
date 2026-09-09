@@ -355,6 +355,22 @@ class SourceFormulaIndex:
                         y = poly[1]
                 self._track_heading(txt)
                 self._scan_text(txt, nums, pg, y)
+            # 🔴 Leading-number latex guard（2026-09-09，Han–Lin (4.3) 实测）：
+            # OCR 有时把显示公式**连同其编号**捕获为 `formulas[].latex` 的开头
+            # token（如 "(4.3) \\quad |A(k,R)|..."）——此时编号从未出现在
+            # `text[]`，S 漏收该真实显示编号，总结忠实的 \\tag 反被误判
+            # FABRICATED。补救：仅当 latex **以括号包裹的 (C.N) 开头**时才把
+            # 该 latex 交给同一 `_scan_text` 管线（复用同一 pattern + 归一化）。
+            # 普通数学内容绝不会以 "(\\d+.\\d+)" 开头，故不会把代数噪声混进 S。
+            for fblk in data.get('formulas', []) or []:
+                lx = (fblk.get('latex') or fblk.get('formula') or '') \
+                    if isinstance(fblk, dict) else ''
+                ls = (lx or '').strip()
+                if not ls:
+                    continue
+                if not re.match(r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]', ls):
+                    continue
+                self._scan_text(ls, nums, pg, None)
         self._by_chapter[ch] = nums
 
     def build_sectioned(self, ch: int, start: int, end: int,

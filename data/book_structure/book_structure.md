@@ -191,6 +191,9 @@
 - `chapter_json_name(key)`：数字章 `ch{N}.json` / 附录 `appendix{X}.json`。
 - `chapter_json_path(ext_dir, key)`：分章契约完整路径。
 - `list_chapter_keys(ext_dir)`：列出章号（数字章按数值在前、附录按字母在后）。
+- `chapter_tag_map(root)`：契约 → `{条目/描述 key: [公式序标 tag, ...]}`（含 proof
+  子节点内的公式，文档序；章/节直属散落公式归容器 key）——单元级 tag 对账
+  （`gate_units` / flow 落账复核）的真值源，拦「漏写编号公式 / 编造编号」。
 
 > 注意：本模型类**未继承** `data/lib/json_data.py`（`JsonData` 基类未实现），序列化契约
 > 以本模块 `to_dict()/from_dict()/dump()/load()` 为准。

@@ -104,18 +104,41 @@
      ```
      exit 0 = 该章全部单元文件存在、首行 `DONE`、**单元级质量校验通过**。
      🔴 **判断标准是「写对」而非「重写」**（拦"模型瞎改就标 DONE"）：
-     `check_unit_quality.py` 对每个 item / desc 单元做**质量校验**——全部引用 verify
+     `check_unit_quality.py` 对每个 item / desc / exercise 单元做**质量校验**——全部引用 verify
      已有检测函数，不重复造轮子：
      - **公式闭合**：`check_katex.check_display_math_closure`（同 verify F 层）
      - **裸数学/箭头**：`katex_heuristics.find_bare_math_errors` / `find_raw_arrow_errors`
        （同 verify F 层）
      - **证明过长**：`verbose_gates.check_verbose_proofs`（同 verify P 层）
      - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify H 层）
-     - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
-     - **OCR 残留**：verify 不覆盖的 OCR 公式模式由薄封装补充
+    - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
+    - **块引用/例/证明/列表结构**（`_run_format_verify_unit_checks`：把单元正文写
+      临时 .md 后**复用 format_verify 原函数**，不复制逻辑）：嵌套块引用
+      `> > **`、例与证明断裂/同行、结构标签误入 `>`、陈述误包 `>`、`>` 块无
+      标签、标签未包 `>`（例 `**Example.**` / `**Proof…**`）、列表末项后直接接
+      新块无空行、连续空 `>` 行、`$$` 块内泄 `>`——verify F/H 层九项在单元级
+      提前拦；文档级专属（`---` 分隔线 / 标题上下文类）不搬（孤立单元无
+      `---`、标题即首行，搬了必误报）
+    - **OCR 残留**：verify 不覆盖的 OCR 公式模式由薄封装补充
+     - **围栏形态**（F 层口径，真实预览器不认而 js 渲染器支持、closure 只查
+       EOF 的盲区）：单行 `$$...$$` 块（须拆行）、`$$` 附着内容（开/闭围栏与
+       公式同行）、blockquote 内 `> $$` 前缺空 `>` 行、顶层 `$$` 前缺空行、
+       `\tag` 落在 `$$` 块外
+     - **内容审阅残留**（「没审阅改好」的典型痕迹，命中即不通过）：QED 结尾框
+       「口/□」独立行、OCR 乱码重复片段（同一 ≥12 字符片段连续重复）、编码损坏
+       字符（U+FFFD）、单元内私造 `#` 标题行（标题应为独立 section 单元）
+     - **🔴 单元级公式序标对账（契约 tag 真值）**：以内容化契约
+       （`chapter_tag_map`）要求该单元携带的 `formula.tag` 为真值对比单元正文
+       `\tag{}`——**缺失（漏写编号公式）与编造（多出编号）均不通过**（Q 层是
+       章级末步，单元粒度提前拦；契约缺失时跳过对账）
+     - **🔴 真实 KaTeX 渲染（按章批量）**：门控把本章全部单元正文拼进
+       `_gate_render_tmp.md` 跑 `katex_validate.js` 真渲染，错误按行号映射回所属
+       单元——启发式抓不到的 `\begin` 不配对 / 宏参数不闭合等在门控即拦，不漏到
+       步骤 8；渲染工具链缺失（node / katex 未装）= 门控不通过（须先完成 prep.env）
      任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。
-     未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。超大章（字符 > 60000）按规则 3 拆节后，
-     逐节单元组分别门控。
+     🔴 **fail-closed**：质量校验**执行失败**（脚本异常）同样判不通过，绝不让
+     崩溃的校验放行单元。未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。超大章
+     （字符 > 60000）按规则 3 拆节后，逐节单元组分别门控。
 6. **agent 逐个翻译单元 + 双重门控（agent 核心步；看一个源单元就产出一个对应翻译单元，不分步预派生；英文书适用，中文书自动跳过）**
    - **(a) 🔴 初始化翻译清单（脚本，不复制正文）**：翻译单元**按需生成**，先让脚本建立
      `units-translate/ch{N}/manifest.json`（章元数据 + 每单元 id/file/type/key/name +
@@ -123,9 +146,13 @@
      ```bash
      python flows/write-source/script/init_translate_units.py "<extract_dir>" [ch ...] [--scaffold]
      ```
-     内置翻译硬闸：初始化前跑源章 `gate_units`，源单元未全部 DONE + 质量校验通过即
-     拒绝（防止「翻译一个还没写对的源」）。`--scaffold` 可选：对缺失单元补一份源文
-     骨架（DRAFT）供直接改写；不加则纯按需新建。
+     内置翻译硬闸（🔴 **源先于译**，三处把关）：① **初始化前**跑源章 `gate_units`，源
+     单元未全部 DONE + 质量校验通过即拒绝（防止「翻译一个还没写对的源」）；② **翻译
+     门控本身**（`gate_units --units-dir units-translate`，及翻译版 `merge_units` 自带的
+     强制门控）**先重跑源章门控**——init 之后源单元再改（补公式 tag / 修格式），翻译
+     门控照样拒绝，杜绝「译文基于旧源作废」；③ parity 的 `src_hash` 漂移检测
+     **fail-closed**：源哈希 ≠ 快照、或快照缺失，均判 FAIL。`--scaffold` 可选：对缺失
+     单元补一份源文骨架（DRAFT）供直接改写；不加则纯按需新建。
    - **(b) agent 逐个打开源单元 `units/ch{N}/NNNN_*.md`（步骤 5 定稿），把译文写入
      对应翻译单元 `units-translate/ch{N}/NNNN_*.md`**（不存在则新建；正文全中文、术语
      首现标注 `(English)`、节标题双语（`## §N.N 中文 (English)`）、条目标签中文化

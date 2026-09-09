@@ -10,16 +10,33 @@
 判定（一个单元「已改好」须同时满足）：
   ① **标记已替换**：文件首行由拆分时写入的 ``<!-- ... DRAFT unit: ... -->``
      变为 ``<!-- ... DONE unit: ... -->``（agent 改完后显式确认）；
-  ② **「写对」而非「重写」**：item / desc 单元做**单元级质量校验**
+  ② **「写对」而非「重写」**：item / desc / exercise 单元做**单元级质量校验**
      （``check_unit_quality.py``）——全部引用 verify 已有检测函数（check_katex /
      katex_heuristics / verbose_gates / struct_labels / format_verify），不重复
      造轮子。🔴 判断标准是"写对"（是否符合写作要求），
      **不看内容指纹是否变化**——防止模型瞎改（公式没渲染对 / 格式破坏）就标 DONE。
+     含内容审阅类残留检测（QED 框「口/□」独立行 / OCR 乱码重复片段 /
+     编码损坏字符 / 单元内私造 `#` 标题行）与**围栏形态检测**（单行 ``$$...$$``
+     块 / ``$$`` 附着内容 / 缺空行或缺空 ``>`` 行 / ``\tag`` 在块外——真实
+     Markdown 预览器不认单行块，而 katex_validate.js 支持、closure 只查 EOF，
+     两道渲染检查都看不见，必须 heuristic 拦）。
      （章节标题单元本就无需改动，只确认 DONE。）
+  ③ **单元级公式序标对账（契约 tag 真值）**：以内容化契约
+     （``chapter_tag_map``）要求该单元携带的 ``formula.tag`` 集合为真值，对比
+     单元正文 ``\tag{}``——缺失（漏写编号公式）与多出（编造编号）均不通过
+     （Q 层是章级末步，单元粒度必须提前拦；契约缺失时跳过对账）。
+  ④ **真实 KaTeX 渲染（按章批量）**：把本章全部 item/desc/exercise 单元正文拼进
+     临时 md（``<extract>/_gate_render_tmp.md``，带单元边界标记），跑
+     ``katex_render.run_render_check``（katex_validate.js 真渲染），错误按行号
+     **映射回所属单元**——启发式抓不到的 `\begin` 不配对 / 未定义宏等在门控即拦，
+     不再漏到步骤 8 verify。🔴 渲染工具链缺失（node / katex 未装）= 门控不通过
+     （fail-closed；须先完成 prep.env：``npm install katex --no-save``）。
+  🔴 **fail-closed**：质量校验**执行失败**（脚本异常）按「质量未达标」处理，
+     绝不因崩溃放行（旧实现异常即放行，曾让未审阅单元整体免检流入拼接）。
 
 完整性核对（防漏项）：
-  ③ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
-  ④ manifest 的 ``units`` 覆盖契约全部编号项单元（item）+ 章/节/描述单元。
+  ⑤ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
+  ⑥ manifest 的 ``units`` 覆盖契约全部编号项单元（item）+ 章/节/描述单元。
 
 不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
@@ -31,6 +48,12 @@
 单元级质量校验（``check_unit_quality``）全部复用 verify 检测函数，**语言无关**
 （$$ 闭合 / 裸数学 / 裸箭头 / 证明过长 / 结构标签 / 例块包裹 / OCR 残留），
 故源单元与翻译单元共用同一实现，不重复造轮子。
+
+🔴 **翻译前置硬闸（源先于译）**：``--units-dir units-translate`` 门控**先跑源章
+门控**——源单元未全部修正完成（源门控未通过）即拒绝放行。init 时的硬闸只保证
+「初始化那一刻」源是好的；源后续再改（补公式 tag / 修格式），翻译门控必须重新
+把关，否则译文基于旧源必作废。``merge_units --units-dir units-translate`` 自带的
+强制门控同样经由本入口，故拼接翻译版亦受此闸约束。
 
 用法
 ----
@@ -62,7 +85,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
 from data.book_structure.book_structure import (
-    chapter_label, list_chapter_keys, prime_chapter_kinds, unit_dir_name)
+    chapter_json_path, chapter_label, chapter_tag_map, list_chapter_keys,
+    prime_chapter_kinds, unit_dir_name)
 import split_draft_units as _split
 import check_unit_quality as _quality
 
@@ -117,21 +141,96 @@ def _read_unit(path):
     return mark, uid, utype, key, body, _hash_text(body.rstrip("\n"))
 
 
+def _render_check_chapter(ext, out_dir, units):
+    """按章批量真实 KaTeX 渲染：把全部 item/desc/exercise 单元正文拼进一个
+    临时 md（每个单元前有 ``<!-- gate-render unit: <file> -->`` 边界标记），
+    调 ``katex_render.run_render_check``（katex_validate.js，每个公式真渲染），
+    把 ``line N`` 错误映射回所属单元。返回问题列表（fail-closed：渲染执行失败
+    / 工具链缺失均记为问题，绝不静默放行）。"""
+    parts = []
+    starts = []  # (正文首行行号, unit)
+    line_no = 1  # 1-based；指向下一单元的 marker 行
+    for u in units:
+        if u["type"] not in ("item", "desc", "exercise"):
+            continue
+        up = os.path.join(out_dir, u["file"])
+        if not os.path.exists(up):
+            continue  # 缺失已在主循环记过
+        mark, _uid, _ut, _k, body, _bh = _read_unit(up)
+        if mark != "DONE":
+            continue  # 标记问题已在主循环记过，渲染只看 DONE 单元
+        marker = "<!-- gate-render unit: %s -->" % u["file"]
+        nlines = len(body.rstrip("\n").splitlines())
+        parts.append(marker + "\n" + body.rstrip("\n"))
+        starts.append((line_no + 1, u))
+        line_no += 1 + nlines + 1  # marker 行 + 正文行 + join 产生的空行
+    if not parts:
+        return []
+    tmp_md = os.path.join(ext, "_gate_render_tmp.md")
+    with open(tmp_md, "w", encoding="utf-8") as f:
+        f.write("\n".join(parts) + "\n")
+    try:
+        from katex_render import run_render_check
+        rerrs = run_render_check(tmp_md)
+    except Exception as e:  # 🔴 fail-closed：渲染执行失败 = 门控不通过
+        return ["真实渲染检查执行失败（fail-closed）：%r" % (e,)]
+    out = []
+    for err in rerrs:
+        m2 = re.match(r"\s*line (\d+):", err)  # js 输出带前导空格："  line N: ..."
+        if m2:
+            ln_no = int(m2.group(1))
+            owner = None
+            for st, uu in starts:
+                if st <= ln_no:
+                    owner = uu
+                else:
+                    break
+            if owner is not None:
+                out.append("单元 %s 公式渲染失败（真实 KaTeX 渲染）：%s"
+                           % (owner["file"], err))
+                continue
+        out.append("公式渲染检查（%s）：%s" % (tmp_md, err))
+    return out
+
+
 def gate_chapter(ext, ch_key, units_sub="units"):
     """门控单章。返回 (ok, detail)。detail 为逐条问题或通过说明。
 
     ``units_sub``：单元子目录名——``units``（源语言单元，默认）或
     ``units-translate``（翻译单元；2026-09-03 起翻译并入本流程，
     与源单元共用同一门控与同一套单元级质量校验，语言无关不重复造轮子）。
+
+    🔴 **翻译前置硬闸（源先于译）**：``units_sub="units-translate"`` 时**先跑
+    源章门控**——源单元未全部修正完成（源门控未通过）即拒绝放行翻译门控。
+    翻译必须等源单元全部改好才开始/放行，否则译文基于旧源必作废（init 硬闸
+    只保证初始化那一刻源是好的；源后续再改，翻译门控必须重新把关）。
     """
+    # 🔴 翻译前置硬闸：源单元全部修正完成（源门控通过）才允许翻译门控放行。
+    # 内层调用 units_sub="units" 不会再触发本分支，无递归风险。
+    if units_sub != "units":
+        ok_src, src_det = gate_chapter(ext, ch_key, units_sub="units")
+        if not ok_src:
+            return False, (
+                "%s 翻译门控拒绝：源单元未全部修正完成（源章 gate_units 未通过）"
+                "——先修好全部源单元再翻译/重派生，否则译文基于旧源必作废。\n"
+                "源门控详情：\n  %s" % (chapter_label(ch_key), src_det))
     out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(ch_key))
     mpath = os.path.join(out_dir, "manifest.json")
     if not os.path.exists(mpath):
-        return False, "%s 缺 %s/manifest.json（先跑 split_draft_units / "
-        "init_translate_units）。" % (chapter_label(ch_key), units_sub)
+        return False, ("%s 缺 %s/manifest.json（先跑 split_draft_units / "
+                       "init_translate_units）。" % (chapter_label(ch_key), units_sub))
     with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     units = manifest.get("units") or []
+    # 契约 tag 真值（单元级「缺失/编造编号」对账；契约缺失 = 跳过对账）
+    tag_map = {}
+    cpath = chapter_json_path(ext, ch_key)
+    if os.path.exists(cpath):
+        try:
+            with open(cpath, encoding="utf-8") as f:
+                tag_map = chapter_tag_map(json.load(f))
+        except Exception:
+            tag_map = {}
     problems = []
     present_files = set()
     for u in units:
@@ -149,11 +248,18 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             problems.append("单元 %s（%s %s）仍未处理（标记仍为 DRAFT）" % (
                 u["file"], u["type"], u["key"]))
             continue
-        # DONE：item / desc 单元必须「写对」——质量校验通过（公式闭合 / 无裸数学 /
-        # 结构标签 / 无明显 OCR 残留）。🔴 2026-09-01 起判断标准是"写对"而非"重写"：
-        # 不再看内容指纹是否变化，而是看单元是否符合写作要求（拦"瞎改就标 DONE"）。
+        # DONE：item / desc / exercise 单元必须「写对」——质量校验通过（公式闭合 /
+        # 无裸数学 / 结构标签 / 无明显 OCR 残留 / 无内容审阅类残留）。
+        # 🔴 判断标准是"写对"而非"重写"：不看内容指纹是否变化，而是看单元是否
+        # 符合写作要求（拦"瞎改就标 DONE"）。
         if utype in ("item", "desc", "exercise"):
-            ok_q, qproblems = _quality.check_body(utype, u.get("name") or "", body)
+            try:
+                ok_q, qproblems = _quality.check_body(
+                    utype, u.get("name") or "", body,
+                    expected_tags=tag_map.get(str(u["key"])) if tag_map else None)
+            except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
+                ok_q, qproblems = False, [
+                    "质量校验执行失败（fail-closed）：%r" % (e,)]
             if not ok_q:
                 problems.append("单元 %s（%s %s）质量未达标（写错/格式破坏）：%s" % (
                     u["file"], u["type"], u["key"], "；".join(qproblems[:4])))
@@ -166,10 +272,14 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # B 层编号预检：同一节内编号是否递增
     numbering_probs = _check_numbering(units)
     problems.extend(numbering_probs)
+    # 🔴 批量真实 KaTeX 渲染（按章一次 node 子进程，错误按行号映射回单元）：
+    # 启发式（裸命令 / $ 配对 / 闭合）抓不到的 \begin 不配对、未定义宏等
+    # 真渲染错误在门控即拦，不再漏到步骤 8 verify / 最终输出。
+    problems.extend(_render_check_chapter(ext, out_dir, units))
     if problems:
         return False, "%s 门控未通过（%d 处）：\n  %s" % (
             chapter_label(ch_key), len(problems), "\n  ".join(problems))
-    return True, "%s 门控通过：%d 个单元全部改好（含 %d 个编号项）" % (
+    return True, "%s 门控通过：%d 个单元全部改好（含 %d 个编号项，含真实 KaTeX 渲染）" % (
         chapter_label(ch_key), len(units), sum(1 for u in units if u["type"] == "item"))
 
 

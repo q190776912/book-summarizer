@@ -35,7 +35,7 @@
   并把首行 `DRAFT` 改为 `DONE`。**禁止跳过任何单元。**
 - **🔴 强制门控**（步骤 5 末尾，脚本）：`gate_units.py` 核对每个单元「存在 +
   首行 DONE + **单元级质量校验通过**」——判断标准是**「写对」
-  而非「重写」**：`check_unit_quality.py` 对每个 item/desc 单元校验——全部引用
+  而非「重写」**：`check_unit_quality.py` 对每个 item/desc/exercise 单元校验——全部引用
   verify 已有检测函数，不重复造轮子：
   - **公式闭合**：`check_katex.check_display_math_closure`（同 verify F 层）
   - **裸数学/箭头**：`katex_heuristics.find_bare_math_errors` / `find_raw_arrow_errors`
@@ -44,8 +44,18 @@
   - **结构标签**：`struct_labels.TOP_LEVEL_HEADER_RE`（同 verify F 层，fixer 代号 H）
   - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify F 层，fixer 代号 G）
   - **OCR 残留**：verify 不覆盖的 OCR 公式模式（`\ensuremath` `\pmb` 等）由薄封装补充
+  - **围栏形态**：单行 `$$...$$` 块、`$$` 附着内容、blockquote 内 `> $$` 前缺空
+    `>` 行、顶层 `$$` 前缺空行、`\tag` 落在 `$$` 块外——真实预览器不认单行块，
+    而 js 渲染器支持、closure 只查 EOF，必须 heuristic 拦
+  - **内容审阅残留**：QED 结尾框「口/□」独立行、OCR 乱码重复片段、编码损坏字符
+    （U+FFFD）、单元内私造 `#` 标题行——「没审阅改好」的典型痕迹，命中即不通过
+  - **单元级公式序标对账**：以内容化契约（`chapter_tag_map`）要求该单元携带的
+    `formula.tag` 为真值对比单元正文 `\tag{}`，缺失（漏写编号公式）与编造均不通过
+  - **真实 KaTeX 渲染**：门控按章把全部单元正文批量跑 `katex_validate.js` 真渲染
+    （错误映射回所属单元）；渲染工具链缺失（node / katex 未装）= 门控不通过
   ——拦模型瞎改就标 DONE。只有全部单元都改对（每个 item 都不漏）才 exit 0，否则列出
-  未达标清单。未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。
+  未达标清单。🔴 **fail-closed**：质量校验执行失败（脚本异常）同样判不通过，绝不
+  因崩溃放行。未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。
 - **拼接**（步骤 7，纯脚本无 agent）：`merge_units.py` 按 manifest 顺序合并全部
   单元为最终 `ChapterN_*.md` / `第N章_*.md`，并按本文件 [V-F](#v-f-格式与块引用f-层母文档)
   规则重建条目级 `---` 分隔线（节标题前 / item↔item / item↔desc 之间加 `---`；

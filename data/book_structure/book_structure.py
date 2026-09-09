@@ -182,6 +182,48 @@ def list_chapter_keys(ext_dir: str) -> List[str]:
     return [k for _, k in sorted(keys)]
 
 
+def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
+    """契约 → {条目/描述 key: [公式序标 tag, ...]}（单元级 tag 对账的真值源）。
+
+    遍历分章契约树：容器（chapter / section）递归；带 key 的叶子节点
+    （编号项 / exercise / description）收集其 `sub_sec` 内全部 `formula.tag`
+    （含 proof 子节点内的公式），tag 按文档序排列；章/节直属的散落公式块
+    归入章/节自身的 key。供 `gate_units` / flow 落账复核做单元级
+    「缺失 / 编造」对账（Q 层是章级末步，单元粒度须提前拦）。
+    """
+    out: Dict[str, List[str]] = {}
+
+    def _collect(n: Dict[str, Any], acc: List[str]) -> None:
+        for c in n.get("sub_sec") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("tag"):
+                acc.append(str(c["tag"]))
+            elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
+                _collect(c, acc)
+
+    def _walk(n: Dict[str, Any]) -> None:
+        # 章/节直属的散落公式块（不在任何条目内）归入容器自身 key
+        acc = [str(c["tag"]) for c in (n.get("sub_sec") or [])
+               if isinstance(c, dict) and c.get("tag")]
+        if acc and n.get("key") is not None:
+            out.setdefault(str(n["key"]), []).extend(acc)
+        for c in n.get("sub_sec") or []:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("type")
+            if t in _CONTAINER_TYPES:
+                _walk(c)
+            elif c.get("key") and t != "proof":
+                acc2: List[str] = []
+                _collect(c, acc2)
+                if acc2:
+                    out.setdefault(str(c["key"]), []).extend(acc2)
+
+    _walk(root)
+    return out
+
+
 def _default_book_dir(ext_dir: str) -> str:
     """由 extract_dir 推书根目录（多册书 ext=_extract/<册> 时上溯两级）。"""
     d = os.path.abspath(ext_dir)

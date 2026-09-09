@@ -15,7 +15,9 @@
 5. **编号项标签一致**：item 单元的条目编号（`**定理9.2**` / `**Theorem 9.2**` 中的 `9.2`）
    集合相同（漏条目 / 改号 → FAIL）。
 6. **源单元漂移**：`manifest.units[].src_hash` ≠ 源单元当前哈希 → 源在派生后被改，
-   须先同步翻译单元（单向修复：先修源 → 再同步译），FAIL。
+   须先同步翻译单元（单向修复：先修源 → 再同步译），FAIL。🔴 **快照缺失同样
+   FAIL**（fail-closed）——manifest 缺 `src_hash` 时漂移检测即失效，等于给
+   「源未定稿就翻译」留旁路；补齐须重跑 `init_translate_units`。
 7. **未翻译残留（WARN 升 FAIL）**：item / desc 单元译文哈希 == 源文哈希，即整单元未翻译。
 
 用法
@@ -169,9 +171,15 @@ def check_chapter_parity(ext, ch_key):
             sl, tl = _labels(sb), _labels(tb)
             if sl != tl:
                 problems.append("单元 %s 条目编号不一致：源 %s / 译 %s" % (a["file"], sl, tl))
-        # 6) 源单元漂移（派生后源又被改 → 译文与源已不同步）
+        # 6) 源单元漂移（派生后源又被改 → 译文与源已不同步）。
+        # 🔴 fail-closed：manifest 缺 src_hash 快照同样判不通过——没有快照漂移
+        # 检测即失效，等于给「源未定稿就翻译」留旁路。
         src_now = _hash_text(sb.rstrip("\n"))
-        if b.get("src_hash") and b["src_hash"] != src_now:
+        recorded = b.get("src_hash")
+        if not recorded:
+            problems.append("单元 %s manifest 缺 src_hash 快照（重跑 init_translate_units "
+                            "补齐；无快照 = 漂移检测失效 = 旁路）" % a["file"])
+        elif recorded != src_now:
             problems.append("单元 %s 源单元已被修改（派生后漂移）——须按单向修复规则"
                             "先定稿源单元，再重新派生/同步翻译单元" % a["file"])
 

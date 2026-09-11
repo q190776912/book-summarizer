@@ -844,6 +844,16 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
                 c = [int(g) for g in m.groups()]
                 if c[0] != ch or c[-1] == 0:
                     continue
+                # 🔴 区间延续守卫（Casella & Berger ch8 实测）：区间号
+                # "(Exercises 8.38-8.42" 被三段号正则切成 "8.38-8"（SEP 类含
+                # "-"），投影出 (8,38) 幻影「节有编号项」证据；再与习题头
+                # "8.38 Let X1,..." 的节头证据相交 → D 层报幻影缺节 8.38，
+                # 被 --backfill 回填成伪节。匹配号后紧随 [SEP]数字（或数字）=
+                # 更长号/区间号的中段，不是独立条目号 → 跳过。真条目号后是
+                # 空白/标点/行尾，不受影响（"Theorem 3.8.2." / "9.3.10)"）。
+                if re.match(r'(?:' + _SEP_RE.pattern + r')?\d',
+                            txt[m.end():m.end() + 2]):
+                    continue
                 if _d_is_labeled(txt, m):
                     _project(c, section_depths, raw_labeled_item)
 

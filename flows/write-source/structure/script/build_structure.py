@@ -428,7 +428,20 @@ def _item_pos(ext, it):
             _v = key.replace('.', '-')
             if _v not in key_variants:
                 key_variants.append(_v)
-    ys_head, ys_contain = [], []
+    # 裸头条目的 label 头变体（attach_content._item_anchor 传 node.type；构建期
+    # 调用无 type 时缺省空串，行为不变）：印刷头仅 "<Label> <号>" 独占一行、
+    # 无题文的条目（Casella & Berger p251 Theorem 5.3.8 实测），契约 name 为裸键
+    # 时 startswith 永不命中 → y=-1；且同页存在 "(Theorem 5.3.8.) Similar..."
+    # 散文引用行时 contain 会抢先命中引用行。追加 "<type> <号>" 头变体后真头
+    # 可命中；配合下方「裸头优先」决胜排除同前缀引用行。
+    _typ = str(it.get("type") or "").strip().lower()
+    if (_typ and _typ not in ("uncat", "description", "proof")
+            and key and re.match(r'^[\dA-Z]+[.\-][\dA-Z]', key)):
+        for _v in (_typ + ' ' + key.replace('-', '.'),
+                   _typ + ' ' + key):
+            if _v not in key_variants:
+                key_variants.append(_v)
+    ys_head, ys_head_bare, ys_contain = [], [], []
     for b in d.get("text", []):
         if not isinstance(b, dict):
             continue
@@ -440,11 +453,23 @@ def _item_pos(ext, it):
         y = poly[1] if len(poly) >= 8 else 0
         # 边界感知：序标后必须跟非数字（空格/字母/标点），避免 "1.2.1" 误命中
         # "1.2.10" 等同前缀序标块（ch6 含 1.6-1…1.6-14）。
-        if key_variants and any(k and re.match(r'^' + re.escape(k) + r'(?!\d)', sl)
-                                for k in key_variants):
-            ys_head.append(y)
+        _hit_bare = False
+        if key_variants:
+            for k in key_variants:
+                if k and re.match(r'^' + re.escape(k) + r'(?!\d)', sl):
+                    ys_head.append(y)
+                    # 裸头判定：匹配号后仅剩标点/空白（印刷头独占一行）。
+                    # 同页若有以此为前缀、后接散文的引用行（"(Theorem 5.3.8.)
+                    # Similar..."），y 更小会被 min(y) 抢先——裸头必须优先。
+                    if not sl[len(k):].strip(" .:：．，,;；)）-–—*"):
+                        _hit_bare = True
+                    break
+        if _hit_bare:
+            ys_head_bare.append(y)
         if probe and probe[:24] in sl:
             ys_contain.append(y)
+    if ys_head_bare:
+        return (p, min(ys_head_bare))
     if ys_head:
         return (p, min(ys_head))
     if ys_contain:

@@ -563,7 +563,8 @@ def _item_anchor(ext, node):
     page = int(node.get("page_start") or 0)
     pos = _bs._item_pos(ext, {"key": node.get("key") or "",
                               "page": page,
-                              "text": node.get("name") or ""})
+                              "text": node.get("name") or "",
+                              "type": node.get("type") or ""})
     if pos and pos[0] == page and pos[1] is not None and pos[1] >= 0:
         return page, float(pos[1])
     # y=-1 是 _item_pos 的「整块丢失」哨兵：在 attach 事件流里必须落在

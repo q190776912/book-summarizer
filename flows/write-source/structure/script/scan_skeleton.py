@@ -285,7 +285,14 @@ def _exercise_headings_re(headings):
 
 # 章末习题块内的数字题号行："3.11. Two cards are ..." / "3.7 The king ..."。
 # 仅当本书声明了 exercise_region_headings（opt-in）且闩锁已激活时捕获为 EXER。
-STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?:\s+\S|$)')
+# 🔴 尾随边界用前瞻 `(?![0-9.])` 而非 `(?:\s+\S|$)`（两处实测缺陷）：
+#   * 旧 `\s+\S` 消费标题首字符——`ln[m.end():]` 切片把 "3.11. Two cards" 切成
+#     "wo cards"（首字母被吃）；
+#   * OCR/印刷把题号与题干粘连（"1.12It was noted..."）时 `\s+\S` 直接失配，
+#     整条习题丢失（Casella & Berger ch1 实测 1.12/1.29/1.35）。
+# 前瞻零宽：题号后不允许数字/点（防 "1.12" 误切成 1.1、防吃进三级号 "1.1.5"），
+# 大写/小写/空白/行尾均放行（粘连与带空格两种形态统一覆盖）。
+STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?![0-9.])')
 # (?![0-9]) tail (was \b): OCR/print glues the title onto the number
 # ('2.2.10Let A', '2.3.9State the dual') - \b fails digit->letter, losing
 # whole exercises (Leinster 2014 measured). Inside the exercise-region
@@ -323,11 +330,43 @@ _SEC_TITLE_LABEL_RE = re.compile(
 # 标题首字符白名单：真小节标题可能以数学符号开头（Brin & Stuck §5.3
 # "∈-Orbits"——∈ 不是 alnum，旧 isalnum 检查整节漏检）。
 _SEC_TITLE_SYMBOLS = set('∈∗*×→←↦∀∃∈⊂⊆∩∪∞δΔ')
+# 句首虚词/祈使动词守卫（Casella & Berger 实测）：以这类词开头的「编号+标题」
+# 行是散文句（公式引用行被 OCR 掉括号后粘连："4.5.4 Hence the correlation…",
+# "9.2.14 Notice that…", "10.1.12 We assume…"），不是节标题。真节标题以名词
+# 短语开头（"Set Theory" / "The Delta Method" / "Does the MGF…"——'Does' 是
+# 真标题首词，不在表内；'Itô' 因 Unicode 连字不匹配 \bIt\b 而安全）。
+_SEC_TITLE_SENTENCE_STARTS = re.compile(
+    r'^(?:Hence|Thus|Therefore|Then|So|Also|Since|Because|Now|It|This|These|'
+    r'Those|There|Here|We|But|And|Or|If|When|While|Suppose|Let|Assume|Recall|'
+    r'Notice|Observe|Consider|Prove|Show|Verify|Explain|Describe|Derive|'
+    r'Compute|Calculate|However|Although|Moreover|Furthermore|Next|Similarly|'
+    r'Indeed|Proof)\b')
 # 标签词 + 后随数字 = 条目标题；仅含标签词（无数字）是合法章节标题。
 _SEC_TITLE_LABEL_NUM_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)\s*\d')
+
+
+# 习题区闩锁内的「真节标题」判据（配合 scan() 的闩锁守卫使用）：
+# 真节标题短（Casella & Berger 全部节标题 ≤ 41 字符，闩锁后首节 Miscellanea
+# 仅 11 字符）且从不以句读收尾；习题行是成句散文（普遍 > 40 字符或以句点
+# 收尾，OCR 行尾截断的也远超 40）。
+_EXER_SEC_TITLE_MAX = 40
+
+
+def _sec_like_title(title):
+    """True if `title` looks like a REAL section title (short, no sentence
+    punctuation at the end); False = prose-y exercise line inside a latched
+    exercise region."""
+    t = str(title or '').strip()
+    if not t:
+        return True  # 标题剥空（running head 残粒）交由上层守卫处理
+    if len(t) > _EXER_SEC_TITLE_MAX:
+        return False
+    if t[-1] in '.,;:，；：':
+        return False
+    return True
 
 
 def _section_header_info(ln, ch=None, depths=None, max_depth=6):
@@ -373,6 +412,19 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
             return None  # too short to be a title ("A"/"B" junk from OCR'd
             # section-dependency diagrams like "5-6.A") — real titles have words
         if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
+            return None
+        # 句读尾守卫（Casella & Berger 实测）：真节标题从不以逗号/分号/冒号收尾；
+        # 以句读收尾的「编号+短词」行是散文碎片（OCR 掉括号的公式引用行
+        # "1.5.3. First,"——原书 "(1.5.3). First, ..."）不是节头。句号收尾
+        # 不拒：部分书真节头带句点（do Carmo 同款守卫亦只堵逗号类）。
+        if _rest_stripped[-1:] in (',', ';', ':', '，', '；', '：'):
+            return None
+        # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
+        # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。
+        if re.search(r'[.;；]\s+[A-Z一-鿿]', _rest_stripped):
+            return None
+        # 句首虚词守卫（见 _SEC_TITLE_SENTENCE_STARTS 注释）。
+        if _SEC_TITLE_SENTENCE_STARTS.match(_rest_stripped):
             return None
         # A genuine section title is Title-Case / Han / starts with a digit — reject
         # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
@@ -475,6 +527,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # two-level mode we also suppress SEC_2 / ITEM_2 so single-number "N. Problem"
     # exercise lines (do Carmo) are NOT mistaken for sections/items.
     in_exercise = False
+    # 习题区计数器（Casella & Berger 体例守卫）：闩锁内已发出的习题最大号。
+    # 习题章内连续编号（C.S 2 段），真节号（同 C.S 空间）必然已被习题序列
+    # 越过（C&B 每章习题数 19–55 ≥ 节数 5–8）→ 闩锁内「短标题 + 号 < 计数器」
+    # 才可能是闩锁后的真节（"1.8 Miscellanea"）；号 ≥ 计数器的短标题行
+    # （"2.9 If the random variable X has pdf" / "2.40 Prove"）是习题。
+    last_exer_num = 0
     # 锥点时的当前节号（'universal 节检测同号守卫'用）：由于 scan()
     # 逐页扫描时不知道当前节，用最近一次发出的 SEC 行号维护。
     cur_exer_sec = None
@@ -537,7 +595,14 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # 其后直到章末不再有正文/节。
                 in_exercise = True
                 continue
-            if not in_exercise and EXER_HEADING.match(ln):
+            if EXER_HEADING.match(ln):
+                # 🔴 无 `not in_exercise` 前置（Casella & Berger 实测）：本书页眉
+                # 印「Section 1.7 ／ EXERCISES」两行——页首的裸 "EXERCISES" 已把
+                # 闩锁激活，随后页中的真节头 "1.7 Exercises" 若因 `not in_exercise`
+                # 被跳过，就会落进 universal 节检测：短标题通过 sec_like → 发 SEC
+                # 并【错误重置闩锁】，同页其后习题全部泄漏成节。EXER_HEADING 是
+                # 全行锚定的习题区标题形态，重复命中只会重设闩锁 + 补发节头 SEC，
+                # 无副作用 → 无条件重闩。
                 in_exercise = True
                 # 记录锥点时当前节：同号节的 running-header 复本
                 # （如 Leinster 2014 p48 '1.3Naturaltransformations'）不应解锁
@@ -567,10 +632,60 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                         # 同号节 running-header 复本：不发 SEC 行、不解锁
                         # 习题区（真正的新节号必不同于锥点时的节号）。
                         continue
+                    if in_exercise:
+                        # 🔴 闩锁内解锁判据（双信号，Casella & Berger 实测）：
+                        # (1) 标题须像真节标题（短、无句读尾）——习题行是成句
+                        #     散文（普遍 > 40 字符或句点收尾）；
+                        # (2) 节号须 < 习题计数器——习题章内连续编号必然越过
+                        #     真节号空间（ch1 习题到 1.55 才遇 §1.8；ch2 习题
+                        #     2.33 后才遇 §2.6）。号 ≥ 计数器的短标题行仍是
+                        #     习题（"2.9 If the random variable X has pdf" /
+                        #     "2.40 Prove"——跟在 EXER 2.8 / 2.39 之后）。
+                        #     计数器为 0（闩锁以来未见习题行，OCR 全吞）时退回
+                        #     旧行为放行解锁，防真节被永久闷死。
+                        _try_exer = False
+                        if _sec_like_title(title):
+                            try:
+                                _sec_tail = int(num_str.split('.')[-1])
+                            except ValueError:
+                                _sec_tail = None
+                            if last_exer_num and _sec_tail is not None \
+                                    and _sec_tail >= last_exer_num:
+                                _try_exer = True
+                        else:
+                            _try_exer = True
+                        if _try_exer:
+                            _m2 = STICKY_EXER_RE.match(ln)
+                            if _m2 and int(_m2.group(1)) == ch:
+                                try:
+                                    _en = int(_m2.group(2))
+                                except ValueError:
+                                    _en = 0
+                                last_exer_num = max(last_exer_num, _en)
+                                rows.append((p, 'EXER', '%s.%s' % _m2.group(1, 2),
+                                             ln[_m2.end():].strip()[:90], None))
+                                continue
+                            # 非 2 段题号形态：维持旧行为（发 SEC 解锁）防兜底死锁。
                     rows.append((p, 'SEC', num_str, title, ln_y))
                     cur_exer_sec = num_str
                     in_exercise = False  # new section ends the exercise region
+                    last_exer_num = 0
                     continue
+                elif in_exercise:
+                    # 🔴 闩锁内被节校验整行拒绝的 2 段题号行（Casella & Berger
+                    # 实测 "1.35Prove that ... P(B) > 0,"——题干以逗号收尾被
+                    # _validate 拒绝 + 题号粘连进不了上方 sec-not-None 回落）：
+                    # 旧逻辑整行丢失 → 习题缺号。按 2 段题号兜回 EXER。
+                    _m2 = STICKY_EXER_RE.match(ln)
+                    if _m2 and int(_m2.group(1)) == ch:
+                        try:
+                            _en = int(_m2.group(2))
+                        except ValueError:
+                            _en = 0
+                        last_exer_num = max(last_exer_num, _en)
+                        rows.append((p, 'EXER', '%s.%s' % _m2.group(1, 2),
+                                     ln[_m2.end():].strip()[:90], None))
+                        continue
             # --- sticky exercise-region numeric problem lines -----------------
             # "3.11. Two cards are ..." / "3.7 The king ..." → EXER 行
             # （键=印刷题号 "3.11"；Problems 与 Self-Test 两块题号各自从 1 重排，

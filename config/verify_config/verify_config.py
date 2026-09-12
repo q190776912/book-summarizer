@@ -347,12 +347,61 @@ _LABEL_CANON = {
     # ["Example"] (canon -> 例); a book that checks exercises uses
     # ["练习","习题"] (canon -> 练习). The two are distinct on purpose.
     'Exercise': '练习', '习题': '练习',
+    # 🔴 Problem 正名为「问题」，不是练习（Lee 2e 实测 + 用户 2026-09-12 拍板）：
+    # 章末 Problems 是发展性结果、会被正文证明引用（如 ch21 引 Problem 20-11），
+    # 与节内即时练习（Exercise/练习）是两类东西。key_parse 的条目识别正则
+    # 早已 `问题|Problem` 配对收录，本表此前漏配导致 _canon_label('Problem')
+    # 原样返回 'Problem'——身份与词表脱节。管线通道（type=exercise）与语义
+    # 身份（问题）是两层：通道决定处理规则，标签承载「它是什么」。
+    'Problem': '问题', '问题': '问题',
+    # CN 直录 + uncat：值为恒等，仅为 LABEL_TO_TYPE 派生表补齐键
+    # （canon 行为不变——原本即原样透传）。
+    '练习': '练习', 'uncat': 'uncat',
 }
 
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
-                  'Example', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
+                  'Example', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
                   'Assumption', 'Algorithm', 'Commentary', 'Application',
                   'Variation', 'Porism']
+
+
+# --- 节点类型 ↔ 规范标签（类型词表单一来源） -------------------------------
+# 此前 build_structure / check_structure_completeness / structure_io 各自手抄
+# 一份 label↔type 表，漂移已三次实测（Algorithm CN/EN 不一致、公理→uncat、
+# 断言→proposition 误并入命题）。现统一在本文件维护，消费方一律导入：
+#
+#   TYPE_TO_LABEL_CN  type -> 规范中文标签（节点语义身份；值域与 _LABEL_CANON 对齐）
+#   TYPE_TO_LABEL_EN  type -> 代表性英文标签（合成 md / EN 书复合键用）
+#   LABEL_TO_TYPE     派生表：凡 _LABEL_CANON 正名后落在上述 CN 标签上的标签，
+#                     自动获得对应 type——新增标签只改 _LABEL_CANON，type 自动齐全。
+# Table/Figure 是图表管线管辖的图表注记，不属内容类型词表（build_structure
+# 按需本地扩展）。
+TYPE_TO_LABEL_CN = {
+    'definition': '定义', 'theorem': '定理', 'lemma': '引理',
+    'corollary': '推论', 'proposition': '命题', 'example': '例',
+    'remark': '评注', 'exercise': '练习', 'problem': '问题',
+    'assertion': '断言', 'conjecture': '猜想', 'assumption': '假设',
+    'algorithm': '算法', 'axiom': '公理', 'property': '性质',
+    'uncat': 'uncat',
+}
+TYPE_TO_LABEL_EN = {
+    'definition': 'Definition', 'theorem': 'Theorem', 'lemma': 'Lemma',
+    'corollary': 'Corollary', 'proposition': 'Proposition', 'example': 'Example',
+    'remark': 'Remark', 'exercise': 'Exercise', 'problem': 'Problem',
+    'assertion': 'Assertion', 'conjecture': 'Conjecture', 'assumption': 'Assumption',
+    'algorithm': 'Algorithm', 'axiom': 'Axiom', 'property': 'Property',
+    'uncat': 'uncat',
+}
+
+_CN_TO_TYPE = {cn: t for t, cn in TYPE_TO_LABEL_CN.items()}
+LABEL_TO_TYPE = {}
+for _lbl, _cn in _LABEL_CANON.items():
+    _t = _CN_TO_TYPE.get(_cn)
+    if _t is not None:
+        LABEL_TO_TYPE.setdefault(_lbl, _t)
+# 大小写不敏感视图：OCR 标签大小写随印刷/识别波动（"ASSERTION"/"proposition"），
+# 查 type 一律走本表（与 build_structure._LABEL_TO_TYPE_LC 同口径）。
+LABEL_TO_TYPE_LC = {k.lower(): v for k, v in LABEL_TO_TYPE.items()}
 
 
 def _canon_label(lbl):

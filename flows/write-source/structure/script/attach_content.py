@@ -909,8 +909,8 @@ def build_chapter_contract(ext, node):
         blk = _strip_header(buckets.get(id(tgt)) or [], tgt.get("name") or "")
         if tgt.get("type") in ("chapter", "section"):
             own_blocks[id(tgt)] = blk
-        elif tgt.get("type") == "exercise":
-            # 练习的「证明：…」是题干任务而非证明过程 → 题面即正文，不拆 proof
+        elif tgt.get("type") in ("exercise", "problem"):
+            # 练习/问题的「证明：…」是题干任务而非证明过程 → 题面即正文，不拆 proof
             tgt["sub_sec"] = [_to_content(b) for b in blk]
         else:
             elements, trailing = _split_proofs(str(tgt.get("key")), blk)

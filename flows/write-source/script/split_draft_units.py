@@ -13,7 +13,9 @@
   * ``chapter`` 单元：``# 章标题``（章首序言是其后独立的 ``desc`` 单元）；
   * ``section`` 单元：``## §...`` 标题行（其下描述/编号项各为独立单元）；
   * ``desc`` 单元：描述散文（章首序言 / 节导语 / 条目尾随段，无标题纯段落）；
-  * ``item`` 单元：单个编号项（定义/定理/例等，含其内部 proof 子节点）。
+  * ``item`` 单元：单个编号项（定义/定理/例等，含其内部 proof 子节点）；
+  * ``exercise`` 单元：练习与问题节点（problem 类型，Lee 2e 章末 Problems；
+    单元层不分 exercise/problem——身份由节点 type 与印刷头承载）。
 
 单元按文档顺序编号（``0001``、``0002`` …，4 位零填充防超千单元），文件名
 ``NNNN_<type>.md``，文件首行为 HTML 标记（``<!-- book-summarizer DRAFT
@@ -156,7 +158,7 @@ def _emit_units(node, lang):
                      _render_desc(child, lang))
             elif t == "proof":
                 continue            # proof 是 item 内部附属，由 item 单元渲染
-            elif t == "exercise":
+            elif t in ("exercise", "problem"):
                 if child.get("consolidated"):
                     continue        # 章末集中习题块省略（writing-rules 习题收录规则）
                 # 🔴 独立 exercise 单元类型：Weibel 等书「结果项」与「习题项」共用
@@ -164,6 +166,8 @@ def _emit_units(node, lang):
                 # 成 item 单元会与结果项同名文件互覆盖。故习题用专属 exercise 单元
                 # 类型（文件名 NNNN_exercise_*.md），不与其他 item 冲突；merge/gate
                 # 均识别该类型（习题单元门控只需 DONE 标记，不做 item 级质量校验）。
+                # problem 节点（Lee 2e 章末问题，独立类型）同走本通道——单元层
+                # 只分通道，身份由节点 type 与印刷头（"Problem N-M."）承载。
                 emit("exercise", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
                      _render_item(child, lang))

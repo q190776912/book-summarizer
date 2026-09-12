@@ -48,6 +48,7 @@ from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
     ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
+    LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
     _canon_label, _load_ignore_file,
 )
 
@@ -74,31 +75,23 @@ OCR_DIGIT = {'O': 0, 'o': 0, 'Q': 0, 'D': 0, '0': 0,
              'g': 9, '9': 9}
 
 # 第 3 步只关心「定义 / 定理 / 引理 / 推论 / 命题 / 例」等重要概念；练习由 EXER 单独处理。
-_EXER_LABELS_RAW = {'练习', '习题', 'Exercise'}
+# Problem（Lee《Introduction to Smooth Manifolds》2e 实测：章末短横编号 `Problem 1-5`、
+# 独立计数器）与 Exercise 同属练习族，走 EXER 节点通道。
+_EXER_LABELS_RAW = {'练习', '习题', 'Exercise', 'Problem'}
+_EXER_LABELS_RAW_LC = {s.lower() for s in _EXER_LABELS_RAW}
 
 CN_LABELS = ['定义', '定理', '引理', '推论', '命题', '例', '练习', '习题', '评注', '注', '公理', '准则']
 EN_LABELS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
-             'Example', 'Exercise', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
+             'Example', 'Exercise', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
              'Algorithm', 'Assumption']
 
-# 与 build_structure._LABEL_TO_TYPE 保持一致（SSOT）：决定回填节点的 type 字段。
-LABEL_TO_TYPE = {
-    '定义': 'definition', 'Definition': 'definition',
-    '定理': 'theorem', 'Theorem': 'theorem',
-    '引理': 'lemma', 'Lemma': 'lemma',
-    '推论': 'corollary', 'Corollary': 'corollary',
-    '命题': 'proposition', 'Proposition': 'proposition',
-    '例': 'example', 'Example': 'example',
-    '练习': 'exercise', 'Exercise': 'exercise', '习题': 'exercise',
-    '评注': 'remark', 'Remark': 'remark', '注': 'remark',
-    '断言': 'proposition', 'Assertion': 'proposition',
-    '猜想': 'uncat', 'Conjecture': 'uncat',
-    '算法': 'uncat', 'Algorithm': 'uncat',
-    '假设': 'uncat', 'Assumption': 'uncat',
-    '公理': 'uncat', 'Axiom': 'axiom', '准则': 'uncat',
-    '性质': 'property', 'Property': 'property',
-    'uncat': 'uncat',
-}
+# 回填节点 type 字段（insert_item/_type_of 消费）：单源导入 config/verify_config
+# 的派生表 LABEL_TO_TYPE（_LABEL_CANON × TYPE_TO_LABEL_CN，新增标签只改
+# config）。练习/问题族（exercise/problem 类型）在本通道的机制：B 层豁免、
+# DONE-only 门控、load_contract 排除；build_structure 侧走 _EXERCISE_LABELS+
+# 3a 标记路由、不经其 _LABEL_TO_TYPE。
+# 与 build_structure._LABEL_TO_TYPE 的差异仅 Table/Figure 两个图表注记类型
+# （build_structure 本地扩展；checker 的回填不含图表项）。
 
 SEP = r'[.\-·，．]'
 _CH = r'([0-9A-Za-z]+)'   # OCR 容错的「数字串」捕获（支持多位数章节号，如 10 / 11）
@@ -116,7 +109,7 @@ _S = r'(?=[0-9A-Za-z]*[0-9][\s.\-·，．]|$)([0-9A-Za-z]*[0-9])'
 # 语篇词（"例如"）误当成条目标签——它们是纯噪声，必须排除。
 _NA = r'(?![A-Za-z一-龥])'
 _LBL_CN = r'(定义|定理|引理|推论|命题|例|练习|习题|评注|注|公理|准则)'
-_LBL_EN = (r'(Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|'
+_LBL_EN = (r'(Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|Problem|'
            r'Remark|Axiom|Assertion|Conjecture|Algorithm|Assumption)')
 
 # 八种方案（标签前置 / 数字前置 × 三级 / 两级 × 中 / 英）。
@@ -508,7 +501,7 @@ def load_contract(tree):
             for k in n.sub_sec:
                 walk(k)
             return
-        if t == "exercise":
+        if t in ("exercise", "problem"):
             return
         canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
         if canon is not None:
@@ -569,7 +562,9 @@ _STRIP_LABEL_CN = re.compile(r'^(定义|定理|引理|推论|命题|例|评注|�
 
 
 def _type_of(label):
-    return LABEL_TO_TYPE.get((label or "").strip(), "uncat")
+    # 大小写不敏感：OCR 标签大小写随印刷/识别波动（与 build_structure._type_of
+    # 的 _LABEL_TO_TYPE_LC 同口径），避免 "ASSERTION" 这类变体掉进 uncat。
+    return LABEL_TO_TYPE_LC.get((label or "").strip().lower(), "uncat")
 
 
 def _clean_title(text, key):
@@ -628,7 +623,17 @@ def insert_item(tree, key, label, page, canon, snippet=""):
         sn.sub_sec.insert(idx, node)
         _fix_pages(tree)
         return True, sec_key or "(page-proximity)"
-    tree.sub_sec.append(node)
+    # chapter-bucket（书无 section 节点）：按 canon 序插入而非 append——否则
+    # 回填条目永远挂在章尾，B 层必报「顺序错乱」（Lee 2e 实测：Prop 11.25 被
+    # append 到 11.51 之后）。canon 未知（None）才回落 append。
+    idx = len(tree.sub_sec)
+    if canon is not None:
+        for i, child in enumerate(tree.sub_sec):
+            cc = _canon_key(_PRIMARY, str(child.key))
+            if cc is not None and cc > canon:
+                idx = i
+                break
+    tree.sub_sec.insert(idx, node)
     _fix_pages(tree)
     return True, "(chapter-bucket)"
 
@@ -683,16 +688,9 @@ def synthetic_section_md(tree):
     return "\n".join(lines) + "\n"
 
 
-# 类型 -> 规范标签（反向映射 LABEL_TO_TYPE），供合成 md 重建可被 B 层解析的条目头。
-_TYPE_TO_LABEL = {
-    "definition": "Definition", "theorem": "Theorem", "lemma": "Lemma",
-    "corollary": "Corollary", "proposition": "Proposition", "example": "Example",
-    "remark": "Remark", "exercise": "Exercise", "uncat": "uncat",
-    "algorithm": "Algorithm", "property": "Property",
-    # Ross 体例（ORDINAL_ROSS）：Axiom 条目独立 type，标签 Axiom（_canon_label
-    # 归一为 公理，与源侧 extract_items_ross 的 label 对齐）。
-    "axiom": "Axiom",
-}
+# 类型 -> 代表性英文标签（单源导入 TYPE_TO_LABEL_EN）：供合成 md 重建可被
+# B 层解析的条目头、以及 load_contract 复合键的标签恢复。
+_TYPE_TO_LABEL = TYPE_TO_LABEL_EN
 # 三级裸键（"C.S-K" / "C.S.K"，无内置标签）——这类键需补一个类型标签，B 层
 # num-first 解析才认得出是真实条目（否则尾串无标签 -> 被当 reference 丢弃）。
 _BARE_THREE = re.compile(r'^\d+[.\-·，．]\d+[.\-·，．]\d+$')
@@ -732,7 +730,7 @@ def synthetic_item_md(tree):
                 _k = 1
                 for c in n.sub_sec:
                     _t = getattr(c, "type", "")
-                    if _t == "exercise":
+                    if _t in ("exercise", "problem"):
                         continue
                     if _t in ("section", "chapter"):
                         walk(c)
@@ -750,6 +748,15 @@ def synthetic_item_md(tree):
                 walk(k)
             return
         if n.type == "exercise":
+            return
+        if n.type == "problem":
+            # 🔴 问题节点进 B 层（2026-09-12 拍板）：头 = 正名「问题」+ 裸短横键
+            # （'问题11-1'——键经 3a 剥离无标签前缀，此处补正名）。B 层按 Problem
+            # 组独立查连续性 / 顺序；源侧（raw scan 对裸短横头不可见）Problem 组
+            # 为空，tail 比对方向为「md 比源少」→ 空源组不误报。
+            key = str(n.key)
+            label = _canon_label(_TYPE_TO_LABEL.get("problem", "Problem"))
+            lines.append("**%s%s**" % (label, key))
             return
         key = str(n.key)
         label = _TYPE_TO_LABEL.get(n.type, "uncat")
@@ -861,7 +868,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
 
     raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
                                              groups=getattr(cfg, "ordinal", None))
-                 if it["label"] not in _EXER_LABELS_RAW]
+                 if str(it["label"]).strip().lower() not in _EXER_LABELS_RAW_LC]
 
     # 0) agent 已核实「非条目」的键（ignore_ch{N}.json，须附理由）：从源侧缺失集
     #    剔除，不得回填进契约。适用形态：OCR 把公式/编号散文误读成条目号
@@ -1035,7 +1042,7 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     ex_keys = set()
 
     def _collect_ex(n):
-        if n.type == "exercise":
+        if n.type in ("exercise", "problem"):
             ex_keys.add(str(n.key))
         for k in n.sub_sec:
             _collect_ex(k)
@@ -1111,6 +1118,23 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             mo_path = os.path.join(ext, f"manual_overrides_{chapter_label(ch)}.json")
             mo_list = _mo_mod.load_manual_overrides(mo_path)
             if mo_list:
+                # 🔴 练习/问题通道去重集：load_contract 排除 exercise 与 problem
+                # 节点（见上文 `if t in ("exercise", "problem"): return`），
+                # contract_items 永远不含这两类键，下面的 composite-key 守卫对
+                # 练习/问题类 overrides **恒不命中**——重跑 --backfill 会把整批
+                # overrides 重复插入契约（Lee 2e 实测：ch1 BACKFILLED=13 全为
+                # 已存在节点的重复；B 层合成 md 与闸门豁免对本通道双盲，重复
+                # 静默）。故改查树内 exercise/problem 节点键（点/短横两形态都
+                # 查），插入成功后回填集合保持幂等。
+                _ex_keys = set()
+
+                def _collect_ex_keys(n):
+                    if n.type in ("exercise", "problem"):
+                        _ex_keys.add(str(n.key))
+                    for k in n.sub_sec:
+                        _collect_ex_keys(k)
+
+                _collect_ex_keys(tree)
                 for mo in mo_list:
                     mk = mo.get("key")
                     if not mk:
@@ -1122,11 +1146,18 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                     # load_contract / _composite_key）——裸 canon 永远查不中，
                     # 重跑 --backfill 会把同一手写条目重复插入书结构。
                     _mo_label = mo.get("label", "uncat")
-                    if _composite_key(_PRIMARY, _mo_label, c) in contract_items:
+                    if str(_mo_label).strip().lower() in _EXER_LABELS_RAW_LC:
+                        _mk_variants = {str(mk), str(mk).replace("-", "."),
+                                        str(mk).replace(".", "-")}
+                        if _mk_variants & _ex_keys:
+                            continue  # 树内已有同号 exercise 节点（避免重复插入）
+                    elif _composite_key(_PRIMARY, _mo_label, c) in contract_items:
                         continue  # 已在校验起点契约中，跳过（避免重复插入）
                     ok, where = insert_item(tree, mk, _mo_label,
                                             mo.get("page", 0), c, mo.get("text", ""))
                     if ok:
+                        if str(_mo_label).strip().lower() in _EXER_LABELS_RAW_LC:
+                            _ex_keys.add(str(mk))
                         backfilled_items.append({"key": mk, "where": where,
                                                  "page": mo.get("page"), "source": "manual_override"})
         if backfilled_items or backfilled_sections:

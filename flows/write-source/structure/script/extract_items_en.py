@@ -64,6 +64,28 @@ def _ocr_int(tok):
     return int(s) if s.isdigit() else None
 
 
+# 合法的「OCR 数字字符」= 数字 + OCR_DIGIT 的键（**区分大小写**）。出现集合外的
+# 字母即说明编号 token 被散文污染（详见 ``_ocr_int_glue``）。
+_VALID_OCR_CHARS = set("0123456789") | set(OCR_DIGIT)
+
+
+# 前瞻 / 回溯**交叉引用**的谓语动词。块首就出现 "Example 5.16 will illustrate
+# why…" 这类引用句时，形态与真条头完全一致（块首 + 标签 + 编号），抓住它会在真
+# 条目之前插入同号幻影 → B 层报「顺序错乱」。编号后紧跟下列**小写**词即为引用。
+# 🔴 below/above 必收（Lee 2e 实测）：前向引用 "Proposition 11.26 below that…" /
+# "Example 15.38 below), …" 若不拒，幻影还会**毒化单调守卫的 max**——同号真条目
+# 及其后续小号真条目全被误杀（ch15 六条 Example 因此漏抽）。
+MENTION_VERBS = {
+    "will", "would", "can", "could", "may", "might", "must", "should", "shall",
+    "shows", "show", "illustrates", "illustrate", "implies", "imply",
+    "gives", "give", "says", "say", "states", "state", "follows", "follow",
+    "is", "are", "was", "were", "has", "have", "had", "and", "or", "then",
+    "to", "in", "of", "by", "with", "for", "see", "cf", "using", "used",
+    "applies", "apply", "tells", "tell", "asserts", "assert", "also",
+    "below", "above",
+}
+
+
 def _ocr_int_glue(tok, nxt):
     """OCR 容错取号，带「粘连散文剥离」守卫。
 
@@ -73,11 +95,22 @@ def _ocr_int_glue(tok, nxt):
     数字与字母、且紧跟 token 的仍是字母（粘连词在继续，如 "1T|he"）→
     尾部字母是散文，剥离后取号。纯字母 token（如 "7.l" 的 "l"）是真
     OCR 数字混淆，原样保留。
+
+    🔴 另有一种粘连：粘连词**整词**被吞进 token，token 之后紧跟的是空格
+    （Bass《Real Analysis》实测 "Proposition 20.8Let E be a subset…" →
+    token = "8Let"）。此时旧判据（只看 nxt 是否字母）失效，token 里含
+    OCR_DIGIT 之外的字母（'L'）导致 ``_ocr_int`` 返回 None，**整条条目被丢弃**
+    ——表现为 B 层「缺号 8」，且查漏扫描也补不回来。
+    新判据：尾部字母串里出现**任何非 OCR 易混字母**（区分大小写，如 'L'/'y'/'h'）
+    → 该串必是粘连的散文，剥离。纯由易混字母组成的尾串（"1OO" → 100）保留。
     """
     s = tok
-    if s and any(c.isdigit() for c in s) and any(c.isalpha() for c in s) \
-            and nxt and nxt.isalpha():
-        s = re.sub(r'[A-Za-z]+$', '', s)
+    if s and any(c.isdigit() for c in s) and any(c.isalpha() for c in s):
+        _tail = re.search(r"[A-Za-z]+$", s)
+        if _tail:
+            _contaminated = any(c not in _VALID_OCR_CHARS for c in _tail.group(0))
+            if _contaminated or (nxt and nxt.isalpha()):
+                s = re.sub(r'[A-Za-z]+$', '', s)
     return _ocr_int(s)
 
 
@@ -285,6 +318,23 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # guard it fabricates a phantom item.
                 _after = txt[m.end():m.end() + 1]
                 if _after and _after in ")]},;:":
+                    continue
+                # 🔴 同族换行残片守卫（Lee《Introduction to Smooth Manifolds》2e
+                # ch16/ch22 实测）：OCR 把提示句的换行尾巴独立成块——"…[Hint: use
+                # the result of / Problem 16-12.]"、"(… by Problem 22-24.)"——块首
+                # 恰是标签+号，但号后紧跟「句点+右括号」（".]" / ".)"），
+                # 这是引用残片而非条目头：单字符守卫被句点骗过，不拒则产出
+                # 幻影练习节点（16.12 / 22.24，与真 Problem 16-12 / 22-24 并存）。
+                if txt[m.end():m.end() + 2] in (".]", ".)"):
+                    continue
+                # 🔴 正文交叉引用守卫（Bass《Real Analysis》实测）：段落本身就是
+                # "Example 5.16 will illustrate why this is a less useful theorem
+                # than …" 这类**前瞻引用**——块首 + 标签 + 编号的形态与真条头完全
+                # 一致，旧守卫（只看块首 / 闭合定界符）拦不住。抓住它会在真条目
+                # （同号、后一页）之前插入一个幻影，B 层报「顺序错乱」并阻断闸门。
+                # 判据：编号后首个词是**小写**且属于引用动词表 → 引用，非条目。
+                _w = re.match(r"[A-Za-z]+", txt[m.end():].lstrip())
+                if _w and _w.group(0).islower() and _w.group(0) in MENTION_VERBS:
                     continue
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.

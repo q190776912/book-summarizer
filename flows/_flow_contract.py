@@ -533,7 +533,7 @@ class physical_evidence:
             # chapter 容器：章标题呈现形态差异大（# 第N章 / # Chapter N: …），不核对；
             # 派生节点（description/proof）与习题（consolidated 省略）非编号项。
             if t in ("chapter",) or t in physical_evidence._GATE_DERIVED_TYPES \
-                    or t == "exercise":
+                    or t in ("exercise", "problem"):
                 continue
             name = str(el.get("name") or "").strip()
             key = str(el.get("key") or "").strip()

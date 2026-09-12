@@ -326,7 +326,7 @@ def _walk_mixed(node, out, quote=False, lang="cn", top=False):
             continue
         _flush(buf, out, quote)
         t = el.get("type")
-        if t == "exercise" and el.get("consolidated"):
+        if t in ("exercise", "problem") and el.get("consolidated"):
             i += 1                        # 章末「集中习题块」省略（writing-rules 习题收录）
             continue
         if top and t != "section":

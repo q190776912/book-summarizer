@@ -94,7 +94,7 @@ def _load_chapter_canons(ext, ch):
             for k in n.get("sub_sec", []):
                 walk(k)
             return
-        if n.get("type") == "exercise":
+        if n.get("type") in ("exercise", "problem"):
             return
         c = _canon_key_of(n.get("key"))
         if c is not None:

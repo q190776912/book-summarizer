@@ -20,7 +20,7 @@
 按章产出**分章契约**（`book_structure/ch{N}.json` / `appendix{X}.json`，含内容完整契约），
 一次产出同时满足两类需求：
   · write-source 写作契约：章节顺序、条目/练习齐全、印刷标题（name 带序标）。
-  · verify 编号项基准：展平树、filter type!="exercise" 即得本书编号项集合
+  · verify 编号项基准：展平树、filter type not in ("exercise","problem") 即得本书编号项集合
     （data_provider 经 BookStructure.load 聚合读取分章文件为编号项基准）。
 
 设计要点（与 verify/data_provider 对齐）
@@ -93,6 +93,7 @@ from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
                               ORDINAL_HUM, ORDINAL_APP,
+                              LABEL_TO_TYPE as _SHARED_LABEL_TO_TYPE,
                               ConfigLoader, ConfigError, BookConfig)
 import chapter_map
 from key_parse import _canon_label, normkey
@@ -104,35 +105,27 @@ from data.book_structure.book_structure import (BookStructure, StructureNode,
 
 # ---------------------------------------------------------------------------
 # 类型映射：抽取器 label（中文 canon 或英文原文） -> 树 type
+# 单源：LABEL_TO_TYPE 派生自 config/verify_config 的 _LABEL_CANON ×
+# TYPE_TO_LABEL_CN（类型词表单一来源，新增标签只改 config）。本地仅合并
+# Table/Figure 两个图表注记类型——图表管线管辖，不属内容类型词表：
+# section-scoped 书（Fraleigh 体例）中 Table/Figure 与正文条目共享节内计数器，
+# 须自成节点（type=table/figure）而非 uncat——否则 group_for_label() 把它们
+# 归入 uncat 组、text counter 在图表槽位（1.20 / 1.21 …）看到假「缺号」。
+# 与 make_config 把 "Table"/"Figure" 折叠进合并 ordinal name 的分支配套。
 # ---------------------------------------------------------------------------
 _LABEL_TO_TYPE = {
-    "定义": "definition", "Definition": "definition",
-    "定理": "theorem", "Theorem": "theorem",
-    "引理": "lemma", "Lemma": "lemma",
-    "推论": "corollary", "Corollary": "corollary",
-    "命题": "proposition", "Proposition": "proposition",
-    "例": "example", "Example": "example",
-    # Section-scoped EN books (Fraleigh-style) number Tables / Figures in the
-    # SAME shared per-section counter as the text items, so they must be typed
-    # as their own nodes (not "uncat") — otherwise group_for_label() sends them
-    # to the uncat group and the text counter still sees false "missing item"
-    # gaps at the graphic slots (1.20 / 1.21 …).  Coupled with the make_config
-    # collapse branch that folds "Table"/"Figure" into the merged ordinal name.
+    **_SHARED_LABEL_TO_TYPE,
     "Table": "table", "Figure": "figure",
-    "评注": "remark", "Remark": "remark",
-    "注": "remark",
-    # Ross 体例（ORDINAL_ROSS）：Axiom 1..4（§2.3 三公理 / §9.2 Markov 链公理）
-    # 是真实印刷条目头，type 用独立 "axiom"（structure_io TYPE_TO_LABEL 同步
-    # 映射 公理），避免误归 definition/uncat 破坏键空间对齐。
-    "公理": "axiom", "Axiom": "axiom",
-    "断言": "proposition", "Assertion": "proposition",  # 近似归入命题
-    "猜想": "uncat", "Conjecture": "uncat",
-    "算法": "algorithm", "Algorithm": "uncat",
-    "性质": "property",
-    "假设": "uncat", "Assumption": "uncat",
-    "uncat": "uncat",
 }
-_EXERCISE_LABELS = {"练习", "习题", "Exercise", "练习."}
+# Exercise 族（Lee 2e 节内点式编号，与定理/例共享章计数器）经 3a 转入 EXER
+# 行 → exercise 节点。
+_EXERCISE_LABELS = {"练习", "习题", "Exercise", "练习.", "Problem"}
+# 🔴 Problem 是独立节点类型 problem（用户 2026-09-12 拍板）：语义身份=问题
+# （正名 _LABEL_CANON['Problem']='问题'；章末独立计数器、发展性结果、会被
+# 正文证明引用，如 Lee ch21 引 Problem 20-11），与节内练习不同类。3a 按
+# _PROBLEM_LABELS 打 PROB 行标记，节点构造落 type='problem'；通道机制
+# （B 层豁免 / DONE-only 门控 / 单元类型 exercise）与 exercise 同族。
+_PROBLEM_LABELS = {"Problem"}
 
 # Case-insensitive view of `_LABEL_TO_TYPE` so OCR-mangled UPPERCASE labels
 # (do Carmo prints `DEFINITION` / `THEOREM` in all caps; OCR may also mangle
@@ -819,8 +812,24 @@ def _extract_items(ext, ch, start, end, book, manual=None):
         return extract_items_cn3lab(ext, ch, start, end, groups=book.ordinal)
     if primary in (ORDINAL_EN, ORDINAL_EN3):
         if primary == ORDINAL_EN:
+            # config_setting 规则5 增量扩展：config `ordinal` 各组 `name` 里
+            # EN_LABELS 没有的标签词（如 Lee 2e 的 Exercise / Problem）追加进
+            # 抽取标签集（_single_en_items 同构；Figure/Table/uncat 是图表管线
+            # 管辖的图注/兜底标记，不作为文本契约条目——🔴 比较须剥尾部句点，
+            # 否则 "Fig."（带点书写）漏网，图注 caption 会被抽成伪条目，
+            # Lee 2e ch1 实测 13 个 Fig.1.x 伪条目）。纯增量：组名都在基础
+            # 词表内的书行为不变（extract_items_en 对 extra_labels 去重）。
+            _non_text = {"uncat", "Figure", "Fig", "Fig.", "Table", "图", "表"}
+            _non_text_stripped = {t.rstrip(".") for t in _non_text}
+            extra = []
+            for _g in getattr(book, "ordinal", []) or []:
+                for _nm in getattr(_g, "name", []) or []:
+                    if _nm and _nm not in extra and \
+                            _nm.rstrip(".") not in _non_text_stripped:
+                        extra.append(_nm)
             items = extract_items_en(ext, start, end, want_examples=True,
-                                     section_scoped=book.section_scoped)
+                                     section_scoped=book.section_scoped,
+                                     extra_labels=extra)
         else:
             items = extract_items_en3(ext, ch, start, end, want_examples=True)
         kept = []
@@ -1038,7 +1047,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                               chapter_first=book.chapter_first,
                               exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
                               plain_sec_heads=(ordinal == ORDINAL_HUM))
-    ex_rows = [r for r in rows if r[1] == "EXER"]
+    ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。
     # 语境定级：附录章（无数字 § 节头）里字母头**就是节** → 升格为 SEC 行，
@@ -1166,7 +1175,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             continue
         _exer_seen.add(num)
         title = _clean_title(it.get("text", ""), it["key"])
-        ex_rows.append((it.get("page", 0), 'EXER', num, title, None))
+        _marker = 'PROB' if (it.get("label") or "").strip() in _PROBLEM_LABELS else 'EXER'
+        ex_rows.append((it.get("page", 0), _marker, num, title, None))
 
     items = [it for it in raw_items
              if (it.get("label") or "").strip() not in _EXERCISE_LABELS
@@ -1468,7 +1478,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         p, num, title = row[0], row[2], row[3]
         sec_key = _section_of_exer(num)
         name = (title if title else num)
-        node = _node(num, "exercise", name, p)
+        node = _node(num, "problem" if row[1] == "PROB" else "exercise", name, p)
         _place(node, sec_key, p)
 
     # 6) 章节内子节点按（页码, 页内 y, 自然序）稳定排序（2026-08-29 升级为
@@ -1662,8 +1672,9 @@ def main():
             json.dump(full, f, ensure_ascii=False, indent=2)
         built += 1
         n_item = sum(1 for _ in _iter_items(chapter)
-                     if _["type"] not in ("exercise", "section", "chapter"))
-        n_ex = sum(1 for _ in _iter_items(chapter) if _["type"] == "exercise")
+                     if _["type"] not in ("exercise", "problem", "section", "chapter"))
+        n_ex = sum(1 for _ in _iter_items(chapter)
+                   if _["type"] in ("exercise", "problem"))
         n_sec = sum(1 for _ in _iter_items(chapter) if _["type"] == "section")
         print("%-9s BUILD | sections=%d items=%d exercises=%d "
               "text=%d formula=%d image=%d proof=%d desc=%d noise=%d -> %s"

@@ -338,6 +338,10 @@ class StructureNode:
     def is_exercise(self) -> bool:
         return self.type == "exercise"
 
+    def is_problem(self) -> bool:
+        """问题节点（Lee 2e 章末 Problem；独立 problem 类型，2026-09-12）。"""
+        return self.type == "problem"
+
     def is_derived(self) -> bool:
         """派生节点（description / proof，attach_content 产出）——非编号项。"""
         return self.type in _DERIVED_TYPES
@@ -359,6 +363,12 @@ class StructureNode:
                 yield from child.iter_items(include_exercise=include_exercise)
             elif child.is_exercise():
                 if include_exercise and not child.consolidated:
+                    yield child
+            elif child.is_problem():
+                # 🔴 问题节点一等公民（2026-09-12）：默认产出、纳入编号项校验
+                # （A 层 truly_missing / B 层连续性），仅 consolidated 省略——
+                # 与练习的 include_exercise 门控不同。
+                if not child.consolidated:
                     yield child
             else:
                 yield child

@@ -17,7 +17,7 @@ for u in manifest["units"]:
 def walk(node, out):
     # collect text/formula in document order from this node and descendants
     for item in node.get("sub_sec", []):
-        if "sub_sec" in item and ("type" in item and item.get("type") in ("description","section","proposition","definition","lemma","theorem","corollary","exercise","chapter","remark","proof")):
+        if "sub_sec" in item and ("type" in item and item.get("type") in ("description","section","proposition","definition","lemma","theorem","corollary","exercise","problem","chapter","remark","proof")):
             # it's a child node (e.g. proof). Recurse but mark depth via indent
             walk(item, out)
         else:

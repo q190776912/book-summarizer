@@ -26,7 +26,9 @@
 用 ``verify`` 复核、``mark`` 落账。scripted 步（extract_text/figure/structure/embed/
 verify）由 ``run`` 直接执行。
 """
+import glob
 import os
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -129,6 +131,15 @@ def cmd_mark(book_dir, flow, step, extract_dir=None):
     return 0
 
 
+def _default_pdf(book_dir):
+    """未显式 ``--pdf`` 时取书目录里的 PDF，避免契约里 ``{pdf}`` 占位为空。"""
+    try:
+        cands = sorted(glob.glob(os.path.join(book_dir, "*.pdf")))
+    except Exception:
+        cands = []
+    return cands[0] if cands else ""
+
+
 def cmd_run(book_dir, flow, step, pdf=None, extract_dir=None):
     # 1) 主干前置闸
     try:
@@ -149,10 +160,17 @@ def cmd_run(book_dir, flow, step, pdf=None, extract_dir=None):
 
     kind, spec = RUN_COMMANDS.get(f"{flow}.{step}", ("agent", "(无命令，按文档手动)"))
     if kind == "cmd":
-        cmd = spec.format(pdf=pdf or "", book_dir=book_dir,
+        cmd = spec.format(pdf=pdf or _default_pdf(book_dir), book_dir=book_dir,
                           extract_dir=extract_dir or os.path.join(book_dir, "_extract"))
-        print(f"▶ 执行 [{flow}.{step}]:\n  {cmd}\n")
-        rc = os.system(cmd)
+        # 🔴 契约里的命令以技能根为基准书写（``flows/...``、``tools/...``、
+        # ``config/...`` 都是相对路径），必须在 SKILL_ROOT 下执行；否则从任意 cwd
+        # 调用都会 "can't open file '<cwd>/flows/script/xxx.py'"。
+        # 同时把裸 ``python`` 换成当前解释器，避免子命令落到另一个 Python 环境。
+        run_cmd = cmd
+        if run_cmd.startswith("python "):
+            run_cmd = '"%s" %s' % (sys.executable, run_cmd[len("python "):])
+        print(f"▶ 执行 [{flow}.{step}]:\n  {run_cmd}\n")
+        rc = subprocess.call(run_cmd, shell=True, cwd=SKILL_ROOT)
         if rc != 0:
             print(f"❌ 命令返回非零 {rc}；步骤未完成，未标记。先排查后重试 run。")
             return rc

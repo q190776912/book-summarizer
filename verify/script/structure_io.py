@@ -4,7 +4,7 @@
 不再依赖抽取管线代码，仅读取其产物 JSON 文件（分章契约
 ``ch{N}.json`` / ``appendix{X}.json``，由 ``data/book_structure/book_structure.py``
 的 BookStructure 模型聚合加载）。
-exercise / chapter / section 节点被排除，返回非 exercise 的编号项列表
+exercise / problem / chapter / section 节点被排除，返回非练习/问题的编号项列表
 （key / label / page / text）。
 """
 import os
@@ -30,18 +30,12 @@ from data.book_structure.book_structure import BookStructure
 from key_parse import keys_in_md, _first_num
 from verify.script.ordinal import int_to_roman
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
-                           ORDINAL_HUM, ORDINAL_APP, _canon_label)
+                           ORDINAL_HUM, ORDINAL_APP, _canon_label,
+                           TYPE_TO_LABEL_CN as TYPE_TO_LABEL)
+# TYPE_TO_LABEL 单源自 config/verify_config（类型词表单一来源），此处不再手抄。
 
 
-TYPE_TO_LABEL = {
-    'definition': '定义', 'theorem': '定理', 'lemma': '引理',
-    'corollary': '推论', 'proposition': '命题', 'example': '例',
-    'remark': '评注', 'uncat': 'uncat',
-    'algorithm': '算法', 'property': '性质',
-    # Ross 体例（ORDINAL_ROSS）：Axiom 条目独立 type，规范标签 公理，
-    # 与 key_parse._canon_label('Axiom') 对齐。
-    'axiom': '公理',
-}
+# （TYPE_TO_LABEL 已单源导入：type -> 规范中文标签，见 config/verify_config。）
 
 
 #: 附录字母章号条目键（`ORDINAL_APP` / type 13）：首字母章位 + 节号 + 条目号，
@@ -51,10 +45,10 @@ _APP_ITEM_RE = re.compile(
 
 
 def read_structure_items(ext_dir, ch, primary_type=None):
-    """读分章契约，定位章节节点，展平为非 exercise 的编号项列表。
+    """读分章契约，定位章节节点，展平为非 exercise/problem 的编号项列表。
 
     返回 None 表示 JSON 不存在/损坏；返回 list（可能为空）表示已采用 JSON 路径。
-    exercise / chapter / section 节点被排除。
+    exercise / problem / chapter / section 节点被排除。
 
     `primary_type`（可选）= `BookConfig.primary_type`。仅当它是
     `ORDINAL_APP`（13，附录字母章号体例）时启用「字母章位」键规范化
@@ -70,6 +64,20 @@ def read_structure_items(ext_dir, ch, primary_type=None):
         return []
     items = []
     for n in nodes:
+        # 🔴 问题节点（problem 类型，Lee 2e 章末 Problems）：键 = 正名「问题」+
+        # 点式两段号（'1-1' → '问题1.1'）——与 keys_in_md 的 Problem 组分支对
+        # md 头 'Problem 1-1' / '问题1-1' 输出的键形**逐字一致**（实测），A 层
+        # truly_missing / extra 两侧才能 1:1 相交。
+        if n.type == 'problem':
+            _pm = re.match(r'^(\d{1,2})[-.](\d{1,3})$', str(n.key or '').strip())
+            if _pm:
+                items.append({
+                    'key': f"问题{_pm.group(1)}.{_pm.group(2)}",
+                    'label': '问题',
+                    'page': n.page_start,
+                    'text': n.name,
+                })
+            continue
         # Canonicalize the structure key into the SAME key space that
         # `keys_in_md` emits for the .md, so the A-layer truly-missing / extra
         # comparison intersects 1:1.

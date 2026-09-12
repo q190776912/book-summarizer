@@ -333,6 +333,10 @@ def run_book(pdf_path, out_dir):
         print(f"  chapter {ch}: {len(assigned)} figures, {n_label} named, "
               f"{len(assigned) - n_label} unnamed")
         total_assigned += len(assigned)
+    if not chapters:
+        # 无图书：仍要落一份空 figure_index.json —— 它是 figure_detection 步的完成
+        # 证据，缺失会让顺序闸永久卡死（"检测跑完但零图" ≠ "没跑检测"）。
+        merge_index(out_dir, None, [])
     write_figure_index_md(out_dir)
     print(f"[done] assigned {total_assigned} figures -> figure_index.json")
 

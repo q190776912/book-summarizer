@@ -9,10 +9,11 @@
 本工具一次性完成"算页码"：
   1. 读 agent 校订的 chapter_map.json（ch / name / name_en / 可选粗略 start/end
      来自 TOC / appendix 标记）。
-  2. scan_headings(page_*.json) → headings + title_lines。
-  3. detect_starts(...) → 每章真实起点（Mode A "Chapter N" 标题匹配；Mode B 裸标题
-     回退）。检测引擎（scan_headings / detect_starts / _ch_sort_key）已**内联于本
-     文件**，无跨文件依赖。
+  2. scan_headings(page_*.json) → headings + title_lines；scan_openers(...) → 章首
+     开页候选。
+  3. detect_starts(...) → 每章真实起点（Mode A0 章首开页；Mode A "Chapter N" 页眉
+     匹配；Mode B 裸标题回退）。检测引擎（scan_headings / scan_openers /
+     detect_starts / _ch_sort_key）已**内联于本文件**，无跨文件依赖。
   4. start = 检测值（未检出则保留 agent 值，仍无则留空标 UNDTECTED）；
      end = 推断值（下一章起点-1；末章保留 agent 值或全书末页）。
   5. 写回 chapter_map.json（保留原 on-disk 形态 A/B 与所有附加字段）+ 生成
@@ -288,6 +289,56 @@ def scan_headings(pages_dir: str):
     return headings, title_lines
 
 
+# ── OCR 章首开页扫描（Mode A0） ─────────────────────────────────────────────
+# 形态证据（Bass《Real Analysis for Graduate Students》实测）：
+#   开页 —— line0 独占 "Chapter 5"（章号偶被 OCR 扫成公式而丢失，只剩 "Chapter"），
+#           line1 起才是标题；
+#   页眉 —— "CHAPTER 5.MEASURABLE FUNCTIONS"（章号与标题同行），出现在该章其余页。
+# 二者靠「首行是否独占」区分；开页全书唯一，是最强的起点证据。
+OPENER_RE = re.compile(r"(?i)^\s*(chapter|chap\.?)(\s*[.:]?\s*([0-9]+|[IVXLC]+))?\s*[.:]?\s*$")
+
+
+def scan_openers(pages_dir: str):
+    """收集「章首开页」候选，返回 ``[{page, label_norm, title_cands}]``。
+
+    ``title_cands`` 是 line1..line3 的**渐进拼接**（跳过空行与纯页码行），
+    使跨行标题（如 ``L^p`` / ``spaces`` 被拆成两行）也能拼出完整标题命中。
+    """
+    openers = []
+    files = sorted(glob.glob(os.path.join(pages_dir, "page_*.json")))
+    for fp in files:
+        m = re.search(r"(\d+)", os.path.basename(fp))
+        if not m:
+            continue
+        page = int(m.group(1))
+        try:
+            with open(fp, encoding="utf-8-sig") as fh:
+                data = json.load(fh)
+        except Exception:
+            continue
+        lines = [_line_text(x) for x in data.get("text", [])]
+        if not lines:
+            continue
+        om = OPENER_RE.match(lines[0].strip())
+        if not om:
+            continue
+        raw_cands, acc = [], ""
+        for l in lines[1:4]:
+            t = l.strip()
+            if not t or NUM_LINE_RE.match(t):
+                continue
+            acc = (acc + " " + t).strip() if acc else t
+            raw_cands.append(acc)
+        if not raw_cands:
+            continue
+        openers.append({
+            "page": page,
+            "label_norm": parse_number(om.group(3)),
+            "title_cands": [clean_title_for_sim(c) for c in raw_cands],
+        })
+    return openers
+
+
 # ── matching ─────────────────────────────────────────────────────────────────
 TITLE_THRESHOLD = 0.75
 
@@ -299,19 +350,17 @@ def _in_window(page, claimed_start, claimed_end, max_dev):
     return (claimed_start - max_dev) <= page <= (hi + max_dev)
 
 
-def detect_starts(chapters, headings, title_lines, max_dev=35):
+def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None):
     """Return {ch: (pdf_page, confidence)} for confidently detected chapters.
 
-    Mode A — "Chapter N" headings whose captured title matches the chapter's
-    ``name_en``/``name``. TOC entries, body-text mentions ("Chapter N
-    discusses ...") and pages far outside the claimed range are excluded, so a
-    genuinely wrong claimed start still surfaces (as a mismatch) rather than a
-    distant body mention being mistaken for the start.
+    Mode A0 — **章首开页**（最高置信）：页面首行是独占的 ``Chapter [N]``、其后紧跟
+    标题行。开页全书唯一，且章号（若 OCR 给出）必须与本章号一致，因此不会像
+    页眉那样被别章的短标题蹭中。命中即定，不再走后续模式。
 
-    Mode B (fallback) — for chapters Mode A could not place, look for the bare
-    title appearing as a near-top line within the claimed window (covers books
-    headed "N. Title" / bare title with no "Chapter" keyword). The earliest
-    such page is taken as the start.
+    Mode A — "Chapter N" 页眉，其捕获标题与本章 ``name_en``/``name`` 相似。TOC
+    条目、正文提及（"Chapter N discusses ..."）与窗口外的页均被排除。
+
+    Mode B（回退）— 对 A0/A 都定不了的章，在窗口内找裸标题作为近顶部行。
     """
     detected = {}
     for c in chapters:
@@ -320,6 +369,28 @@ def detect_starts(chapters, headings, title_lines, max_dev=35):
         target = norm_title(c.get("name_en") or c.get("name") or "")
         claimed_start = c.get("start")
         claimed_end = c.get("end")
+        # ---- Mode A0：章首开页（最强证据，命中即定）----
+        best_op = None
+        for op in (openers or []):
+            if (ch_int is not None and op["label_norm"] is not None
+                    and op["label_norm"] != ch_int):
+                continue
+            best_o = -1.0
+            for cand in op["title_cands"]:
+                s = title_similarity(cand, target) if (cand and target) else 0.0
+                if cand and target:
+                    a, b = cand, target
+                    if (b.startswith(a) or a.startswith(b)) and min(len(a), len(b)) >= 0.3 * max(len(a), len(b)):
+                        s = max(s, 0.95)
+                if s > best_o:
+                    best_o = s
+            if best_o < TITLE_THRESHOLD:
+                continue
+            if best_op is None or best_o > best_op[1] + 1e-9:
+                best_op = (op["page"], best_o)
+        if best_op is not None:
+            detected[ch] = (best_op[0], round(best_op[1], 3))
+            continue
         # ---- Mode A ----
         best = None
         best_score = -1.0
@@ -342,13 +413,20 @@ def detect_starts(chapters, headings, title_lines, max_dev=35):
                 # genuinely truncated real headings.
                 if cand and target:
                     a, b = cand, target
-                    if (a in b or b in a) and min(len(a), len(b)) >= 0.3 * max(len(a), len(b)):
+                    # 🔴 仅当二者是**前缀**关系才给 0.95 保底（OCR 把标题截断，或
+                    # 标题被下一行续接）。单纯「互为子串」判定会让别章的短标题蹭中：
+                    # 实测 ch3 的 "MEASURES" 是 ch11 "PRODUCT MEASURES" 的子串，
+                    # 通用子串判定给 0.95，把 ch11 起点误判到 ch3 的开页。
+                    if (b.startswith(a) or a.startswith(b)) and min(len(a), len(b)) >= 0.3 * max(len(a), len(b)):
                         tsim = max(tsim, 0.95)
                 if tsim > best_tsim:
                     best_tsim = tsim
             if best_tsim < TITLE_THRESHOLD:
                 continue
-            score = tsim
+            # 🔴 用 best_tsim，不是 tsim：tsim 是循环末值（最长、被正文污染的
+            # 累积候选），拿它计分会让「章末页眉」（单一干净候选）系统性压过
+            # 真正的开页（标题后还跟着几行正文）。
+            score = best_tsim
             if h["same_line_title"]:
                 score -= 0.1
             if ch_int is not None and h["label_norm"] is not None and h["label_norm"] == ch_int:
@@ -447,7 +525,7 @@ def build_report(recs, starts, ends, statuses, detected, max_page):
     lines.append("")
     lines.append("| ch | name | in_start | detected | in_end | inferred_end | status |")
     lines.append("|----|------|----------|----------|--------|--------------|--------|")
-    n_corrected = n_undetected = 0
+    n_corrected = n_undetected = n_suspect = 0
     for c in sorted(recs, key=lambda r: _ch_sort_key(str(r.get("ch")))):
         ch = str(c.get("ch"))
         name = c.get("name_en") or c.get("name") or ""
@@ -459,6 +537,8 @@ def build_report(recs, starts, ends, statuses, detected, max_page):
             n_corrected += 1
         elif st == "UNDTECTED":
             n_undetected += 1
+        elif st == "SUSPECT":
+            n_suspect += 1
         lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
             ch, name,
             "" if inp_s is None else inp_s,
@@ -471,12 +551,17 @@ def build_report(recs, starts, ends, statuses, detected, max_page):
     lines.append("- 全书末页（max page）: %d" % max_page)
     lines.append("- 自动校正 CORRECTED: %d 章" % n_corrected)
     lines.append("- 未检出 UNDTECTED: %d 章（须 agent 手动补）" % n_undetected)
+    lines.append("- 自检可疑 SUSPECT: %d 章（起点非单调递增 或 end < start）" % n_suspect)
     lines.append("")
     if n_undetected:
         lines.append("⚠️ 有 %d 章检测器未能从 OCR 定位起点（UNDTECTED），其 start/end "
                      "暂留空或保留 agent 原值。请在 chapter_map.json 中手动补正后重跑本工具。"
                      % n_undetected)
-    else:
+    if n_suspect:
+        lines.append("⚠️ 有 %d 章起点自检不通过（SUSPECT）：章序上起点非严格递增，或 "
+                     "end < start。多为某章起点被错检到别章/章末页，须人工核对后补正重跑。"
+                     % n_suspect)
+    if not n_undetected and not n_suspect:
         lines.append("✅ 全章起点已由 OCR 检出，页码已据证据自动填正。")
     return "\n".join(lines)
 
@@ -501,7 +586,9 @@ def main():
         sys.exit("chapter_map.json has no chapter records")
 
     headings, title_lines = scan_headings(ex)
-    detected = detect_starts(recs, headings, title_lines, max_dev=args.max_deviation)
+    openers = scan_openers(ex)
+    detected = detect_starts(recs, headings, title_lines,
+                             max_dev=args.max_deviation, openers=openers)
     max_page = _max_page(ex)
 
     # ── start：检测值优先；未检出则保留 agent 值，仍无则留空 ──
@@ -521,8 +608,9 @@ def main():
             statuses[ch] = "UNDTECTED"
 
     # ── end：推断（下一章起点-1；末章保留 agent 值或全书末页）──
+    # 🔴 按**章序**（而非起点数值）推断，避免某一章起点检错就级联污染前后章区间
     order = sorted([ch for ch in starts if starts[ch] is not None],
-                   key=lambda c: starts[c])
+                   key=_ch_sort_key)
     ends = {}
     for i, ch in enumerate(order):
         nxt = order[i + 1] if i + 1 < len(order) else None
@@ -536,15 +624,28 @@ def main():
         if starts.get(ch) is None:
             ends[ch] = c.get("end")
 
+    # ── 一致性自检（防「检出即 OK」的假绿）──────────────────────────────────
+    # 章序上起点必须严格递增，且 end >= start。违反即标 SUSPECT，报告与退出码
+    # 都会拦下，逼 agent 人工介入，而不是让一份自相矛盾的页码悄悄流向下游。
+    prev = None
+    for ch in order:
+        s = starts[ch]
+        if prev is not None and s <= prev:
+            statuses[ch] = "SUSPECT"
+        if ends.get(ch) is not None and ends[ch] < s:
+            statuses[ch] = "SUSPECT"
+        prev = s
+
     # ── 报告 ──
     report = build_report(recs, starts, ends, statuses, detected, max_page)
     print(report)
 
     n_undetected = sum(1 for s in statuses.values() if s == "UNDTECTED")
+    n_suspect = sum(1 for s in statuses.values() if s == "SUSPECT")
 
     if args.no_write:
         print("\n[--no-write] 未写盘；预览如上。")
-        sys.exit(1 if n_undetected > 0 else 0)
+        sys.exit(1 if (n_undetected or n_suspect) else 0)
 
     # ── 写回：保留原 on-disk 形态与附加字段，仅改 start/end ──
     raw = load_chapter_map_raw(cmap_path)
@@ -572,7 +673,10 @@ def main():
     if n_undetected:
         print("⚠️ %d 章 UNDTECTED：请在 chapter_map.json 手工补 start/end 后重跑本工具。"
               % n_undetected)
-    sys.exit(1 if n_undetected > 0 else 0)
+    if n_suspect:
+        print("⚠️ %d 章 SUSPECT：起点自检不通过（非单调递增 / end<start），请人工核对后"
+              "补正重跑本工具。" % n_suspect)
+    sys.exit(1 if (n_undetected or n_suspect) else 0)
 
 
 if __name__ == "__main__":

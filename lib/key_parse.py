@@ -242,6 +242,20 @@ PROSE_RE_APP_C = re.compile(
 ENTRY_RE_APP_BARE_C = re.compile(
     r'\*\*([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 
+# 两段式附录条目（附录级编号，无节号）：`**Theorem D.1**` / `**Example A.5**`
+# ——Lee ISM 附录实测（Theorem D.1-D.6 / Example A.5 等）。规范键 = 规范中文标签
+# + `D.1`（保留字母章位，与三段式 `定义A.1-1` 同族）；负向断言排除三段前缀
+# （`A.1.1` 的 `A.1` 不得截成两段键）。裸号两段（`**D.1**`）刻意不收：
+# 与公式号 `(D.1)` / 小节标题无形态区别（宁缺毋滥）。
+ENTRY_RE_APP2_C = re.compile(
+    r'\*\*(' + '|'.join(APP_LABEL_KINDS) + r')'
+    r'\s*([A-Za-z])' + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)',
+    re.IGNORECASE)
+PROSE_RE_APP2_C = re.compile(
+    r'(?<![A-Za-z0-9])(' + '|'.join(APP_LABEL_KINDS) + r')(?![A-Za-z])'
+    r'\s*([A-Za-z])' + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)',
+    re.IGNORECASE)
+
 
 
 # --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
@@ -474,6 +488,16 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                                  f".{m.group(3)}-{m.group(4)}")
+                # 两段式附录条目（附录级编号 `**Theorem D.1**` / `**Example A.5**`）
+                # → `定理D.1` / `例A.5`（与 read_structure_items 的两段式分支同构）。
+                for m in ENTRY_RE_APP2_C.finditer(line):
+                    key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                           f".{m.group(3)}")
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_APP2_C.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                                 f".{m.group(3)}")
             elif t == ORDINAL_ROMAN:
                 for m in ENTRY_RE_ROMAN.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"

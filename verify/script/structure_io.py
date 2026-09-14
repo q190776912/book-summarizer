@@ -43,6 +43,11 @@ from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
 _APP_ITEM_RE = re.compile(
     r'^([A-Za-z])[.\-－．·–〜](\d+)[.\-－．·–〜](\d+)(?![\d.\-－．·–〜])')
 
+#: 两段式附录条目（附录级编号，无节号）：`Theorem D.1` → 规范键 `定理D.1`
+#: ——Lee ISM 附录实测（D.1-D.6 等）。负向断言排除三段前缀（`A.1.1` 先走三段式）。
+_APP_ITEM2_RE = re.compile(
+    r'^([A-Za-z])[.\-－．·–〜](\d+)(?![.\-－．·–〜]\d)')
+
 
 def read_structure_items(ext_dir, ch, primary_type=None):
     """读分章契约，定位章节节点，展平为非 exercise/problem 的编号项列表。
@@ -106,6 +111,17 @@ def read_structure_items(ext_dir, ch, primary_type=None):
                           + f"{_am.group(1).upper()}.{_am.group(2)}-{_am.group(3)}")
                 items.append({
                     'key': _canon,
+                    'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                    'page': n.page_start,
+                    'text': n.name,
+                })
+                continue
+            _am2 = _APP_ITEM2_RE.match(raw.strip())
+            if _am2:
+                _canon2 = (TYPE_TO_LABEL.get(n.type, 'uncat')
+                           + f"{_am2.group(1).upper()}.{_am2.group(2)}")
+                items.append({
+                    'key': _canon2,
                     'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
                     'page': n.page_start,
                     'text': n.name,

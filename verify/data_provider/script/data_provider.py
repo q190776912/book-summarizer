@@ -43,8 +43,9 @@ from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 def _dispatch_items(ctx):
     """编号项来源：统一读分章契约（structure 产物，SSOT，经 BookStructure.load 聚合为书对象）。
     旧书须先重跑 build_structure 生成 JSON，不再回退抽取器（无兼容性代码）。"""
-    # primary_type 透传：附录章（ORDINAL_APP / type 13）据此把字母章位键
-    # `A.1.1` 规范化成 `定义A.1-1`；其余书零影响。
+    # primary_type 透传：附录章（ORDINAL_APP / type 13 三级、ORDINAL_APP2 /
+    # type 14 两段）据此把字母章位键 `A.1.1` / `B.4` 规范化成 `定义A.1-1` /
+    # `定理B.2`；其余书零影响。
     items = read_structure_items(ctx.ext_dir, ctx.ch,
                                  primary_type=getattr(ctx.config, 'primary_type', None))
     if items is None:

@@ -237,7 +237,7 @@ class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目 / 派生节点）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
-                 "consolidated", "letter_subs", "raw")
+                 "consolidated", "letter_subs", "level", "raw")
 
     # 内容块判定：attach_content 挂进 sub_sec 的 {"text"| "formula" | "image"}
     # 裸字典（无 key/type）。from_dict 遇到含内容块的子树时保留整个原始 dict
@@ -250,6 +250,7 @@ class StructureNode:
                   sub_sec: Optional[List["StructureNode"]] = None,
                   consolidated: bool = False,
                   letter_subs: Optional[List[Dict[str, Any]]] = None,
+                  level: Optional[int] = None,
                   raw: Optional[Dict[str, Any]] = None):
         self.key = key
         self.type = type
@@ -272,6 +273,11 @@ class StructureNode:
         # 原地修改（回填条目 / 重排），调用方必须先 clear_raw_recursive() 丢弃
         # raw 并重建内容，再落盘——否则 raw 是过期视图。
         self.raw: Optional[Dict[str, Any]] = raw
+        # 无序号标小节的标题层级（Lee ISM 实测：1=一级小节（TOC 级）、2=节内
+        # 二级子标题）。仅 section 节点且 section_types 含 0 的书携带；None 表示
+        # 无层级语义（to_dict 仅在非 None 时写出 → 其他书 JSON 零变化）。渲染层
+        # 据此选择 `## §` / `### §`。
+        self.level: Optional[int] = level
 
     @classmethod
     def _has_blocks(cls, d: Dict[str, Any]) -> bool:
@@ -301,6 +307,8 @@ class StructureNode:
         }
         if self.letter_subs:
             d["letter_subs"] = [dict(x) for x in self.letter_subs]
+        if self.level is not None:
+            d["level"] = int(self.level)
         return d
 
     @classmethod
@@ -319,6 +327,7 @@ class StructureNode:
                              and any(k in x for k in cls._BLOCK_SIG))],
             consolidated=bool(d.get("consolidated", False)),
             letter_subs=list(d.get("letter_subs") or []) or None,
+            level=(int(d["level"]) if d.get("level") is not None else None),
             raw=raw,
         )
         return node

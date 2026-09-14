@@ -92,7 +92,7 @@ from extract_items_hum import extract_items_hum
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
-                              ORDINAL_HUM, ORDINAL_APP,
+                              ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
                               LABEL_TO_TYPE as _SHARED_LABEL_TO_TYPE,
                               ConfigLoader, ConfigError, BookConfig)
 import chapter_map
@@ -540,8 +540,10 @@ def _find_chapter_local_section_page(ext, ch, n, start, end):
 
 def _recognized_sections(ext, ch, start, end):
     """无序号标书（section_types 含 0）：读取「agent 校验识别」步骤产物
-    ``_recognized_sections.json`` 中本章的小节标题清单，返回 ``[(title, page, y), ...]``
-    （按文档顺序），``(page, y)`` 为该标题块的锚定位置（用于排序与条目归并）。
+    ``_recognized_sections.json`` 中本章的小节标题清单，返回
+    ``[(title, page, y, level), ...]``（按文档顺序），``(page, y)`` 为该标题块的
+    锚定位置（用于排序与条目归并），``level`` = 标题层级（1=一级小节 / 2=节内
+    二级子标题；字符串条目视为 level 1 向后兼容）。
 
     该清单由识别步骤（agent/LLM 读原书确认「真实无序号标」后给出权威小节列表）
     产出，是**唯一可靠**的无序号标小节来源——OCR 正则靠「≥2 段数字」判节，对
@@ -559,14 +561,27 @@ def _recognized_sections(ext, ch, start, end):
     out = []
     n = len(titles)
     for i, t in enumerate(titles):
-        pos = _find_title_pos(ext, t, start, end)
+        if isinstance(t, dict):
+            title = str(t.get("title") or "")
+            level = int(t.get("level") or 1)
+            # 可选锚定页提示：同名短标题（如 Lee 的 "More Examples" 在章内
+            # 多节出现）的子串匹配可能命中更晚页——提示页与命中页偏离过大时
+            # 以提示页为准（agent 清单的文档序本身即权威）。
+            hint_pg = t.get("page")
+        else:
+            title, level, hint_pg = str(t), 1, None
+        pos = _find_title_pos(ext, title, start, end)
+        if pos is not None and hint_pg is not None \
+                and abs(int(pos[0]) - int(hint_pg)) > 3:
+            pos = (int(hint_pg), 0)
         if pos is None:
             # OCR 漏识的标题（如被 PaddleOCR 吞掉的小节标题）：按文档索引在
             # [start, end] 线性插值保序，避免错排到章首（否则会破坏小节顺序
             # 与条目页码归并）。插值仅影响页排序，不编造内容。
-            pg = start if n <= 1 else round(start + (end - start) * i / (n - 1))
+            pg = (int(hint_pg) if hint_pg is not None else
+                  (start if n <= 1 else round(start + (end - start) * i / (n - 1))))
             pos = (pg, 0)
-        out.append((t, pos[0], pos[1]))
+        out.append((title, pos[0], pos[1], level))
     return out
 
 
@@ -867,15 +882,17 @@ def _extract_items(ext, ch, start, end, book, manual=None):
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
-            or primary == ORDINAL_APP:
+            or primary in (ORDINAL_APP, ORDINAL_APP2):
         # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The
         # generic three-level extractor is CN-oriented and captures unlabeled
         # exercise numbers (`3.1.1`) as items; route to the label-first EN3
         # extractor, which requires an Example/Definition label and so naturally
         # excludes exercises.  ORDINAL_APP（附录字母章位，type 13）的条目印成
-        # `Definition A.1.1` / 裸 `A.1.5`（Weibel Appendix A），同属 label-first
-        # 三级形态，由 extract_items_en3 的附录正则（EN3_APP_RE / EN3_APP_BARE_*）
-        # 覆盖——键仍走 normkey 裸号（"A.1-1"），类型由节点 type 承载。
+        # `Definition A.1.1` / 裸 `A.1.5`（Weibel Appendix A）；ORDINAL_APP2
+        # （type 14，两段）印成 `Theorem B.2` / 裸 `B.4`（Lee ISM 附录）——
+        # 同属 label-first 字母章位形态，由 extract_items_en3 的附录正则
+        # （EN3_APP_RE / EN3_APP_BARE_*）覆盖——键仍走 normkey 裸号（"A.1-1" /
+        # "B.2"），类型由节点 type 承载。
         # KEY FORMAT (root-cause fix, 2026-08-19): the book's primary_type is
         # ORDINAL_THREE_LEVEL (NOT ORDINAL_EN3), so the completeness checker's
         # _canon_key parses its keys as pure-numeric `C.S-N` tuples — a label
@@ -1309,13 +1326,16 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 无序号标层（section_types 含 0）：注入「agent 校验识别」步骤产出的权威
     # 小节清单（key 用 "U{n}" 区分于编号小节）。OCR 无数字段，scan_skeleton
     # 的深度检测对无序号标标题完全失明且易编造假小节（违反保真），故此处
-    # 直接消费识别产物 _recognized_sections.json，不再走 OCR 正则。
+    # 直接消费识别产物，不再走 OCR 正则。条目可带 level（1=一级小节 / 2=节内
+    # 二级子标题），_u_level 供 6b) 按层级嵌套（sec2 → 最近 sec1 的 sub_sec）。
+    _u_level = {}
     if getattr(book, "sections_unnumbered", False):
-        for _i, (_ut, _up, _uy) in enumerate(
+        for _i, (_ut, _up, _uy, _ulv) in enumerate(
                 _recognized_sections(ext, ch, start, end), 1):
             _uk = "U%d" % _i
             sec_pages.setdefault(_uk, _up)
             sec_pos[_uk] = (_up, _uy)
+            _u_level[_uk] = _ulv
             # 保留空标题（unnumbered 书常有「## §」无标题小节，如 Silverman 后段章
             # 节）。空标题在 P 层 _title_present("") 被判定为「恒存在」，不会误报
             # 缺节；若回退到 "U{n}" 键名，则会因 "u1" 不在 md 标题中而假阳缺节。
@@ -1396,6 +1416,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         else:
             name = (f"{n} {title}".strip() if title else n)
         node = _node(n, "section", name, page)
+        if n.startswith("U"):
+            # 标题层级（1=一级小节 / 2=节内二级子标题）：渲染层据此选择
+            # `## §` / `### §`，写作契约与 md 保留原书层级结构。
+            node["level"] = int(_u_level.get(n, 1))
         node["sub_sec"] = []
         sec_nodes[n] = node
 
@@ -1528,9 +1552,22 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         return len(re.findall(r"\d+", str(key)))
 
     top_secs = []
+    # 无序号标节按 level 嵌套（Lee ISM 实测：sec1=一级小节（TOC 级）、
+    # sec2=节内二级子标题——「Coordinate Charts」等只出现在正文、不进 TOC/
+    # 页眉）。sec2 挂进**文档序上最近的前一个 sec1** 的 sub_sec；前导 sec2
+    #（尚无任何 sec1）保守留在顶层，不编造父节。
+    _last_u1 = None
     for n in all_sec_nums:
         node = sec_nodes[n]
-        if n.startswith("U") or _sec_depth(n) < 2:
+        if n.startswith("U"):
+            if _u_level.get(n, 1) >= 2 and _last_u1 is not None:
+                _last_u1["sub_sec"].append(node)
+            else:
+                top_secs.append(node)
+                if _u_level.get(n, 1) <= 1:
+                    _last_u1 = node
+            continue
+        if _sec_depth(n) < 2:
             top_secs.append(node)
             continue
         parts = re.findall(r"\d+", str(n))

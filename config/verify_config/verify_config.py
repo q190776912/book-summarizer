@@ -157,13 +157,26 @@ ORDINAL_APP = 13              # APPENDIX LETTER-CHAPTER three-level (附录体�
                               #   与 type 5（roman，`Label I.2.3`）的区别：type 5 的
                               #   章位是**罗马数字串**（I/II/III/IV…，可多字符且只取
                               #   IVXLCDM 字符集），type 13 的章位是**单个字母**
+
+ORDINAL_APP2 = 14             # APPENDIX LETTER-CHAPTER two-level (附录字母章位两段).
+                              #   条目形如 `Theorem B.2` / `Example A.4` / 裸 `B.4`
+                              #   （章位 A/B/C… + **一段**数字，无节段），节标题
+                              #   `B.1 Sums` 与条目同形、由 D 层/结构层区分。计数器
+                              #   跨全附录连续（Example A.4-A.8 不分节重置）、每
+                              #   字母章从 1 重开 → scope=2（章级，首分量=字母与
+                              #   章键 'A'/'B'… 比对）。Lee《Introduction to Smooth
+                              #   Manifolds》2e 附录 A-D 即此体例（两段条目 145 次
+                              #   实测命中、三级 0 次）。与 type 13 的关系：**探测
+                              #   层严格按段数分流**（两段 → 14、三级 → 13），绝不
+                              #   把两段书误判成 13 再靠下游宽容解析兜底；13 的
+                              #   键解析分支保留两段宽容仅供历史 config 兼容。
                               #   （A/B/C…，可含 C/D/M 等与罗马字符同形的字母），
                               #   二者正则不可混用，故独立成码。
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13)
+ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14)
 ORDINAL_NAME = {
     1: 'single', 2: 'two_level', 3: 'three_level',
     4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
-    12: 'hum', 13: 'app',
+    12: 'hum', 13: 'app', 14: 'app2',
 }
 # Numbering depth (numeric components) per ordinal code.
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
@@ -174,10 +187,10 @@ from data.book_structure.book_structure import (  # noqa: E402
     prime_chapter_kinds)
 # Structural style per ordinal code (None = common depth-driven parsing).
 ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
-                     11: None, 12: None, 13: None}
+                     11: None, 12: None, 13: None, 14: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
 ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
-                            10: 'cn', 11: 'en', 12: 'en', 13: 'en'}
+                            10: 'cn', 11: 'en', 12: 'en', 13: 'en', 14: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
@@ -297,6 +310,11 @@ ORDINAL_SECTION_TYPES = {
     # 数字节号首分量是 1/2/…，二者永不相等 ⇒ D 层对附录章自然 vacuous PASS
     #（缺节由 P 层「位置/数量」闸门与结构完整性查漏负责），无假红。
     13: [1, 2],
+    # ORDINAL_APP2（14）：两段附录字母章位（Lee ISM）——页区间探测实测
+    # section_types=[1]（节印 `B.1` 与条目 `B.N` 同形，节定位由 P 层/结构
+    # 完整性查漏负责）。同 13 的 D 层 vacuous PASS 机理：节 token 首分量
+    # 是数字、章键是字母 ⇒ D 层放行。
+    14: [1],
     # Humphreys GTM 9：章=文件一级、节=全书全局单序标 §1..§27（原书印裸
     # "9. Axiomatics" 无 § 前缀）、小节 N.M 不作契约层级（条目键内嵌小节定位）。
     12: [1, 1],

@@ -47,7 +47,7 @@ from audit_ignore import run_audit             # ignore 条目审核（防误用
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
-    ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
+    ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP, ORDINAL_APP2,
     LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
     _canon_label, _load_ignore_file,
 )
@@ -262,11 +262,13 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "scheme": "ross", "canon": c, "has_label": True,
             })
         return out
-    if primary_type == ORDINAL_APP:
-        # （附录字母章位，type 13）条目形如 `Definition A.1.1` / 裸 `A.1.5`，
-        # 委托 extract_items_en3 的附录正则（EN3_APP_RE / EN3_APP_BARE_*，
-        # 与 build_structure 同一抽取真源）；canon = (字母, 节[, 条])，与
-        # _canon_key(ORDINAL_APP, key) 逐字段一致。键存 normkey 形 "A.1-1"。
+    if primary_type in (ORDINAL_APP, ORDINAL_APP2):
+        # （附录字母章位，type 13 三级 / type 14 两段）条目形如
+        # `Definition A.1.1` / 裸 `A.1.5`（13，Weibel）或 `Theorem B.2` /
+        # 裸 `B.4`（14，Lee ISM），委托 extract_items_en3 的附录正则
+        # （EN3_APP_RE / EN3_APP_BARE_*，与 build_structure 同一抽取真源）；
+        # canon = (字母, 节[, 条]) 或 (字母, 条)，与
+        # _canon_key(ORDINAL_APP[2], key) 逐字段一致。键存 normkey 形 "A.1-1"。
         from extract_items_en3 import extract_items_en3
         out = []
         for it in extract_items_en3(ext, ch, start, end, want_examples=True):
@@ -274,7 +276,7 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
             # 再做字母号 canon（标签单独经 _canon_label 进复合键）。
             lab = (it.get("label") or "uncat")
             _num = it["key"].partition(" ")[2] if " " in it["key"] else it["key"]
-            c = _canon_key(ORDINAL_APP, _num)
+            c = _canon_key(primary_type, _num)
             if c is None:
                 continue
             out.append({
@@ -438,11 +440,15 @@ def _canon_key(primary_type, key):
         if m.group(4):
             return (n1, ord(m.group(4).lower()) - 96)
         return (n1,)
-    if primary_type == ORDINAL_APP:
-        # 附录字母章位（type 13）：契约键 "A.1-1"（normkey 形）/ 源侧键 "A.1.1"，
-        # 两级 "A.1"（Leinster 体例）也可。canon = (字母, 节号[, 条目号])，
-        # 字母保留原样（str 元组与 int 元组互比安全：仅同方案内部比较）。
-        m = re.match(r'^([A-Za-z])[.\-·，．]+(\d+)(?:[.\-·，．]+(\d+))?$',
+    if primary_type in (ORDINAL_APP, ORDINAL_APP2):
+        # 附录字母章位（type 13 三级 / type 14 两段）：契约键 "A.1-1"（normkey
+        # 形）/ 源侧键 "A.1.1"，两级 "A.1"（type 14 的 Lee 体例 / Leinster 体
+        # 例）也可；**允许中文/英文标签前缀**（Lee 契约键实测为 `例A.4` /
+        # `定理B.2` 形——build_structure 落盘时标签内嵌进 key）。canon =
+        # (字母, 节号[, 条目号]) 或 (字母, 条目号)，字母保留原样（str 元组与
+        # int 元组互比安全：仅同方案内部比较）。
+        m = re.match(r'^(?:[A-Za-z\u4e00-\u9fff]+)?([A-Za-z])[.\-·，．]+(\d+)'
+                     r'(?:[.\-·，．]+(\d+))?$',
                      str(key).strip())
         if not m:
             return None
@@ -477,9 +483,11 @@ def _composite_key(primary_type, label, canon):
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
                         ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
-                        ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP):
-        # ORDINAL_APP：Weibel 附录 Definition A.1.1 与 Exercise A.1.1 同号并存，
-        # 无标签复合键会把两类折叠、假绿。
+                        ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
+                        ORDINAL_APP2):
+        # ORDINAL_APP/APP2：Weibel 附录 Definition A.1.1 与 Exercise A.1.1
+        # 同号并存（Lee 附录 Theorem B.2 与 Exercise B.2 同理），无标签复合键
+        # 会把两类折叠、假绿。
         return (_canon_label(str(label)).lower(), canon)
     return canon
 

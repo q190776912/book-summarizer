@@ -43,7 +43,7 @@ from lib.regexlib import (
 from verify_config import (
     ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
-    ORDINAL_ROSS, ORDINAL_HUM, ORDINAL_APP,
+    ORDINAL_ROSS, ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -490,6 +490,20 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                                  f".{m.group(3)}-{m.group(4)}")
                 # 两段式附录条目（附录级编号 `**Theorem D.1**` / `**Example A.5**`）
                 # → `定理D.1` / `例A.5`（与 read_structure_items 的两段式分支同构）。
+                # 🔴 宽容回退：探测层已按段数分流（两段书 → ORDINAL_APP2 走下
+                # 一分支），本分支的两段正则仅供「type14 落地前误判 13」的
+                # 历史 config 兼容，不再有新写入。
+                for m in ENTRY_RE_APP2_C.finditer(line):
+                    key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                           f".{m.group(3)}")
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_APP2_C.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
+                                 f".{m.group(3)}")
+            elif t == ORDINAL_APP2:
+                # 附录字母章位两段（type 14，Lee ISM `Label B.N`）：`**Theorem B.2**`
+                # → `定理B.2`；键无节段（计数器跨全附录连续）。
                 for m in ENTRY_RE_APP2_C.finditer(line):
                     key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                            f".{m.group(3)}")

@@ -27,7 +27,7 @@ from data.book_structure.book_structure import (chapter_json_name, chapter_label
                                                 unit_dir_name)
 import make_config as mc
 import verify_config as vc
-from verify_config import ORDINAL_APP
+from verify_config import ORDINAL_APP, ORDINAL_APP2
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,43 @@ def test_canon_key_app_letter_forms():
     assert csc._canon_key(ORDINAL_APP, "A.1.1") == ("A", 1, 1)
     assert csc._canon_key(ORDINAL_APP, "A.1") == ("A", 1)
     assert csc._canon_key(ORDINAL_APP, "1.1-1") is None  # 数字键不归 APP canon
+
+
+# ---------------------------------------------------------------------------
+# ORDINAL_APP2（type 14，两段附录字母章位 `Label B.N`，Lee ISM 实测）
+# ---------------------------------------------------------------------------
+def test_parse_comps_letter_two_level_is_app2_family():
+    # 族投票：两段字母首分量 (B, 4) 必须归 ORDINAL_APP2(14)，绝不混判 13。
+    assert mc._parse_comps("B.4", letter_chapter=True) == ("B", 4)
+    assert mc._parse_comps("B.1.2", letter_chapter=True) == ("B", 1, 2)
+
+
+def test_canon_key_app2_two_level_forms():
+    import check_structure_completeness as csc
+    assert csc._canon_key(ORDINAL_APP2, "B.4") == ("B", 4)
+    assert csc._canon_key(ORDINAL_APP2, "B.2-1") == ("B", 2, 1)  # normkey 形容忍
+    assert csc._canon_key(ORDINAL_APP2, "1.2") is None           # 数字键不归 APP2 canon
+
+
+def test_composite_key_app2_is_label_scoped():
+    # Theorem B.2 与 Exercise B.2 同号并存 → 复合键须带 label 维度（防假绿）。
+    import check_structure_completeness as csc
+    c = csc._canon_key(ORDINAL_APP2, "B.2")
+    k = csc._composite_key(ORDINAL_APP2, "Theorem", c)
+    assert k == ("定理", ("B", 2))
+
+
+def test_read_structure_items_app2_key_canon(tmp_path):
+    from verify.script.structure_io import read_structure_items
+    ext = str(tmp_path)
+    _write_contract(ext, {
+        "B": [_item("B.2", "theorem", "B.2 Theorem B.2 Linear maps"),
+              _item("B.4", "exercise", "Exercise B.4 Suppose V")],
+    })
+    items = read_structure_items(ext, "B", primary_type=ORDINAL_APP2)
+    keys = [it["key"] for it in items]
+    # 练习被排除；Theorem B.2 → 定理B.2（两段、无节段）
+    assert keys == ["定理B.2"]
 
 
 def test_exercise_gap_exemption_regex():

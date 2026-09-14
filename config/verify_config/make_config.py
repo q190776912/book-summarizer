@@ -79,7 +79,7 @@ import glob
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from verify_config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT,
-                           ORDINAL_HUM, ORDINAL_APP)
+                           ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
 
@@ -1132,17 +1132,27 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     # three-level > two-level > single-level.  A PURE single-level book (every
     # detected entry is "Label N", e.g. Silverman) must NOT fall through to the
     # default type 3 — it votes type 1 here.
-    # 附录字母章号（`A.1.1`）——首分量是 str 而非 int，独立成族 ORDINAL_APP(13)。
-    n_app = sum(1 for h in headings
-                if len(h[2]) >= 2 and isinstance(h[2][0], str))
+    # 附录字母章号——首分量是 str 而非 int，按**实际段数**分流成独立族：
+    # 三级 `A.1.1`（字母 + 节.号）→ ORDINAL_APP(13)；两段 `B.N`（字母 + 一段
+    # 数字，Lee ISM 附录实测）→ ORDINAL_APP2(14)。🔴 段数即体例，绝不把两段
+    # 书混判成 13 再靠下游宽容解析兜底（no-default / must-match 原则同样
+    # 适用于 ordinal 的形态归属）。
+    n_app3 = sum(1 for h in headings
+                 if len(h[2]) >= 3 and isinstance(h[2][0], str))
+    n_app2 = sum(1 for h in headings
+                 if len(h[2]) == 2 and isinstance(h[2][0], str))
     n_single = sum(1 for h in headings
                    if len(h[2]) == 1 and not isinstance(h[2][0], str))
     n_two = sum(1 for h in headings
                 if len(h[2]) == 2 and not isinstance(h[2][0], str))
     n_three = sum(1 for h in headings
                   if len(h[2]) >= 3 and not isinstance(h[2][0], str))
-    if n_app > 0 and n_app >= n_single and n_app >= n_two and n_app >= n_three:
+    if n_app3 > 0 and n_app3 >= n_app2 and n_app3 >= n_single \
+            and n_app3 >= n_two and n_app3 >= n_three:
         family = ORDINAL_APP
+    elif n_app2 > 0 and n_app2 >= n_single and n_app2 >= n_two \
+            and n_app2 >= n_three:
+        family = ORDINAL_APP2
     elif n_three > 0 and n_three >= n_two and n_three >= n_single:
         family = 3
     elif n_two > 0 and n_two >= n_single:
@@ -1299,18 +1309,34 @@ def _detect_exercise_counter(extract_dir, pages=None):
     return False
 
 
-# Appendix exercises print a LETTER chapter slot (`Exercise A.1.1`) and are NOT
-# part of LABEL_FORMS (which deliberately omits Exercise to avoid cross-reference
-# fabrication).  Detect them separately so the appendix config can carry an
-# Exercise group — a preserved/interleaved appendix exercise counter is a real
-# verified sequence, exactly like a body one.
+# Appendix exercises print a LETTER chapter slot and are NOT part of
+# LABEL_FORMS (which deliberately omits Exercise to avoid cross-reference
+# fabrication).  Detect them separately so the appendix config can carry the
+# exercise counter — a preserved/interleaved appendix exercise sequence is a
+# real verified one, exactly like a body one.  Two shapes exist in the wild:
+#   * three-level `Exercise A.1.1`（Weibel 式，条目与练习都带节段）
+#   * two-level   `Exercise B.4`（Lee ISM 附录实测 101 次命中：练习编号与
+#     条目同为「字母章.序」两段，无节段）——canon 层对两段键本就兼容
+#     （check_structure_completeness._canon_key: 'A.1' -> ('A', 1)）。
+# The `[A-Z]\.` slot requirement keeps digit-chapter `Exercise 7.35`
+# cross-references from the body config's counter out of the appendix probe.
 _APP_EX_RE = re.compile(
-    r'(?i)\bexercise\b\s*[A-Z]\.\d+\.\d+|\b[A-Z]\.\d+\.\d+\s+exercise\b')
+    r'(?i)\bexercise\b\s*([A-Z]\.\d+(?:\.\d+)?)'
+    r'|\b([A-Z]\.\d+(?:\.\d+)?)\s+exercises?\b')
 
 
 def _detect_appendix_exercise(extract_dir, pages):
-    """True iff the appendix page range contains preserved `Exercise A.S.N`
-    headings (letter chapter slot).  Only consulted for the appendix config."""
+    """附录保留式练习计数器探测 → ``(present, shared)``。
+
+    ``present``：附录页区间存在字母章位练习标题（两段/三级均可）。
+    ``shared``：练习与条目**共享同一计数器**（一起升序）——判据 = 同前缀组
+    （两段按字母、三级按 字母.节）内练习号的跳号率：共享计数器里条目占用
+    序列空位 → 练习号大量跳号（Lee A 章 1,2,3,9,11,13,…，A.4-A.8 是
+    Example）；独立平行计数器组内近似连续（Weibel A.1.1,A.1.2,A.1.3…）。
+    ``shared=True`` 时调用方把 ``Exercise`` 并入主组 name；``False`` 时追加
+    独立 Exercise 组。
+    """
+    nums = []  # (prefix_tuple, last_int)
     for pg in (pages or []):
         try:
             with open(pg, encoding='utf-8') as f:
@@ -1319,9 +1345,32 @@ def _detect_appendix_exercise(extract_dir, pages):
             continue
         for b in data.get('text', []):
             text = blk_text(b) if isinstance(b, dict) else ''
-            if _APP_EX_RE.search(text or ''):
-                return True
-    return False
+            if not text:
+                continue
+            for m in _APP_EX_RE.finditer(text):
+                raw = m.group(1) or m.group(2)
+                parts = raw.split('.')
+                if len(parts) == 2:
+                    nums.append(((parts[0].upper(),), int(parts[1])))
+                else:
+                    nums.append(((parts[0].upper(), int(parts[1])), int(parts[2])))
+    if not nums:
+        return False, False
+    # 按前缀分组投票：组内（样本 >=3）跳号率 = 相邻差>1 占比
+    groups = {}
+    for pre, n in nums:
+        groups.setdefault(pre, []).append(n)
+    votes = 0
+    total = 0
+    for pre, seq in groups.items():
+        seq = sorted(seq)
+        if len(seq) < 3:
+            continue
+        gaps = sum(1 for i in range(1, len(seq)) if seq[i] > seq[i - 1] + 1)
+        votes += 1 if gaps / (len(seq) - 1) >= 0.25 else 0
+        total += 1
+    shared = total > 0 and votes * 2 > total
+    return True, shared
 
 
 def detect_ordinal(extract_dir):
@@ -1539,17 +1588,27 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     ordinal_arr = []
     if ordinal is not None:
         if is_appendix:
-            # 🔴 附录：所有标签共享「按节(A.S)重置」的计数器（Weibel Appendix A：
-            # A.1.1, A.1.2 … 然后 A.2.1 重置），合并为单个 group、scope=3，
-            # 避免字母章位窗口把每个 (A.S) 拆成独立 group。
             all_labels = []
             for g in groups:
                 for nm in g:
                     if nm and nm not in all_labels:
                         all_labels.append(nm)
-            scope = 3
-            ordinal_arr.append({"type": ORDINAL_APP,
-                                "name": all_labels or ["uncat"], "scope": 3})
+            if ordinal == ORDINAL_APP2:
+                # 两段附录字母章位（Lee ISM `Label B.N`）：计数器跨全附录连续
+                # （Example A.4-A.8 不分节重置）、每字母章从 1 重开 → 章级
+                # 计数器（scope=2，首分量=字母与章键 'A'/'B'… 比对，跨章
+                # 守卫天然成立）。
+                scope = 2
+                ordinal_arr.append({"type": ORDINAL_APP2,
+                                    "name": all_labels or ["uncat"], "scope": 2})
+            else:
+                # 🔴 三级附录字母章位（Weibel `Label A.S.N`）：所有标签共享
+                # 「按节(A.S)重置」的计数器（A.1.1, A.1.2 … 然后 A.2.1 重置），
+                # 合并为单个 group、scope=3，避免字母章位窗口把每个 (A.S)
+                # 拆成独立 group。
+                scope = 3
+                ordinal_arr.append({"type": ORDINAL_APP,
+                                    "name": all_labels or ["uncat"], "scope": 3})
         else:
             scope = SCOPE_BY_TYPE.get(ordinal, 2)
             for name in groups:
@@ -1633,7 +1692,8 @@ def _generate_special_verify_configs(extract_dir):
     ``"appendix"`` / ``"supplement"``，绝不混称。返回
     ``{"appendix": cfg|None, "supplement": cfg|None}``。
 
-    仅当某类页区间检出字母章位体例（ORDINAL_APP=13）才产出子配置；否则回退主配置。
+    仅当某类页区间检出字母章位体例（ORDINAL_APP=13 三级 / ORDINAL_APP2=14 两段）
+    才产出子配置；否则回退主配置。
     """
     out = {"appendix": None, "supplement": None}
     for kind, key, label in ((KIND_APPENDIX, "appendix", "附录"),
@@ -1651,16 +1711,30 @@ def _generate_special_verify_configs(extract_dir):
             extract_dir, os.path.join(extract_dir, 'verify_config.json'),
             letter_chapter=True, is_appendix=True, pages=pages,
             section_key=key)
-        if not ordinal or ordinal != ORDINAL_APP:
+        if not ordinal or ordinal not in (ORDINAL_APP, ORDINAL_APP2):
             # 该类页区间未检出字母章位体例（可能本书该类与正文同体例）→ 不产出，
             # 避免一份与主配置等价的冗余子配置。
-            print(f"[make_config] {label}页区间检出编号族={ordinal}（非字母章位 type 13），"
+            print(f"[make_config] {label}页区间检出编号族={ordinal}"
+                  f"（非字母章位 type 13/14），"
                   f"视为与正文同体例，跳过 \"{key}\" 子配置。")
             continue
-        # 字母章位保留式练习计数器（`Exercise A.1.1` / `Exercise S.1.1`）不在
-        # LABEL_FORMS 中，单独探测后并入，确保练习序列也被校验。
-        if _detect_appendix_exercise(extract_dir, pages):
-            cfg["ordinal"].append({"type": ORDINAL_APP, "name": ["Exercise"], "scope": 3})
+        # 字母章位保留式练习计数器（`Exercise A.1.1` / `Exercise B.4`，两段/
+        # 三级形态见 _APP_EX_RE）不在 LABEL_FORMS 中，单独探测后按计数器
+        # 归属落位：与条目**共享**同一计数器（一起升序，Lee ISM 附录实测——
+        # 练习号 A.1,A.2,A.3 后跳 A.9，A.4-A.8 是 Example）→ 把 ``Exercise``
+        # **并入主组 name**（正文章共享体例同构）；**平行独立**计数器
+        # （Weibel 式同号并存）→ 追加独立 Exercise 组。type/scope 均跟随
+        # 本书附录的实际体例。
+        ex_present, ex_shared = _detect_appendix_exercise(extract_dir, pages)
+        if ex_present:
+            _main_scope = (cfg["ordinal"][0].get("scope", 3)
+                           if cfg.get("ordinal") else 3)
+            if ex_shared and cfg.get("ordinal"):
+                if "Exercise" not in cfg["ordinal"][0].setdefault("name", []):
+                    cfg["ordinal"][0]["name"].append("Exercise")
+            else:
+                cfg["ordinal"].append({"type": ordinal, "name": ["Exercise"],
+                                       "scope": _main_scope})
         out[key] = cfg
         labels = [nm for g in cfg.get('ordinal', []) for nm in g.get('name', [])]
         print(f"⚠️ 已生成{label}配置（letter-chapter 体例 ordinal={ordinal}，"

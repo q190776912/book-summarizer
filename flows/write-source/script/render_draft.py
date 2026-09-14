@@ -383,7 +383,10 @@ def _render_node(node, out, lang="cn"):
         key = str(node.get("key") or "")
         name = (node.get("name") or "").strip()
         if re.fullmatch(r"U\d+", key):
-            out.append("## § " + name)      # 无序号标小节：仅保留 §
+            # 无序号标小节：仅保留 §。level=2 为节内二级子标题（Lee ISM 实测
+            # 「Coordinate Charts」等），渲染为 `### §` 以保留原书层级结构。
+            lvl = int(node.get("level") or 1)
+            out.append(("### § " if lvl >= 2 else "## § ") + name)
         else:
             out.append("## §" + name)       # name 自带 "N.M 标题" 序标
         out.append("")

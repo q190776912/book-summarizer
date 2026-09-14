@@ -287,7 +287,8 @@ class SourceFormulaIndex:
                  chapter_prefix: bool = True,
                  ignore: Optional[Set[str]] = None,
                  ncomp: Optional[int] = None,
-                 keep_cross_refs: bool = True) -> None:
+                 keep_cross_refs: bool = True,
+                 known_book: Optional[Set[str]] = None) -> None:
         self.extract_dir = extract_dir
         self.patterns = [re.compile(p) for p in (patterns or [])]
         self.chapter_prefix = chapter_prefix
@@ -302,6 +303,20 @@ class SourceFormulaIndex:
         # produce false q-miss rows.  Real numbered display formulas (in a
         # math-bearing block) are still kept either way.
         self.keep_cross_refs = keep_cross_refs
+        # known_book (2026-09-14): a set of normalised formula numbers that are
+        # GENUINE book labels the source page-scan missed (OCR-merged into an
+        # equation line, cross-reference mis-read, etc.).  These are NOT noise —
+        # they are real, and the summary faithfully carries them as \tag — so
+        # they must be registered as real book formulas (in S) rather than
+        # hidden behind `ignore` (which would violate no-fabrication: a real
+        # number must never be suppressed).  Mirrors the audit_ignore.py
+        # "manual_overrides 补回真实缺项" recommendation.  Populated from
+        # verify_config.json `formula.known_book` via the Q-layer run().
+        self._known_book = {
+            SourceFormulaIndex.norm(str(x))
+            for x in (known_book or [])
+            if SourceFormulaIndex.norm(str(x))
+        }
         # ncomp (depth) enables the Bug #18 source-noise gate in _scan_text:
         # only multi-component books (ncomp>=2) need it, because their bare
         # `N.N` pattern otherwise matches section headings / cross-references /
@@ -398,6 +413,15 @@ class SourceFormulaIndex:
                         continue
                     self._scan_text(ls, nums, pg, None)
         self._by_chapter[ch] = nums
+        # 🔧 known_book supplement (2026-09-14): register genuine book formula
+        # numbers the source scan missed, so Q-layer no longer false-FABRICATEs
+        # them.  Only numbers whose first component == ch are injected.  This is
+        # the plain-path S used by _compare for FABRICATED / MISSING membership.
+        if self._known_book:
+            _kb = self._by_chapter.setdefault(ch, set())
+            for _n in self._known_book:
+                if _n.split('.')[0] == str(ch):
+                    _kb.add(_n)
 
     def build_sectioned(self, ch: int, start: int, end: int,
                         md_sections: List[str],
@@ -658,6 +682,15 @@ class SourceFormulaIndex:
         union: Set[str] = set()
         for s in sectioned.values():
             union |= s
+        # 🔧 known_book supplement (2026-09-14): genuine book formula numbers the
+        # source scan missed — inject into the chapter-wide union so FABRICATED
+        # (which tests against this union) no longer false-flags them.  MISSING
+        # is already suppressed per-section via the summary's covered_anywhere.
+        if self._known_book:
+            for _n in self._known_book:
+                if _n.split('.')[0] == str(ch):
+                    union.add(_n)
+                    self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}
 
     def numbers_for_chapter(self, ch: int) -> Set[str]:
@@ -1774,6 +1807,10 @@ class QLayer(VerifyLayer):
             except Exception:
                 pass
         fkeep = formula.get('keep_cross_refs', True)
+        # 🔧 known_book (2026-09-14): genuine book formula numbers the source
+        # scan missed, registered as real (not hidden behind ignore).  Wired
+        # from verify_config.json `formula.known_book`.  See SourceFormulaIndex.
+        fknown = set(formula.get('known_book') or [])
         scope = formula.get('scope', 2)
         # Per-section formula numbering (Kreyszig: every section restarts at
         # (1)).  FABRICATED/INCONSISTENT are checked section-locally; the
@@ -1835,7 +1872,8 @@ class QLayer(VerifyLayer):
             else:
                 tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
                 src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore,
-                                          keep_cross_refs=fkeep)
+                                          keep_cross_refs=fkeep,
+                                          known_book=fknown)
                 # 🔴 书章号集（供跨章引用过滤，见 build_sectioned 尾部注记）
                 try:
                     from data.book_structure.book_structure import list_chapter_keys as _lck
@@ -1878,7 +1916,8 @@ class QLayer(VerifyLayer):
 
         tags = _extract_summary_tags(ctx.md_file)
         src = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix, fignore,
-                                 ncomp=ncomp, keep_cross_refs=fkeep)
+                                 ncomp=ncomp, keep_cross_refs=fkeep,
+                                 known_book=fknown)
         src.build(ctx.ch, ctx.start, ctx.end)
 
         # RESERVED probe for letter / Roman-led formula numbering.  With

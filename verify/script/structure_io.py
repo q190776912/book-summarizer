@@ -30,7 +30,8 @@ from data.book_structure.book_structure import BookStructure
 from key_parse import keys_in_md, _first_num
 from verify.script.ordinal import int_to_roman
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
-                           ORDINAL_HUM, ORDINAL_APP, _canon_label,
+                           ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
+                           _canon_label,
                            TYPE_TO_LABEL_CN as TYPE_TO_LABEL)
 # TYPE_TO_LABEL 单源自 config/verify_config（类型词表单一来源），此处不再手抄。
 
@@ -101,31 +102,47 @@ def read_structure_items(ext_dir, ch, primary_type=None):
         #   behavior ('定义1.1' / 'Remark1.1.1'), which already matches
         #   `keys_in_md`'s output for those ordinals (their keys have no dash).
         raw = (n.key or n.name or '')
-        # ORDINAL_APP (type 13)：附录字母章号 `A.1.1` → 规范键 `定义A.1-1`
-        # （与 key_parse.keys_in_md 的 ORDINAL_APP 分支同构）。必须先于下面的
+        # ORDINAL_APP (type 13) / ORDINAL_APP2 (type 14)：附录字母章位
+        # `A.1.1`（三级）→ 规范键 `定义A.1-1`；`B.4`（两段，Lee ISM）→
+        # `定理B.2`（与 key_parse.keys_in_md 的对应分支同构）。必须先于下面的
         # 「首个数字串」通用分支，否则 `A.1.1` 会被截成 `1.1` 而丢掉字母章位。
-        if primary_type == ORDINAL_APP:
-            _am = _APP_ITEM_RE.match(raw.strip())
-            if _am:
-                _canon = (TYPE_TO_LABEL.get(n.type, 'uncat')
-                          + f"{_am.group(1).upper()}.{_am.group(2)}-{_am.group(3)}")
-                items.append({
-                    'key': _canon,
-                    'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
-                    'page': n.page_start,
-                    'text': n.name,
-                })
-                continue
-            _am2 = _APP_ITEM2_RE.match(raw.strip())
-            if _am2:
-                _canon2 = (TYPE_TO_LABEL.get(n.type, 'uncat')
-                           + f"{_am2.group(1).upper()}.{_am2.group(2)}")
-                items.append({
-                    'key': _canon2,
-                    'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
-                    'page': n.page_start,
-                    'text': n.name,
-                })
+        # 🔴 契约键可能内嵌标签（Lee 契约实测 `例A.4` / `定理B.2` 中文标签形，
+        # build_structure 落盘产物）——先试裸号，失败则剥标签前缀重试，输出
+        # 统一为「规范中文标签 + 字母号」，与 keys_in_md 的 md 侧键 1:1 对齐。
+        if primary_type in (ORDINAL_APP, ORDINAL_APP2):
+            _cands = [raw.strip()]
+            _pm = re.match(
+                r'^[A-Za-z\u4e00-\u9fff]+?([A-Za-z](?:[.\-－．·–〜]\d+)+)'
+                r'(?![\d.\-－．·–〜])$', raw.strip())
+            if _pm:
+                _cands.append(_pm.group(1))
+            _done = False
+            for _s in _cands:
+                _am = _APP_ITEM_RE.match(_s)
+                if _am:
+                    _canon = (TYPE_TO_LABEL.get(n.type, 'uncat')
+                              + f"{_am.group(1).upper()}.{_am.group(2)}-{_am.group(3)}")
+                    items.append({
+                        'key': _canon,
+                        'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                        'page': n.page_start,
+                        'text': n.name,
+                    })
+                    _done = True
+                    break
+                _am2 = _APP_ITEM2_RE.match(_s)
+                if _am2:
+                    _canon2 = (TYPE_TO_LABEL.get(n.type, 'uncat')
+                               + f"{_am2.group(1).upper()}.{_am2.group(2)}")
+                    items.append({
+                        'key': _canon2,
+                        'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                        'page': n.page_start,
+                        'text': n.name,
+                    })
+                    _done = True
+                    break
+            if _done:
                 continue
         # ORDINAL_HUM (Humphreys GTM 9): keys use English labels with § prefix
         # (e.g. "Theorem §4.1", "Lemma §10.2B"). The markdown uses bare labels

@@ -230,14 +230,17 @@ def _figure_blocks(ext, page):
     return out
 
 
-def _collect_blocks(ext, start, end):
+def _collect_blocks(ext, start, end, ch=None):
     """收集 [start, end] 页全部内容块，页内按 (y, x) 稳定排序，跨页拼接。
+
+    `ch` 为章键（数字章 `"10"` / 字母章 `"A"`）——供 `formula_cfg` 分章路由
+    （字母章读 `appendix` 段的 formula 配置，见其 docstring）。
 
     返回 (blocks, page_height)；page_height 为全书观测到的最大 bottom（同一本书
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
-    ncomp = formula_cfg(ext)[0]
+    ncomp, _scope, letter, bare = formula_cfg(ext, ch)
     blocks = []
     for p in range(int(start), int(end) + 1):
         fp = os.path.join(ext, "page_%03d.json" % p)
@@ -314,7 +317,8 @@ def _collect_blocks(ext, start, end):
         page_blocks = _splice_inline(texts, disp)
         page_blocks.extend(_figure_blocks(ext, p))
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
-        page_blocks = _attach_formula_tags(page_blocks, ncomp)
+        page_blocks = _attach_formula_tags(page_blocks, ncomp,
+                                           letter=letter, bare=bare)
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
@@ -323,8 +327,8 @@ def _collect_blocks(ext, start, end):
 _FORMULA_CFG_CACHE = {}
 
 
-def formula_cfg(ext):
-    """本书公式序标配置 → ``(ncomp, scope)``；未配置时为 ``(None, None)``。
+def formula_cfg(ext, ch=None):
+    """本书公式序标配置 → ``(ncomp, scope, letter, bare)``；未配置时为 ``(None, None, False, True)``。
 
     🔴 **编号段数必须由 `verify_config.json` 的 `formula.type` 经
     `ORDINAL_DEPTH` 派生，不得硬编码**。各书形态差异极大（全语料实测）：
@@ -338,14 +342,31 @@ def formula_cfg(ext):
     分段落盘的书（如 Katok）取到空配置 → `ncomp=None` → 段数不限 → 把页码 /
     矩阵里的裸数字（``0`` / ``153`` / ``166``）当成公式编号挂上 tag，污染
     单元级 tag 对账真值。
+
+    🔴 **分章路由（2026-09-14，Lee ISM 附录 letter-led 实测）**：`ch` 为字母
+    章键（``"A"``/``"B"``…，非纯数字）时读 **`appendix` 段**的 `formula`（缺失
+    回退顶层/`ch` 段——主配置 digit 形态对字母编号抽不到，零污染）。附录段的
+    `formula.letter_ch: true` 置 ``letter=True``（`(A.3)` 字母章位形态）。
+
+    `bare` 读 `formula.bare_number`（默认 True；显式 false 的书——如 Lee——
+    裸排 `1-11` Problem 标签不可当编号，挂 tag 侧与 Q 层同口径）。
     """
-    if ext not in _FORMULA_CFG_CACHE:
+    ck = _FORMULA_CFG_CACHE
+    cache_key = (ext, None if ch is None else str(ch))
+    if cache_key not in ck:
         ncomp = scope = None
+        letter, bare = False, True
         try:
             with open(os.path.join(ext, "verify_config.json"),
                       encoding="utf-8-sig") as f:
                 data = json.load(f) or {}
+            sub = ("appendix"
+                   if (ch is not None and not str(ch).isdigit()
+                       and isinstance(data.get("appendix"), dict))
+                   else None)
             fc = data.get("formula")
+            if sub is not None:
+                fc = data[sub].get("formula") or fc
             if not fc and isinstance(data.get("ch"), dict):
                 fc = data["ch"].get("formula")
             fc = fc or {}
@@ -353,24 +374,29 @@ def formula_cfg(ext):
             s = fc.get("scope")
             if isinstance(s, int):
                 scope = s
+            letter = bool(fc.get("letter_ch"))
+            bare = bool(fc.get("bare_number", True))
         except Exception:
             ncomp = scope = None
-        _FORMULA_CFG_CACHE[ext] = (ncomp, scope)
-    return _FORMULA_CFG_CACHE[ext]
+            letter, bare = False, True
+        ck[cache_key] = (ncomp, scope, letter, bare)
+    return ck[cache_key]
 
 
-def tag_re(ext, bare=True):
+def tag_re(ext, bare=True, ch=None):
     """本书「独立成块的公式编号」锚定正则（供 attach 与完整性闸门共用）。"""
-    return formula_tag_re(formula_cfg(ext)[0], bare=bare)
+    ncomp, _scope, letter, _bare = formula_cfg(ext, ch)
+    return formula_tag_re(ncomp, bare=bare, letter=letter)
 
 
-def _attach_formula_tags(page_blocks, ncomp=None):
+def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True):
     """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
     并从散文流剔除该文本块（纯版面锚点，不是正文）。
 
-    编号形态（段数 / 括号 / 分隔符 / 字母后缀）由 ``ncomp`` 经
-    :func:`lib.numbering.formula_tag_re` 决定，调用方从 ``formula_cfg(ext)``
-    取得——**绝不在此硬编码某一种编号样式**。
+    编号形态（段数 / 括号 / 分隔符 / 字母后缀 / 字母章位）由 ``ncomp`` /
+    ``letter`` 经 :func:`lib.numbering.formula_tag_re` 决定，调用方从
+    ``formula_cfg(ext, ch)`` 取得——**绝不在此硬编码某一种编号样式**。
+    ``bare=False``（config `formula.bare_number: false`）时只认带括号形态。
 
     判定（宁缺勿滥）：整块恰为一个编号，且同时满足两个几何条件：
 
@@ -398,7 +424,7 @@ def _attach_formula_tags(page_blocks, ncomp=None):
         if b["kind"] != "text":
             continue
         raw = (b["text"] or "").strip()
-        num = formula_tag_number(raw, ncomp)
+        num = formula_tag_number(raw, ncomp, letter=letter, bare=bare)
         if num is not None:
             tags.append((b, num, raw[:1] in "（("))
     if not tags:
@@ -493,7 +519,7 @@ def _strip_furniture(texts, disp, page):
     return kept_texts, disp
 
 
-def _filter_noise(blocks, page_height, n_pages, ncomp=None):
+def _filter_noise(blocks, page_height, n_pages, ncomp=None, letter=False):
 
     def _edge(b):
         h = page_height
@@ -528,7 +554,7 @@ def _filter_noise(blocks, page_height, n_pages, ncomp=None):
             # 无法区分（页码永远是裸数字），豁免会让页码重新漏进正文。
             h = page_height
             if (h and n.isdigit() and len(n) <= 3
-                    and not formula_paren_tag_re(ncomp).match(
+                    and not formula_paren_tag_re(ncomp, letter=letter).match(
                         (b.get("text") or "").strip())
                     and (b["y"] < 0.06 * h or b["bottom"] > 0.94 * h)):
                 continue
@@ -880,11 +906,13 @@ def build_chapter_contract(ext, node):
     """
     node = _to_skeleton(node)          # 幂等：已挂内容（重复 attach）先还原为骨架
     start, end = int(node.get("page_start") or 0), int(node.get("page_end") or 0)
+    ch_key = str(node.get("key") or "")
+    _fc_ncomp, _fc_scope, _fc_letter, _fc_bare = formula_cfg(ext, ch_key)
     n_noise = [0]
 
-    blocks, page_height = _collect_blocks(ext, start, end)
+    blocks, page_height = _collect_blocks(ext, start, end, ch=ch_key)
     kept = _filter_noise(blocks, page_height, max(1, end - start + 1),
-                         formula_cfg(ext)[0])
+                         _fc_ncomp, letter=_fc_letter)
     n_noise[0] = len(blocks) - len(kept)
     blocks = kept
     _mark_line_geometry(blocks)

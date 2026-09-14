@@ -755,7 +755,7 @@ class physical_evidence:
                 continue
             # 1:1 同构闸（子进程解耦，复用与 CLI 同一脚本）
             script = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                os.path.dirname(os.path.abspath(__file__)),
                 "write-source", "script", "check_translate_parity.py")
             try:
                 rc = subprocess.call([sys.executable, script, ex, k])

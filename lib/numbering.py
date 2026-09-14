@@ -56,19 +56,35 @@ ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 1
 #   2,3 / 1-2          分隔符还有 `,` 与 `-`（Ross、遍历论实测）
 #   (8.11a)            字母后缀子式（Evans SDE、PDE、Ross 实测）
 #   裸排 2.17          大量书右缘编号**不带括号**（bare 形态，占实测近一半）
-#   (A.3) / （I.2）    字母 / 罗马开头 —— 暂不支持（Q 层同源 TODO，见
-#                      verify/formula_tag/script/formula_tag.py）；此处保持同
-#                      步不支持，否则 attach 会挂上 Q 层判 FABRICATED 的编号。
+#   (A.3) / （A.3）    字母章位编号（Lee ISM 附录 B.1-B.15/C.1-C.21/D.1-D.21
+#                      实测）：首段单个大写字母、后续段纯数字——`letter=True`
+#                      分支支持（2026-09-14）。仅接受**带括号**形态：裸排 `A.3`
+#                      与 `Fig. A.3` / 小节标题 `C.1` 无法区分，宁缺勿滥。
+#                      多字母前缀（罗马 `II.5`、`App.2`）仍暂不支持，由 Q 层
+#                      `_LETTER_LED_RE` 探测兜 WARN（两处注释互为锚点）。
 _FORMULA_SEP = r'[.\-·,]'                 # 编号分隔符：点 / 连字符 / 间隔号 / 逗号
 _FORMULA_SUFFIX = r'(?:[a-zA-Z])?'        # 子式字母后缀：`8.11a`
 
 
-def formula_num_core(ncomp=None):
+def formula_num_core(ncomp=None, letter=False):
     """公式编号 token 的正则源（**不含括号**、**不锚定**、**无捕获组**）。
 
     `ncomp` = 段数（由 `formula.type` 经 `ORDINAL_DEPTH` 派生）；``None`` = 段数
     不限（书未配置 `formula` 块时的兜底，如集合论/表示论等无编号公式的书）。
+
+    `letter=True`：字母章位编号（`(A.3)`）——首段是**单个大写字母**，其余段纯
+    数字。`ncomp=2` → ``[A-Z][SEP]\d+``；``None`` → 至少一个数字段。纯单字母
+    ``[A-Z]``（无数字段）不构成公式序标，故数字段数下限为 1。
     """
+    if letter:
+        n_min = 1  # 数字段数下限：`(A)` 不是公式编号
+        if ncomp is None:
+            return r'[A-Z](?:%s\d+){%d,}%s' % (_FORMULA_SEP, n_min, _FORMULA_SUFFIX)
+        try:
+            n = max(0, int(ncomp) - 1)
+        except (TypeError, ValueError):
+            n = 0
+        return r'[A-Z](?:%s\d+){%d}%s' % (_FORMULA_SEP, max(n, n_min), _FORMULA_SUFFIX)
     if ncomp is None:
         return r'\d+(?:%s\d+)*%s' % (_FORMULA_SEP, _FORMULA_SUFFIX)
     try:
@@ -79,35 +95,42 @@ def formula_num_core(ncomp=None):
 
 
 @functools.lru_cache(maxsize=None)
-def formula_tag_re(ncomp=None, bare=True):
+def formula_tag_re(ncomp=None, bare=True, letter=False):
     """匹配「**整块**恰为一个公式编号」的锚定正则。
 
     `bare=True` 时额外接受**无括号裸排**编号（右缘编号不带括号的书占实测近
     一半，不可或缺）。需要严格判据时（如噪声过滤的页码豁免）用 `bare=False`。
+
+    `letter=True`（字母章位 `(A.3)`）时 `bare` 强制无效——只返回带括号变体：
+    裸排 `A.3` 与 `Fig. A.3` / 小节标题 `C.1` 无形态区别（宁缺勿滥，见头部
+    注释）。
     """
-    core = formula_num_core(ncomp)
-    variants = [r'[（(]\s*%s\s*[）)]' % core]        # (2.17) / （2.17）
-    if bare:
+    core = formula_num_core(ncomp, letter=letter)
+    variants = [r'[（(]\s*%s\s*[）)]' % core]        # (2.17) / （A.3）
+    if bare and not letter:
         variants.append(core)                        # 裸排 2.17
     return re.compile(r'^(?:%s)$' % '|'.join(variants))
 
 
 @functools.lru_cache(maxsize=None)
-def formula_paren_tag_re(ncomp=None):
+def formula_paren_tag_re(ncomp=None, letter=False):
     """只认**带括号**的公式编号（半角 / 全角）。
 
     用于「页码过滤豁免」一类需要零误判的场合：页码永远不会被写成 `(99)`，
     但裸排的 `99` 与页码无法区分，故裸排不享受豁免。
     """
-    return formula_tag_re(ncomp, bare=False)
+    return formula_tag_re(ncomp, bare=False, letter=letter)
 
 
-def formula_tag_number(text, ncomp=None):
+def formula_tag_number(text, ncomp=None, letter=False, bare=True):
     """整块恰为公式编号时返回**裸编号**（去括号 / 去空白），否则返回 ``None``。
 
+    `bare=False`：只认带括号形态（`verify_config.json` 的
+    `formula.bare_number: false` 书——如 Lee——散文里裸排 `1-11` Problem 标签
+    不可当编号）。`letter=True` 时 `bare` 强制无效（见 `formula_tag_re`）。
     统一返回裸编号，让契约 `tag`、草稿 `\\tag{}` 与 Q 层 `norm()` 三处口径一致。
     """
-    m = formula_tag_re(ncomp).match((text or '').strip())
+    m = formula_tag_re(ncomp, bare=bare, letter=letter).match((text or '').strip())
     if not m:
         return None
     s = m.group(0).strip()

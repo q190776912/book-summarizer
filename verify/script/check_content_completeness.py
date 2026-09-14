@@ -72,14 +72,16 @@ def _block_sig(b):
     return ("text", _norm_text(b.get("text")))
 
 
-def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None):
+def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
+                         letter=False, bare=True):
     """书源独立公式编号块（独立真值，不经 attach 管线）。
 
     遍历页区间内 ``page_*.json`` 的 ``text``，取**整块恰为一个编号**的块，返回
-    **裸编号集合**。编号形态（段数 / 括号 / 分隔符 / 字母后缀）由 ``ncomp``
-    派生于本书 ``verify_config.json`` 的 ``formula.type``——🔴 **不可硬编码成
-    ``(C.N)`` 一种**：实测各书还有 ``(1)`` 节级重置、``(11.1-1)`` 连字符三段、
-    ``(8.11a)`` 字母后缀，以及近半数书右缘编号**不带括号**。
+    **裸编号集合**。编号形态（段数 / 括号 / 分隔符 / 字母后缀 / 字母章位
+    ``letter``）由 ``ncomp`` 派生于本书 ``verify_config.json`` 的
+    ``formula.type``——🔴 **不可硬编码成 ``(C.N)`` 一种**：实测各书还有 ``(1)``
+    节级重置、``(11.1-1)`` 连字符三段、``(8.11a)`` 字母后缀、Lee 附录
+    ``(B.4)`` 字母章位，以及近半数书右缘编号**不带括号**。
 
     ``ch_prefix`` 非空时只收首分量等于该章号的编号（排除跨章引用）。
     """
@@ -100,7 +102,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None):
                 raw = raw.get("text")
             if not isinstance(raw, str):
                 continue
-            key = formula_tag_number(raw.strip(), ncomp)
+            key = formula_tag_number(raw.strip(), ncomp, letter=letter, bare=bare)
             if key is None:
                 continue
             if ch_prefix and re.split(r'[.\-·,]', key)[0] != ch_prefix:
@@ -189,7 +191,8 @@ def check_chapter(ext, ch_node):
 
     # ②b 公式序标完整性（page_*.json 独立真值，不经 attach 管线）
     got_tags = {b["tag"] for b in ac._iter_blocks(saved) if b.get("tag")}
-    ncomp, scope = ac.formula_cfg(ext)
+    ch_key_s = str(ch_node.get("key") or "")
+    ncomp, scope, f_letter, f_bare = ac.formula_cfg(ext, ch_key_s)
     # 🔴 与 Q 层一致**opt-in**：书未配 `formula` 时整项跳过。否则段数兜底正则
     # （段数不限、含裸排）会把页眉页脚的**页码**当成公式编号，而页码已被
     # _filter_noise 从契约剔除 → 每章凭空报「公式编号丢失」并阻断渲染。
@@ -198,10 +201,16 @@ def check_chapter(ext, ch_node):
     else:
         # 只有「章级编号」（scope=2）才能用「首分量 == 章号」筛编号：book 级全书
         # 连续号（scope=1）与节级重置（scope=3）的首分量都与章号无关，筛了清零。
-        ch_key_s = str(ch_node.get("key") or "")
-        prefix = ch_key_s if (scope == 2 and ch_key_s.isdigit()) else ""
+        # 字母章键（letter=True 时 `"A"`/`"B"`…）首分量同为该字母，直接可筛。
+        prefix = ""
+        if scope == 2:
+            if ch_key_s.isdigit():
+                prefix = ch_key_s
+            elif f_letter and len(ch_key_s) == 1 and ch_key_s.isalpha():
+                prefix = ch_key_s
         want_tags = _source_formula_tags(ext, ch_node.get("page_start"),
-                                         ch_node.get("page_end"), prefix, ncomp)
+                                         ch_node.get("page_end"), prefix, ncomp,
+                                         letter=f_letter, bare=f_bare)
 
         def _ord(k):
             return [int(y) for y in re.split(r'[.\-·,]', k) if y.isdigit()]

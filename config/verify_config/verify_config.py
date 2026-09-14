@@ -29,6 +29,7 @@ Config schema (see config/config_schema.md §配置字段说明):
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -182,6 +183,29 @@ _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
     'en': 4, 'roman': 5, 'gm': 6,
 }
+
+# --- 静默回退显性化（进程级去重） -------------------------------------------
+# 附录/补篇章缺自己的子配置时 ConfigLoader 会回退正文配置——数字章号口径对
+# 字母章号条目（Theorem A.1）等于全灭抽取。这条路径曾经把 Lee 2e 的附录
+# 变成"整章一个 description 而所有下游无感"。此处发一次性 stderr 警告。
+_SPECIAL_FALLBACK_WARNED: Set[str] = set()
+
+
+def _warn_missing_special_config(kind_key: str, ch: Any) -> None:
+    mark = "%s:%s" % (kind_key, str(ch))
+    if mark in _SPECIAL_FALLBACK_WARNED:
+        return
+    _SPECIAL_FALLBACK_WARNED.add(mark)
+    print(
+        "[CONFIG] ⚠ 附录/补篇配置缺失：章 %r 按 kind 路由到 %r 子配置，但 "
+        "verify_config.json 外层 map 没有该键 —— 已回退正文（\"ch\"）配置。"
+        % (ch, kind_key),
+        file=sys.stderr)
+    print(
+        "[CONFIG]   若该章条目编号首段不是数字章号（如 Theorem A.1），回退配置会让"
+        "抽取全部落空、整章被塞进单个 description。补救："
+        "python config/verify_config/make_config.py <extract_dir> --force"
+        "（会自动补写缺失的 appendix/supplement 子配置）。", file=sys.stderr)
 
 # --- section role codes = ORDINAL-DEPTH codes for the nested `## §` hierarchy -
 # The code stored in `section_types` is NOT a "chapter/section/subsection"
@@ -601,7 +625,8 @@ class BookConfig:
     # None the whole Q-LAYER is a pure no-op (neutral `q_*` metadata, no
     # report, never contributes to FAIL), so the 16 legacy layers and already
     # finished books are completely untouched.  Map shape:
-    #   {"type": 3, "scope": 2, "ignore": []}
+    #   {"type": 3, "scope": 2, "ignore": [], "letter_ch": false,
+    #    "bare_number": true}
     #   type  : ORDINAL_* style code (1..9); `depth` is DERIVED from `type`
     #           via the canonical ORDINAL_DEPTH map, so it is NOT a separate
     #           field (it can never desync from `type`).
@@ -610,6 +635,15 @@ class BookConfig:
     #           ON iff scope == 2.
     #   ignore: list of normalized formula numbers to SKIP in the 1:1
     #           comparison (neither flagged FABRICATED nor MISSING).
+    #   letter_ch (default false): letter-chapter-led numbering `(A.3)` /
+    #           `（B.12）` (Lee ISM appendices).  Patterns/norm accept a single
+    #           leading capital letter; the bare variant is then never used
+    #           (indistinguishable from `Fig. A.3` / section headings).
+    #           make_config.detect_formula sets this automatically for ranges
+    #           where the letter-led form dominates.  Multi-letter / Roman
+    #           prefixes (`II.5`) stay RESERVED (q_letter_led WARN).
+    #   bare_number (default true): when false, the bare `N.M` source variant
+    #           is dropped (books full of numbered cross-references, e.g. Lee).
     formula: Optional[dict] = None
 
     # 🔴 Figure labels/depth now live in `ordinal` (the Figure group's `type`
@@ -1259,11 +1293,23 @@ class ConfigLoader:
         Supplement 与 Appendix 分别落键、分别路由，绝不混称；只有 per-chapter
         ``ignore`` 集合（侧车 ``ignore_supplement{S}.json`` / ``ignore_appendix{A}.json``
         / ``ignore_ch{N}.json``）叠加到所选基底配置之上。无对应子配置的书逐字节不受影响。
+
+        🔴 回退必须**可见**（Lee 2e 实测教训）：verify_config.json 只写了 ``"ch"``
+        而书含附录章时，附录章会静默落到数字章号的正文配置上——``Theorem A.1``
+        的字母章号条目被 chapter-first 数字比对全部判为跨章引用丢弃，build_structure
+        抽出 0 条、整附录塞进单个 description 节点，而所有下游都以为"附录本来就没
+        条目"。这里对每一次静默回退发一条 stderr 警告（进程级去重），把错配显性化。
         """
         base = self.book
         kind = self.chapter_kind(ch)
-        if kind == KIND_SUPPLEMENT and self.supplement_book is not None:
-            base = self.supplement_book
-        elif kind == KIND_APPENDIX and self.appendix_book is not None:
-            base = self.appendix_book
+        if kind == KIND_SUPPLEMENT:
+            if self.supplement_book is not None:
+                base = self.supplement_book
+            else:
+                _warn_missing_special_config("supplement", ch)
+        elif kind == KIND_APPENDIX:
+            if self.appendix_book is not None:
+                base = self.appendix_book
+            else:
+                _warn_missing_special_config("appendix", ch)
         return replace(base, ignore=list(self.ignore_for_chapter(ch)))

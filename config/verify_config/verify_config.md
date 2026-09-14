@@ -104,6 +104,10 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 - **生成**：由 `make_config.py` 分别扫各 kind 的页区间半自动产出（同样打 `_provenance` 戳、同样过 `_extraction_done.json` 上游闸——**无手写侧门**）；检测偏差直接改 `verify_config.json` 本身即可（`make_config.py` 在文件已存在且非 `--force` 时跳过，不会覆盖手动修改）。
 - **校验**：`require_complete()` 对三类子配置套用**同一套闸门**（ordinal 必为合法数组、type∈合法码、section_types 角色码合法）。
 
+🔴 **缺子配置的回退不是无害的（Lee 2e 实测）**：书的附录条目印作 `Theorem A.1`（字母章位），回退到数字章号的正文配置后，`config_for_chapter` 的 chapter-first 数字比对把这些条目**全部判为跨章引用丢弃**——build_structure 抽出 0 条，整附录被塞进单个 description 节点（数万字符原始 OCR），而下游一切「照常运行」。因此：
+  * `ConfigLoader.config_for_chapter` 遇到缺省回退时发**一次性 stderr 警告**（`_warn_missing_special_config`，进程级去重）——看到它就说明该书的 verify_config.json 需要升级；
+  * `make_config.py`（非 `--force`）对已存在的外层 map 做**增量升级**：缺 `appendix`/`supplement` 键而书的章节映射确有该 kind 的章时，自动补写该键（既有键原样保留，`--force` 才整份重生成）。补写后必须**重跑 build_structure 重建这些章的契约**。
+
 ### 章类判定与路由（`ConfigLoader.chapter_kind` / `config_for_chapter`）
 
 与分章契约命名（`chapter_label` 依 `kind` 把数字章写成 `ch{N}`、附录章 `appendix{X}`、补篇章 `supplement{S}`）**严格同源**：

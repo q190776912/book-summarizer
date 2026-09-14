@@ -41,8 +41,9 @@
   - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。支持两种键形态：裸编号（全章生效）与 `'<sec>#<num>'` 作用域键（仅该节生效，见上）。
 - **scope/depth 耦合不变量（由 `type` 决定，配置必守）**：scope:3⇒`type 1`(depth 1，节级裸`(N)`)；scope:2⇒`type≥4`(depth≥2，章级带 C. 前缀)；scope:1 通常 `type 1` 全局连续。违反即非法，`require_complete` 应拒。
 - **书源编号抽取**：`SourceFormulaIndex.build()` 遍历 `page_{start:03d}.json .. page_{end:03d}.json`，对每页 `text[].text` 用**由 `type` 派生的 `depth`** 正则抽编号（`build_formula_patterns(ncomp)` 覆盖 `（1.17）`/`(1.17)`/`Eq. 1.17`/`Equation 1.17`/`式（1.17）`/裸 `1.17` 六种变体，每式单捕获组），`norm()` 归一后归入本章集合 S。**只读 text**；`formulas[].latex` 仅在一条守卫下参与——latex **以括号包裹的 `(C.N)` 开头**（OCR 把显示公式连同其编号捕获为 latex 首 token 的形态，如 Han–Lin `(4.3) \quad …`，此时编号从未落进 `text[]`，漏收会使总结忠实的 `\tag` 被误判 FABRICATED）才交给同一 `_scan_text` 管线；普通数学不会以 `(\d+.\d+)` 开头，不会把代数噪声混进 S（2026-09-09）。
-  - 🔴 **编号 token 的正则核属于 `lib.numbering.formula_num_core`（唯一真源）**：本层抽书源编号、`attach_content` 给公式挂 `tag`、`check_content_completeness` 做序标独立真值，三处共用同一套形态（段数由 `formula.type` 经 `ORDINAL_DEPTH` 派生；分隔符 `. - · ,`；可选字母后缀）。**改形态只改 `lib/numbering.py`**，否则三处口径漂移会互相判对方"漏/编造"。
-  - 实测形态差异极大，**不可假设 `(C.N)`**：约半数书右缘编号**不带括号**（Kreyszig / Evans SDE / PDE / Ross / 随机过程 / 解析数论），另有 `11.1-1` 连字符三段、`8.11a` 字母后缀等。编号还可能排在公式**左缘**（Kreyszig / 解析数论 / PDE）而非右缘。
+  - 🔴 **编号 token 的正则核属于 `lib.numbering.formula_num_core`（唯一真源）**：本层抽书源编号、`attach_content` 给公式挂 `tag`、`check_content_completeness` 做序标独立真值，三处共用同一套形态（段数由 `formula.type` 经 `ORDINAL_DEPTH` 派生；分隔符 `. - · ,`；可选字母后缀；`letter_ch` 时首段为单个大写字母）。**改形态只改 `lib/numbering.py`**，否则三处口径漂移会互相判对方"漏/编造"。
+  - 实测形态差异极大，**不可假设 `(C.N)`**：约半数书右缘编号**不带括号**（Kreyszig / Evans SDE / PDE / Ross / 随机过程 / 解析数论），另有 `11.1-1` 连字符三段、`8.11a` 字母后缀、字母章位 `(A.3)`（Lee ISM 附录）等。编号还可能排在公式**左缘**（Kreyszig / 解析数论 / PDE）而非右缘。
+  - 🔴 **字母章位编号（`formula.letter_ch: true`，2026-09-14 落地）**：`(A.3)` / `（B.12）` 形态（Lee 附录 B.1-B.15 / C.1-C.21 / D.1-D.21 实测）。patterns/norm 接受单个大写字母首段（`norm('（A.03）')`→`'A.3'`）；`scope==2` 跨章守卫用字母首分量对比章键（`'B'`）直接工作；**裸排变体在该模式下永不启用**（裸 `A.3` 与 `Fig. A.3` / 小节标题 `C.1` 无形态区别）。`make_config.detect_formula` 对页区间 letter-led 形态占优（≥30 次行尾命中且压过 digit）时自动写 `"letter_ch": true` 并按字母章回退判定 scope。多字母 / 罗马前缀（`II.5` / `App.2`）仍为 RESERVED（`q_letter_led` WARN）。
 - **序标校验（自动 FAIL）**：
   - `q_fabricated`(FABRICATED)：总结 `\tag` 编号归一后**不在 S**（编造/串号）→ 始终 FAIL。
   - `q_inconsistent`(INCONSISTENT)：编号**重复**，或**跨章**（`scope == 2` 时首分量 ≠ 当前章号）→ 始终 FAIL。
@@ -55,7 +56,7 @@
 - **build_sectioned 节推进信号（2026-08 收紧）**：`C.S-1` 推进标记只接受**剥离后行首**且后随空白的形态（真实条目标题形如 `9.3-1 Definition (Monotone sequence). ...`）；行中引用（`(cf. 9.9-1)`、`theorem 4.2-1 (variants`）与 OCR 断行残块（行首 `9.2-1), and ...`）一律不再触发。Strogatz 式标题路径（`_HEAD_RE` + 顺序 +1）排除 `N.M-K` 条目形态与行首 `N.M)` 括注断行，防止把条目续行当标题。
 - **作用域化 ignore 键**：per-chapter ignore 文件的键可为裸编号或 `'<sec>#<num>'`（如 `'9.8#17'`）——后者只在该节内静默该编号。节级重置书中每个裸编号在全章各节复用，章级忽略会连累其他节的合法 `\tag{n}` 校验；浓缩省略类豁免一律优先用 scoped 键并附理由。
 - **公式内容校验（人工对账）**：`verify_all` 末聚合各章 `q_rows` 写出 `<extract_dir>/formula_audit.md`，并排列出「总结 LaTeX / 书源文本片段」，机器**不判内容对错**。
-- **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错，**或书源采用字母/罗马开头编号 `(A.3)`/`(I.2)` 这类 Q 层暂不支持的形态（预留待实现）**），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。字母/罗马开头场景由 `_detect_letter_led_formulas` 提前探测并把 WARN 文案改为「该格式暂不校验、须人工核对 formula_audit」，避免误导成配置错。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
+- **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错，或书源采用多字母/罗马前缀编号 `II.5`/`App.2` 这类仍 RESERVED 的形态），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。单字母章位 `(A.3)` 已支持（`formula.letter_ch: true`）；若书源检出单字母章位编号而 config 未启用 `letter_ch`，`_detect_letter_led_formulas` 的 WARN 文案会指向补配置（mis-config 提示），罗马/多字母则仍提示「暂不校验、须人工核对 formula_audit」。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
 
 ## 本阶段规则（阻断性 / 可修复）
 - FABRICATED / INCONSISTENT → 始终 FAIL（阻断）。
@@ -81,7 +82,7 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登�
 **书源公式编号集合 S** 1:1 对应；编造/错位/跨章须人工核对书源，脚本不臆造编号。
 
 - **前置（缺一不可）**：`verify_config.json` 须配 `formula` map（`type`/`scope`），
-否则 Q 层静默 no-op（见本层顶部警告）。看到 `[Q-LAYER WARN]` 必须补全配置，禁止宣称公式校验通过。
+否则 Q 层静默 no-op（见本层顶部警告）。看到 `[Q-LAYER WARN]` 必须补全配置，禁止宣称公式校验通过。附录字母章位编号须 `formula.letter_ch: true`（落在外层 map 的 `appendix` 段；`make_config` 重生成即自动写入——手写 config 无效）。
 - **触发门（report.py）**：`Q-LAYER FORMULA FABRICATED` / `Q-LAYER FORMULA INCONSISTENT` → 始终 FAIL；
 `Q-LAYER FORMULA MISSING`（未登记 ignore）→ FAIL（阻断）；`Q-LAYER FORMULA ORDER_MISMATCH` / `Q-LAYER FORMULA MISPLACED` → 仅 WARN（非阻断）。
 - **修复步骤**：

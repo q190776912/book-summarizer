@@ -164,7 +164,8 @@ def _head_norm(s: str) -> str:
 _CAPTION_LEAD_RE = re.compile(r'^\s*(?:figure|fig\.?\b|图)', re.IGNORECASE)
 
 
-def build_formula_patterns(ncomp: int, allow_bare: bool = True) -> List[str]:
+def build_formula_patterns(ncomp: int, allow_bare: bool = True,
+                           letter: bool = False) -> List[str]:
     """Build source-extraction regexes from a formula key's component count.
 
     `allow_bare` (default True, the historical behaviour) also emits the bare
@@ -176,6 +177,15 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True) -> List[str]:
     explicitly-marked forms — ``(N.M)`` / ``Eq. N.M`` / ``Equation N.M`` /
     ``式（N.M）`` — are then collected.
 
+    `letter=True`（`formula.letter_ch: true`）: letter-chapter-led numbering
+    `(A.3)` / `（B.12）`（Lee ISM appendices）。The token core comes from the
+    SAME single source (`lib.numbering.formula_num_core(..., letter=True)`);
+    the **bare variant is never emitted** in this mode — a bare `A.3` is
+    indistinguishable from `Fig. A.3` / section headings like `C.1`, so only
+    parenthesised / `Eq.`-prefixed forms are collected (宁缺勿滥).
+    Multi-letter / Roman prefixes (`II.5` / `App.2`) remain RESERVED — the
+    `_LETTER_LED_RE` probe still surfaces them as a WARN.
+
     `ncomp` is the number of numeric components (the `depth` field): 2 -> `1.17`,
     3 -> `11.1-1`, 1 -> `7`.  Each returned pattern has exactly ONE capture
     group returning the raw number token; SourceFormulaIndex.norm() then
@@ -184,12 +194,6 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True) -> List[str]:
     """
     if ncomp is None or ncomp < 1:
         ncomp = 1
-    # TODO(letter-led): books whose formula numbers START with a letter / Roman
-    # numeral (e.g. `(A.3)` / `（I.2）`) are NOT supported yet.  To add support,
-    # prepend an optional leading prefix `([A-Za-z]{1,4}[.\-·,])?` to `group`
-    # below (and mirror it in norm()), then add a `letter` branch to
-    # `_validate_formula_config` so the pre-flight stops treating them as a
-    # mis-config.  Until then, `_detect_letter_led_formulas` surfaces a WARN.
     # Capture the optional trailing letter suffix (e.g. `8.11a`) so that
     # sub-formula numbers extracted from the book source match the summary's
     # `\tag{8.11a}`.  Without this, `norm()` keeps the suffix on the summary
@@ -198,8 +202,16 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True) -> List[str]:
     # matches unchanged.
     # 🔴 编号 token 的正则核与 `lib.numbering.formula_num_core` 同源（唯一真源）：
     # attach_content 挂 tag、本层抽书源编号、完整性闸门做独立真值，三处必须读
-    # 同一套形态（段数 / 分隔符 / 字母后缀），否则口径漂移会互相判对方"漏/编造"。
-    group = '(' + formula_num_core(ncomp) + ')'
+    # 同一套形态（段数 / 分隔符 / 字母后缀 / 字母章位），否则口径漂移会互相判
+    # 对方"漏/编造"。
+    group = '(' + formula_num_core(ncomp, letter=letter) + ')'
+    if letter:
+        # Letter-chapter-led: parenthesised + Eq.-prefixed forms only (no bare).
+        return [
+            r'[（(]\s*' + group + r'\s*[）)]',   # （A.3） / (B.12)
+            r'\bEq\.?\s+' + group,                # Eq. A.3
+            r'\bEquation\s+' + group,             # Equation A.3
+        ]
     if ncomp == 1:
         # Per-section bare numbering (Kreyszig): genuine formula numbers appear
         # as a STANDALONE `(N)` / `（N）` attached to a displayed equation.
@@ -366,22 +378,25 @@ class SourceFormulaIndex:
                         y = poly[1]
                 self._track_heading(txt)
                 self._scan_text(txt, nums, pg, y)
-            # 🔴 Leading-number latex guard（2026-09-09，Han–Lin (4.3) 实测）：
-            # OCR 有时把显示公式**连同其编号**捕获为 `formulas[].latex` 的开头
-            # token（如 "(4.3) \\quad |A(k,R)|..."）——此时编号从未出现在
-            # `text[]`，S 漏收该真实显示编号，总结忠实的 \\tag 反被误判
-            # FABRICATED。补救：仅当 latex **以括号包裹的 (C.N) 开头**时才把
-            # 该 latex 交给同一 `_scan_text` 管线（复用同一 pattern + 归一化）。
-            # 普通数学内容绝不会以 "(\\d+.\\d+)" 开头，故不会把代数噪声混进 S。
-            for fblk in data.get('formulas', []) or []:
-                lx = (fblk.get('latex') or fblk.get('formula') or '') \
-                    if isinstance(fblk, dict) else ''
-                ls = (lx or '').strip()
-                if not ls:
-                    continue
-                if not re.match(r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]', ls):
-                    continue
-                self._scan_text(ls, nums, pg, None)
+                # 🔴 Leading-number latex guard（2026-09-09，Han–Lin (4.3) 实测）：
+                # OCR 有时把显示公式**连同其编号**捕获为 `formulas[].latex` 的开头
+                # token（如 "(4.3) \\quad |A(k,R)|..."）——此时编号从未出现在
+                # `text[]`，S 漏收该真实显示编号，总结忠实的 \\tag 反被误判
+                # FABRICATED。补救：仅当 latex **以括号包裹的 (C.N) 开头**时才把
+                # 该 latex 交给同一 `_scan_text` 管线（复用同一 pattern + 归一化）。
+                # 普通数学内容绝不会以 "(\\d+.\\d+)" 开头，故不会把代数噪声混进 S。
+                # letter-chapter-led `(A.3)` 开头同理放行（捕获仍由 patterns 决定，
+                # digit 书的 letter patterns 不存在 → 零回归）。
+                for fblk in data.get('formulas', []) or []:
+                    lx = (fblk.get('latex') or fblk.get('formula') or '') \
+                        if isinstance(fblk, dict) else ''
+                    ls = (lx or '').strip()
+                    if not ls:
+                        continue
+                    if not (re.match(r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]', ls)
+                            or re.match(r'^[（(]\s*[A-Z]\s*[.·]\s*\d{1,3}\s*[）)]', ls)):
+                        continue
+                    self._scan_text(ls, nums, pg, None)
         self._by_chapter[ch] = nums
 
     def build_sectioned(self, ch: int, start: int, end: int,
@@ -932,6 +947,7 @@ class SourceFormulaIndex:
             'Eq. 2.3'    -> '2.3'
             '式（3,4）'  -> '3.4'
             '2.3a'       -> '2.3'   (trailing letter suffix dropped)
+            '（A.03）'   -> 'A.3'   (letter-chapter-led; leading zero folded)
         """
         if not raw:
             return None
@@ -946,21 +962,21 @@ class SourceFormulaIndex:
         # peel a single outer parenthesis pair (handles （）and ())
         while s and s[0] in '（(' and s[-1] in '）)':
             s = s[1:-1].strip()
-        m = re.match(r'(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
+        # Optional leading single capital letter + separator (`A.3` / `A.03`
+        # letter-chapter-led; the head group swallows its trailing separator).
+        # Pure-digit tokens never have it, so digit-led books are unaffected —
+        # norm() only ever sees tokens the configured patterns captured.
+        m = re.match(r'([A-Z][.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
         if not m:
-            # TODO(letter-led): tokens like `A.3` / `I.2` (letter / Roman
-            # prefix) fall through here and return None.  When support lands,
-            # extend this regex with an optional leading `([A-Za-z]{1,4}
-            # [.\-·,])?` group and normalise it.  Until then such numbers are
-            # intentionally un-validated (see `_detect_letter_led_formulas`).
             return None
-        core = m.group(1)
-        suffix = m.group(2)
+        head, core, suffix = m.group(1), m.group(2), m.group(3)
         # Fold separators to '.' and strip leading zeros per component so that
         # `(02)` / `(02.5)` normalise to `2` / `2.5` and match `\tag{2}` /
-        # `\tag{2.5}`.  Pure-digit components only, so int() is safe.
+        # `\tag{2.5}`.  Pure-digit components only, so int() is safe — the
+        # optional letter head is re-prepended verbatim.
         norm_core = re.sub(_SEP_CLASS, '.', core)
         norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
+        parts = ([head[0]] if head else []) + [norm_core]
         # Drop the trailing letter suffix (e.g. `8a` -> `8`).  Books such as
         # Strogatz number sub-parts of a single displayed equation as
         # `(8a)`, `(8b)`, while the curated summary groups them under one
@@ -975,7 +991,7 @@ class SourceFormulaIndex:
         # here is purely for S-membership / MISSING / FABRICATED reconciliation;
         # collapsing distinct lettered sub-equations into one key would
         # falsely flag them as duplicate \tag numbers.
-        return norm_core
+        return '.'.join(parts)
 
     @staticmethod
     def norm_full(raw: Optional[str]) -> Optional[str]:
@@ -1004,14 +1020,15 @@ class SourceFormulaIndex:
         s = s.strip()
         while s and s[0] in '（(' and s[-1] in '）)':
             s = s[1:-1].strip()
-        m = re.match(r'(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
+        # Optional leading single capital letter + separator — mirrors norm().
+        m = re.match(r'([A-Z][.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
         if not m:
             return None
-        core = m.group(1)
-        suffix = m.group(2)
+        head, core, suffix = m.group(1), m.group(2), m.group(3)
         norm_core = re.sub(_SEP_CLASS, '.', core)
         norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
-        return norm_core + (suffix.lower() if suffix else '')
+        norm_full = '.'.join(([head[0]] if head else []) + [norm_core])
+        return norm_full + (suffix.lower() if suffix else '')
 
 
 def _extract_summary_tags(md_file: str) -> List[FormulaTag]:
@@ -1072,6 +1089,10 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # 而 Koopman（标签为章级两段、噪声为函数/散文括号）不再被误判。
         single_re = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
         dotted_paren = re.compile(r'[（(]\s*(\d+\.\d+)\s*[）)]')
+        # Letter-chapter-led `(A.3)` counts as two-component too (Lee ISM
+        # appendices) — without it a letter_ch book's scope-2 pre-flight sees
+        # dotted==0 and wrongly demands a scope change.
+        dotted_paren_letter = re.compile(r'[（(]\s*[A-Z][.·]\d+\s*[）)]')
         # 3-component (C.S.N) numbers are also genuine multi-component formula
         # labels; the original dotted_paren only matched 2 components, so
         # chapter-wide 3-component books (e.g. Lasota-Mackey 5.7.21) were wrongly
@@ -1103,11 +1124,14 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
                 ts = t.strip()
                 if _standalone.fullmatch(ts):
                     # Genuine standalone formula label on its own line.
-                    if dotted_paren.search(t) or dotted_eq.search(t) or dotted_cn.search(t) or dotted_paren3.search(t):
+                    if (dotted_paren.search(t) or dotted_eq.search(t)
+                            or dotted_cn.search(t) or dotted_paren3.search(t)
+                            or dotted_paren_letter.search(t)):
                         dotted += (len(dotted_paren.findall(t))
                                    + len(dotted_eq.findall(t))
                                    + len(dotted_cn.findall(t))
-                                   + len(dotted_paren3.findall(t)))
+                                   + len(dotted_paren3.findall(t))
+                                   + len(dotted_paren_letter.findall(t)))
                     elif single_re.search(t):
                         single += len(single_re.findall(t))
                     continue
@@ -1119,7 +1143,8 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
                     dotted += (len(dotted_paren.findall(t))
                                + len(dotted_eq.findall(t))
                                + len(dotted_cn.findall(t))
-                               + len(dotted_paren3.findall(t)))
+                               + len(dotted_paren3.findall(t))
+                               + len(dotted_paren_letter.findall(t)))
         return single, dotted
 
     # 1) Configured patterns extract nothing but the book clearly HAS formulas.
@@ -1210,23 +1235,34 @@ def _detect_letter_led_formulas(ext_dir: str, start, end) -> Set[str]:
 def _letter_led_note(found: Set[str]) -> Optional[str]:
     """Build the (non-blocking) WARN note for letter / Roman-led formula numbers.
 
-    Returns the note string when `found` is non-empty, else None.  The Q layer
-    cannot yet *validate* such numbering (norm() / build_formula_patterns are
-    digit-led — see TODO(letter-led) anchors).  Per the Q-layer SSOT
-    (formula_tag.md), this is a **WARN + downgrade**, NOT a blocking FAIL: the
-    layer skips 1:1 validation of those numbers and asks for human
-    reconciliation via formula_audit.md, instead of silently degrading to a
-    false-green pass OR spuriously blocking a digit-led book (the old behaviour
-    misfired on algebraic `(n-1)` / reference `(Fig. 19)` parentheticals).
+    Returns the note string when `found` is non-empty, else None.  Two branches
+    (2026-09-14 letter-led support landed):
+
+    * ONLY single-letter tokens (`(A.3)`) are found → the book uses
+      letter-chapter-led numbering but the config has NOT enabled
+      `letter_ch` — a mis-config hint pointing at the fix (the numbering itself
+      is now supported).
+    * Multi-letter / Roman tokens (`II.5` / `App.2`) are found → still
+      RESERVED: per the Q-layer SSOT (formula_tag.md), a WARN + downgrade, NOT
+      a blocking FAIL — that part stays un-validated and asks for human
+      reconciliation via formula_audit.md, instead of silently degrading to a
+      false-green pass OR spuriously blocking a digit-led book.
     """
     if not found:
         return None
+    single = {f for f in found
+              if re.fullmatch(r'[（(]\s*[A-Z]\s*[.·]\s*\d+[a-zA-Z]?\s*[）)]', f)}
+    if single and single == set(found):
+        return (
+            f"书源含字母章位公式编号（如 {sorted(found)[:3]}…），但 verify_config.json 的"
+            f" formula 未启用 \"letter_ch\": true → 此类编号本轮未经机器校验。"
+            f"请在对应段（正文 \"ch\" / 附录 \"appendix\"）的 formula 配置加"
+            f" \"letter_ch\": true 后重跑 verify。")
     return (
-        f"书源含字母/罗马开头公式编号（如 {sorted(found)[:3]}…），"
-        f"但 Q 层公式序标校验的 norm()/build_formula_patterns() 目前**仅支持数字开头**编号，"
-        f"此类编号的 1:1 真实性逻辑尚未实现，故**降级为 WARN（不阻断）**：该部分公式序标"
-        f"未经机器校验，请人工核对 <extract>/formula_audit.md。待实现「可选首段字母/罗马前缀」"
-        f"支持（见代码 TODO(letter-led) 锚点）后可恢复校验。")
+        f"书源含多字母/罗马开头公式编号（如 {sorted(found - single)[:3] if sorted(found - single) else sorted(found)[:3]}…），"
+        f"该形态（罗马/多字母前缀）Q 层暂不支持，降级为 WARN（不阻断）：该部分公式序标"
+        f"未经机器校验，请人工核对 <extract>/formula_audit.md。单字母章位编号已支持"
+        f"（formula 配置 \"letter_ch\": true）。")
 
 
 def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
@@ -1747,13 +1783,19 @@ class QLayer(VerifyLayer):
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
         ncomp = _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
+        # `formula.letter_ch` (default False): letter-chapter-led numbering
+        # `(A.3)` / `（B.12）`（Lee ISM appendices）.  Patterns and norm() then
+        # accept a single leading capital letter; the cross-chapter guard
+        # (scope 2) compares the letter head against the chapter key ('A'…).
+        letter = bool(formula.get('letter_ch'))
         # `formula.bare_number` (default True): when False, the bare ``N.M``
         # variant is dropped from the source-extraction patterns.  Books whose
         # prose is full of numbered cross-references (Lee: ``(Fig. 1.2)``,
         # ``1-11`` Problem labels) otherwise collect those as phantom formula
         # numbers and report each as MISSING.
         patterns = build_formula_patterns(
-            ncomp, allow_bare=bool(formula.get('bare_number', True)))
+            ncomp, allow_bare=bool(formula.get('bare_number', True)),
+            letter=letter)
 
         # Pre-flight: validate the formula config against the actual book BEFORE
         # the structural compare loop.  A depth/scope mismatch would otherwise
@@ -1813,10 +1855,12 @@ class QLayer(VerifyLayer):
                 om, mp = _compute_order_and_section(
                     tags_sec, src, fglob, reset_on_section=True,
                     scoped_ignore=fscoped)
-                # RESERVED letter/Roman-led: same BLOCKING probe as the chapter
-                # path — a letter-led book must not silently pass via section
-                # scope either.
-                _ll_sec = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
+                # RESERVED letter/Roman-led probe: only meaningful when the
+                # config has NOT enabled `letter_ch` (with it, single-letter
+                # numbering IS validated; multi-letter/Roman stays RESERVED).
+                # A letter-led book must not silently pass via section scope.
+                _ll_sec = ([] if letter else
+                           _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end))
                 ll_note_sec = _letter_led_note(_ll_sec)
                 if ll_note_sec is not None:
                     print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note_sec}",
@@ -1837,16 +1881,14 @@ class QLayer(VerifyLayer):
                                  ncomp=ncomp, keep_cross_refs=fkeep)
         src.build(ctx.ch, ctx.start, ctx.end)
 
-        # RESERVED: letter / Roman-led formula numbering (e.g. (A.3)/(I.2)).
-        # norm()/patterns are digit-led, so such numbering is NEVER validated by
-        # the Q layer.  Whenever the book source actually contains letter-led
-        # formula numbers — regardless of whether S is empty — surface a BLOCKING
-        # FAIL (via q_letter_led): the verification is incomplete and must not
-        # pass until the supporting logic lands.  This is the "implement the
-        # logic before this book can validate" guarantee that prevents the
-        # false-green case (prose like "3.1 Theorem" can populate S with
-        # digit-led numbers while the letter-led ones stay silently un-validated).
-        _ll = _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end)
+        # RESERVED probe for letter / Roman-led formula numbering.  With
+        # `letter_ch` enabled, single-letter `(A.3)` numbering IS validated by
+        # the normal path — the probe only fires for UN-configured letter-led
+        # sources (mis-config hint) or multi-letter / Roman prefixes
+        # (`II.5` / `App.2`, still unsupported → BLOCKING WARN).  See
+        # _letter_led_note for the two branches.
+        _ll = ([] if letter else
+               _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end))
         ll_note = _letter_led_note(_ll)
         if ll_note is not None:
             print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note}", file=sys.stderr)

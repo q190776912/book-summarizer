@@ -121,6 +121,36 @@ def _load_old_ordinal(cfg_path, section_key="ch"):
     # legacy flat format: 顶层 ordinal
     return data.get("ordinal", []) or []
 
+
+def _load_old_formula(cfg_path, section_key="ch"):
+    """旧配置同段 `formula` 中 operator 登记的键（`ignore` / `bare_number`）。
+
+    `detect_formula` 只能从书源**探测** `type`/`scope`/`letter_ch`；而
+    `ignore`（噪声账本，如 Lee 正文的 `"7.35"`）与 `bare_number`（裸排编号
+    开关，Lee 散文 `1-11` Problem 标签须关）是**人工判断**，探测层无法重建。
+    重生成配置若不回贴，登记过的噪声会静默复活 → 假 MISSING。与
+    `_load_old_ordinal` 同构：map 格式读 ``data[section_key]["formula"]``，
+    扁平格式读顶层 ``formula``。无旧配置 / 无 formula / 无登记键 → ``None``。
+    """
+    try:
+        with open(cfg_path, encoding="utf-8-sig") as f:
+            data = json.load(f) or {}
+    except Exception:
+        return None
+    if isinstance(data, dict) and any(k in data for k in ("ch", "appendix", "supplement")):
+        sub = data.get(section_key)
+        fc = sub.get("formula") if isinstance(sub, dict) else None
+    else:
+        fc = data.get("formula")
+    if not isinstance(fc, dict):
+        return None
+    out = {}
+    if "ignore" in fc:
+        out["ignore"] = fc["ignore"]
+    if "bare_number" in fc:
+        out["bare_number"] = fc["bare_number"]
+    return out or None
+
 # --- section hierarchy (D-layer) -------------------------------------------
 # `section_types` (ORDINAL-DEPTH codes, NOT "chapter/section" role names) MUST
 # NOT be inferred from the ordinal type alone — it is a PER-LEVEL list ordered
@@ -506,8 +536,9 @@ HEADING_SHORT_MAX = 80   # blocks at/under this length are scanned whole
 
 # Formula-number detectors — patterns shared from lib/regexlib.py
 from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
-                           F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
-                           SEP_SPLIT_RE)
+                          F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
+                          F_LETTER_RE as _F_LETTER_RE,
+                          SEP_SPLIT_RE)
 
 # --- formula detection confidence gate ------------------------------------
 # The loose `(N)` / `（N）` text scan matches MANY non-formula contexts in a
@@ -557,11 +588,18 @@ def detect_formula(extract_dir, pages=None):
     Counts standalone single-component ``(N)``/``（N）`` vs two-component
     ``(C.N)``/``Eq. C.N``/``式（C.N）`` occurrences across the WHOLE book, then
     decides the global formula config by whole-book aggregation (never by
-    sampling the first N pages).
+    sampling the first N pages).  Letter-chapter-led ``(A.3)`` / ``（B.12）``
+    (Lee ISM appendices) is counted via ``F_LETTER_RE`` with the same
+    tail-clean discipline; when it dominates the range (>= _FORMULA_MIN_COUNT
+    and beats the digit form) the returned config carries
+    ``"letter_ch": True`` and the scope is decided by whether the digit
+    component resets after each chapter letter (per-letter reset → scope 2).
 
-    Returns a ``{"type", "scope", "ignore"}`` dict (``depth`` is DERIVED from
-    ``type`` via ORDINAL_DEPTH, so it is not part of the config), or ``None`` when
-    neither shape is detected (caller then simply omits the ``formula`` key).
+    Returns a ``{"type", "scope", "ignore"[, "letter_ch"]}`` dict (``depth`` is
+    DERIVED from ``type`` via ORDINAL_DEPTH, so it is not part of the config),
+    or ``None`` when no shape is detected (caller then simply omits the
+    ``formula`` key).  Operator-registered keys (``ignore`` / ``bare_number``)
+    from the previous config are re-attached by ``_build_config_dict``.
 
     Phase guard: requires MM Repair to be finished (``_extraction_done.json``
     present — written only after mode A+B are applied back to ``page_*.json``,
@@ -579,7 +617,9 @@ def detect_formula(extract_dir, pages=None):
         glob.glob(os.path.join(extract_dir, 'page_*.json')))
     single_count = 0
     dotted_count = 0
+    letter_count = 0
     single_nums = []  # ints in page order, for per-section-reset fallback
+    letter_hits = []  # (letter, num) in page order, for letter-ch scope check
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -608,6 +648,39 @@ def detect_formula(extract_dir, pages=None):
             dotted_count += len(_F_DOT_RE.findall(text))
             dotted_count += len(_F_EQ_RE.findall(text))
             dotted_count += len(_F_CN_EQ_RE.findall(text))
+            # Letter-chapter-led `(A.3)`: same tail-clean discipline as the
+            # single-component scan (the block's LAST letter-led paren must be
+            # a right-aligned equation number).  Letter-led books (Lee ISM
+            # appendices) score ZERO on _F_DOT_RE — its `\d+\.\d+` core cannot
+            # match a letter first component — so without this counter the
+            # appendix sub-config silently loses its `formula` key entirely.
+            lmatches = list(_F_LETTER_RE.finditer(text))
+            if lmatches:
+                llast = lmatches[-1]
+                if _formula_tail_clean(text[llast.end():]):
+                    letter_count += 1
+                    letter_hits.append((llast.group(1), int(llast.group(2))))
+
+    # Letter-chapter-led candidate (checked FIRST — letter-led pages also score
+    # a little on single/dotted noise, and letter-led must win when present).
+    if letter_count >= _FORMULA_MIN_COUNT and letter_count > dotted_count:
+        # Scope: per-letter-chapter reset (B.1..B.15 then C.1.. → scope 2) vs
+        # one book-wide letter series (scope 1) — decided by whether the first
+        # number of a later letter is smaller than the previous letter's max.
+        letters = []
+        for lt, _n in letter_hits:
+            if lt not in letters:
+                letters.append(lt)
+        scope = 1
+        for i in range(1, len(letters)):
+            first_of_later = next(n for l2, n in letter_hits
+                                  if l2 == letters[i])
+            prev_max = max(n for l2, n in letter_hits
+                           if l2 == letters[i - 1])
+            if first_of_later < prev_max:
+                scope = 2
+                break
+        return {"type": 4, "scope": scope, "ignore": [], "letter_ch": True}
 
     if single_count > dotted_count and single_count > 0:
         # Single-component candidate.  Require CONFIDENT evidence of a genuine
@@ -1526,6 +1599,11 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     config["chapter_first"] = bool(cm_chapter_first)
     config["section_scoped"] = bool(not cm_chapter_first)
     if formula_cfg is not None:
+        # 回贴 operator 登记（ignore / bare_number 是人工判断，探测层无法重建，
+        # 见 _load_old_formula）——缺了这步，重生成即静默清空噪声账本。
+        old_f = _load_old_formula(cfg_path, section_key)
+        if old_f:
+            formula_cfg.update(old_f)
         config["formula"] = formula_cfg
     config["_provenance"] = {
         "generated_by": "make_config.py",
@@ -1594,6 +1672,52 @@ def _generate_special_verify_configs(extract_dir):
     return out
 
 
+def _upgrade_missing_special_keys(extract_dir, cfg_path):
+    """已存在的 verify_config.json 缺 appendix/supplement 子配置时的增量升级。
+
+    🔴 Lee 2e 实测教训：书先由旧版本生成（当时附录分支不存在或未检出），
+    此后 skill 升级了 letter-chapter 支持，但「已存在则跳过」硬闸让这份
+    缺 ``"appendix"`` 键的配置永远不更新——ConfigLoader 把附录章静默回退到
+    数字章号的正文配置，``Theorem A.1`` 全部判为跨章引用，build_structure
+    抽出 0 条，整附录被塞进单个 description，而所有下游都无感。
+
+    因此普通（非 --force）运行时做**增量升级**：外层 map 缺哪个 special 键、
+    而书的章节映射确实含该 kind 的章，就只补写那个键（整份重扫、保留既有键
+    的手动修改原样不动）。补写后打印变更清单。既有键一律不碰——
+    ``--force`` 才是整份重生成。
+    """
+    try:
+        with open(cfg_path, encoding='utf-8-sig') as fh:
+            data = json.load(fh)
+    except Exception as e:
+        print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。读取失败: {e}")
+        return 0
+    if not isinstance(data, dict):
+        print(f"[make_config] 已存在 {cfg_path}（非外层 map 格式），跳过（用 --force 覆盖）。")
+        return 0
+
+    missing = [k for k in ('appendix', 'supplement') if k not in data]
+    if not missing:
+        print(f"[make_config] 已存在 {cfg_path}，跳过（外层 map 完整；用 --force 覆盖）。")
+        return 0
+
+    special = _generate_special_verify_configs(extract_dir)
+    added = []
+    for key in missing:
+        if special.get(key) is not None:
+            data[key] = special[key]
+            added.append(key)
+    if not added:
+        print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。"
+              f"缺 {missing} 键但对应 kind 的章未检出或无页区间——若这不符合预期，"
+              f"请核对 chapter_map.json 的章名/章号。")
+        return 0
+    with open(cfg_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[make_config] ⚠ 增量升级 {cfg_path}：补写缺失的 {added} 子配置"
+          f"（既有键原样保留）。附录/补篇章自下一次运行起改走自己的编号体例；"
+          f"须重跑 build_structure 重建这些章的契约。")
+    return 0
 
 
 def main():
@@ -1611,7 +1735,7 @@ def main():
 
     cfg_path = os.path.join(extract_dir, 'verify_config.json')
     if os.path.exists(cfg_path) and not force:
-        print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。")
+        _upgrade_missing_special_keys(extract_dir, cfg_path)
         return 0
 
     # 🔒 硬闸：MM Repair 未完成（缺 _extraction_done.json）一律拒绝生成配置，

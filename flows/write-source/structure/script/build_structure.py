@@ -1161,8 +1161,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 对 "1.1-1" 永不命中 → 3a `continue` 漏掉全部 Exercise。改为：可选字母首
     # 分量 + [.\-] 分隔符无关，digit-first（"1.2-3"）与字母前缀（"A.4-1"）均命中，
     # exercise 节点键取 normkey 形态，_section_of_exer 据字母前缀派生 §A.N。
+    # 🔴 两级字母号变体（Lee 2e 实测）：附录练习印作 "Exercise A.3"（字母章位 +
+    # 单段数字），normkey 后为 "A.3"。旧正则的两段数字核 `\d[.\-]\d` 对它永不
+    # 命中 → 3a `continue`，附录练习整章漏收（A 29 条 / B 22 条 / C 7 条）。
+    # 增加字母前缀 + 单段数字的变体（字母前缀强制存在，裸单数字仍是散文噪声
+    # 不得收）；alternation 放在三级形态之后，三级书行为不变。
     _exer_num_re = re.compile(
-        r'((?:[A-Za-z][.\-])?\d{1,2}[.\-]\d{1,2}(?:[.\-](?:\d{1,3}|[A-Z]))?)\.?$')
+        r'((?:[A-Za-z][.\-])?\d{1,2}[.\-]\d{1,2}(?:[.\-](?:\d{1,3}|[A-Z]))?'
+        r'|(?:[A-Za-z][.\-])\d{1,3})\.?$')
     _exer_seen = {r[2] for r in ex_rows}
     for it in raw_items:
         if (it.get("label") or "").strip() not in _EXERCISE_LABELS:

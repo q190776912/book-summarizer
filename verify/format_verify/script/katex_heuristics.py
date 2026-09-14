@@ -150,6 +150,78 @@ def find_naked_command_errors(lines):
     return errs
 
 
+# Pass 1g: display-fence damage.  Three shapes, all invalid KaTeX and all
+# repaired by format_verify Pattern 11 (`fix_katex.fix_display_fence_wrappers`):
+#   * escaped fence   `\$\$`  — the block is not in math mode at all;
+#   * doubled fence   `$$` repeated on adjacent lines with the same prefix —
+#     the empty block shifts the pairing, so every later `\tag` lands "outside";
+#   * a `$$` block body wrapped in an inline `$...$` — `$` is never legal
+#     inside `$$...$$`.
+# These are line-shape facts, so they are detectable WITHOUT rendering; doing
+# it here keeps the defect visible in the F-layer report instead of surfacing
+# only as a cascade of KaTeX parse errors (the shape that stayed invisible
+# until a render was run).
+_DF_PFX_RE = re.compile(r'^((?:>[ \t]*)*)(.*)$')
+
+
+def _df_split(line):
+    m = _DF_PFX_RE.match(line.rstrip('\r\n'))
+    return (m.group(1), m.group(2)) if m else ('', line.rstrip('\r\n'))
+
+
+def find_display_fence_damage_errors(lines):
+    """Pass 1g: flag escaped / doubled / `$`-wrapped display fences."""
+    errs = []
+    n = len(lines)
+    # 🔴 Fences are strictly alternating open/close, so only ODD occurrences
+    # (1st, 3rd, …) OPEN a block.  The previous version re-ran the body scan
+    # for EVERY `$$` line, including CLOSING fences: from a closing fence it
+    # walked forward to the NEXT block's opening fence and treated all prose
+    # in between (e.g. a standalone `$\blacksquare$` ending a proof) as
+    # "block body" — reporting it as an inline-`$`-wrapped display block.  On
+    # books that end proofs with `$\blacksquare$` (Lee) this fired on every
+    # such line (24 false F-layer hits across 22 chapters) even though the md
+    # had perfectly paired fences.  Skip closing fences entirely.
+    _fence_no = 0
+    for i, line in enumerate(lines):
+        pfx, core = _df_split(line)
+        if core.strip() == '\\$\\$':
+            errs.append(
+                f'line {i + 1}: display fence escaped as `\\$\\$` — the block '
+                f'is not in math mode; restore `$$` (format_verify Pattern 11)')
+            continue
+        if core.strip() != '$$':
+            continue
+        _fence_no += 1
+        if _fence_no % 2 == 0:
+            continue          # closing fence — nothing to scan
+        if i + 1 < n:
+            p2, c2 = _df_split(lines[i + 1])
+            if c2.strip() == '$$' and p2 == pfx:
+                errs.append(
+                    f'line {i + 1}: doubled display fence (`$$` repeated on the '
+                    f'next line with the same prefix) — the empty block shifts '
+                    f'fence pairing; collapse to one (format_verify Pattern 11)')
+                continue
+        j = i + 1
+        while j < n and _df_split(lines[j])[1].strip() != '$$':
+            j += 1
+        for k in range(i + 1, min(j, n)):
+            if not lines[k].strip():
+                continue
+            _pk, ck = _df_split(lines[k])
+            s = ck.strip()
+            if len(s) > 2 and s.startswith('$') and not s.startswith('$$') \
+                    and s.endswith('$') and not s.endswith('$$') \
+                    and s.count('$') == 2:
+                errs.append(
+                    f'line {k + 1}: `$$` block body wrapped in an inline '
+                    f'`$...$` span — `$` is not legal inside `$$...$$` (KaTeX: '
+                    f'"Can\'t use function \'$\' in math mode"); drop the inner '
+                    f'`$` pair (format_verify Pattern 11)')
+    return errs
+
+
 # Pass 1e: a `$` at line start that swallowed a structural prefix, e.g.
 #   `$> - \mu_*$ ...`  or  `$> (b) \mathbb Z_n$ ...`  or  `$- \mu:A\to B$ ...`
 # This destroys the blockquote `>` marker / list bullet / item numbering

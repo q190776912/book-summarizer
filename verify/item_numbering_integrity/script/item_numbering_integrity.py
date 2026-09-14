@@ -409,6 +409,12 @@ def _md_tail_blocking(ctx, cfg, groups):
 
     blocking = []
     for gk, pairs in sorted(groups.items()):
+        # 🔴 练习/问题独立窗（ex:）不做 TAIL 比对：源侧 ctx.items 的分组尚未按
+        # ex 窗拆分（源侧练习与条目同 (gi,prefix) 混窗，smax 被条目号抬高——
+        # Katok §1.1 实测 源最大 6 vs md 3）。ex 窗仅做顺序/缺号校验，TAIL 交由
+        # 人工或后续源侧分组适配。
+        if ':ex:' in gk:
+            continue
         # `gk` is "{gi}:<body>" where <body> is the numeric prefix string,
         # "file" (uncat), or "file:<label>".
         body = gk.split(':', 1)[1] if ':' in gk else gk
@@ -416,6 +422,9 @@ def _md_tail_blocking(ctx, cfg, groups):
             prefix_str, label = '', 'uncat'
         elif body.startswith('file:'):
             prefix_str, label = '', body[len('file:'):]
+        elif body.startswith('ex:'):
+            # 🔴 练习/问题独立编号窗（见 entries 构建处 Katok 注记）
+            prefix_str, label = body[len('ex:'):], 'exercise'
         else:
             prefix_str, label = body, 'uncat'
         last = max(n for n, _ in pairs)
@@ -600,6 +609,26 @@ def _md_gap_blocking(ctx):
         # present_md key uses the dash form ("C.S-N") so the extraction-side
         # OCR-suppression filter (which builds "sec-num") can match it.
         key = f"{prefix_str}-{item_num}" if prefix_str else str(item_num)
+        # 🔴 Katok 2026-09-13：练习/问题环境在书中独立于条目计数器按节重排
+        # （Exercise 1.1.1 = §1.1 第 1 题，与 Definition 1.1.1 同形不同序），
+        # 而 many books 的 config 把 Exercise 与条目词映射进同一 ordinal 组
+        # （实测 gi 同为 0）——练习重排的 1 混进条目序列被误判「顺序错乱」
+        # （Katok 23 章 md 层 65 处假 BLOCKING）。练习/问题强制独立编号窗：
+        # gk 中段插 'ex'（body 解析处识别；组 id 数值不变，cfg.ordinal[gi]
+        # 回读不受影响），练习缺号/顺序校验在独立窗内进行。
+        _lab = (label or '').strip().lower().rstrip('*')
+        # exercise_shared_numbering（Lee 体例）：练习与定理/例共用章内同一条
+        # 1..N 序列，此处不得为 exercise 另开窗，否则定理号全被报成「练习缺号」。
+        # Problem 无论何种模式都独立开窗——它用 N-M 编号（Lee 章末 Problems
+        # 印作 "1-1."），与条目的 N.M 不同形，并入会与 Theorem 1.1 撞号。
+        _shared = bool(getattr(cfg, 'exercise_shared_numbering', False))
+        if _lab in ('exercise', 'exercse', 'problems', 'problem', '习题', '问题') \
+                and not (_shared and _lab in ('exercise', 'exercse', '习题')):
+            if ':' in gk:
+                _gh, _gb = gk.split(':', 1)
+                gk = f"{_gh}:ex:{_gb}"
+            else:
+                gk = f"{gk}:ex"
         entries.append((gk, item_num, key, label, prefix_str))
 
     groups = defaultdict(list)
@@ -658,6 +687,9 @@ def _md_gap_blocking(ctx):
             prefix_str, label = '', 'uncat'
         elif body.startswith('file:'):
             prefix_str, label = '', body[len('file:'):]
+        elif body.startswith('ex:'):
+            # 🔴 练习/问题独立编号窗（见 entries 构建处 Katok 注记）
+            prefix_str, label = body[len('ex:'):], 'exercise'
         else:
             prefix_str, label = body, 'uncat'
         # Recover the human-readable label(s) carried by this group so the emit
@@ -778,13 +810,31 @@ def _md_gap_blocking(ctx):
         for i, num in enumerate(seq_f):
             last_pos[num] = i
         ordered = [num for num, _ in sorted(last_pos.items(), key=lambda kv: kv[1])]
+        # 🔴 Katok 2026-09-13：幽灵重复节点（正文引用被 build_structure 误当条目
+        # 头建出同号重节点，如 §1.1 的第二个 定义1.1.1「Thus any such map…」）
+        # 使序列出现同号二现。按「保留首次」去重后若单调，则为重复节点伪影而非
+        # 真实错位 → 降级为非阻断 WARN（重复编号仍列出供清理）；真实错位
+        # （去重后仍非单调）照旧 BLOCKING。
+        first_pos = {}
+        for i, num in enumerate(seq_f):
+            first_pos.setdefault(num, i)
+        ordered_first = [num for num, _ in sorted(first_pos.items(), key=lambda kv: kv[1])]
+        monotone_first = all(ordered_first[i] >= ordered_first[i - 1]
+                             for i in range(1, len(ordered_first)))
         for i in range(1, len(ordered)):
             if ordered[i] < ordered[i - 1]:
-                blocking.append(
-                    f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq_f}]: 编号 {ordered[i]} "
-                    f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
-                    f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
-                    f"将 {pref}-{ordered[i]} 移到正确位置。")
+                if monotone_first:
+                    dups = sorted({n for n in seq_f if seq_f.count(n) > 1})
+                    warnings.append(
+                        f"  WARN (non-blocking): 疑似幽灵重复节点 @{pref} [gk={gk_key}]: "
+                        f"同号二现 {dups}（保留首次去重后单调）——正文引用被误建为条目"
+                        f"节点，请核对源书并清理契约中的重复节点。")
+                else:
+                    blocking.append(
+                        f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq_f}]: 编号 {ordered[i]} "
+                        f"出现在更大编号 {ordered[i-1]} 之后（去重后阅读顺序 {ordered}）→ "
+                        f"疑似条目错位（如 2.6-8 被排到 2.6-11 之后）。请核源书真实顺序，"
+                        f"将 {pref}-{ordered[i]} 移到正确位置。")
                 break  # 每节只报一次，避免洪水
 
     # 尾部校验：.md 最大号 vs 提取契约（源）同组最大号（非阻断）

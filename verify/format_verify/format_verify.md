@@ -58,8 +58,11 @@ $$x = y$$
 | 6 | 集合符号 `{x` 花括号未转义 | `$A_n={x$` → 缺 `\{` / `\}` |
 | 7 | `$$\text{N}pt\]` 对齐参数 | `\\[\text{N}pt]` 被改写为 `$$\text{N}pt]` |
 | 8 | `$$` 块内空行 | 空白行插入 `$$` 内部，部分渲染器中断显示块 |
+| 9 | 展示围栏损伤：转义 `\$\$`、重复 `$$`、`$$` 块内 body 被 `$…$` 包裹 | 批量正则把「孤立数学行提升为展示块」时留下；三类都非法 KaTeX |
 
-> 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–10（含单行 `$$…$$` 显示数学拆分）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览；🔴 独立 CLI 自 2026-09 起内置 PREFLIGHT 写回守卫，与 `verify --fix` 同级），复验 `python verify/format_verify/script/check_katex.py <file>`。
+> 修复由 `verify/format_verify/script/fix_katex.py`（code `C`，纯字符串变换，不含 `check_katex --fix` 的级联破坏风险）一站式覆盖模式 1–11（含单行 `$$…$$` 显示数学拆分、展示围栏损伤归一）；亦可独立运行 `python verify/format_verify/script/fix_katex.py <book_dir>`（加 `--dry-run` 预览；🔴 独立 CLI 自 2026-09 起内置 PREFLIGHT 写回守卫，与 `verify --fix` 同级），复验 `python verify/format_verify/script/check_katex.py <file>`。
+>
+> 🔴 **模式 11 的判定（展示围栏损伤归一）**：一处批量正则若想把「孤立数学行提升为展示块」，会留下三种形态——① 围栏被转义成 `\$\$`（该块根本没进数学模式）；② 同一前缀的 `$$` 在相邻两行重复（空块把后续围栏配对整体错位，块内 `\tag` 全被挤出块外）；③ `$$` 块 body 被行内 `$…$` 包裹（`$` 在 `$$…$$` 内永远非法 → KaTeX `Can't use function '$' in math mode`）。三者都由模式 11 归一（剥内层 `$`、折叠重复围栏、还原 `\$\$`、补回块内丢失的 `>` 前缀）。检测侧由 `check_katex` Pass 1g（`find_display_fence_damage_errors`，纯行形态、不需渲染即可报）与写源单元门控的 F8 同步覆盖；回归测试见 `verify/tests/test_fix_katex_fence.py`。
 >
 > 🔴 **模式 2 的保守判定（2026-08 Kreyszig 事故修复）**：旧启发式「块内含中文且首行非反斜杠命令 → 拆围栏」把 `\text{中文}` 公式与字母开头的合法显示式（如 `p(\alpha x)=… \text{对所有 }…`）成批误拆（单章最多 -14 对围栏）。现规则：剥离 `$…$` 行内段后，仅当**行外文本含 CJK 散文且全块无任何 LaTeX 结构**（无命令/`&`/`^`/`_`/`{}`/`\begin{}`）或包裹 `##` 标题时才拆；纯关系式（`x=y+z.` 这类无命令块）一律保留围栏（疑错从有）。回归测试见 `verify/tests/test_fix_katex_fence.py`。
 
@@ -395,7 +398,7 @@ $$
 | fixer 代号 | 修复模块 | fix_order | fix_dict 键 | 修复对象 |
 |-----------|----------|-----------|-------------|----------|
 | H | fix_structural_label_guard.py | 1 | `h`, `h_stmt`, `h_ul`, `h_mbq`（硬约束顺序） | h_structural_bq / h_stmt_bq / h_ul_bq / h_mbq |
-| C | fix_katex.py | 2 | `c` | katex 模式综合修复（模式 1–10，纯字符串变换；含单行 `$$…$$` 拆分） |
+| C | fix_katex.py | 2 | `c` | katex 模式综合修复（模式 1–11，纯字符串变换；含单行 `$$…$$` 拆分、展示围栏损伤归一） |
 | G | fix_blockquote_continuity.py | 5 | `g` | quote_gaps / nested_bq（展平） / ex_proof_gaps（合并例证空隙 + 拆分同行例+证明） |
 | I | fix_item_separator.py | 6 | `i` | i_sep_gaps |
 | J | fix_intra_item_dash.py | 7 | `j` | j_header_dash |
@@ -406,7 +409,7 @@ $$
 
 > `--fix` 最终写回的变更字典顺序固定为 `{h, h_stmt, h_ul, h_mbq, c, g, i, j, k, l, m, n}`（键序固定为上述顺序，新增 `c` 为 KaTeX 自动修复）。
 >
-> 🔒 **前置守卫与 --preflight**：围栏（`\$\$`）不配对时一切按块作用域的判断都不可信——Q 层 `\$\$(.*?)\$\$` 顺序非贪婪配对，一个落单 `\$\$` 使其后所有块的奇偶归属整体翻转。因此（🔴）：① `verify_chapter.py --preflight` 提供只读检查表（fences / blocks / \\tag in-out 三数不变量，exit code 判通过）；② **全层 `--fix` 默认禁用**——裸 `--fix` 不运行任何 fixer，仅打印指引；确需自动修复用 `--fix --fix-force`，且仍须过 PREFLIGHT 门（围栏配对 + 无块外 `\\tag`，任一不满足即使 force 也拒绝）；③ G 层 fixer 内置同款守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）——fail fast 优于静默污染（2026-08 实测：Ch1 顶层正文被吞进引用块即 G 层在错位配对下运行所致）。
+> 🔒 **前置守卫与 --preflight**：围栏（`\$\$`）不配对时一切按块作用域的判断都不可信——Q 层 `\$\$(.*?)\$\$` 顺序非贪婪配对，一个落单 `\$\$` 使其后所有块的奇偶归属整体翻转。因此（🔴）：① `verify_chapter.py --preflight` 提供只读检查表（fences / blocks / \\tag in-out 三数不变量，exit code 判通过）；② **全层 `--fix` 默认禁用**——裸 `--fix` 不运行任何 fixer，仅打印指引；确需自动修复用 `--fix --fix-force`，且仍须过 PREFLIGHT 门（围栏配对 + 无块外 `\\tag`，任一不满足即使 force 也拒绝）；③ G 层 fixer 内置同款守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）——fail fast 优于静默污染（2026-08 实测：Ch1 顶层正文被吞进引用块即 G 层在错位配对下运行所致）；④ 不变量在**归一形态**上计算——转义围栏 `\$\$` 与同前缀相邻重复 `$$` 都是可修的围栏损伤（模式 11 的目标），先折成 `$$` 再配对，否则守卫会拒绝运行那个正好能修好它的 fixer；报告行附 `escaped=` / `doubled=` 计数。
 >
 > 🔧 **修复顺序纪律（同场事故教训）**：安全顺序 = 基线还原 → 围栏修复（一次性、从后往前，禁止边修边重扫）→ 公式块以公式行/`\\tag` 为锚点整体重建（引用块内保留 `> ` 前缀，行级重建剥前缀会产生成批裸 LaTeX）→ 引用连续性 → 风格收尾 → 每步 verify。OUTSIDE 非空时禁止逐处补围栏（Ch6 实测越补越乱 12→18）。
 

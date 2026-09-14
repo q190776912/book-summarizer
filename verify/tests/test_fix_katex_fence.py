@@ -24,6 +24,85 @@ import lib.boot as _boot
 _boot.setup()
 
 from verify.format_verify.script.fix_katex import fix_file  # noqa: E402
+from verify.format_verify.script.katex_heuristics import (  # noqa: E402
+    find_display_fence_damage_errors,
+)
+
+
+class FenceDamageRepairTest(unittest.TestCase):
+    """Pattern 11 — escaped / doubled / `$`-wrapped display fences.
+
+    All three shapes are produced by a bulk regex pass that tries to "promote
+    lone math lines to display blocks"; all three are invalid KaTeX and must be
+    repaired, while a well-formed file must come back byte-identical.
+    """
+
+    def _run(self, text):
+        fd, fp = tempfile.mkstemp(suffix=".md")
+        os.close(fd)
+        try:
+            with io.open(fp, "w", encoding="utf-8") as f:
+                f.write(text)
+            fix_file(fp)
+            with io.open(fp, encoding="utf-8") as f:
+                return f.read()
+        finally:
+            os.remove(fp)
+
+    def test_body_wrapped_in_inline_dollar_stripped(self):
+        out = self._run("$$\n$\\mathcal S = \\{ H, T \\}.$\n$$\n")
+        self.assertEqual(out, "$$\n\\mathcal S = \\{ H, T \\}.\n$$\n")
+
+    def test_escaped_fence_restored(self):
+        out = self._run("> **证明**：\n>\n> \\$\\$\n> P(A)=1\\tag{1.2.4}\n> \\$\\$\n")
+        self.assertNotIn("\\$\\$", out)
+        self.assertEqual(
+            sum(1 for l in out.split("\n") if l.strip().endswith("$$")), 2)
+        self.assertIn("P(A)=1\\tag{1.2.4}", out)
+
+    def test_doubled_fence_and_lost_prefix_repaired(self):
+        src = ("> **证明**：\n>\n> $$\n> $$\n"
+               "$P(A\\cup A^c)=P(\\mathcal S)=1\\tag{1.2.4}$\n> $$\n> $$\n")
+        out = self._run(src)
+        self.assertEqual(out, "> **证明**：\n>\n> $$\n"
+                              "> P(A\\cup A^c)=P(\\mathcal S)=1\\tag{1.2.4}\n> $$\n")
+
+    def test_multiline_body_wrapper_stripped(self):
+        # the closing `$` sits after a `\\` line break — it is still a wrapper
+        src = ("$$\n\\begin{aligned}\n$x &= y \\\\$\nz &= w.\n\\end{aligned}\n$$\n")
+        out = self._run(src)
+        self.assertEqual(out, "$$\n\\begin{aligned}\nx &= y \\\\\n"
+                              "z &= w.\n\\end{aligned}\n$$\n")
+
+    def test_two_inline_spans_untouched(self):
+        # not a single wrapper: two separate `$...$` spans -> leave alone
+        src = "$$\n$x$ $y$\n$$\n"
+        self.assertEqual(self._run(src), src)
+
+    def test_clean_file_untouched(self):
+        src = "$$\n\\mathcal S = \\{ H, T \\}.\n$$\n"
+        self.assertEqual(self._run(src), src)
+
+
+class FenceDamageDetectionTest(unittest.TestCase):
+    """Pass 1g (`find_display_fence_damage_errors`) — the F-layer must NAME
+    this defect class statically, not only surface it as a KaTeX cascade."""
+
+    def test_escaped_fence_flagged(self):
+        errs = find_display_fence_damage_errors(["> \\$\\$", "> x", "> \\$\\$"])
+        self.assertTrue(any("escaped" in e for e in errs), errs)
+
+    def test_doubled_fence_flagged(self):
+        errs = find_display_fence_damage_errors(["$$", "$$", "x", "$$"])
+        self.assertTrue(any("doubled" in e for e in errs), errs)
+
+    def test_wrapped_body_flagged(self):
+        errs = find_display_fence_damage_errors(["$$", "$x$", "$$"])
+        self.assertTrue(any("wrapped" in e for e in errs), errs)
+
+    def test_clean_block_not_flagged(self):
+        self.assertEqual(find_display_fence_damage_errors(
+            ["> $$", "> x &= y \\\\", "> $$"]), [])
 
 
 class FencePreserveTest(unittest.TestCase):

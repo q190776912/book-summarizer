@@ -64,6 +64,7 @@ from katex_heuristics import (                        # F 层：裸数学检测
     find_raw_arrow_errors,
     find_naked_command_errors,
     find_swallowed_prefix_errors,
+    find_display_fence_damage_errors,
 )
 from verbose_gates import check_verbose_proofs        # P 层：证明过长
 from struct_labels import TOP_LEVEL_HEADER_RE         # H 层：结构标签
@@ -344,6 +345,13 @@ def check_body(utype, name, body, expected_tags=None):
     if re.search(r"\\tag\s*\{", joined):
         all_problems.append(
             "\\tag 出现在 $$ 块外（编号必须随公式写在 $$ 块内，不得散落正文）")
+
+    # F8) 展示围栏损伤（转义 `\$\$` / 围栏重复 / `$$` 块内 body 被 `$...$` 包裹）
+    # —— 纯行形态检测，对 exercise 单元同样执行；三类都非法 KaTeX，
+    # 且都由 verify format_verify Pattern 11 机械修复
+    errs = find_display_fence_damage_errors(line_list)
+    if errs:
+        all_problems.extend(e.strip() for e in errs)
 
     # ── P 层 ──────────────────────────────────────────────────────────
 

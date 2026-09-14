@@ -26,7 +26,7 @@
      单元正文 ``\tag{}``——缺失（漏写编号公式）与多出（编造编号）均不通过
      （Q 层是章级末步，单元粒度必须提前拦；契约缺失时跳过对账）。
   ④ **真实 KaTeX 渲染（按章批量）**：把本章全部 item/desc/exercise 单元正文拼进
-     临时 md（``<extract>/_gate_render_tmp.md``，带单元边界标记），跑
+     临时 md（``<extract>/_gate_render_tmp_<章目录名>.md``，带单元边界标记），跑
      ``katex_render.run_render_check``（katex_validate.js 真渲染），错误按行号
      **映射回所属单元**——启发式抓不到的 `\begin` 不配对 / 未定义宏等在门控即拦，
      不再漏到步骤 8 verify。🔴 渲染工具链缺失（node / katex 未装）= 门控不通过
@@ -166,7 +166,7 @@ def _render_check_chapter(ext, out_dir, units):
         line_no += 1 + nlines + 1  # marker 行 + 正文行 + join 产生的空行
     if not parts:
         return []
-    tmp_md = os.path.join(ext, "_gate_render_tmp.md")
+    tmp_md = os.path.join(ext, "_gate_render_tmp_%s_%d.md" % (os.path.basename(out_dir), os.getpid()))
     with open(tmp_md, "w", encoding="utf-8") as f:
         f.write("\n".join(parts) + "\n")
     try:

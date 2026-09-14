@@ -85,6 +85,7 @@ from katex_heuristics import (
     find_naked_command_errors,
     find_swallowed_prefix_errors,
     find_bare_math_errors,
+    find_display_fence_damage_errors,
     _fence_looks_like_math,
 )
 from katex_render import run_render_check
@@ -308,6 +309,9 @@ def process_file(path, fix):
 
     # --- Pass 1f: character-type formulas outside math mode (rule #17) ---
     errors.extend(find_bare_math_errors(lines))
+
+    # --- Pass 1g: display-fence damage (escaped / doubled / $-wrapped) ---
+    errors.extend(find_display_fence_damage_errors(lines))
 
     # --- Pass 1i: equation number annotation outside $$ block (rule #10) ---
     # Detect lines like （式 (1.17)）/（式 (7)）/（式 (11.1-1)）/（式 (A.3)） that

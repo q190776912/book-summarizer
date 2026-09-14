@@ -80,6 +80,21 @@ Pattern 10 — Split single-line `$$ ... $$` display math onto separate lines
   Applies to both plain and blockquote (`> $$ formula $$`) single-line
   blocks.  Resolves check_katex Pass 1 detection so `verify --fix` is
   end-to-end for display-math line shape.
+
+Pattern 11 — Display-fence damage normalisation (escaped / doubled / $ -wrapped)
+  A bulk regex pass that means to "promote lone math lines to display blocks"
+  can leave four tell-tale shapes.  All four are invalid KaTeX and all are
+  repaired here (idempotent; only fires on the damaged shapes):
+    (a) escaped fence       > \$\$          ->  > $$
+    (b) doubled fence       > $$ / > $$    ->  > $$        (empty block collapse)
+    (c) body wrapped in $   $$ / $F$ / $$  ->  $$ / F / $$
+        including a wrapper spanning a MULTI-LINE body (opening `$` on the
+        first body line, closing `$` on the last).
+    (d) blockquote prefix lost inside a block: a body line under `> $$` with
+        no `>` prefix is re-prefixed, so the display block stays inside the
+        quote instead of breaking out of it.
+  `$` is never legal inside `$$ ... $$`, so (c) is unambiguous; (b) can only
+  be an empty block, which is never legal either.
 """
 
 import os, re, sys, glob
@@ -561,6 +576,123 @@ def fix_single_line_display_math(lines: list) -> bool:
     return changed
 
 
+_DDF_PFX_RE = re.compile(r'^((?:>[ \t]*)*)(.*)$')
+
+
+def _ddf_split(line: str):
+    """Split a markdown line into (blockquote prefix, rest)."""
+    m = _DDF_PFX_RE.match(line)
+    return (m.group(1), m.group(2)) if m else ('', line)
+
+
+def _ddf_fence(core: str) -> bool:
+    """True when the prefix-stripped line content is a display fence."""
+    return core.strip() in ('$$', '\\$\\$')
+
+
+def fix_display_fence_wrappers(lines: list) -> bool:
+    """Pattern 11: normalise escaped / doubled / `$`-wrapped display fences.
+
+    See the module docstring (Pattern 11) for the four repaired shapes.
+    Conservative by construction: fires only on shapes that are invalid
+    KaTeX, so a well-formed file is returned untouched (idempotent).
+    """
+    changed = False
+    n = len(lines)
+
+    def _nl_of(idx):
+        return '\n' if lines[idx].endswith('\n') else ''
+
+    def _body_of(idx):
+        nl = _nl_of(idx)
+        return (lines[idx][:-1] if nl else lines[idx]), nl
+
+    # (a) escaped fence  \$\$  ->  $$
+    for i in range(n):
+        body, nl = _body_of(i)
+        pfx, core = _ddf_split(body)
+        if core.strip() == '\\$\\$':
+            lines[i] = pfx + '$$' + nl
+            changed = True
+
+    # (b) collapse doubled adjacent fences sharing the same prefix
+    i = 0
+    while i < n - 1:
+        p1, c1 = _ddf_split(_body_of(i)[0])
+        p2, c2 = _ddf_split(_body_of(i + 1)[0])
+        if c1.strip() == '$$' and c2.strip() == '$$' and p1 == p2:
+            del lines[i + 1]
+            n -= 1
+            changed = True
+            continue
+        i += 1
+
+    # (c) strip a `$...$` wrapper around the block body
+    # (d) restore a lost blockquote prefix on body lines
+    i = 0
+    while i < n:
+        p0, c0 = _ddf_split(_body_of(i)[0])
+        if c0.strip() != '$$':
+            i += 1
+            continue
+        j = i + 1
+        while j < n and _ddf_split(_body_of(j)[0])[1].strip() != '$$':
+            j += 1
+        if j >= n:
+            i += 1
+            continue
+
+        body_idx = [k for k in range(i + 1, j) if lines[k].strip()]
+        if body_idx:
+            # (c1) a body line that is entirely one inline `$...$` span:
+            # exactly two `$` (one open, one close) and nothing outside them.
+            # `$` is never legal inside `$$ ... $$`, so this is unambiguous
+            # even when the closing `$` follows a `\\` line break
+            # (e.g. `$\mathrm{E}X^3 &= \ldots \\$`).
+            for k in body_idx:
+                bod, nl = _body_of(k)
+                pk, ck = _ddf_split(bod)
+                s = ck.strip()
+                if len(s) > 2 and s.startswith('$') and not s.startswith('$$') \
+                        and s.endswith('$') and not s.endswith('$$') \
+                        and s.count('$') == 2:
+                    a, b = ck.index('$'), ck.rindex('$')
+                    if b > a:
+                        lines[k] = pk + ck[:a] + ck[a + 1:b] + ck[b + 1:] + nl
+                        changed = True
+            # (c2) wrapper spanning a MULTI-LINE body: lone `$` opens on the
+            # first body line and closes on the last (does not fire on a
+            # well-formed block — both ends would have to be a lone `$`)
+            first, last = body_idx[0], body_idx[-1]
+            if first != last:
+                f_body, f_nl = _body_of(first)
+                fp, fc = _ddf_split(f_body)
+                l_body, l_nl = _body_of(last)
+                lp, lc = _ddf_split(l_body)
+                if fc.lstrip().startswith('$') and not fc.lstrip().startswith('$$') \
+                        and fc.count('$') == 1 \
+                        and lc.rstrip().endswith('$') and not lc.rstrip().endswith('$$') \
+                        and lc.count('$') == 1:
+                    a = fc.index('$')
+                    b = lc.rindex('$')
+                    lines[first] = fp + fc[:a] + fc[a + 1:] + f_nl
+                    lines[last] = lp + lc[:b] + lc[b + 1:] + l_nl
+                    changed = True
+
+        if p0:                                  # (d) re-prefix lost `>` lines
+            for k in range(i + 1, j):
+                if not lines[k].strip():
+                    continue
+                bod, nl = _body_of(k)
+                pk, ck = _ddf_split(bod)
+                if pk == '':
+                    lines[k] = p0 + bod + nl
+                    changed = True
+        i = j + 1
+
+    return changed
+
+
 def fix_file(fp: str, dry_run: bool = False) -> int:
     """Apply all fixes to a single file. Returns count of changes made."""
     with open(fp, 'r', encoding='utf-8') as f:
@@ -571,6 +703,13 @@ def fix_file(fp: str, dry_run: bool = False) -> int:
     # Pattern 10 — split single-line display math (run first so downstream
     # $$ -based patterns see properly-formed multi-line blocks)
     if fix_single_line_display_math(lines):
+        changes += 1
+        content = ''.join(lines)
+
+    # Pattern 11 — normalise escaped / doubled / `$`-wrapped display fences
+    # (must precede Pattern 2-3 so block bodies are clean before the
+    # prose-unwrap judgement runs)
+    if fix_display_fence_wrappers(lines):
         changes += 1
         content = ''.join(lines)
 

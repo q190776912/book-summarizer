@@ -18,6 +18,41 @@ import re
 
 _TAG_RE = re.compile(r'\\tag\{([^}]+)\}')
 _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
+_PFX_RE = re.compile(r'^((?:>[ \t]*)*)(.*)$')
+
+
+def normalize_fences(raw):
+    """Fold the two repairable display-fence damage shapes for the invariant.
+
+    * escaped fence  ``\\$\\$`` -> ``$$``   (a regex escape pass hides every
+      ``\\tag`` in the block from the non-greedy pairing below);
+    * doubled fence  ``$$`` immediately followed by ``$$`` with the same
+      blockquote prefix -> a single ``$$`` (an empty display block is never
+      legal, and the extra fence shifts the pairing so the body's ``\\tag``
+      lands "outside" and the file would be wrongly reported unpaired).
+
+    Returns ``(text, escaped, collapsed)``.  Read-only helper: used only for
+    the invariant, so a file blocked for a REAL fence defect still blocks.
+    """
+    escaped = 0
+    collapsed = 0
+    out = []
+    prev_fence_pfx = None
+    for ln in raw.replace('\r\n', '\n').split('\n'):
+        m = _PFX_RE.match(ln)
+        pfx, core = (m.group(1), m.group(2)) if m else ('', ln)
+        if core.strip() == '\\$\\$':
+            escaped += 1
+            core = core.replace('\\$\\$', '$$')
+        if core.strip() == '$$':
+            if prev_fence_pfx == pfx:
+                collapsed += 1
+                continue
+            prev_fence_pfx = pfx
+        else:
+            prev_fence_pfx = None
+        out.append(pfx + core)
+    return '\n'.join(out), escaped, collapsed
 
 
 def preflight_md(md_file):
@@ -25,14 +60,22 @@ def preflight_md(md_file):
 
     Returns dict:
       fences       — number of `$$` marks
+      escaped      — number of `\\$\\$` marks (escaped fences; repairable)
+      collapsed    — doubled adjacent fences folded away (repairable)
       balanced     — fences % 2 == 0
       blocks       — number of non-greedy paired $$...$$ spans
       tags_total   — number of \\tag{...} occurrences
       tags_in      — unique tags inside paired blocks
       tags_outside — sorted list of tags NOT inside any paired block
+
+    Escaped and doubled fences are folded first (see `normalize_fences`) —
+    both are damage that `format_verify` Pattern 11 repairs.  Counting them
+    raw would report such a file unpaired / with outside `\\tag`s and make the
+    guard refuse to run the very fixer that repairs it.
     """
     with open(md_file, encoding='utf-8') as f:
-        t = f.read()
+        raw = f.read()
+    t, escaped, collapsed = normalize_fences(raw)
     fences = t.count('$$')
     tags_total = _TAG_RE.findall(t)
     in_block = set()
@@ -42,6 +85,8 @@ def preflight_md(md_file):
     return {
         'file': md_file,
         'fences': fences,
+        'escaped': escaped,
+        'collapsed': collapsed,
         'balanced': fences % 2 == 0,
         'blocks': len(_BLOCK_RE.findall(t)),
         'tags_total': len(tags_total),
@@ -69,10 +114,19 @@ def print_preflight(md_files, label=''):
             if len(pf['tags_outside']) > 8:
                 shown += ',…'
             outside = '; OUTSIDE=' + shown
-        print('[PREFLIGHT]%s %s: fences=%d balanced=%s blocks=%d tags=%d (in=%d%s)'
+        esc = ''
+        if pf.get('escaped'):
+            esc += ' escaped=%d' % pf['escaped']
+        if pf.get('collapsed'):
+            esc += ' doubled=%d' % pf['collapsed']
+        print('[PREFLIGHT]%s %s: fences=%d balanced=%s blocks=%d tags=%d (in=%d%s)%s'
               % ((' ' + label) if label else '', os.path.basename(fp),
                  pf['fences'], 'YES' if pf['balanced'] else 'NO',
-                 pf['blocks'], pf['tags_total'], pf['tags_in'], outside))
+                 pf['blocks'], pf['tags_total'], pf['tags_in'], outside, esc))
+        if pf.get('escaped') or pf.get('collapsed'):
+            print('  ~~ 围栏损伤（转义 %d / 重复 %d）：已按归一形态计入配对；'
+                  'format_verify Pattern 11 会还原为 `$$`'
+                  % (pf.get('escaped', 0), pf.get('collapsed', 0)))
         if not pf['balanced']:
             print('  !! 围栏不配对：先修复 $$ 围栏再运行 --fix 或任何块作用域修复'
                   '（步骤见 verify/format_verify/format_verify.md「前置守卫」）')

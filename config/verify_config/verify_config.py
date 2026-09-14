@@ -532,6 +532,17 @@ class BookConfig:
     # ordering).  Default False — books whose item number's second component
     # IS the section number keep the number-derived placement.
     chapter_scoped_items: bool = False
+    # Exercises/Problems SHARE the chapter's single item counter with theorems,
+    # lemmas and examples (Lee《Intro to Smooth Manifolds》: Theorem 1.2,
+    # Example 1.3 and Exercise 1.6 are consecutive slots of ONE 1..N sequence).
+    # The B-layer otherwise forces exercises into a separate numbering window
+    # (`:ex:`, added for Katok where exercises renumber per section), which for
+    # such a book reports every theorem/example number as a MISSING exercise —
+    # hundreds of structural false BLOCKINGs.  When True the exercise window is
+    # NOT split off and exercises are checked against the shared item sequence.
+    # Default False — books with per-section exercise numbering (Katok) and
+    # books with a truly separate Problem counter are unaffected.
+    exercise_shared_numbering: bool = False
     # Chapter-LOCAL section numbering (e.g. Karlin: sections are ``§1, §2, §3``
     # that RESET every chapter, NOT global ``§C.S``).  The whole structure /
     # verify tooling assumes globally-prefixed ``§C.S`` section numbers, so a
@@ -805,6 +816,7 @@ class BookConfig:
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
             chapter_scoped_items=bool(data.get('chapter_scoped_items', False)),
+            exercise_shared_numbering=bool(data.get('exercise_shared_numbering', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             sections_global=bool(data.get('sections_global', False)),
             exercise_region_headings=[

@@ -72,9 +72,11 @@ from verify.script.base import VerifyLayer, LayerResult, LayerFixResult
 # ── 练习归拢块：独立标题 / 独立加粗 ───────────────────────────────────────
 # 节末/章末「自建」的 `### 练习` `### 习题` `### Exercises` 归拢标题块——策略上章末整块习题本就省略不写，
 # 此处专拦「无中生有新建归拢块」的违规（穿插习题应原位内联为 `**练习 N.M.X**：` 而非标题块）。
-EXER_HEADING_RE = re.compile(r'^#{1,6}\s+.*(?:练习|习题|[Ee]xercises?)\s*$')
+# 大小写无关：OCR 常把节末标题排成全大写（Bass 实测 `## §3.2 EXERCISES`），
+# 旧写法 `[Ee]xercises?` 只覆盖首字母大小写，全大写标题被漏放（假阴）。
+EXER_HEADING_RE = re.compile(r'^#{1,6}\s+.*(?:练习|习题|exercises?)\s*$', re.I)
 # 独立加粗（无编号）：`**练习**` / `**习题**` / `**Exercise**` / `**练习：**`
-EXER_BOLD_RE = re.compile(r'^\*\*(?:练习|习题|Exercise)\b[：:]*\*\*\s*$')
+EXER_BOLD_RE = re.compile(r'^\*\*(?:练习|习题|exercise)\b[：:]*\*\*\s*$', re.I)
 
 # ── OCR 噪声：页眉/页脚/版权 ──────────────────────────────────────────────
 NOISE_RES = [
@@ -167,7 +169,11 @@ def check_bare_items(lines, ordinal):
 
 # 习题专属节（如 "1.11 Exercises" / "3.9 习题" / "Problems"）——按习题收录规则可省略，
 # 不计入「骨架必写节」契约（详见 verify/verbose_gates/verbose_gates.md 习题收录规则）
-EXER_SEC_TITLE_RE = re.compile(r'(?:练习|习题|习)\s*\d*\s*$|[Ee]xercises?\b|[Pp]roblems?\b')
+# 大小写无关：与 EXER_HEADING_RE 同口径。OCR 常把节末标题排成全大写
+# （Bass 实测契约 `2.3 EXERCISES`），旧写法 `[Ee]xercises?` 无法匹配，
+# 于是「全大写习题节」既被 p_exer_block 禁写标题、又被本集合当成必写节，
+# 形成无解矛盾。统一 re.I 后：习题节一律可省略（不进 required）。
+EXER_SEC_TITLE_RE = re.compile(r'(?:练习|习题|习)\s*\d*\s*$|exercises?\b|problems?\b', re.I)
 
 
 # 标题归一化（无序号标小节按标题匹配用）：去 LaTeX/标点/空白，保留字母数字与

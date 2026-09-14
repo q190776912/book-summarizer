@@ -19,6 +19,8 @@
    FAIL**（fail-closed）——manifest 缺 `src_hash` 时漂移检测即失效，等于给
    「源未定稿就翻译」留旁路；补齐须重跑 `init_translate_units`。
 7. **未翻译残留（WARN 升 FAIL）**：item / desc 单元译文哈希 == 源文哈希，即整单元未翻译。
+   仅对**含散文**的单元判定（`_has_prose` 先剥掉 `$$...$$` 与 `$...$`）——纯公式单元
+   （如 `$y \\in \\Re$`）与纯图单元两侧本就应逐字一致，不算漏译。
 
 用法
 ----
@@ -78,21 +80,24 @@ def _labels(body):
     return sorted(out)
 
 
-def _prose_lines(body):
-    """散文行（不在 $$ 块内、非 img/div、非空）——纯公式/纯图单元无散文行。"""
-    out = []
-    in_math = False
-    for ln in body.split("\n"):
-        s = ln.strip()
-        if s.startswith("$$"):
-            in_math = (not in_math) if s == "$$" else in_math
+def _has_prose(body):
+    """True when the unit carries natural-language text worth translating.
+
+    "未翻译" can only be judged on prose: a pure-formula unit (`$y \\in \\Re$`)
+    or a pure-image unit is *correctly* byte-identical in both languages, so
+    flagging it is a false positive.  All math ($$...$$ and $...$) is masked
+    out first; whatever visible text remains decides.
+    """
+    s = re.sub(r"\$\$[\s\S]*?\$\$", " ", body)
+    s = re.sub(r"\$[^$\n]*\$", " ", s)
+    for ln in s.split("\n"):
+        t = ln.strip()
+        if not t:
             continue
-        if in_math or not s:
+        if "<img" in t or "<div" in t or "</div>" in t or t.startswith("<!--"):
             continue
-        if "<img" in s or "<div" in s or "</div>" in s or s.startswith("<!--"):
-            continue
-        out.append(s)
-    return out
+        return True
+    return False
 
 
 def _hash_text(text):
@@ -146,7 +151,7 @@ def check_chapter_parity(ext, ch_key):
 
         # 7) 未翻译残留（仅对该翻译的散文：纯公式 / 纯图单元译文与源文一致是正确的）
         if utype in ("item", "desc") and sb.strip() and tb.strip() \
-                and _prose_lines(sb) \
+                and _has_prose(sb) \
                 and _hash_text(sb.rstrip("\n")) == _hash_text(tb.rstrip("\n")):
             problems.append("单元 %s 译文与源文完全相同（未翻译）" % a["file"])
 

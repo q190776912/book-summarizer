@@ -164,8 +164,17 @@ def _head_norm(s: str) -> str:
 _CAPTION_LEAD_RE = re.compile(r'^\s*(?:figure|fig\.?\b|图)', re.IGNORECASE)
 
 
-def build_formula_patterns(ncomp: int) -> List[str]:
+def build_formula_patterns(ncomp: int, allow_bare: bool = True) -> List[str]:
     """Build source-extraction regexes from a formula key's component count.
+
+    `allow_bare` (default True, the historical behaviour) also emits the bare
+    ``N.M`` variant — any bare number token found in the source text counts as a
+    formula number.  Books that sprinkle NUMBERED CROSS-REFERENCES through the
+    prose (Lee: ``(Fig. 1.2)`` everywhere, plus ``1-11`` Problem labels) get a
+    huge phantom source set from that variant and report every reference as a
+    MISSING formula.  Such books set ``formula_bare_number: false``; only
+    explicitly-marked forms — ``(N.M)`` / ``Eq. N.M`` / ``Equation N.M`` /
+    ``式（N.M）`` — are then collected.
 
     `ncomp` is the number of numeric components (the `depth` field): 2 -> `1.17`,
     3 -> `11.1-1`, 1 -> `7`.  Each returned pattern has exactly ONE capture
@@ -209,8 +218,10 @@ def build_formula_patterns(ncomp: int) -> List[str]:
     ]
     # The bare `group` variant catches standalone multi-component numbers
     # (`1.17`); it is not used for the 1-level case above.
-    if ncomp != 1:
-        pats.append(group)                     # bare 1.17
+    # 🔴 Katok 2026-09-13：bare 变体此前无词边界——「Lemma 13.4.2」中段会切出
+    # '3.4.2'（首数字被吞），伪造 S 条目制造假 MISSING。加数字/点负向断言。
+    if ncomp != 1 and allow_bare:
+        pats.append(r'(?<![\d.])' + group)     # bare 1.17（词边界保护）
     return pats
 
 
@@ -555,6 +566,27 @@ class SourceFormulaIndex:
                                 mm.start() >= _tail_only_span[0]
                                 and mm.end() <= _tail_only_span[1]):
                             continue
+                        # 🔴 Katok 2026-09-13：sectioned 内联提取此前缺 _scan_text
+                        # plain 路径的条目词守卫——「Proposition 1.3.3. If α is
+                        # irrational」（定理头）、「0.4.1. Give an example of」
+                        # （习题头：条目号后跟祈使句）、「1.9.11 Theorem1.9.11.」
+                        # （OCR 复写头）、「(2.5.1), we consider」（括号散文引用）
+                        # 全部混入 S，制造 729 条假 MISSING。补四道门（与 plain
+                        # 路径同口径）：
+                        _pre = txt[max(0, mm.start() - 24):mm.start()]
+                        if _ITEM_LABEL_RE.search(_pre):
+                            continue  # ① 条目词前缀（Proposition 1.3.3 / (cf. Definition 1.9.3)）
+                        _rest = txt[mm.end():mm.end() + 48]
+                        if re.match(
+                                r'[\.\。]?\s*(?:definition|theorem|remark|example|proposition|corollary|exercise|lemma|定义|定理|引理|推论|命题|例|习题|注)\b',
+                                _rest, re.IGNORECASE):
+                            continue  # ② 编号后紧跟条目词（OCR 复写头「1.9.11 Theorem1.9.11.」）
+                        if re.match(
+                                r'[\.\。]\s*(?:Give|Prove|Show|Define|Let|Suppose|Consider|Find|Construct|Formulate|Describe|Generalize|Disprove|Every|Each)\b',
+                                _rest, re.IGNORECASE):
+                            continue  # ③ 条目号 + 祈使句 = 习题头（「0.4.1. Give an example of」）
+                        if _rest[:1] in (',', ';', '，', '；'):
+                            continue  # ④ 括号号后紧跟逗号/分号 = 散文交叉引用（「(2.5.1), we consider」）
                         raw = mm.group(1)
                         n = self.norm(raw)
                         if not n or n in self.ignore or not self._plausible(n):
@@ -589,6 +621,23 @@ class SourceFormulaIndex:
                                 idx = 0
                             snippet = txt[max(0, idx - 20): idx + len(span) + 20]
                             self._source_text[n] = snippet[:60]
+        # 🔴 Katok 2026-09-13：en3 体例（标签首组件=章号）下，跨章引用（如 ch5
+        # 引用 ch1 的 (1.5.6)）会混入本章 S，按节对账判假 MISSING。两道过滤：
+        # ①确定性（优先）：首组件 ∈ 书章号集且 ≠ 当前章 → 跨章引用，剔除
+        #   （多数决在自有公式少的章会失效——ch11/ch16/ch19 实测）；
+        # ②多数决兜底：书章号集不可用时，首组件多数 == 当前章才启用同款过滤。
+        from collections import Counter as _C
+        _cnt = _C(n.split('.')[0] for s in sectioned.values() for n in s)
+        _book_chs = {str(k) for k in (getattr(self, '_book_chapter_keys', None)
+                                      or set())}
+        _majority = bool(_cnt) and _cnt.get(str(ch), 0) * 2 > sum(_cnt.values())
+        if _majority or _book_chs:
+            for _s in sectioned:
+                sectioned[_s] = {
+                    n for n in sectioned[_s]
+                    if n.split('.')[0] == str(ch)
+                    or (n.split('.')[0] not in _book_chs and not _majority)
+                }
         # chapter-wide union (used for FABRICATED so source-section misalignment
         # can never produce a false FABRICATED)
         union: Set[str] = set()
@@ -642,8 +691,33 @@ class SourceFormulaIndex:
 
     def _record_pos(self, n: str, pg, y) -> None:
         """Record the earliest (page, y) occurrence of `n` (its definition site)."""
-        if n not in self._primary_pos or (pg, y) < self._primary_pos[n]:
+        if n not in self._primary_pos:
             self._primary_pos[n] = (pg, y)
+            return
+        old_pg, old_y = self._primary_pos[n]
+        # Handle None values: treat None as "unknown/undefined"
+        # If both are None, they're equal - don't update
+        # If one is None, the defined one is "earlier" (more useful)
+        if pg is None and old_pg is None:
+            return  # Both unknown, keep existing
+        if pg is None:
+            return  # New is unknown, keep existing (which is defined)
+        if old_pg is None:
+            self._primary_pos[n] = (pg, y)  # Old is unknown, replace with defined
+            return
+        # Both pg values are defined - compare normally
+        if pg < old_pg:
+            self._primary_pos[n] = (pg, y)
+        elif pg == old_pg:
+            # Same page - compare y values (handle None y)
+            if y is None and old_y is None:
+                return  # Both unknown on same page
+            if y is None:
+                return  # New y unknown, keep existing
+            if old_y is None:
+                self._primary_pos[n] = (pg, y)  # Old y unknown, replace
+            elif y < old_y:
+                self._primary_pos[n] = (pg, y)
 
     def _update_pos(self, n: str, pg, y) -> None:
         """Record earliest position AND anchor the book-side section to the
@@ -1329,6 +1403,11 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     rows: List[Dict[str, str]] = []
     seen_fab: Set[str] = set()
     seen_inc: Set[str] = set()
+    # MISSING is emitted once per chapter even in the sectioned path: a source
+    # number can sit in several sections' sets (loose per-section assignment),
+    # and the row carries no section, so re-emitting it per section only
+    # inflated the reported count (observed 5x) without adding information.
+    seen_miss: Set[str] = set()
 
     md_by_sec: Dict[str, list] = {s: [] for s in md_sections}
     for sec, t in tags_sec:
@@ -1389,10 +1468,21 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
         if not s_empty:
             covered = {t.normalized for t in tags
                        if t.normalized and t.normalized not in ignore}
+            # 🔴 Katok 2026-09-13：游离编号块（OCR 把右缘编号切成孤立 text 块）
+            # 常被节推进逻辑分进相邻节，而总结的 \tag 在正确节——按节比对会把
+            # 「他节已 tag」误报为本节 MISSING（阻断）。改为：章内任何节已 tag
+            # 即不算 MISSING（跨节归属差异由 q-mp / ORDER 机制以 WARN 报告）；
+            # 全章都未 tag 的编号才是真漏写，维持阻断。
+            covered_anywhere = {t.normalized for _s0, _tags in md_by_sec.items()
+                                for t in _tags
+                                if t.normalized and t.normalized not in ignore}
             for n in sorted(S):
                 if (n in ignore or n in covered
+                        or n in covered_anywhere
+                        or n in seen_miss
                         or (sec, n) in (scoped_ignore or set())):
                     continue
+                seen_miss.add(n)
                 row = {
                     'number': n,
                     'status': 'MISSING',
@@ -1657,7 +1747,13 @@ class QLayer(VerifyLayer):
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
         ncomp = _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
-        patterns = build_formula_patterns(ncomp)
+        # `formula.bare_number` (default True): when False, the bare ``N.M``
+        # variant is dropped from the source-extraction patterns.  Books whose
+        # prose is full of numbered cross-references (Lee: ``(Fig. 1.2)``,
+        # ``1-11`` Problem labels) otherwise collect those as phantom formula
+        # numbers and report each as MISSING.
+        patterns = build_formula_patterns(
+            ncomp, allow_bare=bool(formula.get('bare_number', True)))
 
         # Pre-flight: validate the formula config against the actual book BEFORE
         # the structural compare loop.  A depth/scope mismatch would otherwise
@@ -1698,6 +1794,12 @@ class QLayer(VerifyLayer):
                 tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
                 src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore,
                                           keep_cross_refs=fkeep)
+                # 🔴 书章号集（供跨章引用过滤，见 build_sectioned 尾部注记）
+                try:
+                    from data.book_structure.book_structure import list_chapter_keys as _lck
+                    src._book_chapter_keys = {str(k) for k in _lck(ctx.ext_dir)}
+                except Exception:
+                    src._book_chapter_keys = set()
                 built = src.build_sectioned(ctx.ch, ctx.start, ctx.end,
                                             md_sections, ncomp=ncomp)
                 src_sec = built['_sectioned']

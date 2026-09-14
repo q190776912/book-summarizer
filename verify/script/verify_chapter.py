@@ -309,8 +309,22 @@ def _write_formula_audit(ext, rows):
 
     Machine only checks sequence-label structure; formula CONTENT correctness is
     left to human reconciliation via the side-by-side summary/source dump.
+
+    Identical rows are collapsed: `--all` verifies every language group of every
+    chapter, so the same row is fed in once per group without this.  Row order
+    of first appearance is preserved.
     """
     path = os.path.join(ext, 'formula_audit.md')
+    seen = set()
+    uniq = []
+    for r in rows:
+        key = (r.get('number'), r.get('status'), r.get('summary_latex'),
+               r.get('source_text'))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    rows = uniq
     fab = [r for r in rows if r.get('status') == 'FABRICATED']
     inc = [r for r in rows if r.get('status') == 'INCONSISTENT']
     miss = [r for r in rows if r.get('status') == 'MISSING']

@@ -461,6 +461,15 @@ def _item_pos(ext, it):
             ys_head_bare.append(y)
         if probe and probe[:24] in sl:
             ys_contain.append(y)
+        else:
+            # 空格归一的去空格包含兜底（2026-09-15《高等代数学》实测）：OCR 粘连
+            # 号（`推论2.4.33类…` 实为 2.4.3+「3类…」）使 head 的 (?!\d) 守卫
+            # 拒配、普通 contain 又因契约名含空格而失配 → y=-1 误排最前（同节
+            # 条目顺序错乱、B 层 BLOCKING）。去空格包含仅作 fallback 层追加，
+            # 不动 head 语义与既有命中。
+            _probe_ns = probe.replace(" ", "")
+            if len(_probe_ns) >= 8 and _probe_ns[:24] in sl.replace(" ", ""):
+                ys_contain.append(y)
     if ys_head_bare:
         return (p, min(ys_head_bare))
     if ys_head:
@@ -1205,6 +1214,13 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
              if (it.get("label") or "").strip() not in _EXERCISE_LABELS
              and (ex_start is None or it.get("page", 0) < ex_start)]
 
+    # 3a-1b) Filter out uncat cross-references: bare numbers followed by comma
+    # (e.g. "1.5.1,以下两个极限存在：") are prose references, not real items.
+    _UNCAT_REF_RE = re.compile(r'^[\d.\-]+\s*[,，]')
+    items = [it for it in items
+             if (it.get("label") or "").strip() != 'uncat'
+             or not _UNCAT_REF_RE.match((it.get("text") or "").strip())]
+
     # 3a-2) Ross 体例章末习题块（exercise_region_headings 声明）：块头起至章末
     #    的页不再进 ITEM 合同。y 感知：与块头同页的条目，仅当其块顶 y 在块头
     #   （y 较小 = 页面上方）之前才保留；_item_pos 找不到位置时返回 -1 → 保留
@@ -1241,9 +1257,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _by_key = {}
     for it in items:
         k = (it["key"] or "").strip().lower()
-        prev = _by_key.get(k)
+        # Include label in dedup key so same-numbered items with different labels
+        # (e.g. "定义1.3.1" and "定理1.3.1") are kept as distinct entries.
+        dk = (k, (it.get("label") or "").strip().lower())
+        prev = _by_key.get(dk)
         if prev is None:
-            _by_key[k] = it
+            _by_key[dk] = it
             continue
         if abs((it.get("page") or 0) - (prev.get("page") or 0)) > 0:
             _by_key[len(_by_key)] = it
@@ -1259,7 +1278,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         if (_lp < 8 <= _li) or \
            ((_lp >= 8) == (_li >= 8) and
             it.get("page", 0) < prev.get("page", 0)):
-            _by_key[k] = it
+            _by_key[dk] = it
     items = sorted(_by_key.values(),
                    key=lambda x: ((x.get("page") or 0), _nat_key_digits(x["key"])))
 

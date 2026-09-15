@@ -93,7 +93,7 @@ EN_LABELS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
 # 与 build_structure._LABEL_TO_TYPE 的差异仅 Table/Figure 两个图表注记类型
 # （build_structure 本地扩展；checker 的回填不含图表项）。
 
-SEP = r'[.\-·，．]'
+SEP = r'[.\-·，．,]'
 _CH = r'([0-9A-Za-z]+)'   # OCR 容错的「数字串」捕获（支持多位数章节号，如 10 / 11）
 # 末段粘连字母守卫（Leinster 2014 实测）：OCR 把条目号后首词首字母
 # 粘到编号上（"Definition 1.3.17A functor" / "Definition 1.2.1Let"）。编号
@@ -103,7 +103,7 @@ _CH = r'([0-9A-Za-z]+)'   # OCR 容错的「数字串」捕获（支持多位数
 # 会退化成 '1' 产生新幻影号）——实现：lookahead 内吹嘴匹配
 # ([0-9A-Za-z]*[0-9]) 后紧跟 (?=[\s.‑·，．]|$)，失败则整体失败，
 # 不会退回到更短的数字（对已完成书零回徒）。
-_S = r'(?=[0-9A-Za-z]*[0-9][\s.\-·，．]|$)([0-9A-Za-z]*[0-9])'
+_S = r'(?=[0-9A-Za-z]*[0-9][\s.\-·，．,\u4e00-\u9fff（(]|$)([0-9A-Za-z]*[0-9])'
 # 块首锚定的「标签 + 编号」候选正则（独立于抽取器的行内扫描）。
 # 标签后加负向预查 (?![A-Za-z一-龥])，避免把章节标题（"Examples"/"Exercises"）或
 # 语篇词（"例如"）误当成条目标签——它们是纯噪声，必须排除。
@@ -606,9 +606,15 @@ def insert_item(tree, key, label, page, canon, snippet=""):
     itype = _type_of(label)
     title = _clean_title(snippet, key)
     name = (f"{key} {title}".strip()) if title else key
+    # CN3LAB（type 10）键形「标签+C.S.N」，节点名与 build_structure 同构（否则
+    # 单位渲染出的粗体头缺标签词）：2026-09-15《高等代数学》实测。
+    if _PRIMARY == ORDINAL_CN3LAB and label:
+        _lab = _canon_label(str(label))
+        if _lab and not str(key).startswith(_lab):
+            name = f"{_lab}{name}"
     node = _node(key, itype, name, page)
     sec_key = None
-    if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP) and len(canon) >= 2:
+    if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP, ORDINAL_CN3LAB) and len(canon) >= 2:
         sec_key = f"{canon[0]}.{canon[1]}"
     sn = _section_node(tree, sec_key) if sec_key else None
     if sn is None:
@@ -624,8 +630,22 @@ def insert_item(tree, key, label, page, canon, snippet=""):
         # （否则回填项会被 append 到末尾，导致 2.1-4 排在 2.1-8 之后）。
         idx = len(sn.sub_sec)
         for i, child in enumerate(sn.sub_sec):
+            # 仅与「条目类」子节点比较位置：description（键如 D19，canon=(19,)）
+            # 等非条目节点的元组与条目 canon 长度不同，元组比较会恒真把回填项
+            # 拽到节首（2026-09-15《高等代数学》实测）；再以长度守卫兜底。
+            _ct = child.get("type") if isinstance(child, dict) else getattr(child, "type", None)
+            if _ct not in _ITEM_TYPES:
+                continue
             cc = _canon_key(_PRIMARY, str(child.key) if isinstance(child.key, str) else str(child.key))
-            if cc is not None and canon is not None and cc > canon:
+            if cc is None or canon is None or len(cc) != len(canon):
+                continue
+            # 阅读序感知比较（2026-09-15《高等代数学》实测）：子节点按 (page, y)
+            # 排序，canon 序与阅读序在跨页交错时并不一致（如例9.5.2 排在其 canon
+            # 更小的定理之后页）；纯 canon 比较会把回填项插错位。改用
+            # ``(page_start, canon)`` 字典序定位：先过完所有「页更早或同页更小」
+            # 的条目，停在第一个「页更晚或同页更大」的条目之前。
+            _cp = int(getattr(child, "page_start", 0) or 0)
+            if (_cp, cc) > (int(page or 0), canon):
                 idx = i
                 break
         sn.sub_sec.insert(idx, node)
@@ -637,8 +657,14 @@ def insert_item(tree, key, label, page, canon, snippet=""):
     idx = len(tree.sub_sec)
     if canon is not None:
         for i, child in enumerate(tree.sub_sec):
+            _ct = child.get("type") if isinstance(child, dict) else getattr(child, "type", None)
+            if _ct not in _ITEM_TYPES:
+                continue
             cc = _canon_key(_PRIMARY, str(child.key))
-            if cc is not None and cc > canon:
+            if cc is None or len(cc) != len(canon):
+                continue
+            _cp = int(getattr(child, "page_start", 0) or 0)
+            if (_cp, cc) > (int(page or 0), canon):
                 idx = i
                 break
     tree.sub_sec.insert(idx, node)

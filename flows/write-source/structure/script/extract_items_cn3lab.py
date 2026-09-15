@@ -69,7 +69,11 @@ def _labels_from_groups(groups):
 _DECOR = "*·•→'”\"“\u3000 \t"
 # 编号后随「引用/证明头」标志：真条头后是陈述（设/若/对/令/则/…或公式），
 # 绝不会以下列字样开头（实测：定理4.2.1的证明 / 定理1.1.5说明 / 定理2.2.2中的 / 定义7.2.1））
-_REF_AFTER = re.compile(r"^(的|说明|可知|知|中|见|即|[)）])")
+# 2026-09-15 本书实测补强：块首「X表明/告诉我们/给出了/提供了…」是**后文引用句**
+# （常跨页成为独立块），以及「编号后重复同一编号+空格」（`定理5.10.2 5.10.2 的证明`）
+# 均为引用而非条头，一并拒收（重复编号规则见 extract_items_cn3lab 内 _DUP_NUM_AFTER）。
+_REF_AFTER = re.compile(r"^(的|说明|可知|知|中|见|即|表明|揭示|告诉|提供|给出|通常|[)）])")
+_DUP_NUM_AFTER = re.compile(r"^(\d{1,2}[\.．。·:：]?){2,3}(\s|的|证)")
 # OCR 粘连拆分：N≥10 且紧贴字母/数字（例1.1.12x → 例1.1.1 + "2x=…"）
 _GLUE_NEXT = re.compile(r"[A-Za-z0-9]")
 
@@ -84,9 +88,28 @@ def extract_items_cn3lab(extract_dir, chapter, start, end, groups=None):
         # 无组标签时回退到本书通用主类标签（不含练习/图族）
         labels = ["定理", "定义", "引理", "推论", "命题", "性质", "例"]
     lab_alt = "|".join(re.escape(x) for x in labels)
+    # 分隔符容错（2026-09-15 本书《高等代数学》实测缺号根因）：正文 OCR 把三级
+    # 编号的「.」打成「。」（定义2.4。1）或「:」（例4:1.5）——编号仍在、块首
+    # 仍锚定，属真实条头，一并接纳（。·:：为块首「标签+三段数字」语境下的分隔
+    # 符变体，非块首命中不受影响）。
+    # 数字位容错：单字符 OCR 字母（l/I→1、O/o→0、S/s→5、B→8、A→4、Z/z→2、
+    # g/q→9）在数字位高频出现（定义9.2.l 实为 9.2.1），按字符归一后再校验；
+    # 归一后非纯数字则拒绝（宁漏不误）。数字位用「数字组优先」的择一写法：
+    # `([0-9]{1,2}|[字母])`——若把字母塞进同一字符类，`例2.6.3A是一个…` 会被
+    # 捕成 3A→归一 34（假粘连），择一写法保证先按纯数字捕获 `3` 再刹车。
     head_re = re.compile(
         r"(" + lab_alt + r")\s*"
-        r"(\d{1,2})[\.．](\d{1,2})[\.．](\d{1,2})")
+        r"([0-9]{1,2}|[lIOoSsBAZzgq])[\.．。·:：]([0-9]{1,2}|[lIOoSsBAZzgq])"
+        r"[\.．。·:：]([0-9]{1,2}|[lIOoSsBAZzgq])")
+
+    _DIGIT_FIX = str.maketrans({
+        "l": "1", "I": "1", "i": "1", "O": "0", "o": "0", "S": "5",
+        "s": "5", "B": "8", "A": "4", "Z": "2", "z": "2", "g": "9", "q": "9",
+    })
+
+    def _tnorm(tok):
+        t = str(tok).translate(_DIGIT_FIX)
+        return int(t) if t.isdigit() else None
 
     items = []
     for p in range(int(start), int(end) + 1):
@@ -103,18 +126,28 @@ def extract_items_cn3lab(extract_dir, chapter, start, end, groups=None):
                 continue
             # 块首锚定后仍要求命中点位于剥离装饰后的起点（head_re.match 已保证）
             label_raw, cs, sn, nn = m.group(1), m.group(2), m.group(3), m.group(4)
-            c, s, n = int(cs), int(sn), int(nn)
+            c, s, n = _tnorm(cs), _tnorm(sn), _tnorm(nn)
+            if c is None or s is None or n is None:
+                continue
             if c != chapter:
                 continue
             if s > 20 or n > 60:
                 continue
             rest = txt.lstrip(_DECOR)[m.end():]
             # OCR 粘连：N≥10 且紧贴字母/数字 → 末位实为正文起点（例1.1.12x → n=1）
-            if n >= 10 and rest and _GLUE_NEXT.match(rest[0]):
+            # 2026-09-15 扩展：中文量词/类别字粘连（`推论2.4.33类初等矩阵`
+            # 实为 2.4.3 + 「3类…」）同属末位粘连，一并拆分。
+            if n >= 10 and rest and (_GLUE_NEXT.match(rest[0])
+                                     or rest[0] in "类种个次"):
                 n = int(str(n)[0])
                 rest = str(nn)[1:] + rest
-            # 引用/证明头/括注残块守卫
-            if rest and _REF_AFTER.match(rest):
+            # 引用/证明头/括注残块守卫（前导空白先剥离：OCR 常在编号与后继
+            # 间留空格，「 表明/ 中定义」等带空白引用句此前漏网成跨页幻影）
+            rest_stripped = rest if rest is None else rest.lstrip()
+            if rest_stripped and _REF_AFTER.match(rest_stripped):
+                continue
+            # 重复编号守卫：`定理5.10.2 5.10.2 的证明` / `定理8.3.1 8.3.1 通常称为…`
+            if rest_stripped and _DUP_NUM_AFTER.match(rest_stripped):
                 continue
             label = _canon_label(label_raw) or label_raw
             snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")

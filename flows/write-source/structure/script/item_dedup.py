@@ -135,14 +135,17 @@ def dedup_items(raw_matches, unique_keys=False):
     the source book prints the same number twice, and both headings must be
     retained).
     """
-    groups = OrderedDict()   # key -> list[it]
+    groups = OrderedDict()   # (key, label) -> list[it]
     for it in raw_matches:
         k = it['key']
+        # Include label in dedup key so same-numbered items with different labels
+        # (e.g. "定义1.3.1" and "定理1.3.1" on the same page) are kept as distinct items.
+        gk = (k, it.get('label', ''))
         g = _is_genuine(it)
-        if k not in groups:
-            groups[k] = [it]
+        if gk not in groups:
+            groups[gk] = [it]
             continue
-        grp = groups[k]
+        grp = groups[gk]
         if unique_keys:
             # 🔴 section-scoped：章内同 key 必为引用幻影，保留首个真头（有非空
             # 标题签名者优先），其余丢弃。真条目头在本书每号只出现一次。

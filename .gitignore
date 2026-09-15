@@ -39,5 +39,10 @@ env/
 .DS_Store
 Thumbs.db
 
+# ===== 根目录临时脚本（根锚定：只忽略根级，不伤子目录源码）=====
+# 带 / 前缀表示仅匹配仓库根目录，verify/script/fig_common.py 等子目录里的
+# 下划线开头源码不受影响。agent 的一次性探路 / 修数脚本不得留在根目录。
+/_*.py
+
 # 注意：verify/script/fig_common.py 等均为必需源码（下划线开头 ≠ 缓存文件），
 # 上面的规则只忽略字节码（*.py[cod]）与 __pycache__/，不会误伤这些源码，可正常提交。

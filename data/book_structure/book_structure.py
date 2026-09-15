@@ -12,6 +12,11 @@
 - 节点 schema：``key / type / name / page_start / page_end / sub_sec``（递归）；
   ``sub_sec`` 顺序即书中实际顺序。整书单文件 ``book_structure.json`` 不是合法
   产物，不被读取（无兼容回退）。
+- 多册书（上下册）额外字段：**章级**节点携带 ``page_dir`` = 本章 ``page_*.json``
+  所在子目录名（相对 extract_dir，如 ``"上册"``）；单册书为空串且不写出。
+  各册页码通常重新从 1 开始，同一 ``page_NNN.json`` 在两册都存在，故下游读页
+  原文前必须据此还原目录（用 ``lib.page_dir.node_page_dir``），直接读
+  extract_dir 会静默命中某一册、把内容挂错册且不报错。
 
 本模块是结构 JSON 的**唯一权威模型**：所有读写 / 遍历 / 回填都经本类，
 脚本不再裸操作 json 字典（见 ``verify/script/structure_io.py``、
@@ -237,7 +242,7 @@ class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目 / 派生节点）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
-                 "consolidated", "letter_subs", "level", "raw")
+                 "consolidated", "letter_subs", "level", "page_dir", "raw")
 
     # 内容块判定：attach_content 挂进 sub_sec 的 {"text"| "formula" | "image"}
     # 裸字典（无 key/type）。from_dict 遇到含内容块的子树时保留整个原始 dict
@@ -251,6 +256,7 @@ class StructureNode:
                   consolidated: bool = False,
                   letter_subs: Optional[List[Dict[str, Any]]] = None,
                   level: Optional[int] = None,
+                  page_dir: str = "",
                   raw: Optional[Dict[str, Any]] = None):
         self.key = key
         self.type = type
@@ -278,6 +284,12 @@ class StructureNode:
         # 无层级语义（to_dict 仅在非 None 时写出 → 其他书 JSON 零变化）。渲染层
         # 据此选择 `## §` / `### §`。
         self.level: Optional[int] = level
+        # 多册书（上下册）分册归属：本章 page_*.json 所在子目录名，相对
+        # extract_dir（如 "上册" / "下册"）；单册书为空串（页就在 extract_dir
+        # 下）。**仅章级节点携带**——各册页码通常重新从 1 开始，同一 page_NNN
+        # 在两册都存在，下游读页原文前必须据此还原目录，否则静默读错册。
+        # to_dict 仅在非空时写出 → 单册书 JSON 零变化。
+        self.page_dir: str = page_dir or ""
 
     @classmethod
     def _has_blocks(cls, d: Dict[str, Any]) -> bool:
@@ -309,6 +321,8 @@ class StructureNode:
             d["letter_subs"] = [dict(x) for x in self.letter_subs]
         if self.level is not None:
             d["level"] = int(self.level)
+        if self.page_dir:
+            d["page_dir"] = self.page_dir
         return d
 
     @classmethod
@@ -328,6 +342,7 @@ class StructureNode:
             consolidated=bool(d.get("consolidated", False)),
             letter_subs=list(d.get("letter_subs") or []) or None,
             level=(int(d["level"]) if d.get("level") is not None else None),
+            page_dir=(str(d.get("page_dir") or "")),
             raw=raw,
         )
         return node

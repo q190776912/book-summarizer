@@ -370,167 +370,11 @@ def _find_title_pos(ext, title, start, end, page_dir=None):
     return None
 
 
-_PAGE_FILE_RE = re.compile(r"^page_(\d+)\.json$")
-
-
-def _volume_dirs(ext):
-    """ext 下所有「含 page_*.json」的分册子目录（按名称排序）。
-
-    多册书把各册的 page_*.json 放在各自子目录（如 ``上册/`` ``下册/``），顶层
-    ext 只放汇总契约（chapter_map.json / book_structure/ 等）。单册书没有这类
-    子目录，返回空列表。"""
-    if not os.path.isdir(ext):
-        return []
-    out = []
-    for name in sorted(os.listdir(ext)):
-        d = os.path.join(ext, name)
-        if not os.path.isdir(d):
-            continue
-        try:
-            if any(_PAGE_FILE_RE.match(f) for f in os.listdir(d)):
-                out.append(d)
-        except OSError:
-            continue
-    return out
-
-
-def _cm_has_chapter(cm_path, ch):
-    """chapter_map.json 是否含指定章（兼容两种落盘格式）。
-
-    格式 A（扁平）：``{"1": {"start": …}, "2": …}``
-    格式 B（模型）：``{"chapters": [{"ch": 1, …}, …]}``
-    任一格式命中即 True；文件缺失 / 不可解析返回 False。"""
-    if not os.path.exists(cm_path):
-        return False
-    try:
-        with open(cm_path, encoding="utf-8") as fh:
-            d = json.load(fh)
-    except Exception:
-        return False
-    if not isinstance(d, dict):
-        return False
-    key = str(ch)
-    if key in d:
-        return True
-    for e in (d.get("chapters") or []):
-        if isinstance(e, dict) and str(e.get("ch")) == key:
-            return True
-    return False
-
-
-def _cm_chapter_spans(cm_path):
-    """读 chapter_map 得 ``[(ch, start, end), ...]``（按章序）；两格式通吃。"""
-    if not os.path.exists(cm_path):
-        return []
-    try:
-        with open(cm_path, encoding="utf-8") as fh:
-            d = json.load(fh)
-    except Exception:
-        return []
-    if not isinstance(d, dict):
-        return []
-    rows = []
-    if isinstance(d.get("chapters"), list):
-        for e in d["chapters"]:
-            if isinstance(e, dict) and e.get("ch") is not None:
-                rows.append((e.get("ch"), e.get("start"), e.get("end")))
-    else:
-        for k, v in d.items():
-            if isinstance(v, dict) and "start" in v:
-                rows.append((k, v.get("start"), v.get("end")))
-
-    def _ord(r):
-        try:
-            return (0, int(r[0]), "")
-        except (TypeError, ValueError):
-            return (1, 0, str(r[0]))
-
-    rows.sort(key=_ord)
-    return rows
-
-
-def _resolve_page_dir(ext, ch=None):
-    """Resolve the directory that actually holds ``page_*.json`` for chapter `ch`.
-
-    单册书：page 文件就在 ext，直接返回 ext（等价于历史行为，零回归）。
-    多册书：各册 page 文件在各自子目录，且页码通常重新从 1 开始（上册 1..516
-    与下册 1..455 并存），同一页码在两册里都存在，故必须按章判定归属。
-
-    判定按证据优先级递减，任一步无法定论就落到下一步，全部无解才返回 ext：
-      1. **分册自带 chapter_map** 声明的章集合（精确，首选）——每册的
-         chapter_map 只列本册的章（上册 1-9 / 下册 10-18）；
-      2. **页码回退边界**：按章序遍历顶层 chapter_map，某章 start 页小于上一章
-         start 页 ⇒ 该章开启新的一册；
-      3. **页区间包含**：本章 [start, end] 与各册实际页范围重叠最多者；
-         重叠并列（无法区分）时判为不定，返回 ext —— 不猜。
-
-    🔴 不得用「章号阈值」之类的魔数判分册：那是从单本书反推的过拟合，换一本
-    分册点不同的书就静默选错分册，且不会报错。
-    """
-    vols = _volume_dirs(ext)
-    if not vols:
-        return ext
-    if len(vols) == 1:
-        return vols[0]
-    if ch is None:
-        return ext
-
-    # 1) 分册自带 chapter_map 的章集合（精确）
-    for v in vols:
-        if _cm_has_chapter(os.path.join(v, "chapter_map.json"), ch):
-            return v
-
-    key = str(ch)
-    seq = _cm_chapter_spans(os.path.join(ext, "chapter_map.json"))
-
-    # 2) 页码回退边界：章序下 start 变小 ⇒ 进入下一册
-    vol_of = {}
-    cur = 0
-    prev = None
-    for c, s, _e in seq:
-        try:
-            s_int = int(s)
-        except (TypeError, ValueError):
-            s_int = None
-        if prev is not None and s_int is not None and s_int < prev:
-            cur += 1
-        vol_of[str(c)] = cur
-        if s_int is not None:
-            prev = s_int
-    if key in vol_of and vol_of[key] < len(vols):
-        return vols[vol_of[key]]
-
-    # 3) 页区间包含：取与本章 [start, end] 重叠最多的分册（并列判不定）
-    span = None
-    for c, s, e in seq:
-        if str(c) == key:
-            try:
-                span = (int(s), int(e))
-            except (TypeError, ValueError):
-                span = None
-            break
-    if span is not None:
-        scored = []
-        for v in vols:
-            pages = []
-            try:
-                for f in os.listdir(v):
-                    m = _PAGE_FILE_RE.match(f)
-                    if m:
-                        pages.append(int(m.group(1)))
-            except OSError:
-                continue
-            if not pages:
-                continue
-            lo, hi = min(pages), max(pages)
-            ov = min(hi, span[1]) - max(lo, span[0]) + 1
-            if ov > 0:
-                scored.append((ov, v))
-        if scored:
-            scored.sort(key=lambda t: (-t[0], t[1]))
-            if len(scored) == 1 or scored[0][0] > scored[1][0]:
-                return scored[0][1]
-    return ext
+# 多册书（上下册）分册解析：单一真源在 lib.page_dir（structure / verify / extract
+# 共用）。契约顶层 `page_dir` 字段由 build_chapter 经 rel_page_dir 写入，下游按
+# 章还原目录，避免歧义读页（各册页码重复，读 extract_dir 会静默命中某一册）。
+from lib.page_dir import (rel_page_dir as _rel_page_dir,
+                          resolve_page_dir as _resolve_page_dir)
 
 
 def _item_pos(ext, it, page_dir=None):
@@ -1818,6 +1662,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     ch_name = (f"{ch} {ch_title}".strip()) if ch_title else str(ch)
     chapter = _node(str(ch), "chapter", ch_name, start)
     chapter["sub_sec"] = sub
+    # 多册书分册归属写进契约（相对 extract_dir 的子目录名，如 "上册"；单册书为空
+    # 串）。下游凡读该章页原文者一律据此还原 page 目录——各册页码重复，直接读
+    # extract_dir 会静默命中某一册（实测命中上册），把内容挂错册且不报错。
+    chapter["page_dir"] = _rel_page_dir(ext, page_dir)
     _fix_pages(chapter)
     # 章边界以 chapter_map 权威区间 (start, end) 为准，禁止被子节点递归覆盖。
     # 修复：Ch8/14–18 等无编号条目（或 section 无子项）的章，_fix_pages 会把

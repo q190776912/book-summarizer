@@ -52,6 +52,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 import attach_content as ac
 from data.book_structure.book_structure import (
     chapter_label, prime_chapter_kinds)
+from lib.page_dir import node_page_dir as _node_page_dir
 
 
 def _norm_text(s):
@@ -73,7 +74,7 @@ def _block_sig(b):
 
 
 def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
-                         letter=False, bare=True):
+                         letter=False, bare=True, page_dir=None):
     """书源独立公式编号块（独立真值，不经 attach 管线）。
 
     遍历页区间内 ``page_*.json`` 的 ``text``，取**整块恰为一个编号**的块，返回
@@ -84,12 +85,26 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     ``(B.4)`` 字母章位，以及近半数书右缘编号**不带括号**。
 
     ``ch_prefix`` 非空时只收首分量等于该章号的编号（排除跨章引用）。
+
+    ``page_dir`` 为该章 page_*.json 实际所在目录（多册书传分册子目录）；省略时
+    等同 ``ext``。各册页码重复，多册书直接用 ``ext`` 会读错册。
+
+    🔴 **页边距家具排除**：页脚/页眉的**页码**（极端边缘的短纯数字）与跨页边缘
+    重复的 running head **不是**公式编号。本函数仅用**几何**（页高、y/bottom、
+    跨页重复）剔除它们，不调用 attach 管线，故仍保持独立真值语义。判据与
+    ``attach_content._filter_noise`` 对齐——契约侧已正确把页码当噪声丢弃，若此处
+    不过滤，源真值会把页码当成"独立成块的公式编号"→ 源/契约不对称 → 假 FAIL
+    （数学分析 ch9-18 实测：页脚页码 '37'/'492' 等被误判为公式编号）。
     """
     from page_json import PageJson
-    from lib.numbering import formula_tag_number
-    out = set()
-    for p in range(int(start), int(end) + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+    from lib.numbering import formula_tag_number, formula_paren_tag_re
+    _dir = page_dir or ext
+    lo, hi = int(start), int(end)
+
+    # 第一遍：收集原始文本块 + 本区间页高（与 _filter_noise 同口径：max bottom）
+    raw = []                                   # (page, y, bottom, text)
+    for p in range(lo, hi + 1):
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -97,17 +112,54 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         except Exception:
             continue
         for t in pg.text_blocks:
-            raw = t.get("text")
-            if isinstance(raw, dict):          # MM 修复可能嵌套一层
-                raw = raw.get("text")
-            if not isinstance(raw, str):
+            s = t.get("text")
+            if isinstance(s, dict):            # MM 修复可能嵌套一层
+                s = s.get("text")
+            if not isinstance(s, str) or not s.strip():
                 continue
-            key = formula_tag_number(raw.strip(), ncomp, letter=letter, bare=bare)
-            if key is None:
-                continue
-            if ch_prefix and re.split(r'[.\-·,]', key)[0] != ch_prefix:
-                continue
-            out.add(key)
+            poly = t.get("poly") or []
+            y = bottom = 0.0
+            if len(poly) >= 8:
+                try:
+                    _ys = [float(poly[i]) for i in (1, 3, 5, 7)]
+                    y, bottom = _ys[0], max(_ys)
+                except (TypeError, ValueError):
+                    y = bottom = 0.0
+            raw.append((p, y, bottom, s.strip()))
+    page_height = max((b for _p, _y, b, _t in raw), default=0.0)
+    n_pages = max(1, hi - lo + 1)
+
+    # 页边距家具统计（同 _filter_noise：跨页边缘重复 / 全章过半页重复）
+    edge_pages, all_pages = {}, {}
+    for p, y, bottom, s in raw:
+        n = _norm_text(s).replace(" ", "")
+        if len(n) < 4:
+            continue
+        all_pages.setdefault(n, set()).add(p)
+        if page_height > 0 and (y < 0.12 * page_height
+                                or bottom > 0.90 * page_height):
+            edge_pages.setdefault(n, set()).add(p)
+
+    out = set()
+    for p, y, bottom, s in raw:
+        n = _norm_text(s).replace(" ", "")
+        if not n:
+            continue
+        if len(n) >= 4 and len(edge_pages.get(n, ())) >= 2:
+            continue                           # 页眉/页脚/版权行
+        if len(all_pages.get(n, ())) >= max(3, int(0.5 * n_pages)):
+            continue                           # running head 变体
+        # 页码：极端边缘的短纯数字（带括号的编号豁免——它是真编号，见 _filter_noise）
+        if (page_height > 0 and n.isdigit() and len(n) <= 3
+                and not formula_paren_tag_re(ncomp, letter=letter).match(s)
+                and (y < 0.06 * page_height or bottom > 0.94 * page_height)):
+            continue
+        key = formula_tag_number(s, ncomp, letter=letter, bare=bare)
+        if key is None:
+            continue
+        if ch_prefix and re.split(r'[.\-·,]', key)[0] != ch_prefix:
+            continue
+        out.add(key)
     return out
 
 
@@ -210,7 +262,8 @@ def check_chapter(ext, ch_node):
                 prefix = ch_key_s
         want_tags = _source_formula_tags(ext, ch_node.get("page_start"),
                                          ch_node.get("page_end"), prefix, ncomp,
-                                         letter=f_letter, bare=f_bare)
+                                         letter=f_letter, bare=f_bare,
+                                         page_dir=_node_page_dir(ext, ch_node))
 
         def _ord(k):
             return [int(y) for y in re.split(r'[.\-·,]', k) if y.isdigit()]

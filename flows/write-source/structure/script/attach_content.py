@@ -90,6 +90,7 @@ from data.book_structure.book_structure import (chapter_json_path,
 import build_structure as _bs
 from lib.numbering import (ORDINAL_DEPTH, formula_paren_tag_re,
                            formula_tag_number, formula_tag_re)
+from lib.page_dir import node_page_dir as _node_page_dir
 
 OUT_DIR_NAME = "book_structure"
 
@@ -914,6 +915,11 @@ def build_chapter_contract(ext, node, page_dir=None):
     复算比对（脚本确定性输出 => 可校验完整性）。
     """
     node = _to_skeleton(node)          # 幂等：已挂内容（重复 attach）先还原为骨架
+    # page_dir 未显式给出时从契约自带字段派生（多册书章级 `page_dir`；老契约缺
+    # 字段 → 按章号走 lib.page_dir 的证据链）。**绝不能默认成 ext**：多册书各册
+    # 页码重复，读 ext 会静默命中某一册、把内容挂到别的册的章上且不报错。
+    if not page_dir:
+        page_dir = _node_page_dir(ext, node)
     start, end = int(node.get("page_start") or 0), int(node.get("page_end") or 0)
     ch_key = str(node.get("key") or "")
     _fc_ncomp, _fc_scope, _fc_letter, _fc_bare = formula_cfg(ext, ch_key)
@@ -1022,10 +1028,10 @@ def attach(ext, chapters=None):
         path = chapter_json_path(ext, ch_key)
         with open(path, encoding="utf-8") as f:
             node = json.load(f)
-        # 多册书：page_*.json 在各分册子目录，须按章解析后传入，否则下册章会
-        # 读到上册页（页码重复 ⇒ 静默挂错内容）。单册书解析结果就是 ext 本身。
-        page_dir = _bs._resolve_page_dir(ext, ch_key)
-        node, stats = build_chapter_contract(ext, node, page_dir=page_dir)
+        # 多册书：page_*.json 在各分册子目录且各册页码重复。目录由
+        # build_chapter_contract 内部从契约 `page_dir` 字段派生（老契约按章号
+        # 走证据链），此处无需再解析。
+        node, stats = build_chapter_contract(ext, node)
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(node, f, ensure_ascii=False, separators=(",", ":"))

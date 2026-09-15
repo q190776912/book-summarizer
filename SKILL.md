@@ -28,7 +28,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 
 > **附录命名总则（全局）**：附录的一切随章命名一律用 `appendix{X}`（X=A..Z，取自 chapter_map 字母章键），**"ch" 只属于数字章**——分章契约 `appendix{X}.json`、单元目录 `units\appendix{X}\` / `units-translate\appendix{X}\`、完整性报告 `appendix{X}_completeness_report.json`、随章侧车文件 `ignore_appendix{X}.json` / `manual_overrides_appendix{X}.json`、图像基名 `appendix{X}_fig*.png`、日志/报告显示标签亦为 `appendix{X}`（`lib` 级判据 = `data/book_structure/book_structure.py` 的 `chapter_label`，与 `chapter_json_name` / `unit_dir_name` 同源）。原书后部附录（结构契约章节点 `name` 含 `Appendix X`，或章键为字母）最终 md 按附录命名——英文 `AppendixX_Name.md`、中文 `附录X_中文名.md`（Name 取自契约章名，不重排号）；`chapter_md_groups` / flow 物理证据均已识别该形态。内部标题体系照旧用原书序标（如 `## §A.1`、`**Proposition A.1**`）。
 
-> **上下册 / 多册书**：PDF 与总结 md 均留在书级目录（`<书名>.pdf` 保持原位**原名不动**）；`_extract\` 内按册分子目录（`_extract\上册\`、`_extract\下册\`），各册提取数据（page_*.json / chapter_map.json / figure_* / _mm_repair/ 及 flow 账本 `.flow_gate.json`）落在对应册目录，由流水线 `--extract-dir` 指定（见 `flows/extract/extract.md` 分支 D）；每册的后续子流程与 flow_runner 操作均以 `<书目录>/_extract/<册>` 为该册 extract_dir。
+> **上下册 / 多册书**：PDF 与总结 md 均留在书级目录（`<书名>.pdf` 保持原位**原名不动**）；`_extract\` 内按册分子目录（`_extract\上册\`、`_extract\下册\`），各册提取数据（page_*.json / chapter_map.json / figure_* / _mm_repair/ 及 flow 账本 `.flow_gate.json`）落在对应册目录，由流水线 `--extract-dir` 指定（见 `flows/extract/extract.md` 分支 D）。**内容化分章契约、完整性报告、ignore 文件统一存放在 `_extract\book_structure\`（唯一位置），不再按册分散**——多册书的后续子流程均以 `<书目录>/_extract` 为 extract_dir 操作，flow_runner 自动汇总各册数据。
 
 > **临时文件隔离**：Agent 生成的所有临时脚本 / 日志必须放入 `_extract\`；根目录只允许 `.pdf`、`.md`、`_extract\` 三类。
 

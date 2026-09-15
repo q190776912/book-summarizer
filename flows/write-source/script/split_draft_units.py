@@ -111,12 +111,16 @@ def _render_chapter(node, lang):
 
 
 def _render_section(node, lang):
-    """仅标题行：无序号标小节 ``## § name``，有号 ``## §name``（name 自带序标）。"""
+    """仅标题行：`#` 数 = level + 1（chapter 为 level 0 → `#`；小节 level=1 →
+    `## §`、level=2 → `### §` …），忠实保留原书小节层级。无序号标小节 ``## § name``，
+    有编号小节 ``## §name``（name 自带序标）。"""
     key = str(node.get("key") or "")
     name = (node.get("name") or "").strip()
+    lvl = int(node.get("level") or 1)
+    prefix = "#" * (lvl + 1)
     if re.fullmatch(r"U\d+", key):
-        return ["## § " + name, ""]
-    return ["## §" + name, ""]
+        return [prefix + " § " + name, ""]
+    return [prefix + " §" + name, ""]
 
 
 def _render_desc(node, lang):

@@ -382,13 +382,15 @@ def _render_node(node, out, lang="cn"):
     elif t == "section":
         key = str(node.get("key") or "")
         name = (node.get("name") or "").strip()
+        lvl = int(node.get("level") or 1)
         if re.fullmatch(r"U\d+", key):
-            # 无序号标小节：仅保留 §。level=2 为节内二级子标题（Lee ISM 实测
-            # 「Coordinate Charts」等），渲染为 `### §` 以保留原书层级结构。
-            lvl = int(node.get("level") or 1)
-            out.append(("### § " if lvl >= 2 else "## § ") + name)
+            # 无序号标小节：仅保留 §。`#` 数 = level + 1（chapter 为 level 0 →
+            # `#`，小节 level=1 → `## §`、level=2 → `### §`、level=3 → `#### §` …），
+            # 忠实保留原书小节层级结构（Lee ISM 实测「Coordinate Charts」为 level-2）。
+            out.append(("#" * (lvl + 1)) + " § " + name)
         else:
-            out.append("## §" + name)       # name 自带 "N.M 标题" 序标
+            # 有编号小节（name 自带 "N.M 标题" 序标，恒为 level 1 → `## §name`）。
+            out.append(("#" * (lvl + 1)) + " §" + name)
         out.append("")
         _CTX["prev"] = "heading"
         _walk_mixed(node, out, False, lang, top=True)

@@ -113,7 +113,7 @@ SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*([A-Za-z](?:\.\d+)+|\d+(?:\.\d+)*)
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
-SEC_HEADING_RE_OPT = re.compile(r'^##\s*§\s*([\dA-Za-z][\d.\-A-Za-z]*)?')
+SEC_HEADING_RE_OPT = re.compile(r'^#{2,4}\s*§\s*([\dA-Za-z][\d.\-A-Za-z]*)?')
 
 
 def check_exer_blocks(lines):

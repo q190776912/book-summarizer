@@ -134,7 +134,7 @@ def scan_sectioned(extract_dir, patterns, first, last, md_sections):
 
 
 # ---------- summary side ----------
-SEC_RE = re.compile(r'^##\s*§?\s*(\d{1,3}\.\d{1,3})\b', re.M)
+SEC_RE = re.compile(r'^#{2,4}\s*§?\s*(\d{1,3}\.\d{1,3})\b', re.M)
 TAG_RE = re.compile(r'\\tag\{\s*([^}]+?)\s*\}')
 
 
@@ -143,8 +143,8 @@ def md_inventory(md_file):
     md_sections = SEC_RE.findall(txt)
     tags_sec = []
     cur = md_sections[0] if md_sections else None
-    for part in re.split(r'(^##\s*§?\s*\d+\.\d+.*$)', txt, flags=re.M):
-        hm = re.match(r'^##\s*§?\s*(\d+\.\d+)', part)
+    for part in re.split(r'(^#{2,4}\s*§?\s*\d+\.\d+.*$)', txt, flags=re.M):
+        hm = re.match(r'^#{2,4}\s*§?\s*(\d+\.\d+)', part)
         if hm:
             cur = hm.group(1); continue
         for blk in re.finditer(r'\$\$(.*?)\$\$', part, re.S):

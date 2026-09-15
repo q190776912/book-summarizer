@@ -1428,15 +1428,15 @@ def _extract_summary_tags_sectioned(md_file: str) -> List[tuple]:
             md = f.read()
     except Exception:
         return []
-    sec_re = re.compile(r'^##\s*§?\s*(\d+\.\d+)', re.M)
+    sec_re = re.compile(r'^#{2,4}\s*§?\s*(\d+\.\d+)', re.M)
     md_sections = sec_re.findall(md)
     if not md_sections:
         return []
-    parts = re.split(r'(^##\s*§?\s*\d+\.\d+.*$)', md, flags=re.M)
+    parts = re.split(r'(^#{2,4}\s*§?\s*\d+\.\d+.*$)', md, flags=re.M)
     out: List[tuple] = []
     cur = md_sections[0]
     for part in parts:
-        hm = re.match(r'^##\s*§?\s*(\d+\.\d+)', part)
+        hm = re.match(r'^#{2,4}\s*§?\s*(\d+\.\d+)', part)
         if hm:
             cur = hm.group(1)
             continue
@@ -1865,7 +1865,7 @@ class QLayer(VerifyLayer):
                     md_text = f.read()
             except Exception:
                 md_text = ''
-            md_sections = re.findall(r'^##\s*§?\s*(\d+\.\d+)', md_text, re.M)
+            md_sections = re.findall(r'^#{2,4}\s*§?\s*(\d+\.\d+)', md_text, re.M)
             if not md_sections:
                 # No section headings -> fall back to the plain chapter path.
                 section_scoped = False

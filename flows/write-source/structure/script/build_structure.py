@@ -246,7 +246,7 @@ def _section_of_exer(num):
 _NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
 
 
-def _numbered_heading_y(ext, key, page):
+def _numbered_heading_y(ext, key, page, page_dir=None):
     """编号小节头在自身页上的 y：块文本以节号开头（含 OCR 粘连变体）才算命中。
 
     2026-08-29 Koopman 书实测：仅按标题词搜（_find_title_pos）会把上一节折行
@@ -261,7 +261,8 @@ def _numbered_heading_y(ext, key, page):
     pat = re.compile(
         r'^[\*§8Ss$]?\s*' + re.escape(str(key))
         + r'(?:[.:：\s\u00a0]+(?=[A-Za-z\u4e00-\u9fff])|(?=[A-Za-z]))')
-    fp = os.path.join(ext, 'page_%03d.json' % int(page))
+    _dir = page_dir or ext
+    fp = os.path.join(_dir, 'page_%03d.json' % int(page))
     if not os.path.exists(fp):
         return None
     try:
@@ -283,7 +284,7 @@ def _numbered_heading_y(ext, key, page):
     return min(ys) if ys else None
 
 
-def _find_title_pos(ext, title, start, end):
+def _find_title_pos(ext, title, start, end, page_dir=None):
     """无序号标小节：在章节 OCR 区间 [start, end] 内查找标题块，返回 ``(page, y)``。
 
     y 为命中块的 poly 顶边（同页多个命中取最小 y），供「同页条目 vs 节头」
@@ -313,8 +314,9 @@ def _find_title_pos(ext, title, start, end):
     else:
         anchor_re = re.compile(r'^' + re.escape(t_raw))
     # --- Pass 1a: anchored, case-sensitive (page, min-y) ---
+    _dir = page_dir or ext
     for p in range(start, end + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -333,7 +335,7 @@ def _find_title_pos(ext, title, start, end):
             return (p, min(ys))
     # --- Pass 1b: exact-case containment ---
     for p in range(start, end + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -349,7 +351,7 @@ def _find_title_pos(ext, title, start, end):
                 return (p, poly[1] if len(poly) >= 8 else 0)
     # --- Pass 2: legacy case-insensitive (y=0) ---
     for p in range(start, end + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -368,7 +370,170 @@ def _find_title_pos(ext, title, start, end):
     return None
 
 
-def _item_pos(ext, it):
+_PAGE_FILE_RE = re.compile(r"^page_(\d+)\.json$")
+
+
+def _volume_dirs(ext):
+    """ext 下所有「含 page_*.json」的分册子目录（按名称排序）。
+
+    多册书把各册的 page_*.json 放在各自子目录（如 ``上册/`` ``下册/``），顶层
+    ext 只放汇总契约（chapter_map.json / book_structure/ 等）。单册书没有这类
+    子目录，返回空列表。"""
+    if not os.path.isdir(ext):
+        return []
+    out = []
+    for name in sorted(os.listdir(ext)):
+        d = os.path.join(ext, name)
+        if not os.path.isdir(d):
+            continue
+        try:
+            if any(_PAGE_FILE_RE.match(f) for f in os.listdir(d)):
+                out.append(d)
+        except OSError:
+            continue
+    return out
+
+
+def _cm_has_chapter(cm_path, ch):
+    """chapter_map.json 是否含指定章（兼容两种落盘格式）。
+
+    格式 A（扁平）：``{"1": {"start": …}, "2": …}``
+    格式 B（模型）：``{"chapters": [{"ch": 1, …}, …]}``
+    任一格式命中即 True；文件缺失 / 不可解析返回 False。"""
+    if not os.path.exists(cm_path):
+        return False
+    try:
+        with open(cm_path, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception:
+        return False
+    if not isinstance(d, dict):
+        return False
+    key = str(ch)
+    if key in d:
+        return True
+    for e in (d.get("chapters") or []):
+        if isinstance(e, dict) and str(e.get("ch")) == key:
+            return True
+    return False
+
+
+def _cm_chapter_spans(cm_path):
+    """读 chapter_map 得 ``[(ch, start, end), ...]``（按章序）；两格式通吃。"""
+    if not os.path.exists(cm_path):
+        return []
+    try:
+        with open(cm_path, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception:
+        return []
+    if not isinstance(d, dict):
+        return []
+    rows = []
+    if isinstance(d.get("chapters"), list):
+        for e in d["chapters"]:
+            if isinstance(e, dict) and e.get("ch") is not None:
+                rows.append((e.get("ch"), e.get("start"), e.get("end")))
+    else:
+        for k, v in d.items():
+            if isinstance(v, dict) and "start" in v:
+                rows.append((k, v.get("start"), v.get("end")))
+
+    def _ord(r):
+        try:
+            return (0, int(r[0]), "")
+        except (TypeError, ValueError):
+            return (1, 0, str(r[0]))
+
+    rows.sort(key=_ord)
+    return rows
+
+
+def _resolve_page_dir(ext, ch=None):
+    """Resolve the directory that actually holds ``page_*.json`` for chapter `ch`.
+
+    单册书：page 文件就在 ext，直接返回 ext（等价于历史行为，零回归）。
+    多册书：各册 page 文件在各自子目录，且页码通常重新从 1 开始（上册 1..516
+    与下册 1..455 并存），同一页码在两册里都存在，故必须按章判定归属。
+
+    判定按证据优先级递减，任一步无法定论就落到下一步，全部无解才返回 ext：
+      1. **分册自带 chapter_map** 声明的章集合（精确，首选）——每册的
+         chapter_map 只列本册的章（上册 1-9 / 下册 10-18）；
+      2. **页码回退边界**：按章序遍历顶层 chapter_map，某章 start 页小于上一章
+         start 页 ⇒ 该章开启新的一册；
+      3. **页区间包含**：本章 [start, end] 与各册实际页范围重叠最多者；
+         重叠并列（无法区分）时判为不定，返回 ext —— 不猜。
+
+    🔴 不得用「章号阈值」之类的魔数判分册：那是从单本书反推的过拟合，换一本
+    分册点不同的书就静默选错分册，且不会报错。
+    """
+    vols = _volume_dirs(ext)
+    if not vols:
+        return ext
+    if len(vols) == 1:
+        return vols[0]
+    if ch is None:
+        return ext
+
+    # 1) 分册自带 chapter_map 的章集合（精确）
+    for v in vols:
+        if _cm_has_chapter(os.path.join(v, "chapter_map.json"), ch):
+            return v
+
+    key = str(ch)
+    seq = _cm_chapter_spans(os.path.join(ext, "chapter_map.json"))
+
+    # 2) 页码回退边界：章序下 start 变小 ⇒ 进入下一册
+    vol_of = {}
+    cur = 0
+    prev = None
+    for c, s, _e in seq:
+        try:
+            s_int = int(s)
+        except (TypeError, ValueError):
+            s_int = None
+        if prev is not None and s_int is not None and s_int < prev:
+            cur += 1
+        vol_of[str(c)] = cur
+        if s_int is not None:
+            prev = s_int
+    if key in vol_of and vol_of[key] < len(vols):
+        return vols[vol_of[key]]
+
+    # 3) 页区间包含：取与本章 [start, end] 重叠最多的分册（并列判不定）
+    span = None
+    for c, s, e in seq:
+        if str(c) == key:
+            try:
+                span = (int(s), int(e))
+            except (TypeError, ValueError):
+                span = None
+            break
+    if span is not None:
+        scored = []
+        for v in vols:
+            pages = []
+            try:
+                for f in os.listdir(v):
+                    m = _PAGE_FILE_RE.match(f)
+                    if m:
+                        pages.append(int(m.group(1)))
+            except OSError:
+                continue
+            if not pages:
+                continue
+            lo, hi = min(pages), max(pages)
+            ov = min(hi, span[1]) - max(lo, span[0]) + 1
+            if ov > 0:
+                scored.append((ov, v))
+        if scored:
+            scored.sort(key=lambda t: (-t[0], t[1]))
+            if len(scored) == 1 or scored[0][0] > scored[1][0]:
+                return scored[0][1]
+    return ext
+
+
+def _item_pos(ext, it, page_dir=None):
     """编号项在源页上的 (page, y)：取其 key/片段首个匹配块的 poly 顶边。
 
     找不到时 y 取 -1（同页排序时排在任何节头之前——OCR 整块丢失的条目
@@ -381,7 +546,8 @@ def _item_pos(ext, it):
     p = it.get("page")
     if not p:
         return None
-    fp = os.path.join(ext, "page_%03d.json" % p)
+    _dir = page_dir or ext
+    fp = os.path.join(_dir, "page_%03d.json" % p)
     if not os.path.exists(fp):
         return None
     try:
@@ -524,15 +690,16 @@ def _chapter_local_sections_from_markdown(ext, ch):
     return out
 
 
-def _find_chapter_local_section_page(ext, ch, n, start, end):
+def _find_chapter_local_section_page(ext, ch, n, start, end, page_dir=None):
     """First source page where chapter-local section `n` appears as a "N. Title"
     heading (Karlin-style).  Gives chapter-local sections a real page so items
     place to the correct section by page proximity.  Returns ``start`` if not
     found; the first occurrence (not later running-header repeats) is the real
     heading, so the early return is correct."""
     from lib.regexlib import SEC_LOCAL
+    _dir = page_dir or ext
     for p in range(start, end + 1):
-        fp = os.path.join(ext, f"page_{p:03d}.json")
+        fp = os.path.join(_dir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
             continue
         try:
@@ -579,7 +746,7 @@ def _recognized_sections(ext, ch, start, end):
             hint_pg = t.get("page")
         else:
             title, level, hint_pg = str(t), 1, None
-        pos = _find_title_pos(ext, title, start, end)
+        pos = _find_title_pos(ext, title, start, end, page_dir=page_dir)
         if pos is not None and hint_pg is not None \
                 and abs(int(pos[0]) - int(hint_pg)) > 3:
             pos = (int(hint_pg), 0)
@@ -716,7 +883,7 @@ def _chapter_title(cm, ch):
     return ""
 
 
-def _exercise_block_pos(ext, ch, start, end, headings):
+def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
     """Ross 体例章末习题块头位置：返回首个锚定标题行的 (page, y)，无则 None。
 
     与 scan_skeleton._exercise_headings_re 同一匹配器（单一真源），供
@@ -725,8 +892,9 @@ def _exercise_block_pos(ext, ch, start, end, headings):
     rx = scan_skeleton._exercise_headings_re(headings)
     if rx is None:
         return None
+    _dir = page_dir or ext
     for p in range(int(start), int(end) + 1):
-        fp = os.path.join(ext, 'page_%03d.json' % p)
+        fp = os.path.join(_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -745,7 +913,7 @@ def _exercise_block_pos(ext, ch, start, end, headings):
     return None
 
 
-def _exercise_region_start(ext, ch, start, end):
+def _exercise_region_start(ext, ch, start, end, page_dir=None):
     """Return the page where 'EXERCISES FOR CHAPTER <ch>' begins, else None.
 
     Used to exclude exercise-region pages from the ITEM contract so that
@@ -755,8 +923,9 @@ def _exercise_region_start(ext, ch, start, end):
     """
     head = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
     pat = str(ch)
+    _dir = page_dir or ext
     for p in range(start, end + 1):
-        fp = os.path.join(ext, 'page_%03d.json' % p)
+        fp = os.path.join(_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -805,35 +974,36 @@ def _single_en_items(ext, start, end, book):
     return kept
 
 
-def _extract_items(ext, ch, start, end, book, manual=None):
+def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
     primary = book.primary_type
+    _dir = page_dir or ext
     if primary == ORDINAL_HUM:
         # Humphreys GTM 9（config_setting 规则5 增量扩展）：条目头只印裸标签
         # （"Lemma."）或节内字母号（"Lemma A"），编号由所在小节隐式给出。
         # 专用抽取器跟踪当前小节，产出唯一化键 "Lemma §10.2B" / "Lemma §7.2"
         # （注入 § 记号使其不可被 B 层数字解析——引用号继承小节网格、天然稀疏，
         # 可解析会误报海量假断号；与 Ross 字母项同走优雅跳过路径）。
-        return extract_items_hum(ext, start, end)
+        return extract_items_hum(_dir, start, end)
     if primary == ORDINAL_ROSS:
         # Ross 体例（ORDINAL_ROSS = 11，config_setting 规则5 增量扩展）：标签在前 +
         # 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。键保留原书印刷
         # 形态；章末习题区过滤由调用方 build_chapter 按 exercise_region_headings 做。
-        return extract_items_ross(ext, start, end)
+        return extract_items_ross(_dir, start, end)
     if primary == ORDINAL_SINGLE:
         # CN 单级编号书（如李庆扬《数值分析》第5版：定理1 / 定义3 / 例12 /
         # 算法2 / 性质4——「标签+单一数字」、章内连续或节内重置）：既有抽取器
         # 均不覆盖（extract_items 只认多级号，EN 单级抽取器无中文标签词），
         # 按 config_setting 规则5 走增量扩展的中文单级抽取器。
         if getattr(book, "language", "cn") == "cn":
-            return extract_items_cn_single(ext, start, end, groups=book.ordinal,
-                                           manual_overrides=manual)
-        return _single_en_items(ext, start, end, book)
+            return extract_items_cn_single(_dir, start, end, groups=book.ordinal,
+                                            manual_overrides=manual)
+        return _single_en_items(_dir, start, end, book)
     if primary == ORDINAL_CN3LAB:
         # CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 / 定义2.3.4，每类标签
         # 独立计数、每节重置）：键内嵌规范中文标签（`定理1.1.1`，与 type 9 的
         # `评注1.1.1` 同构），块首锚定天然排除三级小节标题与裸 C.S.N 公式号。
         # 按 config_setting 规则5 走增量扩展的 extract_items_cn3lab。
-        return extract_items_cn3lab(ext, ch, start, end, groups=book.ordinal)
+        return extract_items_cn3lab(_dir, ch, start, end, groups=book.ordinal)
     if primary in (ORDINAL_EN, ORDINAL_EN3):
         if primary == ORDINAL_EN:
             # config_setting 规则5 增量扩展：config `ordinal` 各组 `name` 里
@@ -851,11 +1021,11 @@ def _extract_items(ext, ch, start, end, book, manual=None):
                     if _nm and _nm not in extra and \
                             _nm.rstrip(".") not in _non_text_stripped:
                         extra.append(_nm)
-            items = extract_items_en(ext, start, end, want_examples=True,
+            items = extract_items_en(_dir, start, end, want_examples=True,
                                      section_scoped=book.section_scoped,
                                      extra_labels=extra)
         else:
-            items = extract_items_en3(ext, ch, start, end, want_examples=True)
+            items = extract_items_en3(_dir, ch, start, end, want_examples=True)
         kept = []
         for it in items:
             lab, _, num = it["key"].partition(" ")
@@ -913,7 +1083,7 @@ def _extract_items(ext, ch, start, end, book, manual=None):
         # from `it["label"]` via _type_of), so we keep the key bare-numeric and
         # let the checker's _composite_key re-attach the type.  normkey:
         # "2.2.1" -> "2.2-1" (matches scan_raw_items' three-level raw keys).
-        items = extract_items_en3(ext, ch, start, end, want_examples=True)
+        items = extract_items_en3(_dir, ch, start, end, want_examples=True)
         kept = []
         for it in items:
             _lab, _, num = it["key"].partition(" ")
@@ -944,20 +1114,20 @@ def _extract_items(ext, ch, start, end, book, manual=None):
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
     if primary in (ORDINAL_GM, ORDINAL_ROMAN):
-        items, _, _ = extract_items_gm(ext, ch, start, end, manual_overrides=manual)
+        items, _, _ = extract_items_gm(_dir, ch, start, end, manual_overrides=manual)
         return items
     if primary == ORDINAL_VAKIL:
-        items, _, _ = extract_items_vakil(ext, ch, start, end, manual_overrides=manual)
+        items, _, _ = extract_items_vakil(_dir, ch, start, end, manual_overrides=manual)
         return items
     # three_level / two_level 全部走 extract_items（内部按 ordinal 选路）
-    items, _, _ = extract_items(ext, ch, start, end, manual_overrides=manual, cfg=book)
+    items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual, cfg=book)
     return items
 
 
 # ---------------------------------------------------------------------------
 # 单章结构构建
 # ---------------------------------------------------------------------------
-def _find_numbered_heading_page(ext, num, lo, hi, min_y=None):
+def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None):
     """在页码 [lo, hi] 内找首个「以节号 num 开头的标题行」所在页。
 
     用于章首目录页免疫的回扫：章扉页目录把节号的 SEC 首现页污染成章首页时，
@@ -978,8 +1148,9 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None):
     pat = re.compile(
         r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?:[\.．:：]|[\s\u00a0]+)\s*[A-Za-z]')
     pat_glue = re.compile(r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?=[A-Za-z])')
+    _dir = page_dir or ext
     for p in range(int(lo), int(hi) + 1):
-        fp = os.path.join(ext, 'page_%03d.json' % p)
+        fp = os.path.join(_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -1066,9 +1237,11 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     language = book.language
     mode = scan_skeleton._mode_for_ordinal(ordinal, language)
     section_depths = getattr(book, 'section_depths', None) or None
+    # Multi-volume: resolve correct page file directory for this chapter
+    page_dir = _resolve_page_dir(ext, ch)
 
     # 1) skeleton 原始行
-    rows = scan_skeleton.scan(ext, ch, start, end, mode,
+    rows = scan_skeleton.scan(page_dir, ch, start, end, mode,
                               section_depths=section_depths,
                               chapter_first=book.chapter_first,
                               exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
@@ -1173,8 +1346,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #    习题块（"EXERCISES FOR CHAPTER N" 起至章末）内的页码一律不从抽取器
     #    进入 ITEM 合同，否则习题题号（如 Strogatz `3.1.1`）会被误判为
     #    Example/Definition 条目，造成重复键、错类型、乱序。
-    raw_items = _extract_items(ext, ch, start, end, book, manual=manual)
-    ex_start = _exercise_region_start(ext, ch, start, end)
+    raw_items = _extract_items(ext, ch, start, end, book, manual=manual, page_dir=page_dir)
+    ex_start = _exercise_region_start(ext, ch, start, end, page_dir=page_dir)
 
     # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器
     #     已把它们作为带标签条目抓出，但练习节点权威来源是 skeleton EXER——
@@ -1227,12 +1400,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #    （宁缺勿滥的反向：真条目不因 OCR 定位失败而丢失，漏项交源侧回填兜底）。
     _ex_headings = getattr(book, 'exercise_region_headings', None) or None
     if _ex_headings:
-        ex_pos = _exercise_block_pos(ext, ch, start, end, _ex_headings)
+        ex_pos = _exercise_block_pos(ext, ch, start, end, _ex_headings, page_dir=page_dir)
         if ex_pos is not None:
             _ep, _ey = ex_pos
             _kept = []
             for it in items:
-                pos = _item_pos(ext, it)
+                pos = _item_pos(ext, it, page_dir=page_dir)
                 if pos is None:
                     _kept.append(it)
                     continue
@@ -1326,12 +1499,13 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 # 章首目录命中：回扫正文节头；扫不到退回原值。min_y = 污染行
                 # （目录命中）块顶——真节头与目录同页时（ch5 扉页即 §5.1 起始），
                 # 只接受目录行下方的匹配。
-                pg = _find_numbered_heading_page(ext, num, p, end, min_y=y) or p
+                pg = _find_numbered_heading_page(ext, num, p, end, min_y=y,
+                                                 page_dir=page_dir) or p
                 y = None
             elif getattr(book, 'chapter_local_sections', False):
                 # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
                 # 首现页作为真实页码，供条目按页就近归节。
-                pg = _find_chapter_local_section_page(ext, ch, int(num), start, end)
+                pg = _find_chapter_local_section_page(ext, ch, int(num), start, end, page_dir=page_dir)
                 y = None
             else:
                 pg = p
@@ -1515,7 +1689,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])
-        pos = _item_pos(ext, it)
+        pos = _item_pos(ext, it, page_dir=page_dir)
         if (pos is not None and pos[1] < 0 and not _unnumbered_book and sec_pos):
             # OCR 整块丢失的条目（_item_pos 找不到块）：位置未知。-1 的「排在节头
             # 之前」语义只适用于无序号标书（Evans）；编号节书沿用旧「页码就近」
@@ -1543,15 +1717,15 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             y = None
             if child.get("type") == "section":
                 if not ckey.startswith("U"):
-                    y = _numbered_heading_y(ext, ckey, page)
+                    y = _numbered_heading_y(ext, ckey, page, page_dir=page_dir)
                 if y is None:
                     t = (child.get("name") or "").strip()
                     t_no = re.sub(r'^[\dA-Z]+(?:\.[\dA-Z]+)*\s*', '', t).strip()
-                    pos = _find_title_pos(ext, t_no or t, page, page) if t else None
+                    pos = _find_title_pos(ext, t_no or t, page, page, page_dir=page_dir) if t else None
                     y = pos[1] if pos else None
             else:
                 pos = _item_pos(ext, {"key": ckey, "page": page,
-                                      "text": child.get("name") or ""})
+                                       "text": child.get("name") or ""}, page_dir=page_dir)
                 y = pos[1] if pos and pos[1] is not None and pos[1] >= 0 else None
             _doc_y_cache[nid] = float(y) if y is not None else 0.0
         return (int(child.get("page_start") or 0), _doc_y_cache[nid],
@@ -1729,7 +1903,10 @@ def main():
         node.recompute_pages()
         out = chapter_json_path(ext, str(ch))
         # 骨架 → 完整契约（内容挂载）→ 落盘；一次读写，无中间态文件。
-        full, stats = build_chapter_contract(ext, node.to_dict())
+        # 多册书：page_*.json 在分册子目录且各册页码重复，内容挂载必须按章
+        # 定位到本册目录，否则下册章会挂成上册页的内容（静默错乱）。
+        page_dir = _resolve_page_dir(ext, ch)
+        full, stats = build_chapter_contract(ext, node.to_dict(), page_dir=page_dir)
         with open(out, "w", encoding="utf-8") as f:
             json.dump(full, f, ensure_ascii=False, indent=2)
         built += 1

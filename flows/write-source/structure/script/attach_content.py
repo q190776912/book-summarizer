@@ -230,20 +230,24 @@ def _figure_blocks(ext, page):
     return out
 
 
-def _collect_blocks(ext, start, end, ch=None):
+def _collect_blocks(ext, start, end, ch=None, page_dir=None):
     """收集 [start, end] 页全部内容块，页内按 (y, x) 稳定排序，跨页拼接。
 
     `ch` 为章键（数字章 `"10"` / 字母章 `"A"`）——供 `formula_cfg` 分章路由
     （字母章读 `appendix` 段的 formula 配置，见其 docstring）。
+
+    `page_dir` 为实际存放 page_*.json 的目录（多册书为对应分册子目录）；
+    省略时等同 `ext`（单册书，保持历史行为）。
 
     返回 (blocks, page_height)；page_height 为全书观测到的最大 bottom（同一本书
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
     ncomp, _scope, letter, bare = formula_cfg(ext, ch)
+    _dir = page_dir or ext
     blocks = []
     for p in range(int(start), int(end) + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -569,28 +573,29 @@ _SEC_NO_PREFIX = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)*\s+(.*)$', re.DOTALL)
 _NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
 
 
-def _section_anchor(ext, node):
+def _section_anchor(ext, node, page_dir=None):
     page = int(node.get("page_start") or 0)
     name = (node.get("name") or "").strip()
     key = str(node.get("key") or "")
     title = name if key.startswith("U") else (_SEC_NO_PREFIX.match(name).group(1)
                                               if _SEC_NO_PREFIX.match(name) else name)
-    y = _bs._numbered_heading_y(ext, key, page)
+    y = _bs._numbered_heading_y(ext, key, page, page_dir=page_dir)
     if y is not None:
         return page, float(y)
     if title:
-        pos = _bs._find_title_pos(ext, title, page, page)
+        pos = _bs._find_title_pos(ext, title, page, page, page_dir=page_dir)
         if pos:
             return page, float(pos[1])
     return page, 0.0
 
 
-def _item_anchor(ext, node):
+def _item_anchor(ext, node, page_dir=None):
     page = int(node.get("page_start") or 0)
     pos = _bs._item_pos(ext, {"key": node.get("key") or "",
                               "page": page,
                               "text": node.get("name") or "",
-                              "type": node.get("type") or ""})
+                              "type": node.get("type") or ""},
+                        page_dir=page_dir)
     if pos and pos[0] == page and pos[1] is not None and pos[1] >= 0:
         return page, float(pos[1])
     # y=-1 是 _item_pos 的「整块丢失」哨兵：在 attach 事件流里必须落在
@@ -598,7 +603,7 @@ def _item_anchor(ext, node):
     return page, 0.0
 
 
-def _build_events(ext, ch_node):
+def _build_events(ext, ch_node, page_dir=None):
     """深度优先收集 (pos, seq, node) 锚点事件；同位次以文档序（seq）稳定排序。"""
     events = []
 
@@ -611,12 +616,12 @@ def _build_events(ext, ch_node):
                 continue
             t = child.get("type")
             if t == "section":
-                add(child, *_section_anchor(ext, child))
+                add(child, *_section_anchor(ext, child, page_dir=page_dir))
                 walk(child)
             elif t == "chapter":
                 walk(child)
             else:
-                add(child, *_item_anchor(ext, child))
+                add(child, *_item_anchor(ext, child, page_dir=page_dir))
 
     walk(ch_node)
     events.sort(key=lambda e: (e[0][0], e[0][1], e[1]))
@@ -897,8 +902,12 @@ def _to_skeleton(node):
     return node
 
 
-def build_chapter_contract(ext, node):
+def build_chapter_contract(ext, node, page_dir=None):
     """纯函数：由骨架章节点 + page_*.json 构建该章内容化契约（含 stats）。
+
+    `page_dir` 为实际存放 page_*.json 的目录（多册书传对应分册子目录）；
+    省略时等同 `ext`。多册书各册页码通常重新从 1 开始，若此处仍读 `ext`
+    会把上册页内容挂到下册章上（静默错乱），故必须由调用方按章解析后传入。
 
     返回 ``(chapter_dict, stats)``——stats 含 text/formula/image/proof/description
     计数与被噪声过滤丢弃的块数，供 `verify/script/check_content_completeness.py`
@@ -910,7 +919,8 @@ def build_chapter_contract(ext, node):
     _fc_ncomp, _fc_scope, _fc_letter, _fc_bare = formula_cfg(ext, ch_key)
     n_noise = [0]
 
-    blocks, page_height = _collect_blocks(ext, start, end, ch=ch_key)
+    blocks, page_height = _collect_blocks(ext, start, end, ch=ch_key,
+                                          page_dir=page_dir)
     kept = _filter_noise(blocks, page_height, max(1, end - start + 1),
                          _fc_ncomp, letter=_fc_letter)
     n_noise[0] = len(blocks) - len(kept)
@@ -918,7 +928,7 @@ def build_chapter_contract(ext, node):
     _mark_line_geometry(blocks)
 
     # 锚点分派：每块归「位置 ≤ 块位置的最后一个锚点事件」；最早事件之前 → 章首序言
-    events = _build_events(ext, node)
+    events = _build_events(ext, node, page_dir=page_dir)
     keys = [e[0] for e in events]
     buckets = {id(e[2]): [] for e in events}
     preamble = []
@@ -1012,7 +1022,10 @@ def attach(ext, chapters=None):
         path = chapter_json_path(ext, ch_key)
         with open(path, encoding="utf-8") as f:
             node = json.load(f)
-        node, stats = build_chapter_contract(ext, node)
+        # 多册书：page_*.json 在各分册子目录，须按章解析后传入，否则下册章会
+        # 读到上册页（页码重复 ⇒ 静默挂错内容）。单册书解析结果就是 ext 本身。
+        page_dir = _bs._resolve_page_dir(ext, ch_key)
+        node, stats = build_chapter_contract(ext, node, page_dir=page_dir)
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(node, f, ensure_ascii=False, separators=(",", ":"))

@@ -120,5 +120,5 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 - `flows/<stage>/ref/` 下除 SSOT 文档外，各流程的脚本索引写在流程文档「相关代码」节（无单独的 script/README.md）。
 - 🔴 **技能根目录整洁（禁放临时脚本）**：根目录只允许 `SKILL.md` / `README.md` / `user_config.json` / `.gitignore` 与两个入口文件（`cli.py` 单入口路由器、`launch_pipeline.sh` extract 启动器），以及 `config/` `data/` `docs/` `flows/` `lib/` `tools/` `verify/` 七个包目录。任何一次性探路脚本、特定书/章节脚本、状态报告（`_*.py` / `*_status.txt` 等）一律**不得落在根目录**——通用工具进 `tools/`，特定书的脚本进该书的 `_extract/`（与硬规则 1 一致）。`.gitignore` 已根锚定 `/_*.py` 兜底，但**不靠它**：落盘前就要选对位置。
 - `flows/<stage>/ref/`：本流程 SSOT 文档（格式 / 保真 / 校验层 / 图片流水线等）。
-- `tools`：**命令行修复 / 维护工具**目录（直接 `python tools/<x>.py` 运行，自举把技能根注入 `sys.path`，与流水线脚本分离，不在 `flows` 或 `lib` 内）。
+- `tools`：**命令行修复 / 维护工具**目录（直接 `python tools/<x>.py` 运行，自举把技能根注入 `sys.path`，与流水线脚本分离，不在 `flows` 或 `lib` 内）。其中 `check_undefined_names.py` 是**未定义名静态检查**（pyflakes-lite，无参即扫全库）——专抓 `py_compile` 查不出的 `NameError` 类错（函数体引用了签名里没有、也非局部/外层/模块级/内置的名字）；改动 `flows`/`verify` 后建议跑一次。
 - 公用的工具 / 常量请放进 `lib`，不要在各包间重复定义。

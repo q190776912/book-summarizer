@@ -35,13 +35,47 @@ HOM_MD_ENTRY_RE = re.compile(r'\*\*(定义|定理|引理|推论|命题)\s*(\d{1,
 # Numbering depth (= number of numeric components) per ordinal style code.
 # 🔴 这是 `ORDINAL_DEPTH` 的**唯一定义处**——`config/verify_config/verify_config.py`
 # 与 `lib/figure_io.py` 一律从这里导入，禁止再各抄一份（抄副本必然漂移）。
-ORDINAL_DEPTH = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2,
+ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2,
+                 # 0 = UNNUMBERED：条目**不带任何编号**（无数字分量 ⇒ 段数 0）。
+                 # 它是「未声明 ordinal」的内部兜底组，也可由用户显式声明
+                 # （`{"type": 0, ...}` 表示本书条目无编号）。🔴 必须登记 0，否则
+                 # `ORDINAL_DEPTH.get(0, 3)` 会给无编号组安上 depth=3 的幻影默认。
                  # 13 = ORDINAL_APP：附录字母章号三级体例 `Label A.1.1`（章位是
                  # 字母 A/B/C…，后跟 节.号 两个数字段），段数同样是 3。
                  13: 3,
                  # 14 = ORDINAL_APP2：附录字母章号两段体例 `Label B.N`（Lee ISM
                  # 附录实测：条目/练习均无节段），章位字母 + 1 个数字段。
                  14: 2}
+
+
+class OrdinalDepthError(KeyError):
+    """An ordinal `type` code has no registered depth in `ORDINAL_DEPTH`.
+
+    This is a registration/config bug — never a signal to fall back to a
+    phantom depth (e.g. 3). Callers must surface it, not swallow it.
+    """
+
+
+def ordinal_depth(ocode):
+    """Return the numeric component count (depth) for ordinal style `ocode`.
+
+    🔴 NO DEFAULT. `ocode` MUST be a registered key of `ORDINAL_DEPTH`; an
+    unregistered code is a registration/config bug and raises `OrdinalDepthError`
+    immediately instead of silently mapping to a phantom depth (e.g. 3).
+
+    `ocode is None` is NOT a default — it is the explicit "no ordinal group"
+    signal and returns `None`, so callers that legitimately handle unconfigured
+    books can keep doing so. They decide what (if anything) to do; this function
+    never substitutes a depth for a missing code.
+    """
+    if ocode is None:
+        return None
+    try:
+        return ORDINAL_DEPTH[ocode]
+    except KeyError:
+        raise OrdinalDepthError(
+            f"ordinal type {ocode!r} 未登记 depth：须在 ORDINAL_DEPTH 注册 "
+            f"（合法码 {sorted(ORDINAL_DEPTH)!r}）")
 
 
 # ---------------------------------------------------------------------------

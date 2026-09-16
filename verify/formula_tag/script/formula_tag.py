@@ -123,14 +123,10 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 # ORDINAL style code -> default component count, used when the `formula` map
 # supplies `type` but no explicit `depth`.  Mirrors config.ORDINAL_SECTION_TYPES
 # lengths so the formula config aligns with the entry-ordinal config shape.
-# Canonical `type` -> numbering-depth map.  SINGLE source of truth, shared with
-# config/verify_config/verify_config.py (ORDINAL_DEPTH).  `depth` is NOT an
-# independent config field in the `formula` map — it is always derived from
-# `type`, so we reuse ORDINAL_DEPTH directly instead of a second, drift-prone map.
-try:
-    from verify_config import ORDINAL_DEPTH as _DEFAULT_DEPTH_BY_TYPE
-except Exception:  # pragma: no cover — boot normally injects config/verify_config
-    _DEFAULT_DEPTH_BY_TYPE = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3}
+# Canonical `type` -> numbering-depth map.  SINGLE source of truth in
+# `lib.numbering.ORDINAL_DEPTH`; depth is always derived from `type` via
+# `lib.numbering.ordinal_depth`, never a second, drift-prone local copy.
+from lib.numbering import ORDINAL_DEPTH, ordinal_depth, OrdinalDepthError
 
 # Heading regex used to assign a book-source formula its enclosing section.
 # Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ..."
@@ -1189,8 +1185,7 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     agnostic_nums = agnostic.all_numbers()
 
     configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False,
-                                    ncomp=_DEFAULT_DEPTH_BY_TYPE.get(
-                                        formula.get('type'), None))
+                                    ncomp=ordinal_depth(formula.get('type')))
     configured.build(ctx.ch, ctx.start, ctx.end)
     configured_nums = configured.all_numbers()
 
@@ -1202,8 +1197,13 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # 无 tag 的章按 SSOT「S 为空降级」放行（结构检查照常，不判 FAIL）。
         if not _summary_has_tags(ctx.md_file):
             return None
-        return (f"`formula` 配置 (type={formula.get('type')}, "
-                f"depth={_DEFAULT_DEPTH_BY_TYPE.get(formula.get('type'), 3)}, "
+        _ft = formula.get('type')
+        try:
+            _fd = ordinal_depth(_ft)
+        except OrdinalDepthError:
+            _fd = '未登记'
+        return (f"`formula` 配置 (type={_ft}, "
+                f"depth={_fd}, "
                 f"scope={formula.get('scope', 2)}) "
                 f"在本章书源中抽不到任何公式编号，但 agnostic 探测抽到 "
                 f"{len(agnostic_nums)} 个编号；depth/scope 与书实际公式形态不符，"
@@ -1819,7 +1819,7 @@ class QLayer(VerifyLayer):
         # Cross-chapter guard (first component == current chapter) is ON iff
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
-        ncomp = _DEFAULT_DEPTH_BY_TYPE.get(ftype, 3)
+        ncomp = ordinal_depth(ftype)
         # `formula.letter_ch` (default False): letter-chapter-led numbering
         # `(A.3)` / `（B.12）`（Lee ISM appendices）.  Patterns and norm() then
         # accept a single leading capital letter; the cross-chapter guard

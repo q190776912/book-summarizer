@@ -28,7 +28,10 @@ _NEVER_RE = re.compile(r"[^\s\S]")
 # components = the former `figure.components`).  🔴 `components` IS `depth`.
 # 🔴 唯一真源在 `lib.numbering`（勿在本处复制镜像副本）：
 # 副本会与 config 侧漂移，缺条目会让 CN-三段标 figure group 静默回落默认值。
-from lib.numbering import ORDINAL_DEPTH
+from lib.numbering import ordinal_depth, OrdinalDepthError
+# `ConfigError` 来自 verify_config —— lib -> config 的反向导入是既有安全模式
+# （见 lib/key_parse.py:43），boot 阶段已将 verify_config 注册为顶层可导入名。
+from verify_config import ConfigError
 
 # Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
 # is matched separately (it carries no ASCII letters).
@@ -47,10 +50,31 @@ def _figure_group(data):
     """Return the `ordinal` group whose `name` contains a figure-label keyword,
     or None.  Figures are NO LONGER a separate `figure` config block — they live
     in `ordinal` like any other counter, and their `type` (-> ORDINAL_DEPTH)
-    carries the component count (= `depth` = former `figure.components`)."""
+    carries the component count (= `depth` = former `figure.components`).
+
+    Handles BOTH config shapes produced by make_config:
+      * legacy FLAT  : top-level ``{"ordinal": [...]}``
+      * current NESTED: ``{"ch": {"ordinal":[...]}, "appendix": {"ordinal":[...]},
+        "supplement": {"ordinal":[...]}}`` — the figure group declared inside a
+        chapter/appendix segment must still be found (otherwise the figure gate
+        aborts all verification with "缺少 figure 配置")."""
+    # 1) legacy flat shape: top-level `ordinal`
     for g in data.get("ordinal", []):
         if any(_is_fig_kw(nm) for nm in g.get("name", [])):
             return g
+    # 2) current nested segment shape (make_config: ch / appendix / supplement)
+    for seg_key in ("ch", "appendix", "supplement"):
+        seg = data.get(seg_key)
+        if isinstance(seg, dict):
+            for g in seg.get("ordinal", []):
+                if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+                    return g
+    # 3) generic fallback: any dict value carrying its own `ordinal`
+    for seg in data.values():
+        if isinstance(seg, dict) and "ordinal" in seg:
+            for g in seg.get("ordinal", []):
+                if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+                    return g
     return None
 
 
@@ -112,19 +136,20 @@ def fig_label_alt(labels):
 
 
 def load_fig_components(out_dir):
-    """Return the figure-number COMPONENT COUNT for this book:
+    """Return the figure-number COMPONENT COUNT (== ordinal `depth`) for this book,
+    or raise `ConfigError` if figure numbering is not explicitly declared.
 
-      1 = global integer sequence   (e.g. Kreyszig "Fig. 1", "Fig. 23", … up to ~270)
-      2 = chapter.figure            (e.g. "Fig. 3.1", "图 3.1")   ← DEFAULT / historical
+      1 = global integer sequence   (e.g. Kreyszig "Fig. 1", "Fig. 23", …)
+      2 = chapter.figure            (e.g. "Fig. 3.1", "图 3.1")
       3 = chapter.section.figure    (e.g. "Fig. 3.1.2", "图 3.1.2")
+      0 = UNNUMBERED / 无图编号      (figure group 显式 `type: 0`) -> 不匹配任何图题
 
     🔴 DERIVED from the `ordinal` figure group's `type` (-> ORDINAL_DEPTH):
     `components` IS the ordinal `depth`, NOT a separate `figure.components` key.
-    Falls back to the legacy `figure.components` block (transitional) and then
-    to the historical default 2, so no existing book regresses.  A book whose
-    figures are numbered by a single global integer (Kreyszig) declares its
-    figure group with `type: 1` (depth 1); without it "Fig. 23" would be
-    mis-read as a non-label and left unnamed.
+    声明的 `type` 必须是已登记码（ordinal_depth 守卫）；未登记即抛
+    `OrdinalDepthError`。🔴 本书**必须显式声明** figure 配置——无图声明 `type: 0`，
+    有图声明 `type: 1/2/3` 等；**禁止任何静默默认**（旧 `return 2` 已移除）。
+    遗留 `figure.components` 块仍作过渡兼容。
     """
     candidates = [os.path.join(out_dir, "verify_config.json"),
                   os.path.join(os.path.dirname(os.path.abspath(out_dir)), "verify_config.json")]
@@ -136,15 +161,30 @@ def load_fig_components(out_dir):
                 fg = _figure_group(data)
                 if fg is not None:
                     t = fg.get("type")
-                    if isinstance(t, int) and t in ORDINAL_DEPTH:
-                        return ORDINAL_DEPTH[t]
-                # transitional: legacy block
+                    if isinstance(t, int):
+                        # 🔴 声明 figure group `type` 必须登记 depth；未登记即
+                        # 注册/配置 bug（ordinal_depth 抛 OrdinalDepthError），
+                        # type:0 (UNNUMBERED) = 显式「无图编号」-> depth 0。
+                        return ordinal_depth(t)
+                    # figure group 存在但缺 `type`：缺失即报错，不得默认。
+                    raise ConfigError(
+                        "figure group 已声明但缺 `type`：无图请显式声明 `type: 0`，"
+                        "有图声明 `type: 1/2/3` 等已登记体例")
+                # transitional: legacy block（旧 `figure.components`）
                 fig = data.get("figure")
                 if isinstance(fig, dict) and isinstance(fig.get("components"), int):
                     return max(1, min(3, fig["components"]))
+            except (ConfigError, OrdinalDepthError):
+                raise
             except Exception:
                 pass
-    return 2
+    # 🔴 无任何 figure 配置（无 figure group、无 legacy block）-> 缺失即报错，
+    # 禁止静默默认 2。请显式声明 ordinal 中的 figure group：无图 `type: 0` /
+    # 有图 `type: 1/2/3` 等已登记体例。
+    raise ConfigError(
+        "缺少 figure 配置：请显式声明 ordinal 中的 figure group"
+        "（无图 `type: 0` / 有图 `type: 1/2/3` 等已登记体例），"
+        "禁止依赖无配置的 2-分量默认")
 
 
 def build_fig_label_re(labels, components=2):
@@ -163,8 +203,13 @@ def build_fig_label_re(labels, components=2):
       1 -> ``([0-9]+)``                       (global integer, e.g. "Fig. 23")
       2 -> ``([0-9]+(?:\.|-)[0-9]+){1,2}``    (chapter.figure / chapter.section.figure)
       3 -> ``([0-9]+(?:\.|-)[0-9]+){2,3}``    (chapter.section.figure, stricter)
+      None / 0 -> ``_NEVER_RE``               (无图编号：type:0 或显式 None，不匹配任何图题)
     """
     if not labels:
+        return _NEVER_RE
+    if components is None or components == 0:
+        # type:0 (UNNUMBERED) 或显式 None = 无图编号分量 -> 不匹配任何图题
+        # （与 `{"labels": []}` 的「无图标签」标记一致，返回 _NEVER_RE）。
         return _NEVER_RE
     components = max(1, min(3, int(components)))
     if components == 1:

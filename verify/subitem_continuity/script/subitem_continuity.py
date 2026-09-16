@@ -159,6 +159,28 @@ def _alpha_to_int(lb):
             return 0
     return n
 
+# 🔴 异质序列守卫（2026-09-16，statistical-inference 3.33/3.34 实测）：
+# 相邻编号跳幅上限。超过即判定为「两条不同序列被并进同一窗」，而非单条序列缺号。
+# 真缺号是「中间少几个」（跳幅小）；把另一条序列的头接进来才会「跳到很远」。
+# 20 足够宽松——真子项序列相邻差远小于此，而 (iii)=3 → (c)=100 这类误并远超。
+_MAX_ORDINAL_JUMP = 20
+
+
+def _has_implausible_jump(vals):
+    """相邻（阅读顺序）编号跳幅是否超阈值——是则判为异质序列而非缺号。
+
+    只比较**相邻**项；跳过 0（转换失败）避免误判。
+    """
+    prev = None
+    for v in vals:
+        if v <= 0:
+            continue
+        if prev is not None and v - prev > _MAX_ORDINAL_JUMP:
+            return True
+        prev = v
+    return False
+
+
 def _classify_block(items):
     """Classify a block of (line_idx, raw_label) pairs as 'numeric', 'roman',
     or 'alpha'. Returns (type, [(line_idx, ordinal_int), ...]) where ordinal_int
@@ -178,7 +200,16 @@ def _classify_block(items):
         multi_char = [lb for lb in labels if len(lb) > 1]
         if multi_char:
             if all(_ROMAN_VALID.match(lb) for lb in multi_char):
-                return 'roman', [(li, _roman_to_int(lb)) for li, lb in items]
+                vals = [(li, _roman_to_int(lb)) for li, lb in items]
+                # 🔴 多字符标签是合法罗马 **不等于** 整块就是一条罗马序列。教材常见
+                # 「罗马任务段 + 字母选项段」同处一块（3.33 = (i)(ii)(iii) 任务 +
+                # (a)(b)(c)(d) 族），而 c/d 恰好也是合法罗马字符（100/500），把整块
+                # 过 _roman_to_int 得 [1,2,3,100,500] → 凭空算出 4..499 一串幽灵号。
+                # 真罗马序列相邻项不会跳这么远（iii 之后是 iv=4），故跳幅超阈值即判
+                # 异质 → 走既有 'mixed' 跳过（不制造噪声）。
+                if _has_implausible_jump([v for _, v in vals]):
+                    return 'mixed', []
+                return 'roman', vals
             # Roman with an alpha sub-suffix, e.g. (i) (iia) (iib) — textbooks use
             # this for sub-cases. Rank by the roman prefix; duplicates collapse.
             split = [_split_roman_suffix(lb) for lb in labels]
@@ -190,7 +221,11 @@ def _classify_block(items):
             # All single-char: check if they're all roman chars
             roman_chars = set('ivxlcdm')
             if all(lb.lower() in roman_chars for lb in labels):
-                return 'roman', [(li, _roman_to_int(lb)) for li, lb in items]
+                vals = [(li, _roman_to_int(lb)) for li, lb in items]
+                # 同上异质守卫：(i)(v) 与 (c) 混在一块时 c=100 会造出幽灵号。
+                if _has_implausible_jump([v for _, v in vals]):
+                    return 'mixed', []
+                return 'roman', vals
             else:
                 return 'alpha', [(li, _alpha_to_int(lb)) for li, lb in items]
 

@@ -489,12 +489,12 @@ def _item_pos(ext, it, page_dir=None):
     return (p, -1)
 
 
-def _find_title_page(ext, title, start, end):
+def _find_title_page(ext, title, start, end, page_dir=None):
     """无序号标小节：返回标题首次出现的页码（兼容旧签名）。
 
     实现委托给 :func:`_find_title_pos`（三段式锚定匹配，见其 docstring），
-    仅丢弃 y 分量。"""
-    pos = _find_title_pos(ext, title, start, end)
+    仅丢弃 y 分量。``page_dir`` 见 :func:`_find_title_pos`（多册书须传分册目录）。"""
+    pos = _find_title_pos(ext, title, start, end, page_dir=page_dir)
     if pos is None:
         return None
     return pos[0]
@@ -558,7 +558,7 @@ def _find_chapter_local_section_page(ext, ch, n, start, end, page_dir=None):
     return start
 
 
-def _recognized_sections(ext, ch, start, end):
+def _recognized_sections(ext, ch, start, end, page_dir=None):
     """无序号标书（section_types 含 0）：读取「agent 校验识别」步骤产物
     ``_recognized_sections.json`` 中本章的小节标题清单，返回
     ``[(title, page, y, level), ...]``（按文档顺序），``(page, y)`` 为该标题块的
@@ -1368,7 +1368,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _u_level = {}
     if getattr(book, "sections_unnumbered", False):
         for _i, (_ut, _up, _uy, _ulv) in enumerate(
-                _recognized_sections(ext, ch, start, end), 1):
+                _recognized_sections(ext, ch, start, end, page_dir=page_dir), 1):
             _uk = "U%d" % _i
             sec_pages.setdefault(_uk, _up)
             sec_pos[_uk] = (_up, _uy)

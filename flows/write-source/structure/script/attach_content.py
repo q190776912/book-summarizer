@@ -88,7 +88,7 @@ from data.book_structure.book_structure import (chapter_json_path,
                                                 list_chapter_keys,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
-from lib.numbering import (ORDINAL_DEPTH, formula_paren_tag_re,
+from lib.numbering import (ordinal_depth, formula_paren_tag_re,
                            formula_tag_number, formula_tag_re)
 from lib.page_dir import node_page_dir as _node_page_dir
 
@@ -375,7 +375,7 @@ def formula_cfg(ext, ch=None):
             if not fc and isinstance(data.get("ch"), dict):
                 fc = data["ch"].get("formula")
             fc = fc or {}
-            ncomp = ORDINAL_DEPTH.get(fc.get("type"))
+            ncomp = ordinal_depth(fc.get("type"))
             s = fc.get("scope")
             if isinstance(s, int):
                 scope = s

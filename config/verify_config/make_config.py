@@ -78,7 +78,8 @@ import glob
 
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
-from verify_config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT,
+from lib.numbering import ordinal_depth
+from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
@@ -1199,7 +1200,7 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
         # No detectable ordinal numbering — return empty groups; the caller
         # will omit the ordinal key rather than fabricate an `uncat` group.
         return None, [], lang, cm_chapter_first
-    depth = ORDINAL_DEPTH.get(family, 3)
+    depth = ordinal_depth(family)
     if depth >= 2:
         headings = [h for h in headings if len(h[2]) >= 2]
     # 计数器分组的证据优先级：结构契约（若已生成）> OCR 标题扫描。契约条目
@@ -1581,7 +1582,7 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     language = (lang if lang
                 else (ORDINAL_LANGUAGE_DEFAULT.get(ordinal, 'cn')
                       if ordinal is not None else 'cn'))
-    depth = ORDINAL_DEPTH.get(ordinal, 3) if ordinal is not None else 3
+    depth = ordinal_depth(ordinal)
     formula_cfg = detect_formula(extract_dir, pages=pages)
     # scope: 三级（type 3/5/13）按「节」重置计数器 → scope=3；其余按章重置 → 2。
     SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 13: 3}

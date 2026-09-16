@@ -76,7 +76,8 @@ import re
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
-from verify_config import (ORDINAL_DEPTH, ORDINAL_LANGUAGE_DEFAULT, ORDINAL_THREE_LEVEL,
+from lib.numbering import ordinal_depth
+from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                        ConfigLoader, ConfigError)
 
 # 节标题：可带 Vakil 的可选标记（★ 被 OCR 成 + / * / x），标题也可能以单字母词开头
@@ -468,7 +469,7 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
 # (western/EN/GM 2-level), or 'cn' (Chinese 3-level).
 def _mode_for_ordinal(ordinal, language=None):
     o = int(ordinal)
-    depth = ORDINAL_DEPTH.get(o, ORDINAL_THREE_LEVEL)
+    depth = ordinal_depth(o)
     # Explicit book `language` (from verify_config.json) wins: a three-level
     # EN book (e.g. Vakil, ordinal=8 / 3 + language=en) numbers western-style
     # (number-first, N.S.item) and must use the `three-level` parser, NOT the

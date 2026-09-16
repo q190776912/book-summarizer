@@ -73,6 +73,7 @@ import lib.boot as _boot
 _boot.setup()
 import chapter_map
 from verify_config import ConfigLoader, ConfigError
+from lib.page_dir import resolve_page_dir as _resolve_page_dir
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -95,11 +96,16 @@ def _call_llm(prompt):
         "或从环境变量移除以走 agent 校订模式。")
 
 
-def _chapter_ocr_blocks(ext, start, end):
-    """汇总章节区间 [start, end] 内所有 page_*.json 的 text 块（带页码）。"""
+def _chapter_ocr_blocks(ext, start, end, page_dir=None):
+    """汇总章节区间 [start, end] 内所有 page_*.json 的 text 块（带页码）。
+
+    ``page_dir`` 为该章 page_*.json 实际所在目录（多册书传对应分册子目录）；
+    省略时等同 ``ext``。各册页码重复，多册书直接用 ``ext`` 会读错册。
+    """
     blocks = []
+    _dir = page_dir or ext
     for p in range(start, end + 1):
-        fp = os.path.join(ext, "page_%03d.json" % p)
+        fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
         try:
@@ -178,7 +184,8 @@ def main():
             print("ch%-3d SKIP (not in chapter_map)" % ch)
             continue
         start, end = rng[ch]
-        blocks = _chapter_ocr_blocks(ext, start, end)
+        blocks = _chapter_ocr_blocks(ext, start, end,
+                                     page_dir=_resolve_page_dir(ext, ch))
         # 写每章 OCR 工作文件（agent 阅读源）
         wf = os.path.join(work, "ch%02d.txt" % ch)
         with open(wf, "w", encoding="utf-8") as fh:

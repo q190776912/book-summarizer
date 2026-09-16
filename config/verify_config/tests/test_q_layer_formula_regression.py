@@ -272,11 +272,16 @@ class MakeConfigFormulaKeyTest(unittest.TestCase):
                             msg=f"verify_config.json not written: {r.stdout}")
             with open(cfg_path, encoding='utf-8') as f:
                 cfg = json.load(f)
-            self.assertIn('formula', cfg,
+            # 落盘格式是外层 map {"ch": 正文, "appendix"?: …, "supplement"?: …}；
+            # ordinal / formula 等字段都在「正文」分段内，不在顶层。
+            body = cfg.get('ch') if any(
+                k in cfg for k in ('ch', 'appendix', 'supplement')) else cfg
+            body = body if isinstance(body, dict) else {}
+            self.assertIn('formula', body,
                           "make_config must emit the 'formula' key")
-            self.assertEqual(cfg['formula']['type'], 1)
-            self.assertNotIn('depth', cfg['formula'])
-            self.assertEqual(cfg['formula']['scope'], 3)
+            self.assertEqual(body['formula']['type'], 1)
+            self.assertNotIn('depth', body['formula'])
+            self.assertEqual(body['formula']['scope'], 3)
 
 
 class GlobalDetectionTest(unittest.TestCase):

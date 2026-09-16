@@ -67,7 +67,11 @@ import warnings
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from verify_config import (ConfigLoader, ConfigError, BookConfig, GroupConfig)  # noqa: E402
+from verify_config import (ConfigLoader, ConfigError, BookConfig, GroupConfig,
+                           ORDINAL_CODES, ORDINAL_NAME, ORDINAL_DEPTH,
+                           ORDINAL_STRUCTURE, ORDINAL_LANGUAGE_DEFAULT,
+                           ORDINAL_SECTION_TYPES)  # noqa: E402
+from lib.numbering import ordinal_depth, OrdinalDepthError  # noqa: E402
 
 PY = sys.executable
 VERIFY_CLI = os.path.join(_ROOT, "verify/script/verify_chapter.py")
@@ -97,6 +101,20 @@ def _find_real_has_cfg_book():
 # A real book with a v2 ordinal array config (used read-only; tests skip when
 # the corpus is absent or no configured book exists).
 REAL_HAS_CFG = _find_real_has_cfg_book()
+
+
+def _body_segment(cfg):
+    """生成的 ``verify_config.json`` 中「正文」子配置。
+
+    落盘格式为外层 map ``{"ch": 正文, "appendix": 附录?, "supplement": 补篇?}``，
+    ``ordinal`` / ``formula`` 等字段都**在分段内**而非顶层。兼容更早的扁平格式
+    （顶层直接放字段）——此时原样返回，使断言对两种格式都成立。
+    """
+    if isinstance(cfg, dict) and any(
+            k in cfg for k in ("ch", "appendix", "supplement")):
+        body = cfg.get("ch")
+        return body if isinstance(body, dict) else {}
+    return cfg
 
 
 def _find_real_no_cfg_book():
@@ -235,6 +253,74 @@ class TestRequireComplete(unittest.TestCase):
         with self.assertRaises(ConfigError) as ctx:
             _loader_with_config({"ordinal": "three_level"})
         self.assertIn("数组", str(ctx.exception))
+
+    # --- no-default / must-match: a group MUST declare its `type` ----------
+    def test_ordinal_group_missing_type_is_rejected(self):
+        # 编号体例归属必须显式声明；缺失时**不得**默认成 ORDINAL_THREE_LEVEL(3)
+        # —— 凭空补一个三级方案＝伪造体例。必须报「匹配不成功」。
+        with self.assertRaises(ConfigError) as ctx:
+            _loader_with_config({"ordinal": [{"name": ["uncat"], "scope": 2}]})
+        msg = str(ctx.exception)
+        self.assertIn("[CONFIG]", msg)
+        self.assertIn("匹配不成功", msg)
+
+    def test_ordinal_group_type_explicit_is_accepted(self):
+        # 对照组：显式给出 type 时正常通过（确认上面拦的是「缺失」而非别的）。
+        loader = _loader_with_config(
+            {"ordinal": [{"type": 2, "name": ["定理"], "scope": 2}]})
+        self.assertEqual(loader.book.primary_type, 2)
+
+    def test_ordinal_group_type_zero_is_declarable(self):
+        # type 0（UNNUMBERED）**可由用户显式声明**，表示本书条目不带编号；它同时
+        # 也是「未声明 ordinal」时的内部兜底值。depth 必须投影为 0（段数 0），
+        # 绝不能落到 ORDINAL_DEPTH 的幻影默认 3 上。
+        loader = _loader_with_config({"ordinal": [{"type": 0, "scope": 2}]})
+        grp = loader.book.ordinal[0]
+        self.assertEqual(grp.type, 0)
+        self.assertEqual(grp.depth, 0)
+        self.assertEqual(loader.book.primary_type, 0)
+        self.assertEqual(loader.book.section_types, [1])
+
+    def test_ordinal_code_zero_registered_everywhere(self):
+        # 注册表齐备性：漏登记会让下游 KeyError 或吃幻影默认值。
+        self.assertIn(0, ORDINAL_CODES)
+        self.assertEqual(ORDINAL_NAME[0], 'unnumbered')
+        self.assertEqual(ORDINAL_DEPTH[0], 0)
+        self.assertIn(0, ORDINAL_STRUCTURE)
+        self.assertIn(0, ORDINAL_LANGUAGE_DEFAULT)
+        self.assertEqual(ORDINAL_SECTION_TYPES[0], [1])
+
+    def test_ordinal_depth_no_phantom_default(self):
+        # 🔴 depth 无默认：登记的 type 返回其真实段数；type 0 返回 0（绝不变 3）；
+        # None 是「未声明 ordinal」的合法透传信号（返回 None，不是 0/3 之类的幻影）；
+        # 任何未登记的 code 一律 OrdinalDepthError，绝不静默套 3。
+        self.assertEqual(ordinal_depth(3), 3)
+        self.assertEqual(ordinal_depth(4), 2)
+        self.assertEqual(ordinal_depth(13), 3)
+        self.assertEqual(ordinal_depth(0), 0)
+        self.assertIsNone(ordinal_depth(None))
+        with self.assertRaises(OrdinalDepthError):
+            ordinal_depth(999)
+        # GroupConfig.depth 走同一入口：未登记 type 同样报错，不回退 3。
+        with self.assertRaises(OrdinalDepthError):
+            GroupConfig(type=999, name=["x"], scope=2).depth
+
+    def test_ordinal_depth_registry_symmetric(self):
+        # 🔴 注册表齐备性（防回归）：ORDINAL_CODES 与 ORDINAL_DEPTH 的 key 必须对称。
+        # 任一 type 缺 depth 都会在运行时撞 OrdinalDepthError 而非吃幻影默认，
+        # 故这里把「缺登记」在测试期就钉死。
+        self.assertEqual(set(ORDINAL_CODES), set(ORDINAL_DEPTH.keys()))
+        # 其它派生字面表也须覆盖全部 code，避免任何派生维度缺漏。
+        for code in ORDINAL_CODES:
+            self.assertIn(code, ORDINAL_NAME)
+            self.assertIn(code, ORDINAL_STRUCTURE)
+            self.assertIn(code, ORDINAL_LANGUAGE_DEFAULT)
+            self.assertIn(code, ORDINAL_SECTION_TYPES)
+
+    def test_ordinal_group_type_non_integer_rejected(self):
+        with self.assertRaises(ConfigError) as ctx:
+            _loader_with_config({"ordinal": [{"type": "three_level", "scope": 2}]})
+        self.assertIn("匹配不成功", str(ctx.exception))
 
     # --- R6: no uncat group declared -> ACCEPTED, no auto-append ----------
     def test_r6_no_uncat_group_accepted_no_auto_append(self):
@@ -422,9 +508,10 @@ class TestMakeConfig(unittest.TestCase):
         # labels are split into per-counter groups (no uncat placeholder).
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
-        self.assertIsInstance(gen["ordinal"], list)
-        self.assertGreaterEqual(len(gen["ordinal"]), 1)
-        for g in gen["ordinal"]:
+        body = _body_segment(gen)
+        self.assertIsInstance(body["ordinal"], list)
+        self.assertGreaterEqual(len(body["ordinal"]), 1)
+        for g in body["ordinal"]:
             self.assertIn(g["type"], (1, 2, 3, 4, 5, 6, 8, 9))
             self.assertNotEqual(g.get("name"), ["uncat"])
 
@@ -466,8 +553,9 @@ class TestMakeConfig(unittest.TestCase):
                          % (out[-500:], err[-500:]))
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
-        self.assertIsInstance(gen["ordinal"], list)
-        grp = gen["ordinal"][0]
+        body = _body_segment(gen)
+        self.assertIsInstance(body["ordinal"], list)
+        grp = body["ordinal"][0]
         self.assertEqual(grp["type"], 3,
                          "EN three-level book must detect type 3, got %r (out=%s)"
                          % (grp, out[-500:]))
@@ -498,11 +586,12 @@ class TestMakeConfig(unittest.TestCase):
                          % (out[-500:], err[-500:]))
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
-        self.assertIsInstance(gen["ordinal"], list)
+        body = _body_segment(gen)
+        self.assertIsInstance(body["ordinal"], list)
         # Current contract: detected labels are split into PER-COUNTER groups
         # (independent numbering sequences each get their own group) — six
         # independently numbered entry types -> six groups, none named uncat.
-        all_names = [nm for g in gen["ordinal"] for nm in g.get("name", [])]
+        all_names = [nm for g in body["ordinal"] for nm in g.get("name", [])]
         self.assertNotIn("uncat", all_names,
                          "detected labels must replace the default ['uncat']")
         for expected in ["定义", "定理", "引理", "推论", "命题", "例"]:
@@ -510,7 +599,7 @@ class TestMakeConfig(unittest.TestCase):
                           "detected label %s missing from group names %r"
                           % (expected, all_names))
         # type 3 (CN three-level) + scope 3 still hold alongside the label fill.
-        for g in gen["ordinal"]:
+        for g in body["ordinal"]:
             self.assertEqual(g["type"], 3)
             self.assertEqual(g["scope"], 3)
 
@@ -548,19 +637,20 @@ class TestMakeConfig(unittest.TestCase):
                          % (out[-500:], err[-500:]))
         with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
             gen = json.load(f)
-        self.assertIsInstance(gen["ordinal"], list)
+        body = _body_segment(gen)
+        self.assertIsInstance(body["ordinal"], list)
         # Per-counter group contract (see the CN variant above).
-        all_names = [nm for g in gen["ordinal"] for nm in g.get("name", [])]
+        all_names = [nm for g in body["ordinal"] for nm in g.get("name", [])]
         self.assertNotIn("uncat", all_names)
         for expected in ["Definition", "Theorem", "Lemma", "Corollary",
                          "Proposition", "Example"]:
             self.assertIn(expected, all_names,
                           "detected label %s missing from group names %r"
                           % (expected, all_names))
-        for g in gen["ordinal"]:
+        for g in body["ordinal"]:
             self.assertEqual(g["type"], 3)
             self.assertEqual(g["scope"], 3)
-        self.assertEqual(gen["language"], "en")
+        self.assertEqual(body["language"], "en")
 
     def test_make_config_real_no_config_book_then_cleanup(self):
         # Real no-config book (discovered at runtime), two tiers so the test

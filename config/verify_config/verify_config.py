@@ -172,8 +172,9 @@ ORDINAL_APP2 = 14             # APPENDIX LETTER-CHAPTER two-level (附录字母�
                               #   键解析分支保留两段宽容仅供历史 config 兼容。
                               #   （A/B/C…，可含 C/D/M 等与罗马字符同形的字母），
                               #   二者正则不可混用，故独立成码。
-ORDINAL_CODES = (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14)
+ORDINAL_CODES = (0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14)
 ORDINAL_NAME = {
+    0: 'unnumbered',
     1: 'single', 2: 'two_level', 3: 'three_level',
     4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
     12: 'hum', 13: 'app', 14: 'app2',
@@ -181,15 +182,15 @@ ORDINAL_NAME = {
 # Numbering depth (numeric components) per ordinal code.
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
-from lib.numbering import ORDINAL_DEPTH  # noqa: F401  (re-exported)
+from lib.numbering import ORDINAL_DEPTH, ordinal_depth  # noqa: F401  (re-exported)
 from data.book_structure.book_structure import (  # noqa: E402
     chapter_label, KIND_CHAPTER, KIND_APPENDIX, KIND_SUPPLEMENT, _resolve_kind,
     prime_chapter_kinds)
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 9: None, 10: None,
+ORDINAL_STRUCTURE = {0: None, 1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 8: None, 9: None, 10: None,
                      11: None, 12: None, 13: None, 14: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
+ORDINAL_LANGUAGE_DEFAULT = {0: 'cn', 1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
                             10: 'cn', 11: 'en', 12: 'en', 13: 'en', 14: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
@@ -302,6 +303,11 @@ SECTION_TYPE_DEPTH = {
 # Two-level families verify chapter + section only ([1, 2]); single-level
 # verifies the chapter prefix ([1]).
 ORDINAL_SECTION_TYPES = {
+    # 0 = UNNUMBERED：条目不带编号。**节的体例是正交的独立轴**——此处保守给
+    # `[1]`（只认章级，不校验节），因为「条目无编号」并不蕴含「节无编号」。
+    # 若本书节确实是 `## § <标题>` 无数字小节，显式标 `section_types: [1, 0]`
+    # （role 0 = SECTION_ROLE_UNNUMBERED），届时走 recognize_sections 清单路径。
+    0: [1],
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
     5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
     9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
@@ -351,7 +357,7 @@ class GroupConfig:
         numbering depth AND the structural style, so a separate `depth` field
         only invites the two to drift out of sync.  Treat `depth` as a read-only
         projection of `type`; it is never serialized and is ignored on load."""
-        return ORDINAL_DEPTH.get(self.type, 3)
+        return ordinal_depth(self.type)
 
     def group_prefix_len(self) -> int:
         """Number of leading numeric components that form the counter's
@@ -464,10 +470,14 @@ def _canon_label(lbl):
 
 
 def ordinal_depth(ordinal: int) -> int:
-    """@deprecated: numeric component count for an ordinal code.  Depth is now
-    per-group (GroupConfig.depth); this helper only survives for make_config's
-    default.  Do NOT add new callers."""
-    return ORDINAL_DEPTH.get(int(ordinal), 3)
+    """Back-compat re-export of `lib.numbering.ordinal_depth`.
+
+    Depth is now derived per-group via `GroupConfig.depth`; the canonical
+    implementation lives in `lib.numbering` and raises `OrdinalDepthError` on
+    any unregistered code (NO phantom default). Prefer importing
+    `ordinal_depth` from `lib.numbering` directly."""
+    from lib.numbering import ordinal_depth as _od
+    return _od(ordinal)
 
 
 def _load_ignore_file(path: str) -> List[str]:
@@ -800,7 +810,23 @@ class BookConfig:
             for i, g in enumerate(raw):
                 if not isinstance(g, dict):
                     raise ConfigError(f"[CONFIG] ordinal[{i}] 必须是对象（GroupConfig）")
-                t = int(g.get('type', ORDINAL_THREE_LEVEL))
+                # 🔴 no-default / must-match：组的 `type`（编号体例归属）必须**显式
+                # 声明**，绝不默认成 ORDINAL_THREE_LEVEL(3)——凭空补一个三级方案会把
+                # 一本书悄悄按错误的体例解析，属伪造体例（与「absent ordinal ⇒ type 0」
+                # 同一原则）。匹配不上就报错，交人工定夺。
+                if g.get('type') is None:
+                    raise ConfigError(
+                        f"[CONFIG] ordinal[{i}] 未声明 `type`（编号体例匹配不成功）。"
+                        f"必须显式给出，取值应为 "
+                        f"{'/'.join(map(str, sorted(ORDINAL_CODES)))}；本字段**无默认值**"
+                        f"（no-default / must-match 规则）。"
+                        f' 例：{{"type": 3, "name": ["uncat"], "scope": 2}}')
+                try:
+                    t = int(g.get('type'))
+                except (TypeError, ValueError):
+                    raise ConfigError(
+                        f"[CONFIG] ordinal[{i}].type={g.get('type')!r} 不是合法整数"
+                        f"（编号体例匹配不成功）。")
                 if t not in ORDINAL_CODES:
                     raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）")
                 nm = g.get('name') or ["uncat"]
@@ -1015,7 +1041,12 @@ class ConfigLoader:
                       os.path.join(self.book_dir, VERIFY_CONFIG_NAME)]
         hit = next((p for p in candidates if os.path.exists(p)), None)
         if hit is None:
-            self.book = BookConfig()
+            # 无配置文件 = 未声明 ordinal ⇒ 与「文件在但无 ordinal」同语义：
+            # 按「no default type」规则给单个 UNNUMBERED uncat 组（type 0），
+            # 绝不静默升级成本书并不存在的三级方案（legacy type 3）。
+            # 走 from_dict({}) 而非 BookConfig()，以免落到 dataclass 的
+            # `[GroupConfig()]`(type 3) 默认值上、与 from_dict 语义分叉。
+            self.book = BookConfig.from_dict({})
             return
         self._gate_extraction_done(hit)
         data = self._read_json(hit)
@@ -1090,7 +1121,9 @@ class ConfigLoader:
 
         The MAIN config (`verify_config.json`) keeps its historic contract:
           * File absent:
-              - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
+              - allow_absent=True  -> WARNING + keep the "no default type"
+                default (a single UNNUMBERED uncat group, type 0 — NOT the
+                legacy type 3; see `BookConfig.from_dict`).
               - allow_absent=False -> raise ConfigError.
           * File present but `ordinal` missing/illegal -> raise ConfigError (hard error).
 
@@ -1120,7 +1153,8 @@ class ConfigLoader:
 
         Rules (identical for the main and the appendix config):
           * File absent:
-              - allow_absent=True  -> WARNING + keep default (ordinal=3, back-compat).
+              - allow_absent=True  -> WARNING + keep the "no default type"
+                default (single UNNUMBERED uncat group, type 0).
               - allow_absent=False -> raise ConfigError.
           * File present but `ordinal` missing/illegal -> raise ConfigError (hard error).
           * `section_types` explicitly given but with an illegal role code (not

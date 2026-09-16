@@ -71,13 +71,14 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。写 `["uncat"]` 表示兜底组。 |
 | `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。 |
 
-### `type` 类型表（1–9）
+### `type` 类型表（0–14）
 
 | code | 名称 | 段数(depth) | 编号样式 | 具体示例 | 代表书/风格 |
 |------|------|----------|---------|---------|-----------|
+| 0 | unnumbered | 0 | 条目**不带编号** | `Definition.` / `定理`（裸标签，无数字） | 条目无编号书；亦为「未声明 `ordinal`」的内部兜底 |
 | 1 | single | 1 | 单级（仅一个连续号，无章/节位） | `定义 1` / `Theorem 1` | 单级编号书 |
 | 2 | two_level | 2 | CN 两级 `N.M`（节优先；无章过滤，定理族共用一条连续号） | `定义 1.1` / `定理 2.3` / `引理 4.5`（章.号） | 中文二级标签 |
-| 3 | three_level | 3 | CN 三级 `N.M.K`（默认） | `定理 1.2.3` / `定义 3.2.1` / `引理 2.4.7`（章.节.号） | 多数中文教材（如 Kreyszig 中文版） |
+| 3 | three_level | 3 | CN 三级 `N.M.K` | `定理 1.2.3` / `定义 3.2.1` / `引理 2.4.7`（章.节.号） | 多数中文教材（如 Kreyszig 中文版） |
 | 4 | en | 2 | EN 两级 `N.M`（章优先；富英文标签词） | `Theorem 6.1` / `Lemma 2.4` / `Proposition 3.7`（章.号） | 英文两级书（如 Strogatz） |
 | 5 | roman | 3 | 三级 + 罗马数字章号 | `Definition I.2.3` / `Theorem II.4.1` / `Lemma III.1.2`（章.节.号，章号为 I/II/III） | 罗马章号书 |
 | 6 | gm | 2 | 两级，章内本地从 1 起号（无章过滤，每章重置计数器） | `Definition 1.1` / `Theorem 1.2` / `Remark 1.5`（章.号，章内从 1 起） | Gelfand–Manin |
@@ -148,7 +149,9 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
-- 逐组校验：`type`∈{1,2,3,4,5,6,8,9,13}（`depth` 由 `type` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 4；type 13 = 附录字母章位三级）、`scope`∈{1,2,3}，否则 `exit 2`。
+- 🔴 **`type` 必须显式声明，无默认值**（no-default / must-match）：组里缺 `type`（或缺 `ordinal` 整键）**一律拒绝并报「编号体例匹配不成功」**（`exit 2`），**绝不默默套用 type 3**——凭空补一个三级方案＝伪造体例，会把整本书按错误体例解析。
+- `type 0`（UNNUMBERED，段数 0）**可由用户显式声明**：表示本书**条目不带编号**（`Definition.` / `定理` 之类裸标签，无数字）。它同时是「未声明 `ordinal`」时由代码内部产生的兜底组。`depth` 对 type 0 投影为 **0**（不是幻影的 3）。⚠️ 节的体例是**正交的独立轴**：`type 0` 只说明条目无编号，节仍按 `section_types` 各自判定；无数字小节书（`## § <标题>`）须显式写 `section_types: [1, 0]`（role 0 = 无序号标层级）。
+- 逐组校验：`type` ∈ `ORDINAL_CODES` = {0,1,2,3,4,5,6,8,9,10,11,12,13,14}（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 4；13/14 = 附录字母章位三级/两段；0 = 条目无编号）、`scope`∈{1,2,3}，否则 `exit 2`。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## 顶层字段：`chapter_first` / `section_scoped`

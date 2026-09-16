@@ -136,9 +136,23 @@
        （`chapter_tag_map`）要求该单元携带的 `formula.tag` 为真值对比单元正文
        `\tag{}`——**缺失（漏写编号公式）与编造（多出编号）均不通过**（Q 层是
        章级末步，单元粒度提前拦；契约缺失时跳过对账）
+     - **🔴 章级序标校验（B 层条目编号 + O 层子项编号，合并前即拦、均阻断）**：
+       待校验的 md **由 `merge_units.merge_chapter` 亲自产出**（`require_gate=False`
+       避免递归）到临时文件——即**门控看到的就是最终章 md 本身**，故复用 verify
+       真层后的结论与步骤 8 章级 verify **一致**：
+         · **B 层**（`_md_gap_blocking`）查**缺号 + 顺序错乱**（含 `uncat`
+           「描述性标题」组），只取其 `blocking`（`warnings` 仅警示，与章级同口径）；
+         · **O 层**（`check_ordinal_subitem_gaps`）查 `(1)(2)(3)` / `(a)(b)(c)` /
+           `(i)(ii)(iii)` 序列缺口，只取其 `'x'` 项；item / desc / exercise
+           （含描述单元）全覆盖。
+       🔴 两者都按章级跑（缺号/顺序跨单元；O 层按「行距 ≤4」成块，逐单元会错并窗）；
+       🔴 **不可手搓「等价拼接」**（缺 `---` 分隔线 / `clean_cjk` 后处理会漂移误报，
+       实测 stat-inference ch3 曾因此报 2 处假缺口）——必须调 merge 自己那一个函数。
+       依赖 `_extraction_done.json`（MM Repair 完成标记）；重建 md / 加载层 / 执行
+       任一失败一律按「序标校验不通过」处理（fail-closed）
      - **🔴 真实 KaTeX 渲染（按章批量）**：门控把本章全部单元正文拼进
-       `_gate_render_tmp_<章目录名>.md`（按章独立，避免多个写手代理并行门控时互相
-       覆盖临时文件）跑 `katex_validate.js` 真渲染，错误按行号映射回所属
+       `_gate_render_tmp_<章目录名>_<pid>.md`（按章独立，避免多个写手代理并行门控时
+       互相覆盖临时文件；用后即删）跑 `katex_validate.js` 真渲染，错误按行号映射回所属
        单元——启发式抓不到的 `\begin` 不配对 / 宏参数不闭合等在门控即拦，不漏到
        步骤 8；渲染工具链缺失（node / katex 未装）= 门控不通过（须先完成 prep.env）
      任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。

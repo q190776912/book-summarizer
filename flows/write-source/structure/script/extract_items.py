@@ -24,8 +24,9 @@ import json, re, os, sys
 
 from extract_items_en import extract_items_en
 from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
+from lib.numbering import ordinal_depth
 from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
-                        ORDINAL_DEPTH, BookConfig, GroupConfig)
+                        BookConfig, GroupConfig)
 
 # ---------------------------------------------------------------------------
 # Label word -> semantic label (canonical CN).  Case-insensitive so English
@@ -592,7 +593,7 @@ if __name__ == '__main__':
     # Back-compat: `--ordinal N` is a single-group shortcut -> one uncat GroupConfig.
     # The group scope follows the detected depth (1->book / 2->chapter / 3->section)
     # so the extraction-side B-layer resets counters at the right boundary.
-    _depth = ORDINAL_DEPTH.get(ns.ordinal, ORDINAL_THREE_LEVEL)
+    _depth = ordinal_depth(ns.ordinal)
     cfg = BookConfig(ordinal=[GroupConfig(type=ns.ordinal, name=["uncat"],
                                           scope=_depth)])
 

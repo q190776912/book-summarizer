@@ -400,13 +400,17 @@ def _render_node(node, out, lang="cn"):
         _render_item(node, out, lang)
 
 
-def _tidy_separators(lines):
+def _tidy_separators(lines, owners=None):
     """草稿分割线整理（2026-08-29 Koopman 书实测）：
     1) 堆叠 ``---`` 合并——嵌套小节边界各自 emit ``---``（子节末 + 父节末），
        产生 "``---`` 空行 ``---``" 堆叠；间距 ≤2 行的 ``---`` 组合并为一个；
     2) 每个保留的 ``---`` 上下恰有一个空行（V-F：``---`` 上下必须空行）；
-    3) 连续多空行折叠为单个空行。幂等。"""
-    out = []
+    3) 连续多空行折叠为单个空行。幂等。
+
+    🔴 ``owners``：与 ``lines`` 等长的并行列表，每行标注其归属（单元相对路径 /
+    ``None``）。传入时返回 ``(res, res_owners)``，使分割线整理后仍能与「合并 md
+    行 → 源单元」映射逐行对齐（回填定位序标缺口用）；不传则保持原单列表返回。"""
+    out, out_ow = [], []
     i, n = 0, len(lines)
     while i < n:
         if lines[i].strip() == "---":
@@ -420,27 +424,38 @@ def _tidy_separators(lines):
                 else:
                     break
             out.append("---")
+            out_ow.append(owners[i] if owners else None)
             i = last + 1
         else:
             out.append(lines[i])
+            out_ow.append(owners[i] if owners else None)
             i += 1
-    res = []
-    for ln in out:
+    res, res_ow = [], []
+    for idx, ln in enumerate(out):
         if ln.strip() == "---":
             while res and not res[-1].strip():
                 res.pop()
+                res_ow.pop()
             if res:
                 res.append("")
+                res_ow.append(None)
             res.append("---")
+            res_ow.append(out_ow[idx])
             res.append("")
+            res_ow.append(None)
         elif not ln.strip():
             if res and res[-1].strip():
                 res.append("")
+                res_ow.append(None)
         else:
             res.append(ln)
+            res_ow.append(out_ow[idx])
     while res and not res[-1].strip():
         res.pop()
-    return res
+        res_ow.pop()
+    if owners is None:
+        return res
+    return res, res_ow
 
 
 

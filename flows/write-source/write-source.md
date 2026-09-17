@@ -136,20 +136,29 @@
        （`chapter_tag_map`）要求该单元携带的 `formula.tag` 为真值对比单元正文
        `\tag{}`——**缺失（漏写编号公式）与编造（多出编号）均不通过**（Q 层是
        章级末步，单元粒度提前拦；契约缺失时跳过对账）
-     - **🔴 章级序标校验（B 层条目编号 + O 层子项编号，合并前即拦、均阻断）**：
-       待校验的 md **由 `merge_units.merge_chapter` 亲自产出**（`require_gate=False`
-       避免递归）到临时文件——即**门控看到的就是最终章 md 本身**，故复用 verify
-       真层后的结论与步骤 8 章级 verify **一致**：
-         · **B 层**（`_md_gap_blocking`）查**缺号 + 顺序错乱**（含 `uncat`
-           「描述性标题」组），只取其 `blocking`（`warnings` 仅警示，与章级同口径）；
-         · **O 层**（`check_ordinal_subitem_gaps`）查 `(1)(2)(3)` / `(a)(b)(c)` /
-           `(i)(ii)(iii)` 序列缺口，只取其 `'x'` 项；item / desc / exercise
+     - **🔴 序标校验不在本门控内跑（已移除冗余重跑），权威检测点见下**：B 层条目编号
+       （`item_numbering_integrity`）的**权威检测在 book structure 完整性校验**（write-source
+       步骤 3，`check_structure_completeness.py` 第 3 步：喂 book_structure 派生「合成 md」+
+       源条目集，查条目缺号 / 顺序错乱 / 重要概念遗漏并回填契约），步骤 8 `verify_chapter.py
+       --all` 在最终合并 md 上**复检**；O 层子项编号（`subitem_continuity` 的 `(1)(2)(3)` /
+       `(a)(b)(c)` / `(i)(ii)(iii)` 缺口）**只在步骤 8 完全拼接后的章 md** 由 `verify_chapter.py
+       --all`（O 真层）校验（structure 完整性闸门只覆盖 D + B，不含 O）。本门控看到的合并 md
+       与步骤 8 同源（merge 亲手产出）、等价，故 B/O **不在门控内重复跑**——避免与「拼接后再
+       校验」重复。步骤 8 校验发现的**缺号**缺口必须用 `backfill_ordinals.py` **写回归属单元
+       `.md`**：
+         · 回填经 `merge_chapter_map` 的 line→unit 映射定位到归属单元，在该单元内紧邻前序
+           条目的正确位置插入**明确标注的占位条目**（不编造内容），后续由你 / agent 补全。
+           仅「缺号」回填，「顺序错乱」只报告、不自动改标签（重排风险高）；默认 `--dry-run`
+           只报告，`--apply` 才写盘；幂等（重复运行不重复插入）。
+         · **B 层**（`_md_gap_blocking`）查**缺号 + 顺序错乱**（含 `uncat`「描述性标题」
+           组），只取 `blocking`；**O 层**（`check_ordinal_subitem_gaps`）查 `(1)(2)(3)` /
+           `(a)(b)(c)` / `(i)(ii)(iii)` 序列缺口，只取 `'x'` 项；item / desc / exercise
            （含描述单元）全覆盖。
-       🔴 两者都按章级跑（缺号/顺序跨单元；O 层按「行距 ≤4」成块，逐单元会错并窗）；
+       🔴 回填的两真层都读 merge 亲手产出的 md（待回填 md 由 `merge_chapter_map` 产出，
+       与最终章 md 逐行一致），故定位精确、不跨单元串味；
        🔴 **不可手搓「等价拼接」**（缺 `---` 分隔线 / `clean_cjk` 后处理会漂移误报，
        实测 stat-inference ch3 曾因此报 2 处假缺口）——必须调 merge 自己那一个函数。
-       依赖 `_extraction_done.json`（MM Repair 完成标记）；重建 md / 加载层 / 执行
-       任一失败一律按「序标校验不通过」处理（fail-closed）
+       依赖 `_extraction_done.json`（MM Repair 完成标记）。
      - **🔴 真实 KaTeX 渲染（按章批量）**：门控把本章全部单元正文拼进
        `_gate_render_tmp_<章目录名>_<pid>.md`（按章独立，避免多个写手代理并行门控时
        互相覆盖临时文件；用后即删）跑 `katex_validate.js` 真渲染，错误按行号映射回所属
@@ -227,6 +236,7 @@
 - `flows/write-source/script/split_draft_units.py`：步骤 4 单元拆分（`ch{N}.json` → `units/ch{N}/` 每 item 一 md + `manifest.json`，首行 DRAFT 标记）。
 - `flows/write-source/script/gate_units.py`：步骤 5 / 6(c) 强制门控（每个单元 DONE + 质量校验通过才 exit 0；`--units-dir units-translate` 用于翻译单元，同一套校验；未过严禁进入拼接）。
 - `flows/write-source/script/merge_units.py`：步骤 7 拼接（纯脚本；`--all` 批量 + `--units-dir` 选目录；源版 → `ChapterN_*.md`，翻译版 → `第N章_*.md`；按 V-F 重建 `---` 分隔线）。
+- `flows/write-source/script/backfill_ordinals.py`：步骤 8 复检的回填落点——把 verify 的 B 层（条目缺号，权威检测在步骤 3 structure 完整性闸门、步骤 8 复检）/ O 层（子项缺号，仅步骤 8 校验）缺口**写回归属单元 `.md`**（门控不冗余重跑 B/O，统一在拼接后校验 + 回填）。`--dry-run` 只报告、`--apply` 写盘、幂等；归属由 `merge_chapter_map` 的 line→unit 映射保证，不跨单元串味。
 - `flows/write-source/script/init_translate_units.py`：步骤 6(a) 翻译清单初始化（仅生成 `units-translate/ch{N}/manifest.json` 元数据 + `src_hash`，**不复制正文**；`--scaffold` 可选补源文骨架；内置源章门控硬闸；中文书自动跳过）。
 - `flows/write-source/script/check_translate_parity.py`：步骤 6(c) 同构闸（单元序列 / `\tag` 集合 / 图片集合 / 编号项标签编号与源单元 1:1 相等；漂移检测基于清单初始化时快照的 `src_hash`）。
 - `flows/write-source/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。

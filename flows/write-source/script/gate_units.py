@@ -34,19 +34,21 @@
   🔴 **fail-closed**：质量校验**执行失败**（脚本异常）按「质量未达标」处理，
      绝不因崩溃放行（旧实现异常即放行，曾让未审阅单元整体免检流入拼接）。
 
-序标校验（1:1 保真，**合并前**即拦，不再漏到步骤 8，**两者均阻断**）
+序标校验（本门控不再冗余重跑 → 权威检测点在 structure 完整性闸门 + 步骤 8 复检）
 ------------------------------------------------------------------
-  ⑤ **条目序标（B 层：缺号 + 顺序错乱，含 ``uncat``「描述性标题」组）**；
-  ⑥ **子项序标（O 层：``(1)(2)(3)`` / ``(a)(b)(c)`` / ``(i)(ii)(iii)`` 缺口）**。
-     两者都**按章级跑**，且待校验的 md **由 `merge_units.merge_chapter` 亲自产出**
-     （``_merged_chapter_md``，``require_gate=False`` 避免递归）——即**门控看到的
-     就是最终章 md 本身**，故分别复用 verify 真 B 层（``_md_gap_blocking``）与真
-     O 层（``check_ordinal_subitem_gaps``）后，结论与步骤 8 章级 verify **一致**。
-     🔴 **不可下放到逐单元**（缺号 / 顺序天然跨单元；O 层按「行距 ≤4」成块，逐
-     单元会切断或错并序列窗）；🔴 **不可手搓「等价拼接」**（缺 `---` 分隔线 /
-     `clean_cjk` 等后处理会漂移，实测并窗误报）——必须调 merge 自己的函数。
-     desc 描述单元已在拼接内，覆盖不丢。
-     阻断口径（fail-closed：重建 md / 加载层 / 执行任一失败 = 不通过）：
+  序标判据天然是**章级 / 文件级**（B 层条目缺号 / 顺序跨单元，O 层按「行距 ≤4」成块），
+  故门控**不再冗余重跑** B / O：
+  · **B 层条目编号**的权威检测在 **book structure 完整性校验**（write-source 步骤 3，
+    ``check_structure_completeness.py`` 第 3 步：喂 book_structure 派生「合成 md」+ 源条目集
+    查条目连续性 / 重要概念遗漏并回填契约）；步骤 8 ``verify_chapter.py --all`` 在最终合并
+    md 上**复检** B 层。
+  · **O 层子项编号** ``(1)(2)(3)`` 缺口**只在步骤 8** 完全拼接后的章 md 由 ``verify_chapter.py
+    --all``（O 真层）校验（structure 完整性闸门只覆盖 D + B，不含 O）。
+  门控看到的合并 md 与步骤 8 同源（merge 亲手产出）、等价，故在门控内跑纯属重复。
+  🔴 **回填落点**：步骤 8 复检发现的缺号缺口由 **``backfill_ordinals.py``**（步骤 7 拼接
+  之后运行）**写回其归属的总结单元 ``.md``**（你在哪个单元找回的序标就放回哪个单元），插入
+  明确标注的占位条目（不编造内容），便利后续补全。默认 ``--dry-run``（只报告），``--apply`` 写盘。
+  🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对。
 
 完整性核对（防漏项）：
   ⑦ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
@@ -134,108 +136,6 @@ def _check_numbering(units):
                     "编号不递增：节 %s 内 %s（%d）排在 %s（%d）之后" % (
                         sec, cur_key, cur_num, prev_key, prev_num))
     return problems
-
-
-class _SilentOut(io.StringIO):
-    """stdout 替身：吞掉 merge_chapter 的进度打印，并容忍 `reconfigure`。
-
-    真实 stdout（TextIOWrapper）有 `reconfigure`，而 `io.StringIO` 没有；模块导入
-    期/运行期若有人调 `sys.stdout.reconfigure(encoding=…)`（如 `lib.boot` 的
-    `_force_utf8_stdio`、各入口脚本），纯 StringIO 会抛 AttributeError。故给替身
-    补一个 no-op `reconfigure`，使重定向在任何调用上下文下都安全。
-    """
-
-    def reconfigure(self, *args, **kwargs):
-        return None
-
-
-def _merged_chapter_md(ext, ch_key, out_dir, units_sub="units"):
-    """调用 **merge_units 自己的拼接器**，把本章 md 产出到临时文件（序标校验消费）。
-
-    🔴 **为什么必须调 `merge_chapter` 而不是本模块自己拼**：序标校验对拼缝形态极
-    敏感（B 层按 `## §` 分窗、O 层按「行距 ≤4」成块），手搓的「等价拼接」必然
-    漂移——本模块曾手搓一版，缺单元间 `---` 分隔线 → 把罗马段与字母段并进同一窗、
-    误报一串幽灵缺口。调**同一个函数**即**按定义**保证「门控看到的 = 最终章 md」
-    （含 `clean_cjk` / `_tidy_separators` / section 单元锚点），从根上杜绝分叉。
-
-    `require_gate=False`：跳过 merge 内置的门控，避免与 gate_units 递归。
-    返回临时 md 路径；调用方负责删除。
-    """
-    tmp_md = os.path.join(ext, "_gate_ordinal_tmp_%s_%d.md" % (
-        os.path.basename(out_dir), os.getpid()))
-    import merge_units as _merge          # 延迟导入：避免与 merge_units 循环依赖
-    import contextlib
-    # merge_chapter 会向 stdout 打印一行「[merge_units] chN -> …」；门控内部调用
-    # 只需产物、不需这行噪声，故就地静默（不改 merge_units 签名，零风险）。
-    with contextlib.redirect_stdout(_SilentOut()):
-        try:
-            _merge.merge_chapter(ext, ch_key, out_md=tmp_md, require_gate=False,
-                                 units_sub=units_sub)
-        except BaseException:
-            # 🔴 merge 可能已写出部分 tmp 后才抛（缺单元文件 → SystemExit）：
-            # 此时路径尚未返回给调用方的 finally，须在此就地清理，防残留。
-            try:
-                os.unlink(tmp_md)
-            except OSError:
-                pass
-            raise
-    return tmp_md
-
-
-def _check_ordinals_chapter(ext, ch_key, out_dir, units, units_sub="units"):
-    """章级序标校验：**B 层（条目编号）+ O 层（子项编号）**，均阻断。
-
-    🔴 **复用 verify 真层**（唯一真源），**不重写判据**：
-      * B 层 ``item_numbering_integrity._md_gap_blocking`` —— 缺号 + 顺序错乱
-        （含 ``uncat``「描述性标题」组），只取其 ``blocking``；
-      * O 层 ``subitem_continuity.check_ordinal_subitem_gaps`` —— ``(1)(2)(3)`` /
-        ``(a)(b)(c)`` / ``(i)(ii)(iii)`` 缺口，只取其 ``'x'`` 项。
-    B 层用轻量 ctx 提供其实际消费的四个属性（``config``/``ignore``/``md_file``/
-    ``language``）。
-
-    🔴 **md 由 `merge_units.merge_chapter` 亲自产出**（`_merged_chapter_md`），
-    故门控看到的就是**最终章 md 本身**——O 层对拼缝邻接极敏感，手搓「等价拼接」
-    必然漂移并误报；调同一函数即按定义消除分叉，O 层因此可放心阻断。
-    desc 描述单元已在拼接内，覆盖不丢。
-
-    🔴 **fail-closed**：重建 md / 加载层 / 执行任一失败，一律按「序标校验不通过」
-    返回，绝不静默放行。
-    """
-    try:
-        tmp_md = _merged_chapter_md(ext, ch_key, out_dir, units_sub)
-    except (Exception, SystemExit) as e:  # 🔴 fail-closed：无法重建 = 不能宣称校验通过
-        # SystemExit 非 Exception 子类（merge_chapter 缺单元文件时抛它），须显式捕获，
-        # 否则会击穿门控而非 fail-closed。
-        return ["章级序标校验执行失败（fail-closed）：无法重建章 md：%r" % (e,)]
-    try:
-        try:
-            from verify_config import ConfigLoader
-            from item_numbering_integrity import _md_gap_blocking
-            from subitem_continuity import check_ordinal_subitem_gaps
-        except Exception as e:  # 🔴 fail-closed：层不可用 = 不能宣称校验通过
-            return ["章级序标校验执行失败（fail-closed）：无法加载 B/O 层：%r" % (e,)]
-        book_dir = os.path.dirname(os.path.abspath(ext.rstrip("/\\"))) or ext
-        loader = ConfigLoader(ext, book_dir)
-        cfg = loader.config_for_chapter(ch_key)
-        ctx = types.SimpleNamespace(
-            config=cfg,
-            ignore=list(getattr(cfg, "ignore", None) or []),
-            md_file=tmp_md,
-            language=getattr(cfg, "language", None) or "cn")
-        problems = ["[B层序标] %s" % b.strip()
-                    for b in (_md_gap_blocking(ctx)[0] or [])]
-        problems.extend("[O层序标] " + g.strip()
-                        for g in (check_ordinal_subitem_gaps(tmp_md) or [])
-                        if str(g).strip().startswith("x"))
-        return problems
-    except Exception as e:  # 🔴 fail-closed
-        return ["章级序标校验执行失败（fail-closed）：%r" % (e,)]
-    finally:
-        try:
-            os.unlink(tmp_md)
-        except OSError:
-            pass
-
 
 def _hash_text(text):
     import hashlib
@@ -396,11 +296,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # B 层编号预检：同一节内编号是否递增
     numbering_probs = _check_numbering(units)
     problems.extend(numbering_probs)
-    # 🔴 章级序标校验（B 层条目编号 + O 层子项编号，含 uncat 描述性标题组）——
-    # 复用 verify 真层，且 md 由 `merge_units.merge_chapter` 亲自产出（=最终章 md），
-    # 故在**合并前**即拦，不再漏到步骤 8 verify。
-    problems.extend(_check_ordinals_chapter(ext, ch_key, out_dir, units,
-                                            units_sub=units_sub))
+    # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
+    # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
+    # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py
+    # 写回归属单元（回填）。此处不再跑章级序标校验（门控看到的合并 md 与步骤 8 同源、等价）。
+    # 注意：上方 _check_numbering 仍是单元内「同节编号单调」的轻量预检，与章级序标校验是两回事。
     # 🔴 批量真实 KaTeX 渲染（按章一次 node 子进程，错误按行号映射回单元）：
     # 启发式（裸命令 / $ 配对 / 闭合）抓不到的 \begin 不配对、未定义宏等
     # 真渲染错误在门控即拦，不再漏到步骤 8 verify / 最终输出。

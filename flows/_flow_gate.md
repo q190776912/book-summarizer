@@ -130,3 +130,12 @@ python tools/flow_runner.py bootstrap <book_dir>
 - ❌ **跳过单元粒度直接凭整章 md 翻译**，或**未过同构闸（`check_translate_parity.py`）就拼接翻译版**（翻译闸详见 [`write-source`](write-source/write-source.md) 步骤 6）。
 - ❌ 手填 `_extract/.flow_gate.json` 账本（仅 `flow_runner` 经证据复核后写）。
 - ❌ 把"文本 100% 落盘 / Pipeline finished 日志 / 后台进程结束"当作"MM Repair 完成"。
+- ❌ 在单元门控（`gate_units.py`）内冗余重跑序标校验：B 层条目编号（`item_numbering_integrity`）
+  的权威检测在 **book structure 完整性校验**（write-source 步骤 3，`check_structure_completeness.py`
+  第 3 步，喂 book_structure 派生「合成 md」+ 源条目集），步骤 8 `verify_chapter.py --all` 在
+  最终合并 md 上**复检**；O 层子项编号（`subitem_continuity`）**只在步骤 8 完全拼接后的章 md**
+  由 `verify_chapter.py --all`（O 真层）校验（structure 完整性闸门只覆盖 D + B，不含 O）。门控
+  看到的合并 md 与步骤 8 同源（merge 产出）、等价，故 B/O **不在门控内重复跑**。步骤 8 复检
+  发现的 **缺号**缺口必须经 `backfill_ordinals.py` **回填到归属总结单元 `.md`**（`--dry-run`
+  只报告、`--apply` 才写盘、幂等；顺序错乱只报告不自动改标签）；🔴 回填必须读
+  `merge_chapter_map` 产出的 md，不可手搓「等价拼接」。

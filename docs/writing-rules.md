@@ -51,12 +51,23 @@
     （U+FFFD）、单元内私造 `#` 标题行——「没审阅改好」的典型痕迹，命中即不通过
   - **单元级公式序标对账**：以内容化契约（`chapter_tag_map`）要求该单元携带的
     `formula.tag` 为真值对比单元正文 `\tag{}`，缺失（漏写编号公式）与编造均不通过
-  - **章级序标校验（B 层条目编号 + O 层子项编号，合并前即拦、均阻断）**：待校验
-    md 由 `merge_units.merge_chapter` 亲自产出（=最终章 md），复用 verify 真层——
-    B 层查**缺号 + 顺序错乱**（含 `uncat`「描述性标题」组，只取 `blocking`）；O 层
-    查 `(1)(2)(3)` / `(a)(b)(c)` / `(i)(ii)(iii)` 缺口（只取 `'x'`），item / desc /
-    exercise（含描述单元）全覆盖。🔴 按章整体判（跨单元 / O 层按行距成块，逐单元
-    会错并窗）；🔴 不可手搓「等价拼接」（会漂移误报）；fail-closed
+  - **🔴 序标校验权威检测点 + 门控不冗余重跑 + 缺号回填归属单元**：
+    · **B 层条目编号（`item_numbering_integrity`：条目缺号 + 顺序错乱）的权威检测在
+      book structure 完整性校验**：write-source 步骤 3（`verify/script/check_structure_completeness.py`
+      第 3 步）把 book_structure 派生「合成 md」+ 源条目集喂给 B 层，查条目连续性 / 重要
+      概念遗漏并回填契约——B 层本就是 structure 完整性闸门的一环，**并非「门控内跑、后被移出」**。
+      步骤 8 `verify_chapter.py --all` 在**最终合并 md** 上**复检** B 层。
+    · **O 层子项编号（`subitem_continuity`：`(1)(2)(3)` / `(a)(b)(c)` / `(i)(ii)(iii)`
+      缺口）只在步骤 8 完全拼接后的章 md** 由 `verify_chapter.py --all`（O 真层）校验
+      （structure 完整性闸门只覆盖 D + B 两层，不含 O）。
+    · **单元门控（`gate_units.py`）不再冗余重跑 B/O**：门控看到的合并 md 与步骤 8 同源
+      （merge 亲手产出）、等价，故 B/O **不在门控内重复跑**——避免与「拼接后再校验」重复。
+    · **缺号缺口必须回填归属单元**：步骤 8 复检发现的**缺号**缺口用 `backfill_ordinals.py`
+      **写回归属总结单元 `.md`**（经 `merge_chapter_map` 的 line→unit 映射精确定位、不跨
+      单元；插入明确标注的占位条目、不编造内容）；`--dry-run` 只报告、`--apply` 才写盘、
+      幂等。**顺序错乱只报告、不自动改标签**（重排风险高，由人/agent 处理）。🔴 按章整体判
+      （跨单元 / O 层按行距成块，逐单元会错并窗）；🔴 不可手搓「等价拼接」（会漂移误报）——
+      必须用 `merge_chapter_map` 产出的 md。
   - **真实 KaTeX 渲染**：门控按章把全部单元正文批量跑 `katex_validate.js` 真渲染
     （错误映射回所属单元）；渲染工具链缺失（node / katex 未装）= 门控不通过
   ——拦模型瞎改就标 DONE。只有全部单元都改对（每个 item 都不漏）才 exit 0，否则列出

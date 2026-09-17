@@ -115,6 +115,71 @@ def _final_md_name(ch_key, language, chapter_name):
         else ("附录%s_%s.md" % (num, rest))
 
 
+def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True):
+    """拼接单章为 ``(lines, owners)``。
+
+    ``lines`` 为最终章 md 行序列；``owners`` 等长并行，``owners[i]`` = 该行归属的
+    单元文件（相对 ``out_dir`` 的文件名），或 ``None``（分割线 / 空行）。
+
+    🔴 与 ``merge_chapter`` 共用同一拼接逻辑（分隔线状态机 + ``_tidy_separators`` +
+    ``clean_cjk``），**不**另起炉灶——确保 ``owners`` 与真实合并 md 逐行对齐，
+    回填时才能把「合并 md 上的序标缺口」精确映射回源单元。
+    """
+    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(ch_key))
+    mpath = os.path.join(out_dir, "manifest.json")
+    if not os.path.exists(mpath):
+        raise SystemExit("[merge_units] %s 缺 %s/manifest.json（先 "
+                         "split_draft_units / init_translate_units 初始化清单）。" % (chapter_label(ch_key), units_sub))
+    if require_gate:
+        ok_g, gdet = _gate.gate_chapter(ext, ch_key, units_sub=units_sub)
+        if not ok_g:
+            raise SystemExit(
+                "[merge_units] 🔴 强制门控未通过（%s / %s），拒绝拼接：\n%s\n"
+                "须先把全部单元按 writing-rules 改好 / 译好（首行 DONE + 质量校验通过）、"
+                "重跑 gate_units 通过后再 merge。" % (chapter_label(ch_key), units_sub, gdet))
+    with open(mpath, encoding="utf-8") as f:
+        manifest = json.load(f)
+    language = manifest.get("language") or "cn"
+
+    lines, owners = [], []
+    prev = None          # heading / desc / item
+    for u in manifest.get("units") or []:
+        up = os.path.join(out_dir, u["file"])
+        if not os.path.exists(up):
+            raise SystemExit("[merge_units] %s 缺单元文件 %s（须先 gate_units 门控）。"
+                             % (chapter_label(ch_key), u["file"]))
+        utype = u["type"]
+        body = _read_body(up)
+        rel = u["file"]  # 单元文件名（相对 out_dir）；回填据此定位源单元
+        # 分隔线状态机（V-F：条目级 ---，标题下第一元素不加）
+        if utype == "section":
+            # 非首单元的节标题之前总是 ---（等价原「每节末 ---」）
+            if lines:
+                lines.append("---"); lines.append(""); owners.append(None); owners.append(None)
+        elif utype in ("item", "exercise"):
+            if prev in ("desc", "item", "exercise"):
+                lines.append("---"); lines.append(""); owners.append(None); owners.append(None)
+        elif utype == "desc":
+            if prev == "item":            # 条目尾随散文
+                lines.append("---"); lines.append(""); owners.append(None); owners.append(None)
+        # chapter 标题/其他：无前置分隔
+        if body:
+            lines.extend(body)
+            owners.extend([rel] * len(body))
+            lines.append(""); owners.append(None)
+        prev = {"section": "heading", "chapter": "heading",
+                "item": "item", "desc": "desc", "exercise": "item"}.get(utype, prev)
+
+    # 整理分隔线 + 空行（复用 render_draft，并同步 owners）
+    lines, owners = _rd._tidy_separators(lines, owners)
+    if clean_cjk is None:
+        clean_cjk = (language == "en")     # 翻译版（cn）自动不清 CJK
+    if clean_cjk:
+        lines = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in lines]
+        # owners 不受影响（行数不变，仅内容去 CJK）
+    return lines, owners
+
+
 def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
                   units_sub="units"):
     """拼接单章；返回最终 md 路径。
@@ -134,13 +199,6 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
     if not os.path.exists(mpath):
         raise SystemExit("[merge_units] %s 缺 %s/manifest.json（先 "
                          "split_draft_units / init_translate_units 初始化清单）。" % (chapter_label(ch_key), units_sub))
-    if require_gate:
-        ok_g, gdet = _gate.gate_chapter(ext, ch_key, units_sub=units_sub)
-        if not ok_g:
-            raise SystemExit(
-                "[merge_units] 🔴 强制门控未通过（%s / %s），拒绝拼接：\n%s\n"
-                "须先把全部单元按 writing-rules 改好 / 译好（首行 DONE + 质量校验通过）、"
-                "重跑 gate_units 通过后再 merge。" % (chapter_label(ch_key), units_sub, gdet))
     with open(mpath, encoding="utf-8") as f:
         manifest = json.load(f)
     language = manifest.get("language") or "cn"
@@ -158,46 +216,32 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
             chapter_name = ""
         out_md = os.path.join(book_dir, _final_md_name(ch_key, language, chapter_name))
 
-    lines = []
-    prev = None          # heading / desc / item
-    for u in manifest.get("units") or []:
-        up = os.path.join(out_dir, u["file"])
-        if not os.path.exists(up):
-            raise SystemExit("[merge_units] %s 缺单元文件 %s（须先 gate_units 门控）。"
-                             % (chapter_label(ch_key), u["file"]))
-        utype = u["type"]
-        body = _read_body(up)
-        # 分隔线状态机（V-F：条目级 ---，标题下第一元素不加）
-        if utype == "section":
-            # 非首单元的节标题之前总是 ---（等价原「每节末 ---」）
-            if lines:
-                lines.append("---")
-                lines.append("")
-        elif utype in ("item", "exercise"):
-            if prev in ("desc", "item", "exercise"):
-                lines.append("---")
-                lines.append("")
-        elif utype == "desc":
-            if prev == "item":            # 条目尾随散文
-                lines.append("---")
-                lines.append("")
-        # chapter 标题/其他：无前置分隔
-        if body:
-            lines.extend(body)
-            lines.append("")
-        prev = {"section": "heading", "chapter": "heading",
-                "item": "item", "desc": "desc", "exercise": "item"}.get(utype, prev)
-
-    # 整理分隔线 + 空行（复用 render_draft）
-    lines = _rd._tidy_separators(lines)
-    if clean_cjk is None:
-        clean_cjk = (language == "en")     # 翻译版（cn）自动不清 CJK
-    if clean_cjk:
-        lines = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in lines]
+    lines, _owners = _assemble(ext, ch_key, units_sub, clean_cjk, require_gate)
     with open(out_md, "w", encoding="utf-8") as f:
         f.write("\n".join(lines).rstrip() + "\n")
     print("[merge_units] %s (%s) -> %s" % (chapter_label(ch_key), units_sub, out_md))
     return out_md
+
+
+def merge_chapter_map(ext, ch_key, units_sub="units", require_gate=False, tmp_dir=None):
+    """拼接单章并返回 ``(tmp_md, owners, out_dir)``——供回填定位序标缺口。
+
+    * ``tmp_md``：拼接产物写入 ``ext`` 下的临时文件（``_bf_merged_tmp_<章>.md``），
+      **不覆盖**最终章 md；
+    * ``owners``：与 ``tmp_md`` 逐行对齐，``owners[i]`` = 该行归属单元文件名
+      （相对 ``out_dir``）或 ``None``；
+    * ``out_dir``：单元目录绝对路径，用于把 ``owners`` 中的相对文件名解析为真实路径。
+
+    🔴 与 ``merge_chapter`` 共用 ``_assemble``，保证 owners 与真实合并 md 逐行一致。
+    回填（backfill_ordinals）据此把「合并 md 上的序标缺口」映射回源单元文件。
+    """
+    out_dir = os.path.join(ext, _ac.OUT_DIR_NAME, units_sub, unit_dir_name(ch_key))
+    tmp = os.path.join(tmp_dir or ext,
+                       "_bf_merged_tmp_%s_%d.md" % (unit_dir_name(ch_key), os.getpid()))
+    lines, owners = _assemble(ext, ch_key, units_sub, clean_cjk=None, require_gate=require_gate)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+    return tmp, owners, out_dir
 
 
 def main():

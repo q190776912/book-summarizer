@@ -27,6 +27,7 @@
      python tools/build_chapter_map.py <extract_dir>
      ```
      它扫描 `page_*.json` 自动定位每章真实起点（"Chapter N" 标题匹配 / 裸标题回退）、推断 `end`（下一章起点-1），写回 `chapter_map.json` 并产出 `chapter_map.build_report.md` 供 agent 判断。
+     - 🔴 **中文书页眉「第N章」序列兜底（Mode C）**：中文教材常见「TOC 印刷页号与 PDF 页序累积漂移」（实测《数学分析教程》3ed 上册偏差 12→82 页递增），若只靠申报窗口内匹配会检测失败、静默保留错值。脚本内置 `scan_cn_heads` 扫全书页眉「第N章」→ 取每章首个连续段起点作为**独立于申报值的真值锚点**，在 Mode A0/A/B 均失败时自动纠正任意大的偏差（实测把 ch7 错值 351 纠正为 304、ch3 141→138 等，7 章全 CORRECTED、0 UNDTECTED）。agent 判断环节照常审阅 `chapter_map.build_report.md` 即可，无需手填中文漂移页码。
    - 🔴 `start`/`end` 是 **PDF 文件页码**（= `page_%03d.json` 序号，1-based），**不是**印刷页码；agent **不手写它**——`build_chapter_map.py` 从 OCR 证据算出，天然是 PDF 页号，规避"存了印刷页号"的经典坑（详见 [data/chapter_map/chapter_map.md](../../../data/chapter_map/chapter_map.md)）。
    - 它是后续"某章是否已可写"、`make_config.py` 编号判定（罗马数字章号 / 每章 `ordinal` / `chapter_first`）、figure 按章分配与 `build_structure` 页区间读取的**唯一判定依据**。
    - 🔴 **生成后 agent 判断（强制）**：读 `chapter_map.build_report.md`——确认 `CORRECTED` 值；若有 `UNDTECTED` 章（检测器未能从 OCR 定位起点），在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具。全章 `start`/`end` 非 null 才放行进入 Step 2–3 与下游 write-source（与"规则 B：暴露真实缺陷、禁止掩盖"一脉相承）。
@@ -42,6 +43,7 @@
    - **全书全局单序标 + 裸字母子块书**（Arnold《数学方法》型：章=`# 第N章` 文件承载、节=§1..§52 跨章连续单序标、节内子块印裸字母 `A. 变分`、附录章的节本身即字母）：声明 `"section_types": [1, 1, 5]` + `"sections_global": true`，md 子块标题写纯 `### §A`（🔴 禁止投影父节数字写成 `### §12.A`——那是编造复合序标）；附录字母节由 build_structure 自动升格进契约。
      - 原书小节**带序标**（如 `§3.2`、`3.1.4`）→ 默认 `[1, 2]`（或按实际层级），总结写 `## §N.M 节名`，verify 缺节闸门按数字逐一对齐分章契约（`book_structure/ch{N}.json`）；
      - 原书小节**无序号标**（如 Silverman《A Friendly Introduction to Number Theory》：章是文件 `# 第N章` 无 `## §` 编号、文件内 `## § <标题>` 小节也无编号）→ **章层级与小节层级都显式写为 `0`**，即 `"section_types": [0, 0]`（第一个 `0`=章、第二个 `0`=小节，两个层级都无序号标），总结写 `## § 描述性标题`（数字留空、仅保留 `§`），verify 缺节闸门改为按「位置/数量」比对（只查契约要求的节是否都在、不计 md 多出的小节），**不强求加回原书没有的序标**。该配置是 per-book 配置，仅改本书行为，其他带序标书保持 `[1,2]` 之类、零回归。
+   - 🔴 **ordinal 家族判别（裸键 family 3 vs 中文标签紧贴编号 family 10）**：探测器默认给 **family 3（`type 3`，裸键 `C.S-N`，如英文 `Theorem 1.2.1` 被解析成键 `1.2-1`）**。但若本书条头是「中文标签 + 紧贴三级编号」（`**定义1.2.1**：` / `**定理1.3.1**：`），**必须改用 `type 10`（cn3lab）**——此类书「定义/定理/推论/例」各自独立计数，同一 `1.3-1` 是定义1.3.1 **且** 定理1.3.1 **且** 推论1.3.1，配 type 3 会把它们并成一组计数器 → B 层假缺号（TAIL/EXTRA）、门控假报「编号不递增」。`make_config.py` 对 family=3 命中 cn3lab 证据（行首条头 `labelC.S.N` + 同一 `C.S-N` 被多标签共用）时会打印 `[CN3LAB 守卫]` 告警，**agent 须据此改配 type 10**（ordinal 数组按标签族分组：定义 / 定理类 / 例 / 习题各自成组）并整书重跑 `build_structure` + 重拆单元；🔴 脚本不自动改判（重排契约键须人工确认）。
 3. 生成配置：
    ```powershell
    python config/verify_config/make_config.py <extract_dir>   # 半自动探测 + 人工核对（公用配置脚本）
@@ -70,7 +72,7 @@
   - `UNDTECTED` 章（检测器未能从 OCR 定位起点）→ **必须**在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具；
   - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `ordinal` 必须含 Figure 组（自定义前缀→`name` 非空、无图序标→不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
-- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（合法值 {1,2,3,4,5,6,8,9,13}：两级序标 + `chapter_first:false` 组合用 `type 4`；**附录字母章位三级 = 13**，见该文档 §附录专用配置）。
+- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（合法值 {1,2,3,4,5,6,8,9,10,13}：两级序标 + `chapter_first:false` 组合用 `type 4`；**附录字母章位三级 = 13**；**中文三级「标签紧贴编号」书（`定义1.3.1` / `定理1.3.1` 同印 .1、各自独立计数）用 `type 10`（cn3lab）**，🔴 不可配 `type 3`（裸键 C.S-N，会把同节内定义/定理/推论并成一组计数器 → 假缺号），见该文档 type 码表与「type 3 vs type 10」警示块）。
 - **附录与正文体例不一致**：若本书附录编号体例与正文不同（如正文数字三级 `Theorem 10.9.13`、附录字母章位 `Definition A.1.1`），`make_config.py` 会**只扫附录页区间**额外生成 `_extract/appendix_verify_config.json`（`ConfigLoader` 对附录章自动路由到此文件，正文零回归）。若附录与正文同体例则**不生成**该文件（回退主配置）。`chapter_map.json` 中附录章须以字母章号（`"ch": "A"`）或章名含 `Appendix`/`附录` 登记，否则检测器无法识别其为附录。详见 [`../../../config/verify_config/verify_config.md` §附录专用配置](../../../config/verify_config/verify_config.md)。
 
 ## 出口条件

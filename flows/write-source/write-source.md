@@ -114,7 +114,7 @@
     - **example blockquote**：`format_verify.check_example_blockquote_lines`（同 verify G 层）
     - **块引用/例/证明/列表结构**（`_run_format_verify_unit_checks`：把单元正文写
       临时 .md 后**复用 format_verify 原函数**，不复制逻辑）：嵌套块引用
-      `> > **`、例与证明断裂/同行、结构标签误入 `>`、陈述误包 `>`、`>` 块无
+      `> > **`、例与证明断裂/同行、blockquote内 bare blank line 打断连续性、结构标签误入 `>`、陈述误包 `>`、`>` 块无
       标签、标签未包 `>`（例 `**Example.**` / `**Proof…**`）、列表末项后直接接
       新块无空行、连续空 `>` 行、`$$` 块内泄 `>`——verify F/H 层九项在单元级
       提前拦；文档级专属（`---` 分隔线 / 标题上下文类）不搬（孤立单元无

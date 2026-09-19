@@ -604,21 +604,24 @@ class physical_evidence:
                 body = raw[m.end():].lstrip("\r\n").rstrip("\n")
                 try:
                     import check_unit_quality as _quality
-                    # 单元级 tag 对账：以同章内容化契约为真值（chapter_tag_map），
-                    # 拦「漏写编号公式 / 编造编号」（Q 层是章级末步，这里提前拦）
-                    expected = None
-                    try:
-                        from data.book_structure.book_structure import (
-                            chapter_json_path, chapter_tag_map)
-                        label = os.path.basename(os.path.normpath(units_dir))
-                        cpath = chapter_json_path(
-                            os.path.dirname(os.path.normpath(units_dir)), label)
-                        if os.path.exists(cpath):
-                            with open(cpath, encoding="utf-8") as cf:
-                                expected = chapter_tag_map(json.load(cf)).get(
-                                    str(u["key"]))
-                    except Exception:
-                        expected = None  # 契约不可得 = 跳过 tag 对账（其余检查照常）
+                    # 单元级 tag 对账：真值优先取 **manifest.tags**（拆分时按契约
+                    # 节点自身写入），回退章契约 chapter_tag_map 的 key 映射。
+                    # 🔴 不可只按 key 聚合：同节内定义/定理/推论各自编号、共用 key，
+                    # 聚合会让「定义」单元被要求写出「定理」单元的编号公式。
+                    expected = u.get("tags") if isinstance(u.get("tags"), list) else None
+                    if expected is None:
+                        try:
+                            from data.book_structure.book_structure import (
+                                chapter_json_path, chapter_tag_map)
+                            label = os.path.basename(os.path.normpath(units_dir))
+                            cpath = chapter_json_path(
+                                os.path.dirname(os.path.normpath(units_dir)), label)
+                            if os.path.exists(cpath):
+                                with open(cpath, encoding="utf-8") as cf:
+                                    expected = chapter_tag_map(json.load(cf)).get(
+                                        str(u["key"]))
+                        except Exception:
+                            expected = None  # 契约不可得 = 跳过 tag 对账（其余检查照常）
                     ok_q, qp = _quality.check_body(
                         u["type"], u.get("name") or "", body,
                         expected_tags=expected)

@@ -85,8 +85,11 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题用字母位 `N.M.A`） | `Theorem 1.2.3` / `Exercise 1.2.A` / `Proposition 4.5.B`（章.节.号） | Vakil《Foundations of Algebraic Geometry》 |
 | 9 | en3 | 3 | EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | `Remark 1.1.1` / `Definition 2.3.4` / `Theorem 3.2.1`（章.节.号） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
 | 13 | app | 3 | 附录**字母章位**三级：章位是**单字母**（A/B/C…）而非数字，条目 `Label A.S.N`、节标题 `A.S`（如 `A.1 Categories` / `A.6 Adjoint Functors`） | `Definition A.1.1` / `Theorem A.6.2` / `Example A.3.4` / `Exercise A.4.1`（字母章位.节.号） | Weibel《An Introduction to Homological Algebra》Appendix A |
+| 10 | cn3lab | 3 | CN 三级「**标签紧贴编号**」：`labelC.S.N`（中文标签与三级编号**无空格紧贴**，且**同一 `C.S.N` 编号被多种标签复用**——定义/定理/推论/例各自独立计数，定义1.3.1 与 定理1.3.1 同印 ".1" 但属不同条目） | `定义1.3.1` / `定理1.3.1` / `推论1.3.1` / `例1.3.1`（章.节.号，标签紧贴、标签间独立计数） | 常庚哲/史济怀《数学分析教程》等中文教材（标签紧贴编号、同号多标签） |
 
 > `depth`（段数）一律由 `type` 经 `ORDINAL_DEPTH` 派生，上表「段数(depth)」列即为其唯一来源；配置里**不要**再写 `depth` 字段。
+
+> 🔴 **type 3（three_level）与 type 10（cn3lab）不可混用**：二者都印三级 `C.S.N`，但语义相反——type 3 下每个 `C.S.N` 编号**唯一对应一种标签**（一个计数器，如 `定理1.2.3` 在全书编号里独占 1.2.3）；type 10 下**同一 `C.S.N` 被定义/定理/推论/例多种标签复用**（各标签独立从 1 起号，同节内"定义1.3.1 / 定理1.3.1 / 推论1.3.1"三者同印 .1 但属不同条目）。配错（尤其把 cn3lab 书误配 type 3）会让契约键 `1.3-1` 既要承载定义又要承载定理/推论 → B 层假缺号（TAIL/EXTRA）、门控假报「编号不递增」。`make_config.py` 探测 family=3 时打印 `[CN3LAB 守卫]` 告警（命中"行首条头 `labelC.S.N` + 同一 `C.S-N` 被多标签共用"证据），agent 须据此**改配 type 10** 并整书重跑 `build_structure` + 重拆单元（🔴 脚本不自动改判，重排契约键须人工确认）。
 
 ## 分章配置 map：verify_config.json 的 `ch` / `appendix` / `supplement`
 

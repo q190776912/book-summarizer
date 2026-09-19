@@ -80,7 +80,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from lib.numbering import ordinal_depth
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
-                           ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2)
+                           ORDINAL_APP2,
+                           ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
+                           ORDINAL_CN3LAB)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
 
@@ -837,6 +839,25 @@ def _group_headings_by_counter(headings, depth, strict_reset=True):
     return groups
 
 
+def _group_cn3lab_by_label(headings):
+    """cn3lab（type 10）按标签族分组：各标签独立计数（同 C.S-N 被多种标签共用），
+    不依赖共享计数器合并逻辑（_group_headings_by_counter 会把同窗重复号判独立、
+    其余判共享而误并）。返回 list of label-form lists，每族一组。"""
+    from collections import defaultdict
+    by_canon = defaultdict(lambda: {"forms": set()})
+    for (ci, f, c) in headings:
+        canon = _FORM_CANON.get(f.lower())
+        if canon is None:
+            continue
+        by_canon[canon]["forms"].add(f)
+    if not by_canon:
+        return [["uncat"]]
+    order = {ff: (i, j) for i, (_, forms) in enumerate(LABEL_FORMS)
+             for j, ff in enumerate(forms)}
+    def sort_forms(fs):
+        return sorted(fs, key=lambda x: order.get(x, (999, 999)))
+    return [sort_forms(data["forms"]) for data in by_canon.values()]
+
 def _shares_main_counter(cand_comps, main_comps, strict_reset=True):
     """True iff the candidate family shares the SAME ascending counter as the
     main types (so it should merge into the primary group).  False (its OWN
@@ -1155,7 +1176,17 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
             and n_app2 >= n_three:
         family = ORDINAL_APP2
     elif n_three > 0 and n_three >= n_two and n_three >= n_single:
-        family = 3
+        # 中文三级「标签紧贴编号」-> cn3lab（type 10）自动改判。探测器原本只会给 3
+        # （没有 cn3lab 形态分支），靠 _print_cn3lab_guard 打印「人工确认」提示，
+        # 导致每本 cn3lab 书都误判 type 3 -> 契约键 1.3-1 被当成单一编号、丢失
+        # 「定义/定理/推论各自独立计数」结构 -> B 层假缺号、Q 层连锁误报、agent 必改。
+        # 证据足够强时直接判 10：复用 scan_cn3lab_evidence 的 hits/collisions
+        # （与 guard 阈值一致：行首条头>=20 或同 C.S-N 多标签撞号）。撞号是
+        # 「各标签独立计数」铁证，优先级最高。附录字母章位体例不触发本改判。
+        if (not letter_chapter) and seen_cn and _cn3lab_probe(extract_dir):
+            family = ORDINAL_CN3LAB
+        else:
+            family = 3
     elif n_two > 0 and n_two >= n_single:
         # CN two-level (type 2) vs EN two-level (type 4)
         family = 2 if (seen_cn and not seen_en) else 4
@@ -1216,7 +1247,9 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     # counter per chapter, so the page scan has NO chapter window to separate
     # shared vs independent counters (the window logic in _shares_main_counter
     # needs >=2 components) — use the domain convention (_group_single_level).
-    if family == 1:
+    if family == ORDINAL_CN3LAB:
+        groups = _group_cn3lab_by_label(headings)
+    elif family == 1:
         groups = _group_single_level(headings)
     else:
         # 契约证据是完备样本：min==1 的 reset 判据关闭（共享计数器书各标签
@@ -1249,7 +1282,8 @@ def _detect_exercise_counter(extract_dir, pages=None):
 
     This returns True ONLY when it finds a run of >=3 consecutive bare
     first-level ordinals that is NOT inside a consolidated-exercise zone (i.e.
-    not on/near a page that carries an "Exercises/练习" header).  That
+    not on
+ear a page that carries an "Exercises/练习" header).  That
     correctly returns False for Fraleigh (every exercise ordinal there lives on
     a consolidated-block page) while still letting books with genuine preserved
     exercises get a type:1 group.
@@ -1585,7 +1619,7 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     depth = ordinal_depth(ordinal)
     formula_cfg = detect_formula(extract_dir, pages=pages)
     # scope: 三级（type 3/5/13）按「节」重置计数器 → scope=3；其余按章重置 → 2。
-    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 13: 3}
+    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 10: 3, 13: 3}
     ordinal_arr = []
     if ordinal is not None:
         if is_appendix:
@@ -1795,6 +1829,88 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
     return 0
 
 
+# --- 形态守卫（暴露型告警：只报告证据，不擅自改判）-----------------------
+# family=3（裸键 `C.S-N`）与 family=10（cn3lab，`标签C.S.N`）的分水岭是
+# **条头是否带中文标签**。探测器目前只会给 3（它没有 cn3lab 形态分支），
+# 而判错的代价极大：契约键由 `1.3-1` 承担「定义1.3.1 / 定理1.3.1 / 推论1.3.1」
+# 三种独立编号序列，键撞车 → B 层假缺号、条目门控假「编号不递增」。
+# 故此处**独立从源侧取证据**并在生成报告里显著告警，由 agent 决定是否改判
+# （改判会重排全书编号体系，必须人工确认，不在此自动执行）。
+_CN3LAB_HEAD_RE = re.compile(
+    r"^\s*(定义|定理|引理|推论|命题|公理|性质|例|注)\s*(\d{1,2})\.(\d{1,2})\.(\d{1,3})")
+_CN3LAB_ANY_RE = re.compile(
+    r"(定义|定理|引理|推论|命题|公理|性质|例|注)\s*(\d{1,2})\.(\d{1,2})\.(\d{1,3})")
+
+
+def scan_cn3lab_evidence(extract_dir):
+    """源侧「中文标签 + 紧贴三级编号」证据。返回 (hits, samples, collisions)。
+
+    ``hits``——行首即条头的命中数；``samples``——样例；``collisions``——
+    **同一 C.S-N 编号被两种以上标签共用**的编号列表（如 `1.3-1` 同时是
+    定义1.3.1 与定理1.3.1），即「各类标签各自独立计数」的铁证。
+    """
+    hits = 0
+    samples = []
+    by_key = {}
+    for fp in sorted(glob.glob(os.path.join(extract_dir, "page_*.json"))):
+        try:
+            with open(fp, encoding="utf-8") as f:
+                j = json.load(f)
+        except Exception:
+            continue
+        for x in (j.get("text") or []):
+            s = x if isinstance(x, str) else (x.get("text") or "")
+            s = str(s).strip()
+            if not s:
+                continue
+            if _CN3LAB_HEAD_RE.match(s):
+                hits += 1
+                if len(samples) < 5:
+                    samples.append(s[:44])
+            for m in _CN3LAB_ANY_RE.finditer(s):
+                lab, c, sN, n = m.group(1), m.group(2), m.group(3), m.group(4)
+                by_key.setdefault("%s.%s-%s" % (c, sN, n), set()).add(lab)
+    collisions = sorted(k for k, v in by_key.items() if len(v) > 1)
+    return hits, samples, collisions
+
+
+def _cn3lab_probe(extract_dir):
+    """源侧 cn3lab 证据是否足够强（中文标签紧贴三级编号）。
+
+    复用 ``scan_cn3lab_evidence`` 的 hits / collisions；阈值与 ``_print_cn3lab_guard``
+    一致：行首条头 >= 20 或存在同 C.S-N 多标签撞号。撞号是「各标签独立计数」铁证，
+    优先级最高，故 collisions 非空即判强证据。
+    """
+    hits, _, collisions = scan_cn3lab_evidence(extract_dir)
+    return hits >= 20 or bool(collisions)
+
+
+def _print_cn3lab_guard(extract_dir, family, groups):
+    """cn3lab 探测结论提示。family=10 时确认已自动改判；family 仍为 3 但证据强时
+    说明判定异常，提示人工复核。"""
+    hits, samples, collisions = scan_cn3lab_evidence(extract_dir)
+    if hits < 20 and not collisions:
+        return False
+    n_groups = len(groups or [])
+    print("")
+    print("=" * 72)
+    if family == ORDINAL_CN3LAB:
+        print("[CN3LAB] OK 源侧检出「中文标签 + 紧贴三级编号」形态（行首条头 %d 处，"
+              "撞号 %d 处）-> 已自动判定 ordinal=10（cn3lab），ordinal 数组分 %d 个 "
+              "group（各标签族独立计数）。" % (hits, len(collisions), n_groups))
+    else:
+        print("[CN3LAB] WARN 源侧检出「中文标签 + 紧贴三级编号」形态（行首条头 %d 处），"
+              "但探测 family=%s（非 10）。" % (hits, family))
+        if collisions:
+            print("  * 撞号 %d 处：同一编号被多种标签共用（例：%s）"
+                  % (len(collisions), "、".join(collisions[:6])))
+            print("    -> 定义/定理/推论/例【各自独立计数】，并非共享一个计数器；")
+            print("      若 ordinal 把它们并成一组，B 层会把「定义1.3.1 + 定理1.3.1」当成缺号。")
+        print("  * 建议确认是否应改用 type 10（cn3lab）；当前判定需人工复核。")
+    print("=" * 72)
+    return True
+
+
 def main():
     args = sys.argv[1:]
     force = '--force' in args
@@ -1840,6 +1956,8 @@ def main():
     # Labels that ascend together share ONE group; labels with an independent
     # counter get their OWN group — that is what the `ordinal` ARRAY is for.
     config, family, groups, ordinal, depth = _build_config_dict(extract_dir, cfg_path)
+    # 🔴 形态守卫：family=3 时核对「中文标签紧贴编号」证据（cn3lab 判型风险）
+    _print_cn3lab_guard(extract_dir, family, groups)
 
     # 🔴 附录 / 补篇子配置：分别按 chapter_map 的 kind 扫对应页区间生成（字母章位
     # 体例），Supplement 与 Appendix 分别落键，绝不混称。缺某一类则回退主配置。

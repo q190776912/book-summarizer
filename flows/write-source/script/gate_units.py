@@ -114,7 +114,13 @@ _KEY_NUM_RE = re.compile(r"(\d+(?:\.\d+)*)-(\d+)$")
 
 
 def _check_numbering(units):
-    """B 层编号预检：同一节内 item 编号是否递增。返回问题列表。"""
+    """B 层编号预检：同一节内 item 编号是否递增。返回问题列表。
+
+    🔴 **按 (节, 条目种类) 分组**比较：中文教材（如《数学分析教程》）同一节内
+    「定义 / 定理 / 推论 / 例」各自独立编号，「定义1.3.1」与「定理1.3.1」同号是
+    书本体例而非缺号。若只按节分组，这类同号会被误报成「编号不递增」，
+    而真正的缺号（同节同种类内编号回退/重复）仍会被抓到。
+    """
     from collections import defaultdict
     sections = defaultdict(list)
     for u in units:
@@ -124,7 +130,9 @@ def _check_numbering(units):
         if m:
             sec = m.group(1)
             num = int(m.group(2))
-            sections[sec].append((num, u["file"], u["key"]))
+            # ntype = 契约条目种类（definition / theorem / …）；老 manifest 缺失时退化为按节分组
+            kind = u.get("ntype") or ""
+            sections[(sec, kind)].append((num, u["file"], u["key"]))
     problems = []
     for sec, items in sorted(sections.items()):
         items.sort(key=lambda x: x[0])
@@ -133,8 +141,9 @@ def _check_numbering(units):
             cur_num, cur_file, cur_key = items[i]
             if cur_num <= prev_num:
                 problems.append(
-                    "编号不递增：节 %s 内 %s（%d）排在 %s（%d）之后" % (
-                        sec, cur_key, cur_num, prev_key, prev_num))
+                    "编号不递增：节 %s%s 内 %s（%d）排在 %s（%d）之后" % (
+                        sec[0], "（%s）" % sec[1] if sec[1] else "",
+                        cur_key, cur_num, prev_key, prev_num))
     return problems
 
 def _hash_text(text):
@@ -180,7 +189,11 @@ def _render_check_chapter(ext, out_dir, units):
         nlines = len(body.rstrip("\n").splitlines())
         parts.append(marker + "\n" + body.rstrip("\n"))
         starts.append((line_no + 1, u))
-        line_no += 1 + nlines + 1  # marker 行 + 正文行 + join 产生的空行
+        # 🔴 拼接用 "\n".join(parts)，part 之间**不产生空行**；每个 part 占
+        # 「1 行 marker + nlines 行正文」，故下一个 marker 行 = line_no + 1 + nlines。
+        # 旧实现多加了 1（按「marker 后有空行」计算），使每个单元累计偏移 1 行，
+        # 渲染错误被归到**上一个**单元（实测 ch1 报 0039、实为 0040），误导返修。
+        line_no += 1 + nlines
     if not parts:
         return []
     tmp_md = os.path.join(ext, "_gate_render_tmp_%s_%d.md" % (os.path.basename(out_dir), os.getpid()))
@@ -276,11 +289,17 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         # 无裸数学 / 结构标签 / 无明显 OCR 残留 / 无内容审阅类残留）。
         # 🔴 判断标准是"写对"而非"重写"：不看内容指纹是否变化，而是看单元是否
         # 符合写作要求（拦"瞎改就标 DONE"）。
+        # 🔴 序标真值**按单元所属契约节点**取（manifest.tags，拆分时写入）：
+        # 同节内定义/定理/推论共用 key，按 key 聚合会要求「定义」单元写出
+        # 「定理」单元的编号公式（假缺号）。老 manifest 缺 tags 时退回 key 映射。
+        exp = u.get("tags")
+        if not isinstance(exp, list):
+            exp = tag_map.get(str(u["key"])) if tag_map else None
         if utype in ("item", "desc", "exercise"):
             try:
                 ok_q, qproblems = _quality.check_body(
                     utype, u.get("name") or "", body,
-                    expected_tags=tag_map.get(str(u["key"])) if tag_map else None)
+                    expected_tags=exp)
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]

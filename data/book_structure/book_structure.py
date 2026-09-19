@@ -187,6 +187,25 @@ def list_chapter_keys(ext_dir: str) -> List[str]:
     return [k for _, k in sorted(keys)]
 
 
+def node_tags(node: Dict[str, Any]) -> List[str]:
+    """**单个**契约节点自身携带的公式序标（含其 proof 子节点内的公式），按文档序。
+
+    🔴 序标真值必须**按节点**取，不能按 ``key`` 聚合：中文教材（如《数学分析教程》）
+    同一节内「定义 / 定理 / 推论 / 例」各自独立编号，于是 ``定义1.3.1`` 与 ``定理1.3.1``
+    在契约里**共用 key ``1.3-1``**。若按 key 聚合 tag，门控会要求「定义」单元也写出
+    「定理」单元的编号公式 → 大量假「缺编号公式」报警（单元级 tag 对账的唯一真源）。
+    """
+    acc: List[str] = []
+    for c in node.get("sub_sec") or []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("tag"):
+            acc.append(str(c["tag"]))
+        elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
+            acc.extend(node_tags(c))
+    return acc
+
+
 def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
     """契约 → {条目/描述 key: [公式序标 tag, ...]}（单元级 tag 对账的真值源）。
 
@@ -197,15 +216,6 @@ def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
     「缺失 / 编造」对账（Q 层是章级末步，单元粒度须提前拦）。
     """
     out: Dict[str, List[str]] = {}
-
-    def _collect(n: Dict[str, Any], acc: List[str]) -> None:
-        for c in n.get("sub_sec") or []:
-            if not isinstance(c, dict):
-                continue
-            if c.get("tag"):
-                acc.append(str(c["tag"]))
-            elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
-                _collect(c, acc)
 
     def _walk(n: Dict[str, Any]) -> None:
         # 章/节直属的散落公式块（不在任何条目内）归入容器自身 key
@@ -220,8 +230,7 @@ def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
             if t in _CONTAINER_TYPES:
                 _walk(c)
             elif c.get("key") and t != "proof":
-                acc2: List[str] = []
-                _collect(c, acc2)
+                acc2: List[str] = node_tags(c)
                 if acc2:
                     out.setdefault(str(c["key"]), []).extend(acc2)
 

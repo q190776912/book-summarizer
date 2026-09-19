@@ -63,6 +63,7 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
+import data.book_structure.book_structure as _bs
 from data.book_structure.book_structure import (chapter_json_path, chapter_label, list_chapter_keys,
                                                 unit_dir_name)
 import render_draft as _rd
@@ -141,8 +142,15 @@ def _render_item(node, lang):
 def _emit_units(node, lang):
     units = []
 
-    def emit(utype, key, name, lines):
+    def emit(utype, key, name, lines, node=None):
+        # ntags = 该**契约节点自身**的编号公式序标真值（不按 key 聚合：同节内
+        # 定义/定理/推论各自独立编号，共用 key，聚合会让门控要求「定义」单元
+        # 写出「定理」单元的编号公式）。ntype = 契约节点类型（definition /
+        # theorem / …），供门控按 kind 分组做编号单调预检。
+        ntags = _bs.node_tags(node) if isinstance(node, dict) else []
         units.append({"type": utype, "key": key or "", "name": name or "",
+                      "ntype": (node.get("type") or "") if isinstance(node, dict) else "",
+                      "ntags": ntags,
                       "lines": lines})
 
     def walk_container(container):
@@ -155,11 +163,11 @@ def _emit_units(node, lang):
             if t == "section":
                 emit("section", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
-                     _render_section(child, lang))
+                     _render_section(child, lang), child)
                 walk_container(child)
             elif t == "description":
                 emit("desc", str(child.get("key") or ""), "",
-                     _render_desc(child, lang))
+                     _render_desc(child, lang), child)
             elif t == "proof":
                 continue            # proof 是 item 内部附属，由 item 单元渲染
             elif t in ("exercise", "problem"):
@@ -174,14 +182,14 @@ def _emit_units(node, lang):
                 # 只分通道，身份由节点 type 与印刷头（"Problem N-M."）承载。
                 emit("exercise", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
-                     _render_item(child, lang))
+                     _render_item(child, lang), child)
             else:
                 emit("item", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
-                     _render_item(child, lang))
+                     _render_item(child, lang), child)
 
     emit("chapter", str(node.get("key") or ""), (node.get("name") or "").strip(),
-         _render_chapter(node, lang))
+         _render_chapter(node, lang), node)
     walk_container(node)
     return units
 
@@ -253,8 +261,10 @@ def split_chapter(ext, ch_key, language, force=False):
             "id": "%04d" % i,
             "file": fn,
             "type": u["type"],
+            "ntype": u.get("ntype") or "",
             "key": u["key"],
             "name": u["name"],
+            "tags": u.get("ntags") or [],
             "hash": _hash_text("\n".join(body)),
         })
     mpath = os.path.join(out_dir, "manifest.json")

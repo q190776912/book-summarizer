@@ -148,7 +148,10 @@ NUM_LINE_RE = re.compile(r"^\s*\d{1,4}\s*$")
 
 def _line_text(item) -> str:
     if isinstance(item, dict):
-        return item.get("text", "") or ""
+        text_val = item.get("text", "")
+        if isinstance(text_val, dict):
+            return text_val.get("text", "") or ""
+        return text_val or ""
     return str(item)
 
 
@@ -350,7 +353,8 @@ def _in_window(page, claimed_start, claimed_end, max_dev):
     return (claimed_start - max_dev) <= page <= (hi + max_dev)
 
 
-def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None):
+def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
+                  cn_head_start=None):
     """Return {ch: (pdf_page, confidence)} for confidently detected chapters.
 
     Mode A0 — **章首开页**（最高置信）：页面首行是独占的 ``Chapter [N]``、其后紧跟
@@ -476,7 +480,71 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None):
                 best_b_score = score
         if best_b is not None:
             detected[ch] = (best_b["page"], round(min(1.0, best_b_score), 3))
+            continue
+        # ---- Mode C：中文页眉「第N章」真值序列（不依赖申报窗口）----
+        # 中文教材页码漂移可达数十页（TOC 印刷页号 ≠ PDF 页序），窗口内检测必然
+        # 失败并静默保留错值（KEPT_MANUAL）。页眉序列是独立于申报值的真值锚点。
+        if cn_head_start and ch_int is not None and ch_int in cn_head_start:
+            detected[ch] = (cn_head_start[ch_int], 0.6)
     return detected
+
+
+# ── 中文页眉真值序列（Mode C）─────────────────────────────────────────────
+CN_CHAP_RE = re.compile(r"第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*章")
+CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8,
+          "九": 9, "十": 10, "十一": 11, "十二": 12, "十三": 13, "十四": 14,
+          "十五": 15, "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20}
+
+
+def scan_cn_heads(pages_dir):
+    """扫全书页眉「第N章」→ ``{page: 章号}``（每页取命中次数最多的章号）。
+
+    🔴 Mode A0/A/B 都在 agent 申报的 ``start ± max_dev`` 窗口内搜索，中文书
+    常见「TOC 印刷页号与 PDF 页序累积漂移」（实测《数学分析教程》3ed 上册
+    偏差 12→82 页递增），超出窗口即检测失败、静默 ``KEPT_MANUAL`` 保留错值。
+    页眉序列不看申报值，可纠正任意大的偏差，故作为最后的兜底真值。
+    """
+    out = {}
+    for fp in sorted(glob.glob(os.path.join(pages_dir, "page_*.json"))):
+        m = re.search(r"page_(\d+)\.json", os.path.basename(fp))
+        if not m:
+            continue
+        try:
+            with open(fp, encoding="utf-8") as f:
+                j = json.load(f)
+        except Exception:
+            continue
+        cnt = {}
+        for x in (j.get("text") or []):
+            s = x if isinstance(x, str) else (x.get("text") or "")
+            for mm in CN_CHAP_RE.finditer(str(s)):
+                t = mm.group(1)
+                n = int(t) if t.isdigit() else CN_NUM.get(t)
+                if n:
+                    cnt[n] = cnt.get(n, 0) + 1
+        if cnt:
+            out[int(m.group(1))] = max(cnt.items(), key=lambda kv: kv[1])[0]
+    return out
+
+
+def cn_head_starts(heads, min_run=3):
+    """页眉序列 → ``{章号: 起点页}``：取该章号**首个长度 ≥ min_run 的连续段**起点。
+
+    目录页会一次性命中全部章号，但不构成连续段，由此自动排除。
+    """
+    runs = []
+    for p in sorted(heads):
+        c = heads[p]
+        if runs and runs[-1][0] == c and p - runs[-1][2] <= 2:
+            runs[-1][2] = p
+            runs[-1][3] += 1
+        else:
+            runs.append([c, p, p, 1])
+    out = {}
+    for c, s, e, n in runs:
+        if n >= min_run and c not in out:
+            out[c] = s
+    return out
 
 
 def _ch_sort_key(k):
@@ -587,8 +655,16 @@ def main():
 
     headings, title_lines = scan_headings(ex)
     openers = scan_openers(ex)
+    # 🔴 Mode C 兜底：中文页眉「第N章」真值序列（不受申报窗口 max_dev 限制）。
+    # 仅在 Mode A0/A/B 均失败时启用，避免抢掉高置信的英文开页/页眉命中。
+    cn_heads = scan_cn_heads(ex)
+    cn_start = cn_head_starts(cn_heads) if cn_heads else {}
+    if cn_start:
+        print("[build_chapter_map] 检出中文页眉序列（第N章）：%d 页命中，%d 章定位"
+              % (len(cn_heads), len(cn_start)))
     detected = detect_starts(recs, headings, title_lines,
-                             max_dev=args.max_deviation, openers=openers)
+                             max_dev=args.max_deviation, openers=openers,
+                             cn_head_start=cn_start)
     max_page = _max_page(ex)
 
     # ── start：检测值优先；未检出则保留 agent 值，仍无则留空 ──

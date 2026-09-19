@@ -19,6 +19,7 @@
     9. example blockquote：`format_verify.check_example_blockquote_lines`
     9b. 块引用/例/证明/列表结构（`_run_format_verify_unit_checks`，临时 .md
         复用 format_verify 原函数，不复制逻辑）：nested_bq / ex_proof_gaps /
+        g_quote_continuity（blockquote内 bare blank line 打断连续性）/
         h_structural_bq / h_stmt_bq / h_ul_bq / h_mbq / k_proof_list /
         n_bq_empty / m_dm_gt；文档级专属（`---` 分隔线 / 标题上下文类：
         i_sep / j_header / l_sep / heading_* / quote_gaps）不搬——孤立单元
@@ -75,9 +76,13 @@ from format_verify import check_example_blockquote_lines  # G 层：example bloc
 # **不复制逻辑**（保持单一真相源，避免已踩过的「三份分叉」坑）。文档级专属的
 # `---` 分隔线 / 标题上下文类检查（i_sep / j_header / l_sep / heading_* /
 # quote_gaps）不搬——孤立单元里无 `---`、标题即首行，搬了会误报。
+# 🔴 块引用内 bare blank line（blockquote内无 `>` 前缀的空行）检查已加入——
+# 这在单元级别也是正确的，因为单元中也可能有blockquote内的bare blank line
+# 打断块引用连续性。
 from format_verify import (
     check_nested_blockquotes,          # G: > > ** 嵌套块引用
     check_example_proof_gap,           # G: 例与证明间断裂 / 同行
+    check_g_quote_continuity,          # G: blockquote内 bare blank line 打断连续性
     check_h_structural_blockquote,     # H: 结构标签误入 `>` / 孤儿空 `>`
     check_h_statement_in_blockquote,   # H: 陈述内容误包 `>`
     check_unlabeled_blockquotes,       # H: `>` 块无标签
@@ -241,6 +246,7 @@ def _fence_issues(line_list):
 _FV_UNIT_CHECKS = (
     check_nested_blockquotes,          # G: > > ** 嵌套
     check_example_proof_gap,           # G: 例与证明间断裂 / 同行（返回 (errors, warns)）
+    check_g_quote_continuity,          # G: blockquote内 bare blank line 打断连续性
     check_h_structural_blockquote,     # H: 结构标签误入 `>` / 孤儿空 `>`
     check_h_statement_in_blockquote,   # H: 陈述内容误包 `>`
     check_unlabeled_blockquotes,       # H: `>` 块无标签

@@ -3,7 +3,7 @@
 背景
 ----
 拆分脚本 ``split_draft_units.py`` 把整章草稿切成按写作顺序的单元文件
-（``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章目录 ``units/appendix{X}/``）；agent 经 ``gate_units.py`` 强制门控逐个改好后，
+（``units/ch{N}/NNNN_<type>_<key>.md``，4 位编号；附录章目录 ``units/appendix{X}/``）；agent 经 ``gate_units.py`` 强制门控逐个改好后，
 本脚本把这些单元**按 manifest 顺序拼接**成最终的源语言章 md
 （``ChapterN_*.md`` / ``第N章_*.md``），并按 ``docs/writing-rules.md`` V-F 的
 「条目级 ``---`` 分隔线」规则在单元之间重建分隔线。

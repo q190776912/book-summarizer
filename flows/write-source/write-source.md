@@ -44,8 +44,11 @@
        * `chapter` 单元：`# 章标题`；
        * `section` 单元：`## §…` 标题行（其下描述 / 编号项各为独立单元）；
        * `desc` 单元：描述散文（章首序言 / 节导语 / 条目尾随段，无标题纯段落）；
-       * `item` 单元：**单个编号项**（定义 / 定理 / 例等，含其内部 proof 子节点）。
-     文件名 `NNNN_<type>.md`（`0001`、`0002` … 写作顺序，4 位零填充防超千单元），另附 `manifest.json`
+       * `item` 单元：**单个编号项**（定义 / 定理 / 例等，含其内部 proof 子节点）；
+       * `exercise` 单元：**练习 / 问题**节点（章末 Problems 等）。
+     文件名 `NNNN_<type>_<key>.md`（`0001`、`0002` … 写作顺序，4 位零填充防超千单元；
+     `<key>` 经 sanitize——`.` 等非词字符转 `_`，如 `0006_exercise_A_2.md`、`0003_section_U1.md`、
+     `0001_chapter_A.md`），另附 `manifest.json`
      （单元序列 + 类型 / key / 内容指纹）。每个单元文件**首行为 HTML 标记**
      `<!-- book-summarizer DRAFT unit: … -->`——agent 改好后须把 `DRAFT` 改为
      `DONE`，门控据此判定「已处理」。

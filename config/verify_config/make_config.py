@@ -333,7 +333,56 @@ def _detect_section_hierarchy(extract_dir, max_depth=4, pages=None,
                                       letter_chapter=letter_chapter)
             if d is not None:
                 depths.add(d)
-    return [1] + sorted(d for d in depths if d >= 2)
+    if depths:
+        return [1] + sorted(d for d in depths if d >= 2)
+    # 🔴 探测不到任何「带编号」节头：本段小节很可能是**无编号主题行**
+    # （Lee《ISM》正文 `Topological Manifolds` 与附录 `Topological Spaces`
+    # 同为无编号），而上面的正则只认点分数字、对此完全失明。此时按「agent
+    # 校验识别」产出的权威清单 `_recognized_sections.json` 推导无编号层级数
+    # （role 0），而不是返回无信息量的 `[1]`（＝该层级无小节）——后者会让
+    # **条目号顶替成 section**（附录小节变成 `## §A.4`）。
+    # 🔴 正文与附录走**同一套逻辑**（仅按 letter_chapter 区分取哪半份清单），
+    # 不存在「附录单独借用正文配置」的第二条路径。
+    _n = _unnumbered_levels_from_recognized(extract_dir, letter_chapter)
+    if _n:
+        return [0] * _n
+    return [1]
+
+
+def _unnumbered_levels_from_recognized(extract_dir, letter_chapter=False):
+    """无编号小节的**层级数**：取 `_recognized_sections.json` 中本段体例
+    （正文=数字章 / 附录=字母章）所有章的 level 最大值。
+
+    `_recognized_sections.json` 由「agent 校验识别」步骤产出，是**唯一可靠**
+    的无编号小节来源（OCR 正则对无数字标题失明）。元素形如
+    ``{"title": ..., "level": 1|2, "page": ...}``；缺 level 或旧格式裸字符串
+    视为 level 1。无清单/层级为 0 时返回 None，调用方回退 `[1]`（零回归）。
+    """
+    fp = os.path.join(extract_dir, "_recognized_sections.json")
+    if not os.path.exists(fp):
+        return None
+    try:
+        with open(fp, encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    max_lv = 0
+    for k, entries in data.items():
+        # 章体例须与本段一致：正文段取数字章，附录/补篇段取字母章
+        if bool(not str(k)[:1].isdigit()) != bool(letter_chapter):
+            continue
+        for e in (entries or []):
+            lv = e.get("level") if isinstance(e, dict) else None
+            try:
+                max_lv = max(max_lv, int(lv or 1))
+            except (TypeError, ValueError):
+                max_lv = max(max_lv, 1)
+    return max_lv or None
+
+
+
 
 # 罗马数字章号形态（chapter_map 的 key / ch 字段全为罗马字母且无阿拉伯数字）
 ROMAN_RE = re.compile(r'^[IVXLCDM]+$')
@@ -1408,6 +1457,77 @@ def _detect_appendix_exercise(extract_dir, pages):
     return True, shared
 
 
+# 正文保留式练习印在**数字章位**（`Exercise 7.35`），与附录的字母章位不同。
+# `_detect_exercise_counter` 明确「不扫描 `Exercise N` 表面形态」（那是正文里
+# 最典型的交叉引用形态），故这里单独探测。
+# 判据 = **共用计数器的真签名**（三者同时成立），而非只看练习号跳号：
+#   * 不相交：同一章窗内练习号与条目号**不重号**（共用一条 1..N 序列时两者
+#     天然互补；平行独立计数器必然重号，如 Problem 6.3-1 与 Definition 6.3-1）；
+#   * 并集稠密：练习号 ∪ 条目号 覆盖 min..max 的 ≥90%（同一条序列被两类瓜分）；
+#   * 练习侧跳号：练习号自身大量跳号（相邻差>1 占比 ≥25%），说明空位被条目占用。
+# 只按「跳号」单判会把**自身稀疏**的独立练习计数器误判为共享（实测 AoPS/交换
+# 代数等书练习号本身就跳号），故必须叠加不相交 + 并集稠密。
+_EX_CH_RE = re.compile(
+    r'(?i)\bexercise\b\s*(\d+)\.(\d+)'
+    r'|\b(\d+)\.(\d+)\s+exercises?\b')
+# 条目（非练习）标签头：EN + CN 常用标签，数字章位两段。
+_ITEM_CH_RE = re.compile(
+    r'(?i)(?:theorem|proposition|lemma|corollary|example|definition|remark'
+    r'|定理|命题|引理|推论|例|定义|评注)\s*(\d+)\.(\d+)'
+    r'|(\d+)\.(\d+)\s+(?:theorem|proposition|lemma|corollary|example|definition|remark)')
+
+
+def _detect_chapter_exercise_shared(extract_dir, pages=None):
+    """正文保留式练习是否与条目**共享同一章内计数器** → ``bool``。
+
+    见上方判据注记（不相交 + 并集稠密 + 练习侧跳号，按章窗多数投票）。
+    ``True`` 时调用方在 config 落 ``exercise_shared_numbering: True``。
+    """
+    ex_by_ch, item_by_ch = {}, {}
+    for pg in (pages if pages is not None else sorted(
+            glob.glob(os.path.join(extract_dir, 'page_*.json')))):
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            text = blk_text(b) if isinstance(b, dict) else ''
+            if not text:
+                continue
+            for m in _EX_CH_RE.finditer(text):
+                ch, n = ((m.group(1), m.group(2)) if m.group(1)
+                         else (m.group(3), m.group(4)))
+                try:
+                    ex_by_ch.setdefault(int(ch), set()).add(int(n))
+                except ValueError:
+                    continue
+            for m in _ITEM_CH_RE.finditer(text):
+                ch, n = ((m.group(1), m.group(2)) if m.group(1)
+                         else (m.group(3), m.group(4)))
+                try:
+                    item_by_ch.setdefault(int(ch), set()).add(int(n))
+                except ValueError:
+                    continue
+    votes = total = 0
+    for ch, ex in ex_by_ch.items():
+        if len(ex) < 3:
+            continue
+        items = item_by_ch.get(ch, set())
+        if ex & items:                      # 重号 → 平行独立计数器
+            total += 1
+            continue
+        union = sorted(ex | items)
+        span = union[-1] - union[0] + 1
+        dense = span > 0 and len(union) / span >= 0.9
+        seq = sorted(ex)
+        gaps = sum(1 for i in range(1, len(seq)) if seq[i] > seq[i - 1] + 1)
+        gappy = gaps / (len(seq) - 1) >= 0.25
+        total += 1
+        votes += 1 if (dense and gappy) else 0
+    return total > 0 and votes * 2 > total
+
+
 def detect_ordinal(extract_dir):
     """Best-effort ordinal (numbering-family) detection for a book's _extract dir."""
     is_roman, _ = _chapter_keys_are_roman(extract_dir)
@@ -1692,6 +1812,15 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     }
     config["chapter_first"] = bool(cm_chapter_first)
     config["section_scoped"] = bool(not cm_chapter_first)
+    if not is_appendix and _detect_chapter_exercise_shared(extract_dir, pages=pages):
+        # Lee 式体例：正文练习（`Exercise C.N`）与定理/例**共用**章内同一条
+        # 1..N 计数器（条目占掉序列空位 → 练习号大量跳号）。B 层
+        # （item_numbering_integrity._lab 分窗）据此**不得**给练习另开 ``ex:``
+        # 编号窗——否则练习组按 1..max 判缺号、非练习组按 min..max 判缺号，
+        # 两侧同时报假 BLOCKING（Lee 2e 实测：全书 22 章 EN 共 42 FAIL）。
+        # 附录侧同体例由 `_detect_appendix_exercise` 把 ``Exercise`` 并入主组
+        # name 解决，自身不需要本字段，故只在正文段落落。
+        config["exercise_shared_numbering"] = True
     if formula_cfg is not None:
         # 回贴 operator 登记（ignore / bare_number 是人工判断，探测层无法重建，
         # 见 _load_old_formula）——缺了这步，重生成即静默清空噪声账本。

@@ -1410,7 +1410,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 以字母前缀条目键派生 A.N 小节注入（标题留空，write-source 阶段据源标题补全
     # §A.N 标题），保证附录条目归入正确的 §A.N 而非堆在章级。仅当本章含字母前缀
     # 键时触发，digit-first 书零回归。
-    if any(re.match(r'^[A-Za-z]', (it.get("key") or "")) for it in items):
+    # 🔴 无编号书（`sections_unnumbered`，section_types 含 0）必须**跳过**这条
+    # 派生路径：其小节来自 `_recognized_sections.json` 的权威清单（键 `U{n}`），
+    # 而附录条目键恰好也是「字母.数字」（Lee ISM 的 `Example A.4` / `Theorem D.1`），
+    # 上面的正则会把**条目号原样派生成 §A.4 / §D.1 伪小节**，与真小节并存
+    # （实测 appendixD 产出 `U1, D.1…D.5, U2, U3, D.6`）。Weibel 式附录用的是
+    # **有编号** §A.N（section_types 不含 0），不受影响，零回归。
+    if (not getattr(book, "sections_unnumbered", False)
+            and any(re.match(r'^[A-Za-z]', (it.get("key") or "")) for it in items)):
         for it in items:
             _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)',
                            (it.get("key") or ""))

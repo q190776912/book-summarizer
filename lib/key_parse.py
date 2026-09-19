@@ -98,8 +98,14 @@ def normkey(s):
 # 练习/习题/Example exercise group).  Do NOT redefine them here.
 
 # Chinese label synonyms that appear in bilingual-book .md files.
+# 🔴 `问题` 必须与 EN 的 `Problem` 配对：config 的 _LABEL_CANON 已把
+# Problem 正名为「问题」（TYPE_TO_LABEL_CN: problem -> 问题），EN_LABEL_KINDS
+# 收 `Problem`，CN 侧漏收 `问题` 会让 CN 合并 md 的 `**问题1-1**` 条头完全
+# 解析不出 → 章末 Problems 在 CN 侧整族报「truly missing」（Lee 2e 实测：
+# ch1–22 CN 各缺 8–31 条，全部是章末问题）。
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
-                  '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法', '性质']
+                  '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法', '性质',
+                  '问题']
 # Combined (used when ordinal == ORDINAL_EN so either language matches).
 COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(

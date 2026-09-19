@@ -3,7 +3,7 @@
 背景
 ----
 写作以单元粒度进行：拆分脚本 ``split_draft_units.py``
-把整章草稿切成按写作顺序的单元文件（``units/ch{N}/NNNN_<type>.md``，4 位编号；附录章 ``units/appendix{X}/``），agent
+把整章草稿切成按写作顺序的单元文件（``units/ch{N}/NNNN_<type>_<key>.md``，4 位编号；附录章 ``units/appendix{X}/``），agent
 **必须逐个把单元按 writing-rules 改好**。本脚本是这一步的**强制门控**：只有全部
 单元都被改好（每个 item 都不漏）才放行，之后才能进入 ``merge_units.py`` 拼接。
 

@@ -18,7 +18,8 @@
     单元层不分 exercise/problem——身份由节点 type 与印刷头承载）。
 
 单元按文档顺序编号（``0001``、``0002`` …，4 位零填充防超千单元），文件名
-``NNNN_<type>.md``，文件首行为 HTML 标记（``<!-- book-summarizer DRAFT
+``NNNN_<type>[_<key>].md``（key 经 sanitize，如 ``0006_exercise_A_2.md``、
+``0003_section_U1.md``、``0001_chapter_A.md``），文件首行为 HTML 标记（``<!-- book-summarizer DRAFT
 unit: ... -->``）。门控依据此标记判断「该单元是否已被 agent 改好」；拼接依据
 manifest 的单元序列 + 单元类型重建 ``---`` 分隔线。
 
@@ -38,7 +39,7 @@ manifest 的单元序列 + 单元类型重建 ``---`` 分隔线。
 输出
 ----
     <extract_dir>/book_structure/units/ch{N}/manifest.json
-    <extract_dir>/book_structure/units/ch{N}/NNNN_<type>.md  （每单元一个）
+    <extract_dir>/book_structure/units/ch{N}/NNNN_<type>[_<key>].md  （每单元一个）
 """
 import hashlib
 import json
@@ -92,9 +93,14 @@ def _sanitize(name):
 
 
 def _unit_filename(idx, utype, key, name):
-    """``NNNN_<type>.md``（4 位零填充，防超千单元；item 追加 key 便于辨识）。"""
+    """``NNNN_<type>[_<key>].md``（4 位零填充，防超千单元）。
+
+    所有类型都追加 sanitize 后的 ``key``（章节 ``A``、小节 ``U1``、说明 ``D1``、
+    条目/习题 ``A.4``→``A_4``），使文件名可直接辨识单元；``key`` 为空时退化为
+    ``NNNN_<type>.md``。
+    """
     base = "%04d_%s" % (idx, utype)
-    if utype == "item" and key:
+    if key:
         base += "_" + _sanitize(key)
     return base + ".md"
 
@@ -176,7 +182,8 @@ def _emit_units(node, lang):
                 # 🔴 独立 exercise 单元类型：Weibel 等书「结果项」与「习题项」共用
                 # 同节编号空间（如 Definition 1.2.2 与 Exercise 1.2.2 同号），若也发
                 # 成 item 单元会与结果项同名文件互覆盖。故习题用专属 exercise 单元
-                # 类型（文件名 NNNN_exercise_*.md），不与其他 item 冲突；merge/gate
+                # 类型（文件名 ``NNNN_exercise_<key>.md``），类型段与 item 区分、
+                # 不冲突；merge/gate
                 # 均识别该类型（习题单元门控只需 DONE 标记，不做 item 级质量校验）。
                 # problem 节点（Lee 2e 章末问题，独立类型）同走本通道——单元层
                 # 只分通道，身份由节点 type 与印刷头（"Problem N-M."）承载。

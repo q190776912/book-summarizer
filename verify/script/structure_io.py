@@ -28,8 +28,7 @@ _boot.setup()
 from data.book_structure.book_structure import BookStructure
 
 from key_parse import keys_in_md, _first_num
-from verify.script.ordinal import int_to_roman
-from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN,
+from verify_config import (ORDINAL_EN, ORDINAL_EN3,
                            ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
                            _canon_label,
                            TYPE_TO_LABEL_CN as TYPE_TO_LABEL)
@@ -219,13 +218,9 @@ def md_keys_for_chapter(md_file, cfg, ch):
     「md 键集」取数缝，从 data_provider.ExtractLayer.run 抽出，避免公共
     编排脚本反向依赖 data_provider 子流程内部函数。
     """
-    if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
-        entry_keys, all_keys = keys_in_md(
-            md_file, groups=cfg.ordinal, chapter_roman=int_to_roman(ch), chapter=ch)
-    else:
-        # chapter=ch：带显式异章限定词（of Chap. X / 第X章…）的正文提及不进
-        # all_keys，A 层 EXTRA 不再被跨章引用刷屏（详见 key_parse._is_foreign_chapter_ref）。
-        entry_keys, all_keys = keys_in_md(md_file, groups=cfg.ordinal, chapter=ch)
+    # chapter=ch：带显式异章限定词（of Chap. X / 第X章…）的正文提及不进
+    # all_keys，A 层 EXTRA 不再被跨章引用刷屏（详见 key_parse._is_foreign_chapter_ref）。
+    entry_keys, all_keys = keys_in_md(md_file, groups=cfg.ordinal, chapter=ch)
     # Chapter-scoping of md keys: only valid when the first number of a key
     # IS the chapter (chapter_first == True).  For chapter_first == False
     # books (e.g. Karlin & Taylor, where `Theorem 3.1` = §3 item 1 and `Example 2`

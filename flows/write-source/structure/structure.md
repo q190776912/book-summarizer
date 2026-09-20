@@ -24,7 +24,7 @@
 ```powershell
 python flows/write-source/structure/script/build_structure <extract_dir>
 # 不传 <ch> 即扫全部章；也可指定章：build_structure.py <extract_dir> 1 2 3
-# 编号模式（三级/两级/en/vakil/gm/roman）由 <extract_dir>/verify_config.json
+# 编号模式（三级/两级/en/vakil/ross/hum…）由 <extract_dir>/verify_config.json
 # 的 ordinal 自动判定，无需 --scheme
 ```
 按章产出完整契约 `ch{N}.json`（附录 `appendix{X}.json`）：`sub_sec` 内按章顺序**层级嵌套**全部章节（`1.2.1` 挂进 `1.2` 的 `sub_sec`、`1.2.1.1` 挂进 `1.2.1`，与原书标题层级同构）与条目，并携带**描述信息（章首序言 / 节导语 / 证明后尾随段落 → `description` 节点，与定理同级）+ 每个编号项 / 练习的文字、公式内容块 + 条目内证明（`proof` 子节点）+ 图片（`image` 路径）块**。要点：
@@ -126,7 +126,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 
 ## 构建逻辑（与 `verify/data_provider` 同一套抽取分派）
 1. **章节骨架**优先来自 `scan_skeleton` 的 `SEC` 扫描（含印刷标题）；当某方案 `SEC` 捕获不全（en 两级、vakil）时，用「条目键派生章节号」补齐缺失章节。
-2. **条目节点权威来自抽取器**（`extract_items` / `extract_items_en` / `extract_items_vakil` / `extract_items_gm` 等，按 `ordinal` 选路，与 data_provider 一致），`label → type`：
+2. **条目节点权威来自抽取器**（`extract_items` / `extract_items_en` / `extract_items_vakil` / `extract_items_ross` / `extract_items_hum` 等，按 `ordinal` 选路，与 data_provider 一致），`label → type`：
    `定义→definition`、`定理→theorem`、`引理→lemma`、`推论→corollary`、`命题→proposition`、`例→example`、`评注/注→remark`、`uncat→uncat`。**抽取器里的 `练习/习题` 类键被排除**（练习只来自下一步的 `EXER`）。
 3. **练习来自 `scan_skeleton` 的 `EXER` 扫描**（统一来源），与条目分开，避免重复计数。
 4. **挂接**：每个条目/练习优先按「派生章节号命中」挂到对应 section；命中失败则按**页码归最近 SEC**。`verify_config.json` 置 `"chapter_scoped_items": true`（章内计数器书）时一律页码归节。section 的 `page_start = 子项最小页`、`page_end = 末代子孙页`（叶子 `== start`）。产出前按 key 数字段**层级嵌套**（`1.2.1` → `1.2.sub_sec`）并重排为文档序。

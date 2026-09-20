@@ -3,7 +3,7 @@
 
 This skill *produces and consumes* ``ch<N>_extract.json`` but does **not** own
 a fixed schema: the file is the serialised per-chapter extraction result and its
-exact fields vary per ``extract_items_*`` variant (K&T, hom, gm, vakil, ...).
+exact fields vary per ``extract_items_*`` variant (K&T, hom, vakil, ...).
 The construction logic lives in the extract pipeline (``flows/extract/...``,
 per user convention) — this module is only a thin anti-corruption layer that
 centralises load/dump and exposes the two universal keys (``sections`` /

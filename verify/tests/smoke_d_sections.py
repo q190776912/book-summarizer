@@ -10,8 +10,6 @@ the regexes the D-layer scans) and drive the actual `verify_chapter.py` CLI:
     REASONABLE subsection finding (gap truly present in .md, not a false +).
   * 2-level book  (ordinal=2) -> must NOT emit any subsection (LEVEL 3) finding;
     only the genuine missing section is reported (back-compat preserved).
-  * gm book       (ordinal=6) -> must route through check_d_layer_gm, not crash,
-    and must NOT print a per-level block (no `levels`).
   * --all summary (risk E) -> must read d_layer.continuity_sections without error.
 
 Run:  python verify/tests/smoke_d_sections.py
@@ -167,35 +165,6 @@ def build_two_level(book):
     return md, ext
 
 
-def build_gm(book):
-    ext = os.path.join(book, "_extract")
-    os.makedirs(ext, exist_ok=True)
-    _ord_cfg(ext, [{"type": 6, "name": ["uncat"], "scope": 2}], language="cn")
-    _cfg(os.path.join(ext, "chapter_map.json"), {"chapters": [{
-        "num": 1, "sections": [
-            {"sec": 1, "start": 1, "end": 1},
-            {"sec": 2, "start": 1, "end": 1}]}]})
-    _contract(ext, 1, [
-        {"key": "1", "name": "§1. Triangulated Spaces"},
-        {"key": "2", "name": "§2. Simplicial Sets"},
-    ])
-    md = os.path.join(book, "第1章_同调代数.md")
-    md_text = (
-        "# Homological Algebra Ch1\n\n"
-        "## §1. Triangulated Spaces\n\n"
-        "### 1. Main Definitions\n\n"
-        "### 3. Proposition\n\n"
-    )
-    with open(md, "w", encoding="utf-8") as f:
-        f.write(md_text)
-    _page(os.path.join(ext, "page_001.json"), [
-        "§1. Triangulated Spaces", "1. Main Definitions",
-        "§2. Simplicial Sets", "2. Auxiliary. Some statement",
-        "3. Proposition. A statement",
-    ])
-    return md, ext
-
-
 def main():
     base = tempfile.mkdtemp(prefix="d_smoke_")
     results = []
@@ -217,15 +186,7 @@ def main():
     results.append(("2-level ordinal=2: no subsection(LEVEL 3) finding, section gap kept",
                     ok, rc, out, err))
 
-    # --- Scenario 3: gm book (ordinal=6) ---
-    bg = os.path.join(base, "bookgm")
-    mdg, extg = build_gm(bg)
-    rc, out, err = _run([str(1), "1", "1", mdg, extg])
-    ok = ("D-LAYER LEVEL" not in out) and ("Traceback" not in err) and ("Traceback" not in out)
-    results.append(("gm ordinal=6: routes via check_d_layer_gm, no per-level block, no crash",
-                    ok, rc, out, err))
-
-    # --- Scenario 4: --all summary (risk E) ---
+    # --- Scenario 3: --all summary (risk E) ---
     rc, out, err = _run(["--all", ext3, b3])
     ok = ("Dc:" in out) and ("Traceback" not in err) and ("Traceback" not in out)
     results.append(("verify_chapter.py --all compact summary reads d_layer (risk E)",

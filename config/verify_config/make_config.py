@@ -10,8 +10,7 @@
   1. 若 <extract_dir>/verify_config.json 已存在且非 --force：打印跳过并 exit 0。
   2. best-effort 检测 ordinal 与 formula（两者都**全量**扫描整本书，整书聚合后
      确认全局配置，**禁止抽样前 N 页**）：
-     - chapter_map.json 章号全是罗马数字（I/II/III…）→ 候选 5（roman）
-     - 否则**全量**扫描整本书所有 page_*.json（sorted(glob)，不切片前 N 页），
+     - **全量**扫描整本书所有 page_*.json（sorted(glob)，不切片前 N 页），
        用轻量正则判断条目标签形态：
          * EN 两级（Theorem/Lemma/Definition/Proposition/Corollary N.M）→ 候选 4（en）
          * CN 三级（定义|定义|引理|推论|命题 N.M.K）→ 候选 3
@@ -383,9 +382,6 @@ def _unnumbered_levels_from_recognized(extract_dir, letter_chapter=False):
 
 
 
-
-# 罗马数字章号形态（chapter_map 的 key / ch 字段全为罗马字母且无阿拉伯数字）
-ROMAN_RE = re.compile(r'^[IVXLCDM]+$')
 
 # EN 两级条目标签（无章号位）：Theorem/Lemma/Definition/Proposition/Corollary N.M
 EN_TWO_RE = re.compile(
@@ -762,41 +758,6 @@ def detect_formula(extract_dir, pages=None):
     return None
 
 
-def _chapter_keys_are_roman(extract_dir):
-    """Return (is_roman, keys) — True if ALL chapter keys are roman-numeral
-    shaped and none contain arabic digits (a roman-chapter book)."""
-    cm_path = os.path.join(extract_dir, 'chapter_map.json')
-    if not os.path.exists(cm_path):
-        return False, None
-    try:
-        with open(cm_path, encoding='utf-8-sig') as f:
-            cm = json.load(f)
-    except Exception:
-        return False, None
-
-    keys = []
-    if isinstance(cm, dict) and 'chapters' in cm:
-        for e in cm['chapters']:
-            ch = e.get('ch', e.get('num', e.get('chapter')))
-            if ch is not None:
-                keys.append(str(ch))
-    elif isinstance(cm, dict):
-        keys = [str(k) for k in cm.keys()]
-    elif isinstance(cm, list):
-        for e in cm:
-            ch = e.get('ch', e.get('num', e.get('chapter')))
-            if ch is not None:
-                keys.append(str(ch))
-    else:
-        return False, None
-
-    if not keys:
-        return False, keys
-    arabic = [k for k in keys if re.search(r'\d', k)]
-    roman = [k for k in keys if ROMAN_RE.match(k.strip())]
-    return bool(roman) and not bool(arabic), keys
-
-
 # canonical NAME (EN) of each surface form — used for grouping decisions.
 _FORM_CANON = {}
 for _canon, _forms in LABEL_FORMS:
@@ -1016,7 +977,7 @@ def _ordinal_from_chapter_map(extract_dir):
     always votes 4 and cannot know chapter_first.  We therefore trust
     chapter_map's declaration for ``chapter_first`` when present and consistent.
 
-    For the scan-ambiguous ORDINAL *codes* (6=gm, 8=vakil, 9=en3) we additionally
+    For the scan-ambiguous ORDINAL *codes* (8=vakil, 9=en3) we additionally
     adopt the declared code over the scan's guess.  A book whose chapters disagree
     on the ordinal (or carry none) returns None and falls back to the scan vote.
     """
@@ -1249,17 +1210,19 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
         # this with family=None so the caller omits the ordinal group entirely
         # instead of fabricating a `{"type": 3}` uncat entry.
         family = None
-    # Prefer a per-chapter `ordinal` declared in chapter_map.json for the
-    # scan-ambiguous ORDINAL codes (6=gm, 8=vakil, 9=en3).  The page scan can
-    # only ever vote {1,2,3,4,5}; gm/vakil/en3 carry numbering shapes the scan
-    # cannot distinguish from plain two/three-level, so we adopt chapter_map's
-    # declared code when present and consistent.  (A section-based two-level
-    # book like Fraleigh is plain type 4 on both axes — the scan already votes
-    # 4 — but we still pull its `chapter_first` flag from chapter_map below.)
+    # Prefer a per-chapter `ordinal` declared in chapter_map.json for the codes
+    # the page scan CANNOT infer (8=vakil, 9=en3, 12=hum).  🔴 The scan only
+    # ever votes {1,2,3,4,10,13,14} — it reads SEGMENT COUNTS and the appendix
+    # letter slot, never label position (number-first) — so those three codes
+    # carry numbering shapes
+    # indistinguishable from plain two/three-level and MUST come from an explicit
+    # chapter_map declaration.  (A section-based two-level book like Fraleigh is
+    # plain type 4 on both axes — the scan already votes 4 — but we still pull
+    # its `chapter_first` flag from chapter_map below.)
     cm = _ordinal_from_chapter_map(extract_dir)
     cm_ord = cm[0] if cm else None
     cm_chapter_first = cm[1] if cm else True
-    if cm_ord is not None and cm_ord in (6, 8, 9, ORDINAL_HUM):
+    if cm_ord is not None and cm_ord in (8, 9, ORDINAL_HUM):
         family = cm_ord
     # language: derive from the ACTUAL label forms seen
     if seen_en:
@@ -1526,15 +1489,6 @@ def _detect_chapter_exercise_shared(extract_dir, pages=None):
         total += 1
         votes += 1 if (dense and gappy) else 0
     return total > 0 and votes * 2 > total
-
-
-def detect_ordinal(extract_dir):
-    """Best-effort ordinal (numbering-family) detection for a book's _extract dir."""
-    is_roman, _ = _chapter_keys_are_roman(extract_dir)
-    if is_roman:
-        return 5
-    family, _, _, _ = _detect_ordinal_from_pages(extract_dir)
-    return family
 
 
 def detect_labels(extract_dir):

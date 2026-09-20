@@ -1,6 +1,6 @@
 ---
 name: book-summarizer
-description: "Summarizes a textbook (local PDF or knowledge base) into chapter-by-chapter markdown notes: numbered definitions/theorems/examples, proof sketches, KaTeX. Language: CN book→CN only; EN book→CN+EN; other→original+CN+EN. HARD REQUIREMENTS: (0) never copy OCR formulas directly — correct+rewrite; (1) no mojibake; (2) include ALL labeled/bare-numbered items and examples; (3) bold inline labels, not ### headings (gm-style books excepted: item titles stay as printed ###, see docs/writing-rules.md 编号项格式模板下的 gm 体例书条款). CN version annotates key terms with (English) from source text when available."
+description: "Summarizes a textbook (local PDF or knowledge base) into chapter-by-chapter markdown notes: numbered definitions/theorems/examples, proof sketches, KaTeX. Language: CN book→CN only; EN book→CN+EN; other→original+CN+EN. HARD REQUIREMENTS: (0) never copy OCR formulas directly — correct+rewrite; (1) no mojibake; (2) include ALL labeled/bare-numbered items and examples; (3) bold inline labels, not ### headings. CN version annotates key terms with (English) from source text when available."
 ---
 
 # Book Summarizer
@@ -103,7 +103,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
 - `flows/script`
 - `tools`（生产期格式化 CLI 工具：`wrap_examples_bq` / `fmt_proofs` / `fmt_extras` / `split_chapters` / `proof_steps` / `_wrap_raw_math` 等；生产期格式化 CLI 工具集中于此处；其中格式修复类由 verify 的 format_verify（F 层）在 `--fix`（🔴 默认禁用，须 `--fix --fix-force` + PREFLIGHT）兜底，编辑性变换（证明步骤编号 / `$$` 归一）仍以 CLI 工具保留）🔴 **`tools/` 只放通用、可跨书复用的工具**；特定书/章节的处理脚本（如硬编码某书路径的 `_diag_ch5.py` / `_dump_contract.py`）必须放进对应书的 `_extract/`，**不得留在本目录**。
 - `verify`：通用校验引擎顶层包（`verify_chapter.py` 总编排、`register_all.py` 自动注册、`report.py` 字节输出；每个校验层一个 `<语义名>/` 子包，位于 `verify/<语义名>/`，含实现 `<snake>.py` 与子流程文档 `<snake>.md`）。
-> ⚠️ **共享基础件定位（消除"extract 依赖 verify"错觉）**：`verify_config`（位于 `config/verify_config/`）与 `key_parse`（位于 `lib/key_parse.py`）属跨流程**共用基础件**——extract、config 工具与 verify 均依赖，并非 verify 私有；extract 反向 import 它们属正常基础件复用，不构成流程耦合。`verify/script/gm_scan.py` 与 `verify/script/ordinal.py` 中的 `scan_gm_blocks` / `int_to_roman` 等是从 `flows/write-source/structure/script/extract_items_gm.py` **解耦复制**的纯函数副本，单一真源仍在 `extract_items_gm.py`，修改须同步两处。
+> ⚠️ **共享基础件定位（消除"extract 依赖 verify"错觉）**：`verify_config`（位于 `config/verify_config/`）与 `key_parse`（位于 `lib/key_parse.py`）属跨流程**共用基础件**——extract、config 工具与 verify 均依赖，并非 verify 私有；extract 反向 import 它们属正常基础件复用，不构成流程耦合。
 
 - `data/<json_name>/`：每个中间产物 JSON **独占一个目录**（如 `data/chapter_map`、`data/figure_index`），内含 `<json_name>.md`（数据结构说明）+ `<json_name>.py`（模型类；统一基类 `JsonData` 位于 `data/lib/json_data.py`，chapter_map / figure_index / figure_embed_overrides / repairs 已接入，其余模型类暂为普通类——新增模型建议接入基类）；JSON 数据结构索引见 `data/data_schema.md`。各 JSON 的校验/编排脚本就近放在消费它的流程或 `verify` 层内，不在 `data`。
 - `lib`：**公用方法与变量锚点**，保留在技能根目录，被所有包 import。当前含：
@@ -114,7 +114,7 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
   - `figure_io.py`：`load_figure_index()`——`figure_index.json` 的统一读取（统一返回 `[]`；调用方仅做真值/迭代判断）。
   - `normalize_math.py`：公式定界符修复库（`normalize()` / `fix_backticks()` / `stats()`）——纯函数、无第三方依赖，被格式 / 校验流水线按需 `from lib.normalize_math import ...` 调用。对应的命令行入口在 `tools/normalize_math_cli.py`（直接 `python tools/normalize_math_cli.py <files>` 改写文件，会写 `.bak_mathfix` 备份）。
 
-各包仍用包名互相 `import`（如 `verify/section_continuity/script/section_continuity.py` → `from extract_items_gm import ...`）。为保证嵌套目录下 import 不断，**`lib/boot.py`** 提供统一引导：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 上述四树全部 `script` 目录与 `data/`、`config/` 直接子目录注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
+各包仍用包名互相 `import`（如 `verify/script/structure_io.py` → `from key_parse import keys_in_md …`）。为保证嵌套目录下 import 不断，**`lib/boot.py`** 提供统一引导：每个入口脚本顶部有一段自包含引导——向上找到含 `SKILL.md` 的技能根，把根目录 + `lib` + 上述四树全部 `script` 目录与 `data/`、`config/` 直接子目录注入 `sys.path`，再 `import lib.boot; lib.boot.setup()`。因此**无论从哪个目录运行哪个脚本，包都能按名 import**，兄弟关系不再依赖物理同居。
 
 约定：
 - `flows/<stage>/ref/` 下除 SSOT 文档外，各流程的脚本索引写在流程文档「相关代码」节（无单独的 script/README.md）。

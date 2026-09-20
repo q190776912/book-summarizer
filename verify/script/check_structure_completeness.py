@@ -46,7 +46,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_EN, ORDINAL_EN3, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_SINGLE,
+    ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
     ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP, ORDINAL_APP2,
     LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
     _canon_label, _load_ignore_file,
@@ -482,7 +482,7 @@ def _composite_key(primary_type, label, canon):
     相交、整章被误报缺失（2026-08-23 CN 单级书实测）。
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-                        ORDINAL_GM, ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
+                        ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
                         ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
                         ORDINAL_APP2):
         # ORDINAL_APP/APP2：Weibel 附录 Definition A.1.1 与 Exercise A.1.1

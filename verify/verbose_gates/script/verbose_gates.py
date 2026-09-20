@@ -147,7 +147,7 @@ def check_bare_items(lines, ordinal):
     out = []
     n = len(lines)
     # ordinal == 3 (three_level) uses the 3-component bare-item detector;
-    # every other style (single / two_level / en / roman / gm) uses
+    # every other style (single / two_level / en) uses
     # the 2-component detector.
     bare = BARE_ITEM_3 if ordinal == 3 else BARE_ITEM_2
     detached = DETACHED_3 if ordinal == 3 else DETACHED_2

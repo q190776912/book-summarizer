@@ -11,11 +11,9 @@ Covers:
   * d_layer._partition_sections_by_level — per-level continuity / tail split,
     merged list relative-to-chapter path strings, ancestor-prefix auto-existence.
   * d_layer.check_d_layer (end-to-end, synthetic md + raw page JSON) for 1/2/3/4
-    level books — proves ordinal=3/5 three-level books verify 1.1.1 for the
+    level books — proves ordinal=3/8 three-level books verify 1.1.1 for the
     first time (no false positive) AND two-level books do NOT emit subsection
     findings.  Configs are built as `BookConfig(ordinal=[GroupConfig(...)])`.
-  * d_layer.check_d_layer_gm — returns a structure WITHOUT a 'levels' key
-    (gm / roman path must not trigger the per-level report block).
   * report.print_result — the per-level block must NOT double-count problems.
 
 No pytest dependency: runs under stdlib unittest
@@ -54,13 +52,13 @@ if _ROOT not in sys.path:
 from verify_config import (
     BookConfig, GroupConfig, ORDINAL_DEPTH, SCOPE_CHAPTER,
     ORDINAL_SINGLE, ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
-    ORDINAL_ROMAN, ORDINAL_GM, SECTION_ROLE_CHAPTER, SECTION_ROLE_SECTION,
+    SECTION_ROLE_CHAPTER, SECTION_ROLE_SECTION,
     SECTION_ROLE_SUBSECTION, SECTION_ROLE_SUBSUBSECTION, SECTION_ROLE_CODES,
     ORDINAL_SECTION_TYPES,
 )
 from section_continuity import (
     _project, _rel_path, _split_num, _build_item_re,
-    _partition_sections_by_level, check_d_layer, check_d_layer_gm,
+    _partition_sections_by_level, check_d_layer,
 )
 from verify.script.base import DEFAULT_RESULT
 
@@ -70,7 +68,7 @@ from verify.script.base import DEFAULT_RESULT
 # --------------------------------------------------------------------------
 def _make_page(path, texts, y=200):
     """Write a synthetic OCR page JSON with `texts` as text blocks (y high so
-    gm item scan keeps them)."""
+    the D-layer source scan keeps them)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     data = {"text": [{"text": t, "poly": [0, y, 100, y, 100, y + 10, 0, y + 10]}
                       for t in texts]}
@@ -126,14 +124,6 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_types, [1])
         self.assertEqual(cfg.section_depths, [1])
         self.assertEqual(cfg.max_level, 1)
-
-    def test_ordinal_5_roman_infers_three_level(self):
-        # roman (ordinal=5) is a three-level book -> subsection level now live.
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 5, "scope": 2}]})
-        self.assertEqual(cfg.primary_type, ORDINAL_ROMAN)
-        self.assertEqual(cfg.section_types, [1, 2, 3])
-        self.assertEqual(cfg.section_depths, [1, 2, 3])
-        self.assertEqual(cfg.max_level, 3)
 
     def test_explicit_four_level(self):
         cfg = BookConfig.from_dict({"section_types": [1, 2, 3, 4]})
@@ -208,8 +198,6 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(ORDINAL_SECTION_TYPES[2], [1, 2])
         self.assertEqual(ORDINAL_SECTION_TYPES[3], [1, 2, 3])
         self.assertEqual(ORDINAL_SECTION_TYPES[4], [1, 2])
-        self.assertEqual(ORDINAL_SECTION_TYPES[5], [1, 2, 3])
-        self.assertEqual(ORDINAL_SECTION_TYPES[6], [1, 2])
         # 原 type 7 (fraleigh, 节基 EN 两级) 已并入 type 4（chapter_first:false），
         # 不再单列；补覆盖 type 8 (vakil EN 三级) / 9 (en3)。
         self.assertEqual(ORDINAL_SECTION_TYPES[8], [1, 2, 3])
@@ -413,68 +401,7 @@ class TestCheckDLayerE2E(unittest.TestCase):
 
 
 # ==========================================================================
-# 5) gm / roman path — must NOT emit a 'levels' key
-# ==========================================================================
-class TestCheckDLayerGM(unittest.TestCase):
-
-    def _gm_setup(self, md_content, page_texts, chapter_map):
-        tmp = tempfile.mkdtemp(prefix="d_gm_")
-        md = os.path.join(tmp, "ch.md")
-        _write_md(md, md_content)
-        ext = os.path.join(tmp, "_extract")
-        _make_page(os.path.join(ext, "page_001.json"), page_texts)
-        with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
-            json.dump(chapter_map, f)
-        return md, ext, tmp
-
-    def test_gm_returns_no_levels_key(self):
-        md = "## §1. Triangulated Spaces\n\n### 1. Main Definitions\n\n### 3. Proposition\n"
-        pages = ["§1. Triangulated Spaces", "1. Main Definitions",
-                 "3. Proposition. Statement here"]
-        md_path, ext, _ = self._gm_setup(
-            md, pages, {"chapters": [{"num": 1, "sections": [
-                {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM,
-                                             scope=SCOPE_CHAPTER)])
-        out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
-        self.assertNotIn("levels", out)
-        self.assertIn("continuity_sections", out)
-        self.assertIn("missing_sections", out)
-
-    def test_gm_missing_section_reported_without_levels(self):
-        # raw has section 2 present, md only §1 -> continuity gap, still no
-        # 'levels' (gm uses the legacy two-bucket partition).
-        md = "## §1. Triangulated Spaces\n"
-        pages = ["§1. Triangulated Spaces", "1. Main Definitions",
-                 "§2. Simplicial Sets", "2. Auxiliary. Some"]
-        md_path, ext, _ = self._gm_setup(
-            md, pages, {"chapters": [{"num": 1, "sections": [
-                {"sec": 1, "start": 1, "end": 1},
-                {"sec": 2, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_GM,
-                                             scope=SCOPE_CHAPTER)])
-        out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
-        self.assertNotIn("levels", out)
-        # gm path returns chapter-local INTEGER section numbers (legacy
-        # behaviour, unchanged by this change) — report formats them
-        # identically to the generalized rel-path strings ("§1.2").
-        self.assertEqual(out["missing_sections"], [2])
-        self.assertEqual(out["continuity_sections"], [])
-
-    def test_roman_routes_to_gm_no_levels(self):
-        md = "## §1. Triangulated Spaces\n"
-        pages = ["§1. Triangulated Spaces", "1. Main Definitions"]
-        md_path, ext, _ = self._gm_setup(
-            md, pages, {"chapters": [{"num": 1, "sections": [
-                {"sec": 1, "start": 1, "end": 1}]}]})
-        cfg = BookConfig(ordinal=[GroupConfig(type=ORDINAL_ROMAN,
-                                             scope=SCOPE_CHAPTER)])
-        out = check_d_layer(1, 1, 1, md_path, ext, cfg=cfg)
-        self.assertNotIn("levels", out)
-
-
-# ==========================================================================
-# 6) report.print_result — per-level block must NOT double-count problems
+# 5) report.print_result — per-level block must NOT double-count problems
 # ==========================================================================
 class TestReportNoDoubleCount(unittest.TestCase):
 

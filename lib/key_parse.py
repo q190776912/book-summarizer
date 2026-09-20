@@ -16,7 +16,7 @@ verify engine), so it is importable anywhere via the bare name `key_parse`
 The inter-component separator policy lives in `lib/regexlib`
 (SEP_TIGHT / SEP_WIDE / canon helpers).  This module imports SEP_TIGHT and
 rebuilds every label-embedded regex with it, and re-exports the label-FREE
-shared regexes (KEY_RE / ENTRY_RE / ROMAN_KEY_RE) so all callers stay unchanged.
+shared regexes (KEY_RE / ENTRY_RE) so all callers stay unchanged.
 """
 import os
 import sys
@@ -38,22 +38,15 @@ import re, sys, os
 
 
 from lib.regexlib import (
-    SEP_TIGHT, SEP_SPLIT_RE, KEY_RE, ENTRY_RE, ROMAN_KEY_RE,
+    SEP_TIGHT, SEP_SPLIT_RE, KEY_RE, ENTRY_RE,
 )
 from verify_config import (
-    ORDINAL_TWO_LEVEL, ORDINAL_EN, ORDINAL_ROMAN, ORDINAL_GM,
+    ORDINAL_TWO_LEVEL, ORDINAL_EN,
     ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
     ORDINAL_ROSS, ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
-
-# GM (Gelfand-Manin) section/entry separators: the shared wildcard set
-# (SEP_TIGHT) plus the ideographic comma "、" that GM book headings
-# occasionally use ("## 1、 Triangulated …"). Derived from SEP_TIGHT so the
-# GM separator stays in lockstep with the rest of the pipeline's policy
-# (single source of truth in lib.regexlib).
-GM_SEP = SEP_TIGHT[:-1] + r'、]'
 
 # --- three-level (default) key parsing ---
 # KEY_RE / ENTRY_RE are imported from lib.regexlib (label-FREE, built from
@@ -231,9 +224,8 @@ APP_LABEL_KINDS = tuple(COMBINED_LABEL_KINDS) + ('Exercise',)
 #   `A.1.5` / `A.4.3`                                          （裸号，原书只印编号）
 # 节标题形如 `A.1 Categories` / `A.6 Adjoint Functors`。
 # 规范键 = 规范中文标签 + `A.S-N`（如 `定义A.1-1`）；裸号条目键 = `A.1-5`。
-# 与 type 5（roman，`Label I.2.3`）刻意分开：roman 章位是罗马数字串
-# （`[IVXLCDM]+`，可多字符），附录章位是单字母（可含 C/D/M 等罗马同形字母），
-# 二者正则不可混用。
+# 附录章位是**单字母**（可含 C/D/M 等与罗马字符同形的字母），与罗马数字串章位
+# （`[IVXLCDM]+`，可多字符）刻意分开：二者正则不可混用。
 ENTRY_RE_APP_C = re.compile(
     r'\*\*(' + '|'.join(APP_LABEL_KINDS) + r')'
     r'\s*([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
@@ -263,50 +255,6 @@ PROSE_RE_APP2_C = re.compile(
     re.IGNORECASE)
 
 
-
-# --- roman three-level (e.g. Gelfand-Manin "Methods of Homological Algebra") ---
-# Item numbers are Chapter.Section.Item with a ROMAN chapter: I.2.13, II.3.5.
-# The chapter prefix is a roman numeral; section/item are arabic.
-ENTRY_RE_ROMAN = re.compile(
-    r'\*\*((' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+))')
-# re.IGNORECASE: 与 PROSE_RE_EN_C 同理——OCR 常把标签打成全大写/混合大小写
-# ("THEOREM I.2.3")，无 IGNORECASE 时整条散文引用被漏抽、浮为假「真缺失」。
-PROSE_RE_ROMAN = re.compile(
-    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![a-z])\s*([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
-    re.IGNORECASE)
-
-# --- GM (ordinal=ORDINAL_GM): BOOK-printed forms, roman machine keys ---
-# Gelfand-Manin style books print sections per chapter ("## §1. Triangulated
-# Spaces") and item titles as per-section headings; the .md renders them as
-# ATX sub-headings ("### 1. Main Definitions", "### 3. Proposition." — book
-# typography, 2026-08 user directive).  Legacy "**N. Title**" inline bold is
-# still accepted for backward compatibility.  Full "Proposition I.2.11" labels
-# appear only in prose cross-references.  Machine keys stay `标签I.S-N`
-# (labelled) / `I.S-N` (heading with no label word — mirror of the PDF-side
-# rule in extract_items_gm.py).
-GM_SEC_RE = re.compile(r'^##\s*[§$]?\s*(\d{1,2})(?:' + GM_SEP + r')?\s+\S')
-GM_ENTRY_RE = re.compile(
-    r'^\s*(?:>\s*)?(?:###\s+|\*\*)(\d{1,3})(?:' + GM_SEP + r')\s*([^*\n]{0,80})')
-GM_LABELED_RE = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([IVXLCDM]+)\s*(?:' + GM_SEP + r')?\s*(\d+)\s*(?:' + GM_SEP + r')?\s*(\d+)',
-    re.IGNORECASE)
-# First label keyword inside an item heading ("3. Proposition." -> 'Proposition'), or None
-# when the heading carries no label word ("14. Skeleton and Dimension").
-GM_HEAD_LABEL_RE = re.compile(
-    r'\b(' + '|'.join(COMBINED_LABEL_KINDS) + r')s?\b', re.IGNORECASE)
-
-
-def gm_head_label(title):
-    """Label of an item heading ("3. Proposition." -> 'Proposition'), or None
-    when the heading carries no label word ("14. Skeleton and Dimension")."""
-    m = GM_HEAD_LABEL_RE.search(title)
-    if not m:
-        return None
-    raw = m.group(1)
-    if raw.lower().endswith('s') and len(raw) > 1 and \
-            raw[:-1].lower() in (k.lower() for k in EN_LABEL_KINDS):
-        raw = raw[:-1]
-    return raw[:1].upper() + raw[1:]
 
 # _canon_label is imported from config (see import above) — single source
 # of truth for bilingual label canonicalization.  The local copy was removed to
@@ -348,7 +296,7 @@ def _is_foreign_chapter_ref(line, start, end, chapter):
     return False
 
 
-def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=None,
+def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                chapter=None):
     """Entries/all_keys from an .md file.
 
@@ -357,17 +305,12 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
     (e.g. 定理/定义 + 练习) parses BOTH numbering styles and unions them —
     the exercise group's two-level keys are captured alongside the theorem
     group's three-level keys.  When only `ordinal` (int) is supplied it is
-    treated as a single group (back-compat shortcut).  `chapter_roman` is
-    required for any GM/ROMAN group.  `chapter`（可选）为该 md 所属章号：给出时，
-    带显式异章限定词（of Chap. X / 第X章…，X != chapter）的正文提及不进入
-    all_keys（条目标签不受影响）；缺省 None 保持旧行为。
+    treated as a single group (back-compat shortcut).  `chapter`（可选）为该 md
+    所属章号：给出时，带显式异章限定词（of Chap. X / 第X章…，X != chapter）的
+    正文提及不进入 all_keys（条目标签不受影响）；缺省 None 保持旧行为。
     """
     if groups is None:
         groups = [GroupConfig(type=int(ordinal) if ordinal is not None else ORDINAL_THREE_LEVEL)]
-    # Any group needing a roman chapter prefix?
-    needs_roman = any(g.type in (ORDINAL_GM, ORDINAL_ROMAN) for g in groups)
-    if needs_roman and chapter_roman is None:
-        raise ValueError("keys_in_md(group with type=ORDINAL_GM/ORDINAL_ROMAN) requires chapter_roman")
     entries, allk = set(), set()
     try:
         lines = open(path, 'r', encoding='utf-8').readlines()
@@ -377,27 +320,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
         t = g.type
         cur_sec = None
         for line in lines:
-            if t == ORDINAL_GM:
-                if chapter_roman is None:
-                    raise ValueError("keys_in_md(ordinal=ORDINAL_GM) requires chapter_roman")
-                sm = GM_SEC_RE.match(line.strip())
-                if sm:
-                    cur_sec = int(sm.group(1))
-                    continue
-                if cur_sec is None:
-                    continue
-                for m in GM_ENTRY_RE.finditer(line):
-                    n = int(m.group(1))
-                    if n > 40:
-                        continue
-                    lbl = gm_head_label(m.group(2))
-                    key = (f"{_canon_label(lbl)}{chapter_roman}.{cur_sec}-{n}"
-                           if lbl else f"{chapter_roman}.{cur_sec}-{n}")
-                    entries.add(key); allk.add(key)
-                for m in GM_LABELED_RE.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
-            elif t == ORDINAL_TWO_LEVEL:
+            if t == ORDINAL_TWO_LEVEL:
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
@@ -518,13 +441,6 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, chapter_roman=None, groups=Non
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                                  f".{m.group(3)}")
-            elif t == ORDINAL_ROMAN:
-                for m in ENTRY_RE_ROMAN.finditer(line):
-                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}"
-                    entries.add(key); allk.add(key)
-                for m in PROSE_RE_ROMAN.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}-{m.group(4)}")
             elif t == ORDINAL_HUM:
                 for m in ENTRY_RE_HUM.finditer(line):
                     label = _canon_label(m.group(1))

@@ -344,8 +344,9 @@ def _source_item_comps_label(it, cfg):
       'Definition 1.1') -> label-first parse.
     * three-level keys are bare numpaths ('4.1-5') with the category in the
       separate `label` field -> use it['label'].
-    * gm / roman keys (chapter is a roman numeral) cannot be split by the
-      integer-only _SEP -> return None (tail check gracefully skips those).
+    * keys whose chapter slot is not an integer only（如字母章位 'A.1-1'）cannot
+      be split by the integer-only _SEP -> return None (tail check gracefully
+      skips those).
     """
     if not isinstance(it, dict):
         return None

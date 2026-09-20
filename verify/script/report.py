@@ -61,7 +61,7 @@ def print_result(r):
             print(f"  ! Ch{ch} §{ch}.{s}")
 
     # Per-level breakdown — only when the generalized nested check emitted a
-    # `levels` map (gm/roman books don't). This is SUPPLEMENTARY detail: the
+    # `levels` map. This is SUPPLEMENTARY detail: the
     # FAIL gate above is driven entirely by the merged continuity/missing lists,
     # so we do NOT re-increment `problems` here (that would double-count). Renders
     # Level 1 (章) / Level 2 (节) / Level 3 (小节) / Level 4 (子小节) blocks.

@@ -585,7 +585,7 @@ if __name__ == '__main__':
     ap.add_argument("--lang", choices=["cn", "en"], default="cn")
     ap.add_argument("--ordinal", dest="ordinal", type=int, default=ORDINAL_THREE_LEVEL,
                         help="integer style code: 1 single | 2 two_level(CN) | "
-                             "3 three_level(CN, default) | 4 en | 5 roman | 6 gm")
+                             "3 three_level(CN, default) | 4 en")
     ap.add_argument("--manual", default=None, help="path to manual_overrides json (CN only)")
     ap.add_argument("--examples", action="store_true", help="include Example items (EN only)")
     ap.add_argument("--verbose", action="store_true")

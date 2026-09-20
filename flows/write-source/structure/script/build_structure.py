@@ -25,7 +25,7 @@
 
 设计要点（与 verify/data_provider 对齐）
 --------------------------------------
-  · 编号模式（three-level / two-level / en / vakil / gm / roman）
+  · 编号模式（three-level / two-level / en / vakil / ross / hum …）
     由 `<extract_dir>/verify_config.json` 的 `ordinal` 自动判定，与 verify/data_provider
     同一套分派逻辑。**build_structure 是抽取器的唯一调用方**（verify 读 JSON，不再重跑抽取器）。
   · **条目权威来自抽取器**（带类型）：skeleton 的 ITEM 行对 dash 编号书
@@ -86,11 +86,10 @@ from extract_items_cn3lab import extract_items_cn3lab
 from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
-from extract_items_gm import extract_items_gm
 from extract_items_ross import extract_items_ross
 from extract_items_hum import extract_items_hum
 from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
-                              ORDINAL_SINGLE, ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_VAKIL,
+                              ORDINAL_SINGLE, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
                               ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
                               LABEL_TO_TYPE as _SHARED_LABEL_TO_TYPE,
@@ -957,9 +956,6 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
                     kept.append(item)
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
-    if primary in (ORDINAL_GM, ORDINAL_ROMAN):
-        items, _, _ = extract_items_gm(_dir, ch, start, end, manual_overrides=manual)
-        return items
     if primary == ORDINAL_VAKIL:
         items, _, _ = extract_items_vakil(_dir, ch, start, end, manual_overrides=manual)
         return items

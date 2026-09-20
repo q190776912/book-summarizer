@@ -12,11 +12,11 @@ Config schema (see config/config_schema.md §配置字段说明):
     (定理/定义/练习/Example/...) that share ONE merged counter.  This replaces
     the old single-integer `ordinal` + `separate_types` (SEP_COMBINED/
     SEP_PER_TYPE) switch: different groups NEVER merge, an unmatched label
-    falls into the `uncat` fallback group.  Group fields: `type` (ORDINAL_* 1..6 / 8 / 9),
+    falls into the `uncat` fallback group.  Group fields: `type` (ORDINAL_* code),
     `name` (label categories), `depth` (numeric components), `scope` (1 book /
     2 chapter / 3 section — the counter reset boundary).  Values for `type`:
         1 single | 2 two_level(CN) | 3 three_level(CN, default)
-        4 en (EN two-level) | 5 roman | 6 gm
+        4 en (EN two-level)
   * `language` (cn/en) is an orthogonal axis, defaulted from `ordinal`.
   * `ignore` is ONE unified list merging the old `known_gaps` + `ignore_keys`
     + `ignore_fig` semantics (the user chose a single suppression set).
@@ -95,14 +95,12 @@ SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 # --- ordinal style codes (single integer selector) -------------------------
 # ONE integer encodes BOTH the numbering depth and the structural style.
 # This ABSORBS the old `levels` (depth 1/2/3) and the old `scheme` family
-# (single / two_level / three_level / en / gm / roman) into a
+# (single / two_level / three_level / en) into a
 # single field.  `language` (cn/en) is an orthogonal axis.
 ORDINAL_SINGLE = 1
 ORDINAL_TWO_LEVEL = 2      # CN two-level (N.M, section-first); no chapter filter
 ORDINAL_THREE_LEVEL = 3    # CN three-level (N.M.K) — default
 ORDINAL_EN = 4             # EN two-level (N.M, chapter-first; rich EN labels)
-ORDINAL_ROMAN = 5          # three-level with ROMAN chapter (e.g. I.2.3)
-ORDINAL_GM = 6             # two-level, bare per-section ordinals (no chapter)
 ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
 ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.g. Lasota & Mackey
                           #   《Chaos, Fractals, and Noise》. 条目形如 `Remark 1.1.1` /
@@ -154,9 +152,9 @@ ORDINAL_APP = 13              # APPENDIX LETTER-CHAPTER three-level (附录体�
                               #   （`Theorem 10.9.13`，type 3），附录却换成字母章位，
                               #   这正是「附录与正文格式不一致、需要独立 verify_config」
                               #   的典型场景（见 APPENDIX_CONFIG_NAME）。
-                              #   与 type 5（roman，`Label I.2.3`）的区别：type 5 的
-                              #   章位是**罗马数字串**（I/II/III/IV…，可多字符且只取
-                              #   IVXLCDM 字符集），type 13 的章位是**单个字母**
+                              #   附录章位是**单个字母**（A/B/C…），与罗马数字串
+                              #   章位（I/II/III…，多字符且只取 IVXLCDM）刻意分开：
+                              #   二者正则不可混用，故附录体例独立成码（13/14）。
 
 ORDINAL_APP2 = 14             # APPENDIX LETTER-CHAPTER two-level (附录字母章位两段).
                               #   条目形如 `Theorem B.2` / `Example A.4` / 裸 `B.4`
@@ -172,11 +170,11 @@ ORDINAL_APP2 = 14             # APPENDIX LETTER-CHAPTER two-level (附录字母�
                               #   键解析分支保留两段宽容仅供历史 config 兼容。
                               #   （A/B/C…，可含 C/D/M 等与罗马字符同形的字母），
                               #   二者正则不可混用，故独立成码。
-ORDINAL_CODES = (0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14)
+ORDINAL_CODES = (0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14)
 ORDINAL_NAME = {
     0: 'unnumbered',
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 5: 'roman', 6: 'gm', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
+    4: 'en', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
     12: 'hum', 13: 'app', 14: 'app2',
 }
 # Numbering depth (numeric components) per ordinal code.
@@ -187,15 +185,15 @@ from data.book_structure.book_structure import (  # noqa: E402
     chapter_label, KIND_CHAPTER, KIND_APPENDIX, KIND_SUPPLEMENT, _resolve_kind,
     prime_chapter_kinds)
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {0: None, 1: None, 2: None, 3: None, 4: None, 5: 'roman', 6: 'gm', 8: None, 9: None, 10: None,
+ORDINAL_STRUCTURE = {0: None, 1: None, 2: None, 3: None, 4: None, 8: None, 9: None, 10: None,
                      11: None, 12: None, 13: None, 14: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {0: 'cn', 1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 5: 'en', 6: 'en', 8: 'en', 9: 'en',
+ORDINAL_LANGUAGE_DEFAULT = {0: 'cn', 1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 8: 'en', 9: 'en',
                             10: 'cn', 11: 'en', 12: 'en', 13: 'en', 14: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
-    'en': 4, 'roman': 5, 'gm': 6,
+    'en': 4,
 }
 
 # --- 静默回退显性化（进程级去重） -------------------------------------------
@@ -292,7 +290,7 @@ SECTION_TYPE_DEPTH = {
 # item-numbering depth: it describes how many NESTED SECTION levels the book's
 # markdown / source actually has (## §N, ## §N.M, ## §N.M.K), NOT how many
 # components an item key carries.  For the historic three-level CN families
-# (type 3 / 5 / 8) the convention is that the book genuinely nests sections
+# (type 3 / 8) the convention is that the book genuinely nests sections
 # three deep (chapter / section / subsection 1.1.1), so the default is
 # [1, 2, 3] — item keys such as ``1.3-4`` whose deepest component is an ITEM
 # counter (NOT a subsection) are the Kreyszig-shaped exception and must declare
@@ -309,7 +307,7 @@ ORDINAL_SECTION_TYPES = {
     # （role 0 = SECTION_ROLE_UNNUMBERED），届时走 recognize_sections 清单路径。
     0: [1],
     1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
-    5: [1, 2, 3], 6: [1, 2], 8: [1, 2, 3],
+    8: [1, 2, 3],
     9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
     # ORDINAL_APP（13）：附录章的节印 `A.1` / `A.2`（字母章位 + 节号两段）。
     # 通用 D 层路径按「token 首分量 == 章号」投影，而附录章号是字母 'A'、
@@ -1181,7 +1179,7 @@ class ConfigLoader:
                 f"请先创建 <book>/_extract/{fname}（至少含 ordinal）。"
             )
 
-        # --- ordinal array present & every group legal (1..6 / 8 / 9 / 10..13) ---
+        # --- ordinal array present & every group legal (ORDINAL_CODES) ---
         # `from_dict` already rejects the old int/str/levels formats and appends a
         # default uncat group, so `has_ordinal` (== "ordinal is a non-empty list")
         # is the reliable "was it declared" signal.

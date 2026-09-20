@@ -48,7 +48,7 @@ D 把“源有而 md 没有的节”按其在 md 节序列中的**位置**切成
 - `d_layer` 结构：`{'continuity_sections': [], 'missing_sections': [], 'levels': {}}`。
   - 顶层 `continuity_sections` / `missing_sections` 为**各层级合并列表**（相对章路径串，去章首分量，如 `(1,2,3)` → `"2.3"`），供 FAIL 门与旧行为兼容。
   - `levels` 为按层级拆分的明细字典：`{1: {'continuity': [...], 'missing': [...]}, 2: {...}, 3: {...}, ...}`，每级为相对章路径串列表，供 `report.py` 按级打印。
-- 分区逻辑集中在 `_partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)`；GM 变体 `check_d_layer_gm` 复用旧 `_partition_sections`（仅返回合并列表，无 `levels`）。
+- 分区逻辑集中在 `_partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)`。
 
 ## 子流程
 无独立子脚本；分区算法 `_partition_sections_by_level` 在本层脚本内。

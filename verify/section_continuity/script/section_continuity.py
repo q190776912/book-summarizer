@@ -21,20 +21,16 @@ section_continuity.py — D-LAYER (order 1): section-continuity + missing-tail-s
 
 Self-contained implementation. Scans the RAW _extract JSON directly and cross-checks against the written .md, INDEPENDENTLY of extract_items' output.
 
-The D-layer now supports an ARBITRARY nested section hierarchy (1–4 levels: chapter / section / subsection / sub-subsection) driven by ``BookConfig.section_types`` / ``section_depths``. For every detected numbering token it projects a prefix at every hierarchy level, then partitions missing sections into continuity (interior hole) vs tail (beyond last written) buckets PER LEVEL. The legacy two-level behaviour is preserved: ordinals 2/4/6 verify chapter + section only; ordinals 3/5 additionally verify the subsection (1.1.1) level for the first time (the old D_MD_NESTED_SEC_RE was dead code).
-
-For ordinal=ORDINAL_GM / ORDINAL_ROMAN it uses check_d_layer_gm, which reuses the extractor's heading scan — `scan_gm_blocks` is a decoupled copy of `extract_items_gm.scan_gm_blocks` (single source of truth there; keep both in sync).
+The D-layer now supports an ARBITRARY nested section hierarchy (1–4 levels: chapter / section / subsection / sub-subsection) driven by ``BookConfig.section_types`` / ``section_depths``. For every detected numbering token it projects a prefix at every hierarchy level, then partitions missing sections into continuity (interior hole) vs tail (beyond last written) buckets PER LEVEL. The legacy two-level behaviour is preserved: ordinals 2/4 verify chapter + section only; ordinals 3/8 additionally verify the subsection (1.1.1) level for the first time (the old D_MD_NESTED_SEC_RE was dead code).
 """
 import re
 import os
 import json
 
 from verify.script.base import VerifyLayer, LayerResult
-from key_parse import GM_SEC_RE, GM_ENTRY_RE
-from verify.script.gm_scan import scan_gm_blocks, _load_sections
 from lib.regexlib import SEP_TIGHT, SEC_LOCAL
 from verify_config import (
-    ORDINAL_GM, ORDINAL_ROMAN, ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,
+    ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,
     ORDINAL_ROSS,
 )
 
@@ -137,55 +133,6 @@ def _d_is_labeled(txt, m):
     lo = max(0, m.start() - 10)
     hi = min(len(txt), m.end() + 10)
     return bool(D_LABEL_KW.search(txt[lo:hi]))
-
-
-# ---------------------------------------------------------------------------
-# GM (Gelfand-Manin) path — UNCHANGED (kept intact; uses _partition_sections).
-# ---------------------------------------------------------------------------
-
-def _partition_sections(md_sections, raw_sec_header, raw_labeled_item):
-    """Split source-present-but-md-absent sections into two BLOCKING buckets.
-
-    - continuity_sections: INTERIOR breaks — the chapter's section sequence has
-      a hole (md has a smaller AND a larger section, but this one is missing).
-      This mirrors B layer's item-level continuity, lifted to section
-      granularity (the section analog of "缺号").
-    - missing_sections: TAIL breaks — a section exists in raw (header + labeled
-      item) but beyond md's last written section; the whole trailing section
-      was simply not written.
-
-    A section is only considered "present in source" when the raw JSON shows BOTH
-    a section-header feature AND a labeled item, so chapters that legitimately
-    skip a number are NOT false-flagged.  The two buckets are disjoint by
-    construction (`s <= md_max` vs `s > md_max`).
-    """
-    raw_present = raw_sec_header & raw_labeled_item
-    md_max = max(md_sections) if md_sections else 0
-    missing = sorted(s for s in raw_present if s not in md_sections)
-    continuity = [s for s in missing if s <= md_max]
-    tail = [s for s in missing if s > md_max]
-    return {'continuity_sections': continuity, 'missing_sections': tail}
-
-
-def check_d_layer_gm(ch, start, end, md_file, ext):
-    """Gelfand-Manin variant: sections are chapter-local ("## §1."), items are
-    bare per-section ordinals ("### N. Title" / legacy "**N. ...**"), machine
-    keys are roman"""
-    with open(md_file, encoding='utf-8') as f:
-        md_text = f.read()
-    md_sections = set()
-    for line in md_text.split('\n'):
-        sm = GM_SEC_RE.match(line.strip())
-        if sm:
-            md_sections.add(int(sm.group(1)))
-    sections = _load_sections(ext, ch)
-    raw_sec_header = set()
-    raw_labeled = set()
-    for h in scan_gm_blocks(ext, start, end, sections):
-        raw_sec_header.add(h['sec'])
-        if h['num'] > 0:
-            raw_labeled.add(h['sec'])
-    return _partition_sections(md_sections, raw_sec_header, raw_labeled)
 
 
 # ---------------------------------------------------------------------------
@@ -765,13 +712,10 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
     depth (1–4) from ``cfg.section_depths``.
 
     When ``cfg`` is not supplied (legacy callers) it is reconstructed from
-    ``ordinal`` via BookConfig (back-compat). GM / Roman books route to
-    check_d_layer_gm (2-level chapter-local semantics, no nested `levels`).
+    ``ordinal`` via BookConfig (back-compat).
     """
     if cfg is None:
         cfg = BookConfig(ordinal=ordinal)
-    if cfg.primary_type in (ORDINAL_GM, ORDINAL_ROMAN):
-        return check_d_layer_gm(ch, start, end, md_file, ext)
     # Ross 体例（ORDINAL_ROSS = 11）：节内作用域条目是节的证据，但通用路径的
     # c[0]==ch 守卫恒拒绝它们 → vacuous PASS。走专用扫描器（见其 docstring）。
     if cfg.primary_type == ORDINAL_ROSS:

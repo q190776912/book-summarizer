@@ -72,7 +72,7 @@
   - `UNDTECTED` 章（检测器未能从 OCR 定位起点）→ **必须**在 `chapter_map.json` 手动补 `start`/`end` 后重跑本工具；
   - 全章 `start`/`end` 非 null 方可进入 Step 2–3 与下游 write-source。此规则与"规则 B：暴露真实缺陷、禁止用 ignore 掩盖"一脉相承——页码由证据生成。
 - **配置一次性生成**：配置**不是边写边填**，而是在文本提取全部完成后一次性生成（非增量）。`scan_skeleton` 对缺失配置仅告警、不阻断（安全网）；配置必须完整合法，且 `ordinal` 必须含 Figure 组（自定义前缀→`name` 非空、无图序标→不放 Figure 组或显式 `{"figure":{"labels":[]}}` 零匹配标记，二者皆不可"字段缺失而静默回落默认"）。
-- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（合法值 {1,2,3,4,5,6,8,9,10,13}：两级序标 + `chapter_first:false` 组合用 `type 4`；**附录字母章位三级 = 13**；**中文三级「标签紧贴编号」书（`定义1.3.1` / `定理1.3.1` 同印 .1、各自独立计数）用 `type 10`（cn3lab）**，🔴 不可配 `type 3`（裸键 C.S-N，会把同节内定义/定理/推论并成一组计数器 → 假缺号），见该文档 type 码表与「type 3 vs type 10」警示块）。
+- **配置字段**见公用配置文档 [`../../../config/verify_config/verify_config.md`](../../../config/verify_config/verify_config.md)；`type` 为编号风格码（合法值 = `ORDINAL_CODES` {0,1,2,3,4,8,9,10,11,12,13,14}：两级序标 + `chapter_first:false` 组合用 `type 4`；**附录字母章位 = 13（三级）/ 14（两段）**；**中文三级「标签紧贴编号」书（`定义1.3.1` / `定理1.3.1` 同印 .1、各自独立计数）用 `type 10`（cn3lab）**，🔴 不可配 `type 3`（裸键 C.S-N，会把同节内定义/定理/推论并成一组计数器 → 假缺号），见该文档 type 码表与「type 3 vs type 10」警示块）。
 - **附录与正文体例不一致**：若本书附录编号体例与正文不同（如正文数字三级 `Theorem 10.9.13`、附录字母章位 `Definition A.1.1`），`make_config.py` 会**只扫附录页区间**额外生成 `_extract/appendix_verify_config.json`（`ConfigLoader` 对附录章自动路由到此文件，正文零回归）。若附录与正文同体例则**不生成**该文件（回退主配置）。`chapter_map.json` 中附录章须以字母章号（`"ch": "A"`）或章名含 `Appendix`/`附录` 登记，否则检测器无法识别其为附录。详见 [`../../../config/verify_config/verify_config.md` §附录专用配置](../../../config/verify_config/verify_config.md)。
 
 ## 出口条件

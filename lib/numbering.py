@@ -35,7 +35,7 @@ HOM_MD_ENTRY_RE = re.compile(r'\*\*(定义|定理|引理|推论|命题)\s*(\d{1,
 # Numbering depth (= number of numeric components) per ordinal style code.
 # 🔴 这是 `ORDINAL_DEPTH` 的**唯一定义处**——`config/verify_config/verify_config.py`
 # 与 `lib/figure_io.py` 一律从这里导入，禁止再各抄一份（抄副本必然漂移）。
-ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2,
+ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 2,
                  # 0 = UNNUMBERED：条目**不带任何编号**（无数字分量 ⇒ 段数 0）。
                  # 它是「未声明 ordinal」的内部兜底组，也可由用户显式声明
                  # （`{"type": 0, ...}` 表示本书条目无编号）。🔴 必须登记 0，否则

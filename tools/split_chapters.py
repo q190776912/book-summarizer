@@ -18,9 +18,8 @@ r"""将一个过大的章总结文件，按「节」拆分成每节一个独立�
 
 用户规则（2026-07-28，2026-08-03 修订）：拆分粒度 = 原书小节标题的格式，
 按标题首部编号识别，支持两种书中实际格式：
-  1) 节标题式（`§N`，gm 风格）：标题以 § 前缀 + 单个整数开头
-     （如 `## §2. Derived Categories are Triangulated`，节内条目从 1 起号，
-     如 Gelfand–Manin《Methods of Homological Algebra》）。
+  1) 节标题式（`§N` 章内节标题风格）：标题以 § 前缀 + 单个整数开头
+     （如 `## §2. Derived Categories are Triangulated`，节内条目从 1 起号）。
   2) `N.M` 编号式（Vakil 风格）：标题首部编号为 N.M（恰好一个小数点），
      不论其 markdown 级数（## / ### 都算）也不论是否带 § 前缀。
      子节 N.M.P（两个小数点）留在父节文件内，不单独成文件。
@@ -49,7 +48,7 @@ import argparse
 DEFAULT_THRESHOLD = 60000
 
 # 节拆分标题，两种书中实际格式（二选一）：
-#   1) gm 风格节标题：`§N`，§ 必须存在（避免把节内条目 `### N. 标题` 误判为节），
+#   1) `§N` 章内节标题风格：§ 必须存在（避免把节内条目 `### N. 标题` 误判为节），
 #      节号后允许一个可选句点（`## §1. 标题`），其后必须是空白或行尾。
 #   2) Vakil 风格：`N.M`（恰好一个小数点），§ 前缀可选；
 #      lookahead 防止把 N.M.P 的 "N.M" 误判为节。
@@ -124,7 +123,7 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
     for l in lines:
         m = SPLIT_RE.match(l)
         if m:
-            sec = m.group(2)                     # gm 风格：§N 节标题（节内从 1 起号，无需核对章号）
+            sec = m.group(2)                     # `§N` 章内节标题（节内从 1 起号，无需核对章号）
             if sec is not None:
                 key = sec
             elif m.group(3) and int(m.group(3)) == num:

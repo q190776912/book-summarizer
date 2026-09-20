@@ -90,12 +90,11 @@ def split_numpath(s, levels):
 
 
 # --- shared label-FREE compiled regexes (all built from SEP_TIGHT) ----------
-# Label-embedded regexes (ENTRY_RE_ROMAN, FR_*, ENTRY_RE_2, ENTRY_RE_EN*,
-# GM_LABELED_RE …) live in lib/key_parse.py, which imports SEP_TIGHT from
-# here and rebuilds them with the wildcard separator.
+# Label-embedded regexes (FR_*, ENTRY_RE_2, ENTRY_RE_EN*, ENTRY_RE_APP* …)
+# live in lib/key_parse.py, which imports SEP_TIGHT from here and rebuilds
+# them with the wildcard separator.
 KEY_RE = re.compile(r'(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+' + SEP_TIGHT + r'\d+' + SEP_TIGHT + r'\d+)[^*]*\*+')
-ROMAN_KEY_RE = re.compile(r'([IVXLCDM]+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)')
 
 
 # --- shared label-bearing / domain regexes (centralised 2026-08-09) --------

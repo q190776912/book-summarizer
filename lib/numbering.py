@@ -104,7 +104,7 @@ _FORMULA_SUFFIX = r'(?:[a-zA-Z])?'        # 子式字母后缀：`8.11a`
 
 
 def formula_num_core(ncomp=None, letter=False):
-    """公式编号 token 的正则源（**不含括号**、**不锚定**、**无捕获组**）。
+    r"""公式编号 token 的正则源（**不含括号**、**不锚定**、**无捕获组**）。
 
     `ncomp` = 段数（由 `formula.type` 经 `ORDINAL_DEPTH` 派生）；``None`` = 段数
     不限（书未配置 `formula` 块时的兜底，如集合论/表示论等无编号公式的书）。

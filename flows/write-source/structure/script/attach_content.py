@@ -711,6 +711,16 @@ _CN_INLINE_PROOF = re.compile(
     r'(?<=[。．.!！?？)）\]])\s*(?:证(?![明毕据实])|证明(?![的于了过程法]))')
 _QED_TEXT = re.compile(r'口|□|∎|证毕|Q\.?\s?E\.?\s?D', re.IGNORECASE)
 _QED_LATEX = re.compile(r'\\(?:square|blacksquare|qed|QED|sqsupset)\b')
+# 章尾标题（🔴 2026-09-21 实测缺陷修复）：一章节末常挂「习题N / 思考题 / 内容提要 /
+# 评注 / 小结 / 注记」等**非条目**尾料，且这些标题不带 定理/定义 序标 → 结构检测器
+# 在其后不再产生锚点，末条目正文块流一路延伸到章末。若该末条目证明又没有显式 QED，
+# `_split_proofs` 的「无 QED 则至块流末尾」逻辑会把整段尾料**吞进证明子节点**（实测
+# 周民强《实变函数论》每章末条目都 REACHES_CH_END、例5-P1 吞 144-149 共 463 块）。
+# 补救：证明扫描遇章尾标题即**收束**，标题及其后残留走既有 trailing→description 通道。
+# 仅认「独立成行、以这些标题词开头」的块，避免误切正文里出现的同名子串。
+_TAIL_HEADING = re.compile(
+    r'^\s*(?:思考与练习|思考题|习题|练习|内容提要|本章小结|小结|重\s*要\s*提示|'
+    r'评注|注\s*记|提\s*要)')
 
 
 def _proof_name(marker):
@@ -748,6 +758,20 @@ def _qed_cut(b):
     head, rest = t[:m.end()].rstrip(), t[m.end():].strip()
     rest_blk = dict(b, text=rest) if rest else None
     return dict(b, text=head), rest_blk
+
+
+def _is_tail_heading(b):
+    """块是否「章尾标题」（习题/思考题/内容提要/评注/小结/注记…）。
+
+    判定收紧以免误切正文：须为 text 块、以标题词起头，且**独立成行**
+    （line_start）或为**短标题行**（≤12 字，如 '习题3'/'注记127'）。
+    """
+    if b.get("kind") != "text":
+        return False
+    t = (b.get("text") or "").strip()
+    if not t or not _TAIL_HEADING.match(t):
+        return False
+    return bool(b.get("line_start")) or len(t) <= 12
 
 
 def _mark_line_geometry(blocks):
@@ -850,7 +874,11 @@ def _split_proofs(item_key, blocks):
             i += 1
             pb = [dict(b, text=marker)] if marker != (b.get("text") or "") else [b]
             rest_blk = None
+            hit_tail = False
             while i < n:
+                if _is_tail_heading(blocks[i]):
+                    hit_tail = True
+                    break  # 章尾标题：证明到此收束；其后全部转残留，不再扫描
                 cut = _qed_cut(blocks[i])
                 if cut is None:             # 未到 QED：块归证明
                     pb.append(blocks[i])
@@ -869,11 +897,19 @@ def _split_proofs(item_key, blocks):
                              "sub_sec": [_to_content(x) for x in pb]})
             if rest_blk is not None:        # 内联 QED 的余段 → 回到正文流（尾随/描述）
                 pending.append(rest_blk)
+            if hit_tail:                    # 遇章尾标题：其后全部转残留，停止再扫描
+                pending.extend(blocks[i:])
+                i = n
+                break
         else:
             pending.append(b)
             i += 1
     if p_no == 0:
-        return [_to_content(x) for x in blocks], None
+        ti = next((idx for idx, x in enumerate(blocks) if _is_tail_heading(x)), None)
+        if ti is None:
+            return [_to_content(x) for x in blocks], None
+        # 无证明但含章尾标题：标题前留条目，标题及其后作残留（→ 同级 description）
+        return [_to_content(x) for x in blocks[:ti]], (blocks[ti:] or None)
     return elements, (pending or None)
 
 

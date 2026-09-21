@@ -401,6 +401,15 @@ class SourceFormulaIndex:
                 for fblk in data.get('formulas', []) or []:
                     lx = (fblk.get('latex') or fblk.get('formula') or '') \
                         if isinstance(fblk, dict) else ''
+                    # 本书等书的提取里 formulas[].latex 可能是**嵌套块**
+                    # （{"text": …} / {"latex": …}）而非裸字符串：逐层解包到
+                    # str，否则 (lx or '').strip() 会在 dict 上崩
+                    # （'dict' object has no attribute 'strip'）。串路径零改动。
+                    _unw = 0
+                    while isinstance(lx, dict) and _unw < 4:
+                        lx = (lx.get('text') or lx.get('latex')
+                              or lx.get('formula') or '')
+                        _unw += 1
                     ls = (lx or '').strip()
                     if not ls:
                         continue

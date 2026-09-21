@@ -7,9 +7,9 @@
 
 ## 定位与范围
 
-- **pilot，未接管线**。本模块实现 **code 0 / 1 / 2 / 3 / 8 / 13 / 14**。
+- **pilot，未接管线**。本模块实现 **code 0 / 1 / 2 / 3 / 8 / 12 / 13 / 14**（type 12 = `OrdinalHum` Humphreys 字母序标，label 可在字母前后；见下「派生类」表与 `OrdinalHum` 小节）。
   `lib/key_parse.py::keys_in_md` 仍走旧的 `if t == …` 分发，`config/verify_config/make_config.py`
-  的页扫探测也未改。其余 code（4、9–12）尚无对应子类，调用 `OrdinalStyle.get(code)`
+  的页扫探测也未改。其余 code（4、9–11）尚无对应子类，调用 `OrdinalStyle.get(code)`
   会抛 `KeyError`。
 - **两套能力，来源不同、互不解耦混淆**：
   - **识别类型**（这本书是几级编号？）→ `judge(page=True)` / `classify` / `detect_style`，
@@ -85,6 +85,7 @@
 | 2 | `OrdinalTwoLevelCN` | 2 | `two_level` | `**定义1.1**` / `**1.1 定义**` | `定义1.1` |
 | 3 | `OrdinalThreeLevelCN` | 3 | `three_level` | `**定理1.1.1**` / `**1.1.1 定理**` | `1.1-1` |
 | 8 | `OrdinalVakil` | 3 | `vakil` | `**Exercise 2.3.A**` / `**Theorem 2.3.B**`（标签在前，第三维**字母**） | `练习2.3-A` / `定理2.3-B` |
+| 12 | `OrdinalHum` | 2* | `hum` | `**Corollary A**` / `**A Corollary**`（label 可在字母前后，字母序标） | `推论 A` / `定理 A` |
 | 13 | `OrdinalApp` | 3 | `app` | `**Definition A.1.1**` / `**A.1.1 Definition**` / 裸号 `**A.1.5**` | `定义A.1-1` / `A.1-5` |
 | 14 | `OrdinalApp2` | 2 | `app2` | `**Theorem B.2**` / `**B.2 Theorem**` | `定理B.2` |
 
@@ -108,15 +109,14 @@
 规范键 = `normkey(a.b.c)` → 纯数字 `1.3-4`，**不带标签前缀**（兼容中文三级书
 「契约键纯数字、标签另存 `manifest.tags`」的现状）。
 因此纯数字加粗行 `**1.1.1**` 是**节标题**，本类不匹配（`judge=False`、`extract=None`）。
-⚠️ 标签词表 = `_LABEL_ALT`（= `COMBINED_LABEL_KINDS`）。2026-09-21「选项 B」后
-`COMBINED_LABEL_KINDS` 已含 `练习` / `Exercise`（分别补入 `CN_LABEL_KINDS` /
-`EN_LABEL_KINDS`），故 `**练习1.2.3**` / `**Exercise 2.3.1**` 这类三段头**本类已收**
-（`练习1.2-3` / `练习2.3-1`），与 legacy 一致。仅**纯数字** `**1.2.3**` 与中文节号
-`**第1.2.3节**` 在 label-aware redesign 下仍刻意不收（节标题非条目）；旧 `keys_in_md`
-的 type 3 走**标签无关**的 `regexlib.ENTRY_RE`，这两类**也收**（`1.2-3`），故仍属
-**减法**，登记为「有意偏差」第 6 条（仅余标签无关真值）。
-🔴 注：`_LABEL_ALT`（COMBINED）与 `_LABEL_ALT_EX`（APP_LABEL_KINDS）在 B 后**完全相同**
-（APP 退化成 COMBINED 去重），type 1/2/3/8/13/14 词表口径已统一。
+⚠️ 🔴 标签词表 = `_LABEL_ALT`（= 全量 `COMBINED_LABEL_KINDS`，38 词），**与 type 1/2 完全相同**。
+用户 2026-09-21 明确：type 3 与 type 2「按标签判断」的方式保持一致——三级条头必须带**条目标签**，
+词表口径不做额外收窄。故 `**练习1.2.3**` / `**Exercise 2.3.1**`（选项 B 已进 `COMBINED`）与
+`**Application 1.2.3**` / `**条件1.2.3**` / `**Variation 1.2.3**` / `**Porism 1.2.3**` **一并收**
+（均落入 `COMBINED_LABEL_KINDS`）。仅**纯数字** `**1.2.3**` 与中文节号 `**第1.2.3节**` 在
+label-aware redesign 下仍刻意不收（节标题非条目）；旧 `keys_in_md` 的 type 3 走**标签无关**的
+`regexlib.ENTRY_RE`，这两类**也收**（`1.2-3`），故仍属**减法**，登记为「有意偏差」第 6 条（仅余标签无关真值）。
+🔴 注：type 1/2/3/8/12/13/14 **全部共用同一 `_LABEL_ALT`（= `COMBINED_LABEL_KINDS`，38 词）**——2026-09-21「标签词统一」已废弃 `_LABEL_ALT_EX` / `_APP_LABEL_ALT` 两别名常量；仅附录类（13/14）在词表之上额外挂 `_APP_PLURAL`（`(?:es|s)?`）以收复数附录头（`Examples A.1.3`）。
 
 ### `canon_key` 各子类签名（基类是 `canon_key(*parts)`）
 
@@ -144,8 +144,8 @@
 - 规范键 = 规范中文标签 + 章号 + `.` + 节号 + `-` + **大写**字母序标 → `练习2.3-A`。
   键里**保留标签**（同节的 `Theorem 2.3.A` 与 `Exercise 2.3.A` 是两条不同条目，
   纯数字键会碰撞），这与 type 3 的纯数字键 `1.3-4` 刻意不同。
-- 标签词表用 **`_LABEL_ALT_EX`**（= `COMBINED_LABEL_KINDS` + `Exercise`）：Vakil 的
-  字母序标条目绝大多数是 **Exercise**，而 `COMBINED_LABEL_KINDS` 里没有这个词。
+- 标签词表用 **`_LABEL_ALT`**（= `COMBINED_LABEL_KINDS`，38 词）：Vakil 的
+  字母序标条目绝大多数是 **Exercise**，而 `Exercise` 已在 2026-09-21「选项 B」并入 `COMBINED_LABEL_KINDS`，故无需独立词表。
   ⚠️ **复数 `Exercises` 刻意不收** —— `_canon_label('Exercises')` 无规范映射，收进来
   只会产出非规范键。
 - 🔴 段数独立：只认「标签 + 数字 . 数字 . **字母**」。两级 `Exercise 2.3` → type 2、
@@ -196,15 +196,37 @@
 折成序号后参与重置判定：`练习2.3-A` → `(2,3,1)`、`练习2.3-C` → `(2,3,3)`、
 `练习10.2-B` → `(10,2,2)`。
 
+### `OrdinalHum`（code 12，Humphreys 字母序标）
+
+🔴 **用户口径（覆盖 legacy `ENTRY_RE_HUM`「只收 label 在前」）**：label + **单字母**序标，
+label 可在字母前后 —— `**Corollary A**` ↔ `**A Corollary**` 归一为同一规范键 `推论 A`。
+
+- 形态：`**Corollary A**` / `**A Corollary**` / `**Lemma B**` / `**B Lemma**` /
+  `**定理 A**` / `**A 定理**`；规范键 = 规范中文标签 + 空格 + **大写**字母序标
+  （`推论 A` / `定理 A` / `引理 B`），与 legacy `f"{label} {letter}"` 同形。
+- 🔴 **段数独立**：只认「label + 单字母」。**数字序标**（`**Example 1**` → type 1）、
+  **纯 label**（`**Theorem**`，零数字，留待 legacy type-12 配置分支）、**字母章位+数字**
+  （`**Definition A.1.1**` → type 13/14）、**数字.数字+字母**（`**Exercise 2.3.A**`
+  → type 8）**均不收**，避免 `classify` 把单级 EN 书误判成 type 12。
+- `judge(page=True)` 与 `extract` **自洽**：`_ENTRY_RE_HUM` 终端用 `[^*]*\*+`
+  （与 type 8 同），故 `**Corollary A.**` 这类尾点也能抽键；`extract` 不收裸号
+  （无数字/字母序标则 `None`）。
+- `_key_to_tuple` 覆写为 `_hum_key_to_tuple`：末位单字母折序号（A→1, B→2）→ `(1,)`，
+  供 `detect_scope` 判重置（章级）。⚠️ 类声明 `depth = ORDINAL_DEPTH[12] = 1`（单字母单维，与 `_key_to_tuple` 单分量一致），
+  但规范键实际只有「字母」一维，`_key_to_tuple` 折成**单分量**，`detect_scope` 按数据长度
+  判定（不依赖类属性 `depth`）。Humphreys 同章内定理/引理/推论等通常共用一个字母序标序列，
+  丢弃 label 后按字母判重置符合该书体例；若某书各 label 独立编号，则须在真值侧另行区分。
+- 派生类表的 type 12 `depth` 声明为 1（单字母单维），有效维度即 1（仅字母），
+  仅作元数据/投票 tiebreaker，不影响 `detect_scope`。
+
 ## 共享正则原语
 
 | 原语 | 定义 | 作用 |
 |---|---|---|
-| `SEP_TIGHT` | `[.\-–·/．－〜]`（来自 `lib.regexlib`） | 数字分量分隔符 |
+| `SEP_TIGHT` | `[.\-–·/．－〜_~]`（来自 `lib.regexlib`；2026-09-21 补 ASCII `~` 与 OCR 下划线 `_`） | 数字分量分隔符 |
 | `_LABEL_ALT` | `COMBINED_LABEL_KINDS` 去重后**按长度降序**拼接 | 标签词表单一真源；降序保证 `示例`/`注记` 不被前缀 `例`/`注` 抢匹配 |
 | `_SUFFIX_RE` | `r'(?:\s*([a-z]+)|(\*(?=\*\*)))?'` | 末位后缀 |
-| `_LABEL_ALT_EX` | `APP_LABEL_KINDS`（= `COMBINED_LABEL_KINDS` + `Exercise`）去重后按长度降序 | **含 `Exercise` 的词表单一真源**（type 8 / 13 / 14 共用） |
-| `_APP_LABEL_ALT` | `_LABEL_ALT_EX` 的别名 | 附录标签词表（避免与 type 8 各排一次序而漂移） |
+| `_LABEL_ALT` | `COMBINED_LABEL_KINDS` 去重后按长度降序 | **词表唯一真源**（type 1/2/3/8/12/13/14 全部共用，38 词） |
 | `_APP_PLURAL` | `r'(?:es|s)?'` | 附录标签**复数**（`Examples A.1.3`），对齐 make_config 页扫 |
 | `_TAIL_GUARD` | `r'(?!\d)'` + `r'(?!\s*' + SEP_TIGHT + r'\s*\d+)'` + `r'(?!' + SEP_TIGHT + r'[A-Za-z])'` | 段数独立性：末位后不能再接「数字 / 分隔符+数字 / **紧贴的分隔符+字母**」 |
 | `_LEAD_GUARD` | `r'(?<!\d' + SEP_TIGHT + r')' + r'(?<!(?<![A-Za-z])[A-Za-z]' + SEP_TIGHT + r')'` | 段数独立性：首位前不能是「数字+分隔符」；**也不能是「独立单字母+分隔符」** |
@@ -246,6 +268,21 @@
   - `_ENTRY_RE_APP2` / `_PAGE_RE_APP2` 两分支，**均无裸号**（裸号两段与公式号同形）。
 - 另有 `_PROSE_RE_TWO` / `_PROSE_RE_THREE`（散文 / 交叉引用形态，无加粗），
   只挂在 `prose_re` 上，**当前方法不使用**。附录两类 `prose_re = None`。
+
+## 规范键归一权威 `normalize_ordinal`（契约侧接入用）
+
+`normalize_ordinal(num_raw, label='')` 把**任意分隔符**的裸序标数字路径归一为与 md 侧
+（`OrdinalStyle` 各子类 `canon_key`）完全一致的规范键：
+
+- 3（及更多）段 → 裸横线型 `N.S-N`（三级，无标签，对齐 `OrdinalThreeLevelCN`）；
+- 2 段 → `<规范标签>.N.N`（两级，带标签，对齐 `OrdinalTwoLevelCN`）；
+- 1 段 → `<规范标签>.N`（单级，对齐 `OrdinalSingle`）。
+
+段数按 `SEP_SPLIT_RE`（含全部通配分隔符 `. - – · / ． － 〜 _ ~`）切分判定，**不依赖某个
+固定分隔符**——故 `1.1.1` / `1-1-1` / `1·1·1` 被归一为同一键，契约侧↔md 侧在「标点可替换」
+上成立。这是供 `verify/script/structure_io.read_structure_items` 通用分支接入时、**代替其
+「`num_raw` 含 '-' 即判三级」的错误启发式 + 过窄的 `_normalize_threelevel` 切分集**的权威入口
+（pilot 接入管线前的必要前提）。验证见 `lib/tests/test_ordinal_normalize.py`。
 
 ## scope：数据派生，与 type 解耦
 
@@ -316,6 +353,8 @@ OrdinalStyle.get(c).judge(h, page=…) is False    # 对一切 c != T（含 c ==
    ⚠️ 副作用：旧 `regexlib.ENTRY_RE` 标签无关 ⇒ 纯数字 `**1.2.3**` / 中文节号
    `**第1.2.3节**` 在 label-aware redesign 下仍被刻意丢弃（节标题非条目），见「有意偏差」第 6 条。
    🔴 2026-09-21「选项 B」：`**练习1.2.3**` / `**Exercise 2.3.1**` 已进 `COMBINED`，type 3 收之，与 legacy 一致。
+   🔴 2026-09-21「按正确标签判断」：type 3 与 type 2 共用全量 `_LABEL_ALT`（= `COMBINED` 38 词），
+   不做额外收窄——`**Application 1.2.3**` / `**条件1.2.3**` 等随 `COMBINED` 一并收（偏差表已无第 7 条）。
 5. **双向**：type 1/2/3/13/14 的标签在前与序标在前两种顺序都要支持，**md 与 page
    两套形态都必须支持**——`judge(page=True)` 认得出的条头，`extract` 必须抽得出键，
    否则「识别类型 → 抽键」链路断裂。
@@ -338,9 +377,9 @@ OrdinalStyle.get(c).judge(h, page=…) is False    # 对一切 c != T（含 c ==
 10. **不得新增 `language` 类属性**：语言轴由正则词表吸收。
 11. **不得新增 `scope` 类属性**：scope 只能是实例属性（显式入参）或 `detect_scope`
     的数据派生量，**绝不**由 type 反查。
-12. **标签词表单一真源**：正文类型用 `_LABEL_ALT`（`COMBINED_LABEL_KINDS`）、含
-    `Exercise` 的类型（8 / 13 / 14）用 `_LABEL_ALT_EX`（`APP_LABEL_KINDS`），
-    都**必须按长度降序**；禁止各类型各写一份手写子集。
+12. **标签词表单一真源**：**所有类型**（1/2/3/8/12/13/14）统一用 `_LABEL_ALT`（`COMBINED_LABEL_KINDS`，38 词），
+    都**必须按长度降序**；附录类（13/14）仅在 `_LABEL_ALT` 之上额外挂 `_APP_PLURAL`（`(?:es|s)?`）收复数头；
+    禁止各类型各写一份手写子集。
 13. **规范键形态**：type 1/2 为「规范标签 + 数字」，type 3 为纯数字（`normkey`），
     type 8 为「规范标签 + 章号 + `.` + 节号 + `-` + **大写字母序标**」，
     附录 13 为「规范标签 + 大写字母章位 + `.` + 节号 + `-` + 条目号」（裸号则无标签
@@ -362,7 +401,7 @@ OrdinalStyle.get(c).judge(h, page=…) is False    # 对一切 c != T（含 c ==
     （派生 13/14 由 `_build_app.py` 一次跑完：187 条断言全过才写盘；派生 8 由
     `_build_vakil.py` 一次跑完：279 条断言全过才写盘。）
 17. **与 legacy 的偏差必须逐条列明**：新层级刻意不同于 `keys_in_md` 之处，一律写进
-    demo 第 12b / 16d 节（说明 + 新值 + 旧值 + 理由），**不得静默漂移**。当前 5 条见下。
+    demo 第 12b / 16d 节（说明 + 新值 + 旧值 + 理由），**不得静默漂移**。当前 6 条见下。
 18. **改正则后必须重跑全量验证**（见下）。
 19. **用户口径优先于 `verify_config` 的旧 type 描述**：表里的注释是历史实测归纳，
     用户明确给出某 type 的判定形态时（如 type 8 = 标签在前 + 第三维字母），
@@ -379,16 +418,27 @@ OrdinalStyle.get(c).judge(h, page=…) is False    # 对一切 c != T（含 c ==
 | `**Exercise 2.3.A**` | 8 | `练习2.3-A` | `None`（**无 type 8 分支**） | 🔴 **用户口径覆盖旧描述**：`ORDINAL_VAKIL` 旧注释是「序标在前 N.M.item + N.M.A exercises」，`extract_items_vakil` 的 `VAKIL_ITEM` / `VAKIL_EXER` 也都是序标在前；用户口径 = 标签在前的 `Label C.S.A`。本类是**新定义**，无等价基线可对拍 |
 | `**1.2.3**` / `**第1.2.3节**` | 3 | `None` | `1.2-3` / `1.2-3` | 旧 `regexlib.ENTRY_RE` **标签无关**（任何「数字 SEP 数字 SEP 数字」加粗行都收，含中文节号 `第N.N.N节`）；本类 label-aware redesign 刻意不收纯数字/中文节号（节标题非条目）。🔴 2026-09-21「选项 B」后 `**练习1.2.3**`/`**Exercise 2.3.1**` 已进 `COMBINED`，type 3 收 `练习1.2-3`/`练习2.3-1`，与 legacy 一致，本偏差仅余标签无关真值 |
 
-前三条是**加法**（legacy 漏收/丢标签，新层级补全）；第四条与第六条是**减法**
+前三条是**加法**（legacy 漏收/丢标签，新层级补全）；第四条、第六条是**减法**
 （第四条刻意不继承历史兼容；第六条是「标签感知」改造的连带代价，仅余纯数字
 `**1.2.3**` / 中文节号 `**第1.2.3节**` 这类真值仍被刻意丢弃——节标题非条目，属设计内；
 `**练习1.2.3**` / `**Exercise 2.3.1**` 已由 2026-09-21「选项 B」闭合，不再计入代价）；
 第五条是**重新定义**（用户口径覆盖，非迁移）。
+🔴 2026-09-21「按正确标签判断」已落地为「type 3 与 type 2 共用全量 `_LABEL_ALT`（38 词）、不收窄词表」，
+故 `Application` / `Variation` / `Porism` / `条件` 等与 type 2 一致收为条目，偏差表无第 7 条。
 
 ## 验证
 
-pilot 验证入口：`D:/study/.workbuddy/_tmp_20260920_ordinal_pilot/demo.py`（16 节，
-工作区临时产物）。必须**全量**跑、不能只跑单节，关键节：
+**正式验证（留存、随仓库提交）**：`lib/tests/test_ordinal_hum.py`（`OrdinalHum` 双向归一 /
+负向不误吞 / `classify` 不误判单级 EN 书 / 字母折序号 / `detect_scope` / judge↔extract 自洽）
+与 `lib/tests/test_ordinal_normalize.py`（段数判定 + 分隔符容错 + 契约↔md 一致）。全量
+`pytest --basetemp=C:/tmp/pytest_bt` 基线 **241 passed**（含这两条的 16 条）。
+
+**临时验证入口（工作区临时产物，不留存）**：`D:/study/.workbuddy/_tmp_20260920_ordinal_pilot/demo.py`
+（16 节，全类型 × 全形态矩阵 382 条断言 + 等价性 + 偏差对齐）。⚠️ 该临时脚本写于 type 12
+落地**之前**，**未覆盖 type 12 的全类型相互独立矩阵**；type 12 的相互独立已由
+`test_ordinal_hum.py` 锁定。正式接管线前，须把 type 12 并入该矩阵，或仅依赖上面的 pytest 测试。
+
+下表为 demo 关键节（临时脚本）：
 
 | 节 | 断言 |
 |---|---|
@@ -410,7 +460,7 @@ pilot 验证入口：`D:/study/.workbuddy/_tmp_20260920_ordinal_pilot/demo.py`�
   `_canon_label` / `SCOPE_*` 权威定义与 `type` 判定树；`ORDINAL_APP=13` /
   `ORDINAL_APP2=14` 的体例定义（Weibel / Lee ISM 实测来源）。
   ⚠️ `ORDINAL_VAKIL=8` 的**旧注释（序标在前）已被用户口径覆盖**，见「有意偏差」第 5 条。
-- `lib/numbering.py`：`ORDINAL_DEPTH`（depth 唯一真源，13→3、14→2）。
+- `lib/numbering.py`：`ORDINAL_DEPTH`（depth 唯一真源，12→1、13→3、14→2）。
 - `lib/key_parse.py`：`keys_in_md`（md 抽键的当前权威实现）、`COMBINED_LABEL_KINDS`、
   `APP_LABEL_KINDS`、`ENTRY_RE_APP_C` / `_APP_BARE_` / `_APP2_C`、`normkey`。
   🔴 2026-09-21「选项 B」变更（影响 legacy `keys_in_md` 与本模块 type 1/2/3，须全书回归）：
@@ -418,11 +468,11 @@ pilot 验证入口：`D:/study/.workbuddy/_tmp_20260920_ordinal_pilot/demo.py`�
   的硬编码词表同步加 `练习|Exercise`；`APP_LABEL_KINDS` 退化为 `COMBINED` 去重（Exercise 已在
   `COMBINED`）。此后 `**练习N.N**` / `**Exercise N.N**` 头会被 type 2/3 正常抽取（与 vakil type 8
   的 `练习N.N-A` 字母序标互不冲突）。
-  ⚠️ `CN_LABEL_KINDS` **不含 `练习`**（`EN_LABEL_KINDS` 也不含 `Exercise`），但
-  `_canon_label` 的**输出域**里有 `练习`（`Exercise` → `练习`）⇒ 契约侧可产出
-  `练习…` 键、md 侧的 type 1/2/3 却解析不出 `**练习…**` 条头；type 8/13/14 靠
-  `_LABEL_ALT_EX` 只能救 EN 的 `Exercise`，CN 的 `练习` 同样漏。补词表属
-  `key_parse.py` 改动、**超出本 pilot 范围**，须单独立项并跑全书回归。
+  ⚠️ 该补词表已在 2026-09-21「选项 B」完成（`CN_LABEL_KINDS` 补 `练习`、
+  `EN_LABEL_KINDS` 补 `Exercise`），故 `**练习N.N**` / `**Exercise N.N**` 头现被
+  type 1/2/3 正常抽取；且 2026-09-21「标签词统一」后 type 8/12/13/14 与 type 1/2/3
+  **共用同一 `_LABEL_ALT`**（= `COMBINED_LABEL_KINDS`，38 词），旧 `_LABEL_ALT_EX`
+  / `_APP_LABEL_ALT` 别名已废弃，「CN 的 `练习` 漏收」问题不再存在。
 - `lib/regexlib.py`：`SEP_TIGHT`。
 - `flows/write-source/structure/script/extract_items_vakil.py`：legacy 的 type 8 抽取器
   （`VAKIL_ITEM` 三段数字 / `VAKIL_EXER` 字母序标，**均为序标在前**），本类按用户

@@ -7,8 +7,9 @@
 通过 ``__init_subclass__`` 自注册进 ``OrdinalStyle._REGISTRY``，用
 ``OrdinalStyle.get(code)`` 取实例。
 
-本模块是 **PILOT**——只实现 **0 / 1 / 2 / 3 / 8 / 13 / 14** 七种。其余 code
-（4, 9, 10, 11, 12）仍走旧字典 + ``keys_in_md`` 分发，等对应类落地再迁移。
+本模块是 **PILOT**——实现 **0 / 1 / 2 / 3 / 8 / 12 / 13 / 14** 八种；type 12
+（hum）为「label + 单字母序标、label 可在字母前后」的 Humphreys 体例。其余 code
+（4, 9, 10, 11）仍走旧字典 + ``keys_in_md`` 分发，等对应类落地再迁移。
 每个注册类都
 会在定义时与 ``config/verify_config`` 的权威 ``ORDINAL_*`` 表交叉校验
 （``code`` ∈ ``ORDINAL_CODES``、``depth`` == ``ORDINAL_DEPTH[code]``、
@@ -38,12 +39,45 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Type
 import lib.boot as _boot
 _boot.setup()
 
-from lib.regexlib import SEP_TIGHT
-from key_parse import APP_LABEL_KINDS, COMBINED_LABEL_KINDS, normkey
+from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
+from key_parse import COMBINED_LABEL_KINDS, normkey
 from verify_config import (
     ORDINAL_APP, ORDINAL_APP2, ORDINAL_CODES, ORDINAL_DEPTH, ORDINAL_NAME,
-    ORDINAL_VAKIL, _canon_label, SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION,
+    ORDINAL_VAKIL, ORDINAL_HUM, _canon_label, SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION,
 )
+
+# ---------------------------------------------------------------------------
+# Separator-tolerant canonical-key normalizer (single source of truth)
+# ---------------------------------------------------------------------------
+# 真实书籍的序标段间分隔符不固定：``.`` / ``-`` / ``–`` / ``·`` / ``/`` / ``．`` /
+# ``－`` / ``〜`` / ASCII ``~`` / OCR 下划线 ``_`` 等可任意替换。本函数把**任意
+# 分隔符**的裸序标路径归一为与 md 侧（``OrdinalStyle`` 各子类 ``canon_key``）完全一致的
+# 规范键：
+#   * 3（及更多）段 → 裸横线型 ``N.S-N``（三级，无标签，对齐 OrdinalThreeLevelCN）
+#   * 2 段          → ``<规范标签>.N.N``（两级，带标签，对齐 OrdinalTwoLevelCN）
+#   * 1 段          → ``<规范标签>.N``（单级，对齐 OrdinalSingle）
+# 此函数是供契约侧（verify/script/structure_io.read_structure_items 通用分支）接入时
+# 代替其「``num_raw`` 含 '-' 即判三级」的错误启发式 + 过窄的
+# ``_normalize_threelevel`` 切分集，从而让「标点可替换」在 契约↔md
+# 校验端也成立（pilot 接入管线前的必要前提）。
+def normalize_ordinal(num_raw, label=''):
+    r"""把含任意分隔符的序标数字路径归一为规范键。
+
+    ``num_raw`` 为纯数字路径串（如 ``'1.1.1'`` / ``'1-1-1'`` / ``'1·1·1'``）；
+    ``label`` 为显式规范标签（契约侧由 ``TYPE_TO_LABEL[type]`` 提供，中文书
+    三级传空串以产出裙横线键）。段数按 ``SEP_SPLIT_RE``（含全部
+    通配分隔符）切分判定，不依赖某个固定分隔符。
+    """
+    parts = [p for p in SEP_SPLIT_RE.split(num_raw or '') if p and p.isdigit()]
+    if len(parts) >= 3:
+        return f"{parts[0]}.{parts[1]}-{parts[2]}"
+    if len(parts) == 2:
+        return f"{label}{parts[0]}.{parts[1]}"
+    if len(parts) == 1:
+        return f"{label}{parts[0]}"
+    return num_raw or ''
+
+
 
 ORDINAL_UNNUMBERED = 0
 
@@ -140,7 +174,7 @@ class OrdinalStyle:
         if code not in cls._REGISTRY:
             raise KeyError(
                 f"ordinal 风格 {code} 尚未实现（已注册：{sorted(cls._REGISTRY)}）。"
-                f"本次 pilot 仅覆盖 0/1/2/3。")
+                f"本次 pilot 覆盖 0/1/2/3/8/12/13/14。")
         return cls._REGISTRY[code]()
 
     @classmethod
@@ -168,7 +202,7 @@ class OrdinalStyle:
         if type_code not in cls._REGISTRY:
             raise KeyError(
                 f"ordinal 风格 {type_code} 尚未实现（已注册：{sorted(cls._REGISTRY)}）。"
-                f"本次 pilot 仅覆盖 0/1/2/3。")
+                f"本次 pilot 覆盖 0/1/2/3/8/12/13/14。")
         return cls._REGISTRY[type_code](scope=scope)
 
     @classmethod
@@ -243,7 +277,7 @@ class OrdinalStyle:
         返回 None（unnumbered —— 无编号条目靠「编号风格都不中」判定）。
 
         ⚠️ 返回的是风格**实例**而非裸 int —— 调用方拿到即可直接 ``.extract(text)``，
-        不必再 ``.get(code)`` 反查。本方法为 pilot：只认识 0/1/2/3/8/13/14。
+        不必再 ``.get(code)`` 反查。本方法为 pilot：认识 0/1/2/3/8/12/13/14。
         """
         for code in sorted(cls._REGISTRY, reverse=True):
             if code == ORDINAL_UNNUMBERED:
@@ -270,7 +304,7 @@ class OrdinalStyle:
         次数，取命中最多、且 depth 最具体者。无任何风格命中则返回 None（无编号书，
         调用方据此省略 ordinal 组，而非编造 type 3）。
 
-        pilot：仅对 0/1/2/3/8/13/14 生效；其余 code（4/9/10/11/12）落地对应
+        pilot：对 0/1/2/3/8/12/13/14 生效；其余 code（4/9/10/11）落地对应
         子类后自动纳入。"""
         tally: Dict[int, int] = {}
         for h in headings:
@@ -401,11 +435,8 @@ class OrdinalUnnumbered(OrdinalStyle):
 # ``**注释1.1**``）会被前缀标签抢匹配。set 去重，长度相同者顺序无关（不存在等长前缀冲突）。
 _LABEL_ALT = '|'.join(sorted(set(COMBINED_LABEL_KINDS), key=len, reverse=True))
 
-# 含练习专属标签 ``Exercise`` 的词表（``COMBINED_LABEL_KINDS`` 里**没有**它，
-# 只有 ``APP_LABEL_KINDS`` = COMBINED + ('Exercise',) 补了）。type 8 的字母
-# 序标条目绝大多数是 **Exercise**，13/14 的附录条目亦然，故三者共用这一个
-# 真源（``_APP_LABEL_ALT`` 只是它的别名，避免两处各排一次序而漂移）。
-_LABEL_ALT_EX = '|'.join(sorted(set(APP_LABEL_KINDS), key=len, reverse=True))
+
+
 
 # 末位后缀（小节字母 / 星号）：某些书在末位数字后追加 ''a''、''b''、''*'' 等子标记，
 # 例如 ''12.1.1a'' / ''12.1.1b'' / ''12.1.1*''。两种形态：
@@ -505,6 +536,26 @@ class OrdinalSingle(OrdinalStyle):
 
     def canon_key(self, label, num, suffix=''):
         return f"{_canon_label(label)}{num}{suffix}"
+
+    @staticmethod
+    def _key_to_tuple(key):
+        r"""type 1 规范键 → 分量元组，**保留末位字母后缀**（``例2a``→(2,1)）。
+
+        基类 ``_key_to_tuple`` 用 ``re.findall(r'\d+')`` 会把字母后缀整个丢掉
+        （``例2a`` / ``例2b`` 都折成 ``(2,)``），于是 Ross 类单级书「同一父号 2
+        下的 2a/2b/2c 是三条不同序标」这一重置信号消失 —— ``detect_scope`` 误判
+        书级、B 层稀疏号检查把它们当「编号 2 重复」误报。末位字母折成序号
+        （a→1, b→2 …）后，2a<2b<2c<3a 才被正确识别为「父号级重置」，与
+        Vakil/App 的字母折序号同思路。
+        ⚠️ 无后缀时仍返回**单分量** ``(n,)``（而非 ``(n,0)``）——否则普通单级书
+        （无后缀）会被逼成 depth=2，导致 ``detect_scope`` 末位恒 0、永远检测不到
+        重置、scope 误判书级。后缀是*可选*的第二维，缺省时不强行凑维度。"""
+        m = __import__('re').search(r'(\d+)\s*([a-z]+)?', key or '')
+        if not m:
+            return None
+        n = int(m.group(1))
+        suf = m.group(2)
+        return (n,) if not suf else (n, ord(suf[0]) - ord('a') + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -632,23 +683,24 @@ class OrdinalThreeLevelCN(OrdinalStyle):
 # 分支（会落进默认三级数字分支），所以本类**没有 legacy 等价性基线可对拍**——
 # 属「按用户口径重新定义」，见 ordinal_styles.md「与 legacy 的有意偏差」。
 #
-# 标签词表必须用 ``_LABEL_ALT_EX``（= ``COMBINED_LABEL_KINDS`` + ``Exercise``）：
-# Vakil 的字母序标条目绝大多数是 **Exercise**，而 COMBINED 里没有这个词。
+# 标签词表用 ``_LABEL_ALT``（= ``COMBINED_LABEL_KINDS``，38 词；``Exercise`` 已于
+# 2026-09-21「选项 B」补入 EN_LABEL_KINDS，故 COMBINED 已含之）。Vakil 的字母序标
+# 条目绝大多数是 **Exercise**，现已被统一词表覆盖，与 type 1/2/3 同源。
 # **复数（``Exercises``）刻意不收** —— ``_canon_label('Exercises')`` 无规范映射，
-# 收进来只会产出非规范键。
+# 收进来只会产出非规范键；type 8 不挂 ``_APP_PLURAL``（与 13/14 不同）。
 #
 # 🔴 段数独立：第三维是字母 ⇒ ``Exercise 2.3.A`` 的数字尾巴 ``Exercise 2.3``
 # 不得被 type 2 截走，靠 ``_TAIL_GUARD`` 第三条断言 ``(?!SEP[A-Za-z])`` 拦住；
 # 反过来本类也绝不认两级（``Exercise 2.3``）与三段数字（``Theorem 2.3.4``）。
 _ENTRY_RE_VAKIL = re.compile(
     r'\*\*'
-    r'(' + _LABEL_ALT_EX + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'([A-Za-z])'
+    r'(' + _LABEL_ALT + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'([A-Za-z])'
     + _TAIL_GUARD + r'[^*]*\*+',
     re.IGNORECASE)
 # page 形态（识别类型，对齐 make_config 页扫）：只收标签在前 —— 序标在前
 # （``2.3.A Exercise``）按用户口径**不属于**本类。
 _PAGE_RE_VAKIL = re.compile(
-    r'(' + _LABEL_ALT_EX + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'([A-Za-z])'
+    r'(' + _LABEL_ALT + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'([A-Za-z])'
     + _TAIL_GUARD,
     re.IGNORECASE)
 
@@ -707,8 +759,9 @@ class OrdinalVakil(OrdinalStyle):
 # ``Theorem A.6.2``；节标题 ``A.1 Categories`` 不是条目）。字母章位与罗马数字
 # 章位（多字符、只取 IVXLCDM）正则不可混用，故独立成码 13（三级）/ 14（两段）。
 #
-# 标签词表 = ``APP_LABEL_KINDS``（``COMBINED_LABEL_KINDS`` + 附录专属
-# ``Exercise``），按长度降序；另允许**复数** ``(?:es|s)?`` —— 对齐 make_config
+# 标签词表 = ``_LABEL_ALT``（= ``COMBINED_LABEL_KINDS``，38 词；``Exercise`` 已被
+# 2026-09-21「选项 B」纳入 COMBINED，故与 type 1/2/3/8 完全同源）。另允许**复数**
+# ``(?:es|s)?``（``_APP_PLURAL``）—— 对齐 make_config
 # ``_build_label_heading_regexes(letter_chapter=True)`` 的页扫（它明确支持
 # ``Examples A.1.3``）。旧 ``keys_in_md`` 的 ``ENTRY_RE_APP_C`` 用无复数词表会
 # **漏收**复数形态，属已确认的 legacy 缺陷，本层级按页扫口径修正（有意偏差，见
@@ -718,7 +771,6 @@ class OrdinalVakil(OrdinalStyle):
 # 不得再接「分隔符 + 数字」（``(?!SEP\d)``）—— 两段书绝不判成 13，反之亦然。
 # 旧 type 13 分支里那段「两段宽容回退」是 type 14 落地前的历史兼容，本层级
 # **刻意不继承**（与「type 间校验相互独立」硬要求直接冲突）。
-_APP_LABEL_ALT = _LABEL_ALT_EX   # 单一真源，见上方 _LABEL_ALT_EX
 _APP_PLURAL = r'(?:es|s)?'
 
 # md 抽键：三分支，按优先级排列（同一行只取最左分支命中的那条）
@@ -730,10 +782,10 @@ _APP_PLURAL = r'(?:es|s)?'
 # ``_TAIL_GUARD`` 保证「恰好字母 + 两段数字」。
 _ENTRY_RE_APP = re.compile(
     r'\*\*'
-    r'(?:(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
+    r'(?:(' + _LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
     + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)' + _TAIL_GUARD +
     r'|([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)' + _TAIL_GUARD
-    + r'\s+(' + _APP_LABEL_ALT + r')' + _APP_PLURAL +
+    + r'\s+(' + _LABEL_ALT + r')' + _APP_PLURAL +
     r'|([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)' + _TAIL_GUARD +
     r')',
     re.IGNORECASE)
@@ -741,10 +793,10 @@ _ENTRY_RE_APP = re.compile(
 # **不含裸号** —— page 散文里 ``A.1.5`` 与矩阵元 / 公式号 / 小节号同形，旧页扫
 # 与 ``keys_in_md`` 的 prose 分支同样**刻意不收裸号**。
 _PAGE_RE_APP = re.compile(
-    r'(?:(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
+    r'(?:(' + _LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
     + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)' + _TAIL_GUARD +
     r'|([A-Za-z])' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)' + _TAIL_GUARD
-    + r'\s+(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r')',
+    + r'\s+(' + _LABEL_ALT + r')' + _APP_PLURAL + r')',
     re.IGNORECASE)
 
 
@@ -812,16 +864,16 @@ class OrdinalApp(OrdinalStyle):
 # 裸号两段（``**D.1**``）与公式号 / 小节标题无形态区别，旧管线与本类**均不收**。
 _ENTRY_RE_APP2 = re.compile(
     r'\*\*'
-    r'(?:(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
+    r'(?:(' + _LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
     + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)' + _TAIL_GUARD +
     r'|([A-Za-z])' + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)' + _TAIL_GUARD
-    + r'\s+(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r')',
+    + r'\s+(' + _LABEL_ALT + r')' + _APP_PLURAL + r')',
     re.IGNORECASE)
 _PAGE_RE_APP2 = re.compile(
-    r'(?:(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
+    r'(?:(' + _LABEL_ALT + r')' + _APP_PLURAL + r'\s*([A-Za-z])'
     + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)' + _TAIL_GUARD +
     r'|([A-Za-z])' + SEP_TIGHT + r'(\d+)(?!' + SEP_TIGHT + r'\d)' + _TAIL_GUARD
-    + r'\s+(' + _APP_LABEL_ALT + r')' + _APP_PLURAL + r')',
+    + r'\s+(' + _LABEL_ALT + r')' + _APP_PLURAL + r')',
     re.IGNORECASE)
 
 
@@ -856,9 +908,91 @@ class OrdinalApp2(OrdinalStyle):
         return f"{_canon_label(label)}{letter.upper()}.{num}{suffix}"
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Type 12 —— hum（Humphreys：label + 单字母序标，label 可在字母前后）
+# ---------------------------------------------------------------------------
+# 真实体例（Humphreys GTM 9《Introduction to Lie Algebras》）：条目头印
+# ``**Theorem**`` / ``**Corollary A**`` / ``**Lemma A**`` / ``**Example 1**``…
+# 其中「label + 单字母序标」(``**Corollary A**``) 是本书最具特征、也是用户
+# 2026-09-21 要求明确定义的形态。本 pilot 类**只覆盖「字母序标」这一形态**，且支持
+# label 在字母前后都可：
+#   * label 在前 ``**Corollary A**``   → 规范键 ``Corollary A``（label + 空格 + 字母）
+#   * label 在后 ``**A Corollary**``   → 归一为同一键 ``Corollary A``（双向等价）
+# 数字序标 (``**Example 1**``) 与纯 label (``**Theorem**``) 两种 legacy 形态**刻意不收**
+# 入本 pilot 类——它们会走 legacy type-12 配置分支，或由 type 1（单级数字）覆盖；若
+# 一并收进本类，``classify`` 会把任意「单级 EN 书 (``**Theorem 1**``)」误判成 type 12，
+# 破坏自动类型识别。字母折序号 (A→1, B→2) 用于 scope 重置判定，与 Vakil/App 同思路。
+# 🔴 段数独立 + 防越界：本类只认「label + 单字母」，**绝不**认数字（归 type 1/2/3）、
+# 绝不认「字母章位 + 数字」(归 type 13/14)、绝不认「数字.数字 + 字母」序标（归 type 8）。
+# ``_TAIL_GUARD`` 拒绝字母之后再接「数字 / 分隔符+数字 / 分隔符+字母」，避免
+# ``**Corollary A.1**`` 这类被本类误吞（应归 type 13/14）。
+_ENTRY_RE_HUM = re.compile(
+    r'\*\*'
+    r'(?:(' + _LABEL_ALT + r')\s+([A-Za-z])' + _TAIL_GUARD +
+    r'|([A-Za-z])\s+(' + _LABEL_ALT + r')' + _TAIL_GUARD + r')'
+    r'[^*]*\*+',
+    re.IGNORECASE)
+_PAGE_RE_HUM = re.compile(
+    r'(?:(' + _LABEL_ALT + r')\s+([A-Za-z])' + _TAIL_GUARD +
+    r'|([A-Za-z])\s+(' + _LABEL_ALT + r')' + _TAIL_GUARD + r')',
+    re.IGNORECASE)
+
+
+def _hum_key_to_tuple(key):
+    r"""type 12 字母序标 → 单分量元组（``Corollary A``→(1,)、``定理B``→(2,)）。
+
+    字母折成序号 (A→1, B→2 …) 后，``detect_scope`` 才能正确判定重置窗口——否则基类
+    ``re.findall(r'\d+')`` 把字母丢光，``Corollary A/B/C`` 全塌缩成空、scope 误判。
+    ``_TAIL_GUARD`` 保证末位字母后无数字/分隔符，键里不会混进数字分量，单分量语义稳定。"""
+    last = (key or '').rsplit(' ', 1)[-1]
+    if len(last) == 1 and last.isalpha():
+        return (ord(last.upper()) - ord('A') + 1,)
+    return None
+
+
+class OrdinalHum(OrdinalStyle):
+    r"""字母序标（ORDINAL_HUM = 12）：``Label A`` ↔ ``A Label`` → 键 ``<规范标签> A``。
+
+    md 条头形如 ``**Corollary A**`` / ``**Lemma B**`` / ``**定理 A**``；也支持 label
+    在字母之后（``**A Corollary**`` / ``**A 定理**``），两种顺序**归一为同一规范键**
+    （``Corollary A``），以便不论 OCR 捕获哪种顺序都能对上号。规范键 = 规范中文标签
+    + 空格 + **大写**字母序标（与 legacy ``f"{label} {letter}"`` 同形）。
+
+    🔴 段数独立：只认「label + 单字母」。单级数字（``Theorem 1``）归 type 1、字母章位
+    + 数字（``Definition A.1.1``）归 type 13/14、数字.数字+字母（``Exercise 2.3.A``）
+    归 type 8，本类**均不认**。数字序标（``Example 1``）与纯 label（``Theorem``）留待
+    legacy type-12 配置分支，不进 pilot 自动识别，避免误判单级 EN 书为 type 12。
+    """
+    code = ORDINAL_HUM
+    depth = ORDINAL_DEPTH[ORDINAL_HUM]   # = 1（单字母序标，仅一个维度：字母折序号
+                                         #  (A→1, B→2, …)；_key_to_tuple 返回单分量，
+                                         #  detect_scope 按末位字母重置判定章/书级）
+    name = ORDINAL_NAME[ORDINAL_HUM]
+    entry_re = _ENTRY_RE_HUM
+    page_entry_re = _PAGE_RE_HUM
+
+    prose_re = None
+    _key_to_tuple = staticmethod(_hum_key_to_tuple)
+
+    def extract(self, text):
+        m = self.match_entry(text)
+        if not m:
+            return None
+        if m.group(1) is not None:                 # label 在前
+            return self.canon_key(m.group(1), m.group(2))
+        return self.canon_key(m.group(4), m.group(3))   # label 在后
+
+    def canon_key(self, label, letter):
+        return f"{_canon_label(label)} {letter.upper()}"
+
+
 __all__ = [
     'OrdinalStyle', 'OrdinalUnnumbered', 'OrdinalSingle',
     'OrdinalTwoLevelCN', 'OrdinalThreeLevelCN', 'OrdinalVakil',
-    'OrdinalApp', 'OrdinalApp2',
+    'OrdinalApp', 'OrdinalApp2', 'OrdinalHum',
+    'normalize_ordinal',
     'OrdinalProfile', 'ORDINAL_UNNUMBERED',
 ]

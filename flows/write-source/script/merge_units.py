@@ -63,7 +63,8 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import chapter_json_path, chapter_label, unit_dir_name
+from data.book_structure.book_structure import (chapter_json_path, chapter_label,
+                                                unit_dir_name, chapter_ordinal)
 import render_draft as _rd
 import split_draft_units as _split
 import gate_units as _gate
@@ -90,29 +91,34 @@ def _final_md_name(ch_key, language, chapter_name):
     三类走向（🔴 按 kind 判定，2026-09-08 起 Supplement 不再被称作 Appendix）：
       章 kind=1      Chapter4_*.md        / 第4章_*.md
       附录 kind=2    AppendixA_*.md       / 附录A_*.md
+      附录无号 kind=2 Appendix.md          / 附录.md         （无印刷序标 → 裸名）
       补篇 kind=3    SupplementS_*.md     / 补篇S_*.md
+    无编号附录（键 "appendix"，序标空）不得伪造序标（2026-09-21 用户裁定）。
     """
+    ordinal = ""
     rest = ""
     m = _CH_NAME.match(chapter_name or "")
-    num = str(ch_key)
     if m:
-        num = m.group(1)
-        rest = m.group(2).strip()
+        tok, rest = m.group(1), m.group(2).strip()
+        # name 若以占位键开头（无号附录契约名 "appendix …"）→ 序标归空
+        ordinal = "" if chapter_ordinal(tok) == "" else tok
+    else:
+        ordinal = chapter_ordinal(ch_key)     # 无编号附录 → ""
     rest = re.sub(r'[\\/:*?"<>|\r\n\s]+', "_", rest).strip(" _")
     kind = 2
     try:
         from data.book_structure.book_structure import chapter_kind
-        kind = chapter_kind(int(num) if num.isdigit() else num)
+        _k = str(ch_key)
+        kind = chapter_kind(int(_k) if _k.isdigit() else _k)
     except Exception:
-        kind = 1 if num[:1].isdigit() else 2
+        kind = 1 if str(ch_key)[:1].isdigit() else 2
     if kind == 3:
-        return ("Supplement%s_%s.md" % (num, rest)) if language == "en" \
-            else ("补篇%s_%s.md" % (num, rest))
-    if kind == 1:
-        return ("Chapter%s_%s.md" % (num, rest)) if language == "en" \
-            else ("第%s章_%s.md" % (num, rest))
-    return ("Appendix%s_%s.md" % (num, rest)) if language == "en" \
-        else ("附录%s_%s.md" % (num, rest))
+        head = "Supplement%s" % ordinal if language == "en" else "补篇%s" % ordinal
+    elif kind == 1:
+        head = "Chapter%s" % ordinal if language == "en" else "第%s章" % ordinal
+    else:
+        head = "Appendix%s" % ordinal if language == "en" else "附录%s" % ordinal
+    return (head + ("_" + rest if rest else "") + ".md")
 
 
 def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True):

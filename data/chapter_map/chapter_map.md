@@ -19,7 +19,7 @@
   ]
 }
 ```
-- `ch`：章号（整数；附录用 `"A"`/`"E"` 等字母）。
+- `ch`：章号（整数；附录用 `"A"`/`"E"` 等字母）。🔴 **无编号附录不伪造序标**：原书若有一篇**没有印刷序标**的附录（既无 `Appendix A` 也无数字号），键直接写 `"appendix"`（无号补篇写 `"supplement"`），**绝不可**顺着正文把它登记成 `ch7` 之类的数字章号——命名层（`chapter_ordinal`）见「键 == 前缀词」会把序标归空，契约/目录/标题/文件名一律退回裸名（`appendix.json` / `units\appendix\` / `# 附录` / `附录.md`）。
 - `name`：章名（中文书填中文，英文书可双语）。`name_en`：英文章名（检测引擎匹配标题用，英文书必填；中文书可空）。
   - 🔴 **附录章填裸标题，不带序标**：`"Appendix A"` 序标由 `ch` 字母承载（与数字章 name 不含 "Chapter N" 前缀同理）。契约章名由 `build_structure` 拼成 `"{ch} {name}"`，下游按此渲染 `# Appendix A: {name}` 与文件名 `AppendixA_{name}.md` / `附录A_{name}.md`——若 name 再填 "Appendix A"，会得到双前缀 `"A Appendix A"`（实测 Weibel《An Introduction to Homological Algebra》Appendix A：name 应为 `"Category Theory Language"` 而非 `"Appendix A"`）。`build_structure` 对 `"Appendix {ch}: …"` 形态的旧数据有剥前缀兜底，但登记时直接填裸标题。
 - `start` / `end`：**PDF 文件页码**（1-based，与 `page_%03d.json` 文件名序号一致；即 `scan_skeleton.scan` 直接 `range(start, end+1)` 读取的页），**不是**原书印刷页码。🔴 **agent 不手写这两个字段**——由 `build_chapter_map.py` 从 OCR 证据算出后写回（authoring 时可省略或仅填 TOC 粗略值）。

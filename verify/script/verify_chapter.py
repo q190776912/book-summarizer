@@ -119,7 +119,7 @@ def _section_num_from_filename(fn):
     return sec
 
 
-from data.book_structure.book_structure import chapter_label
+from data.book_structure.book_structure import chapter_label, chapter_ordinal
 
 
 def _appendix_letter(book_dir, ch):
@@ -175,13 +175,21 @@ def chapter_md_groups(book_dir, ch):
     except Exception:
         kind = 1 if str(ch)[:1].isdigit() else 2
     if kind == 2:
-        lab = str(ch)
-        pats.append((f'附录{lab}_*.md', f'附录{lab}*.md'))          # zh appendix
-        pats.append((f'Appendix{lab}_*.md', f'Appendix{lab}_*.md'))  # en appendix
+        lab = chapter_ordinal(ch)
+        if lab:
+            pats.append((f'附录{lab}_*.md', f'附录{lab}*.md'))          # zh appendix
+            pats.append((f'Appendix{lab}_*.md', f'Appendix{lab}_*.md'))  # en appendix
+        else:
+            pats.append(('附录.md', '附录.md'))                          # 无编号附录（裸名）
+            pats.append(('Appendix.md', 'Appendix.md'))
     elif kind == 3:
-        lab = str(ch)
-        pats.append((f'补篇{lab}_*.md', f'补篇{lab}*.md'))            # zh supplement
-        pats.append((f'Supplement{lab}_*.md', f'Supplement{lab}_*.md'))  # en supplement
+        lab = chapter_ordinal(ch)
+        if lab:
+            pats.append((f'补篇{lab}_*.md', f'补篇{lab}*.md'))            # zh supplement
+            pats.append((f'Supplement{lab}_*.md', f'Supplement{lab}_*.md'))  # en supplement
+        else:
+            pats.append(('补篇.md', '补篇.md'))                           # 无编号补篇（裸名）
+            pats.append(('Supplement.md', 'Supplement.md'))
     for merged_pat, sec_pat in pats:
         merged = [f for f in glob.glob(os.path.join(book_dir, merged_pat))
                   if _section_num_from_filename(f) is None]

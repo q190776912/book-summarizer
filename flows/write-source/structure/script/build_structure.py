@@ -99,7 +99,7 @@ from key_parse import _canon_label, normkey
 from data.book_structure.book_structure import (BookStructure, StructureNode,
                                                 chapter_json_path,
                                                 norm_chapter_key,
-                                                chapter_label)
+                                                chapter_label, chapter_ordinal)
 
 
 # ---------------------------------------------------------------------------
@@ -511,10 +511,14 @@ def _chapter_local_sections_from_markdown(ext, ch):
     cands = []
     # 小结 md 命名随章型：数字章 Chapter{N}_*.md / 第N章_*.md，
     # 附录章 Appendix{X}_*.md / 附录X_*.md（merge_units._final_md_name 同源）。
-    if str(ch)[:1].isdigit():
-        pats = (f"Chapter{ch}_*.md", f"chapter{ch}_*.md", f"第{ch}章_*.md")
+    _ord = chapter_ordinal(ch)
+    if str(ch)[:1].isdigit() and _ord:
+        pats = (f"Chapter{_ord}_*.md", f"chapter{_ord}_*.md", f"第{_ord}章_*.md")
+    elif _ord:
+        pats = (f"Appendix{_ord}_*.md", f"appendix{_ord}_*.md", f"附录{_ord}_*.md")
     else:
-        pats = (f"Appendix{ch}_*.md", f"appendix{ch}_*.md", f"附录{ch}_*.md")
+        # 无编号附录：裸名 附录.md / Appendix.md（或带标题 附录_*.md）
+        pats = ("附录.md", "附录_*.md", "Appendix.md", "appendix_*.md")
     for pat in pats:
         cands.extend(glob.glob(os.path.join(book_dir, pat)))
     out = []
@@ -625,9 +629,15 @@ def _real_subsections_from_markdown(ext, ch):
     if str(ch)[:1].isdigit():
         cands.extend(glob.glob(os.path.join(book_dir, f"第{ch}章_*.md")))
     else:
-        # 附录章小结 md 命名同 merge_units._final_md_name（Appendix{X}_*.md / 附录X_*.md）
-        cands.extend(glob.glob(os.path.join(book_dir, f"Appendix{ch}_*.md")))
-        cands.extend(glob.glob(os.path.join(book_dir, f"附录{ch}_*.md")))
+        # 附录/补篇章小结 md 命名同 merge_units._final_md_name
+        # （Appendix{X}_*.md / 附录X_*.md；无编号附录 → 裸名 附录.md）
+        _ord = chapter_ordinal(ch)
+        if _ord:
+            cands.extend(glob.glob(os.path.join(book_dir, f"Appendix{_ord}_*.md")))
+            cands.extend(glob.glob(os.path.join(book_dir, f"附录{_ord}_*.md")))
+        else:
+            for _b in ("附录.md", "附录_*.md", "Appendix.md", "appendix_*.md"):
+                cands.extend(glob.glob(os.path.join(book_dir, _b)))
     if not cands:
         return None
     nums = set()
@@ -689,6 +699,10 @@ def _build_rng(cm):
             s = cc.get("start", cc.get("start_page"))
             e = cc.get("end", cc.get("end_page"))
             n = _aint(kk)
+            if n is None:
+                # 非数字键（附录字母序标 A/B… 或无编号附录/补篇键 "appendix"）
+                # 保留为字符串键，与 form-A 分支同处理；否则该章被静默丢弃。
+                n = str(kk).strip() or None
             if n is None or s is None or e is None:
                 continue
             out[n] = (int(s), int(e))
@@ -1650,19 +1664,23 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     sub = chapter_bucket + ordered_secs
 
     ch_title = _chapter_title(cm, ch)
-    # 附录章名归一（命名单点）：契约章名约定 "{key} {title}"，下游
-    # render_draft/_final_md_name 据此渲染 "# Appendix A: title" /
-    # "AppendixA_title.md"。chapter_map 若登记 "Appendix A: Category Theory
+    # 印刷序标（无编号附录 → 空串）：契约章名约定 "{ordinal} {title}"，下游
+    # render_draft/_final_md_name 据此渲染 "# Appendix A: title" / "附录.md"。
+    # 🔴 无编号附录（键 "appendix"）ordinal 为空 → 章名只剩标题，绝不伪造 "7 附录"。
+    ch_ord = chapter_ordinal(ch)
+    # 附录章名归一（命名单点）：chapter_map 若登记 "Appendix A: Category Theory
     # Language"（或 "附录A：…"），title 已含序标，直接拼接会得到双前缀
     # "A Appendix A: …" → 渲染 "# Appendix A: Appendix A: …" / 文件名
-    # "AppendixA_Appendix_A.md"。故剥离 title 首部的 "Appendix {ch}" / "附录{ch}"
+    # "AppendixA_Appendix_A.md"。故剥离 title 首部的 "Appendix {ord}" / "附录{ord}"
     # （含冒号）；剥后为空（仅登记 "Appendix A"）时保留原样退化，不产生空标题。
-    _m_app = re.match(r'^\s*(?:appendi(?:x|ces)\s+%s|附录\s*%s)\b\s*[:：]?\s*(.*)$'
-                      % (re.escape(str(ch)), re.escape(str(ch))),
-                      ch_title or '', re.IGNORECASE)
-    if _m_app and _m_app.group(1).strip():
-        ch_title = _m_app.group(1).strip()
-    ch_name = (f"{ch} {ch_title}".strip()) if ch_title else str(ch)
+    # 无编号附录（ch_ord 为空）没有可剥离的序标，跳过此归一。
+    if ch_ord:
+        _m_app = re.match(r'^\s*(?:appendi(?:x|ces)\s+%s|附录\s*%s)\b\s*[:：]?\s*(.*)$'
+                          % (re.escape(str(ch_ord)), re.escape(str(ch_ord))),
+                          ch_title or '', re.IGNORECASE)
+        if _m_app and _m_app.group(1).strip():
+            ch_title = _m_app.group(1).strip()
+    ch_name = (f"{ch_ord} {ch_title}".strip()) if ch_title else (ch_ord or str(ch))
     chapter = _node(str(ch), "chapter", ch_name, start)
     chapter["sub_sec"] = sub
     # 多册书分册归属写进契约（相对 extract_dir 的子目录名，如 "上册"；单册书为空

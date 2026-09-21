@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 from data.book_structure.book_structure import (
-    chapter_label, prime_chapter_kinds, unit_dir_name)
+    chapter_label, prime_chapter_kinds, unit_dir_name, chapter_ordinal)
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -448,10 +448,13 @@ class physical_evidence:
         数字章按 第N章_*.md / ChapterN_*.md；附录章（key 为字母）按
         附录X_*.md / AppendixX_*.md（与 verify_chapter.chapter_md_groups 同规）。
         """
-        if key[:1].isdigit():
-            pats = [f"第{key}章_*.md", f"Chapter{key}_*.md"]
+        _ord = chapter_ordinal(key)
+        if key[:1].isdigit() and _ord:
+            pats = [f"第{_ord}章_*.md", f"Chapter{_ord}_*.md"]
+        elif _ord:
+            pats = [f"附录{_ord}_*.md", f"Appendix{_ord}_*.md"]
         else:
-            pats = [f"附录{key}_*.md", f"Appendix{key}_*.md"]
+            pats = ["附录.md", "附录_*.md", "Appendix.md", "Appendix_*.md"]
         files = []
         for p in pats:
             files.extend(glob.glob(os.path.join(book_dir, p)))
@@ -781,10 +784,14 @@ class physical_evidence:
     @staticmethod
     def _md_group_lang(book_dir, key, lang):
         """按语种取该章最终 md 组：cn → 第N章_*/附录X_*；en → ChapterN_*/AppendixX_*。"""
-        if key[:1].isdigit():
-            pats = ([f"第{key}章_*.md"] if lang == "cn" else [f"Chapter{key}_*.md"])
+        _ord = chapter_ordinal(key)
+        if key[:1].isdigit() and _ord:
+            pats = ([f"第{_ord}章_*.md"] if lang == "cn" else [f"Chapter{_ord}_*.md"])
+        elif _ord:
+            pats = ([f"附录{_ord}_*.md"] if lang == "cn" else [f"Appendix{_ord}_*.md"])
         else:
-            pats = ([f"附录{key}_*.md"] if lang == "cn" else [f"Appendix{key}_*.md"])
+            pats = (["附录.md", "附录_*.md"] if lang == "cn"
+                    else ["Appendix.md", "Appendix_*.md"])
         files = []
         for p in pats:
             files.extend(glob.glob(os.path.join(book_dir, p)))

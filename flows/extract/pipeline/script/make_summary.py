@@ -107,7 +107,15 @@ def main():
             detail = (f"M={f.get('M')} B={f.get('B')} K={f.get('K')} Dmiss={f.get('Dmiss')} "
                       f"G={f.get('G')} EG={f.get('EG')} FgMiss={f.get('FgMiss')} FgInv={f.get('FgInv')}")
             _ch = f.get("ch")
-            _ch_disp = (f"第{_ch}章" if str(_ch)[:1].isdigit() else f"附录{_ch}")
+            _ck = str(_ch).strip()
+            if _ck[:1].isdigit():
+                _ch_disp = f"第{_ck}章"
+            elif _ck.lower() == "appendix":
+                _ch_disp = "附录"
+            elif _ck.lower() == "supplement":
+                _ch_disp = "补篇"
+            else:
+                _ch_disp = f"附录{_ck}"
             lines.append(f"- {_ch_disp} ({f['file']}): {detail}")
         lines.append("")
     if not any_fail:

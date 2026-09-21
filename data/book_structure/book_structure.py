@@ -93,26 +93,45 @@ def _resolve_kind(key: Any, kind: Any) -> int:
     return KIND_CHAPTER if (s[:1].isdigit() if s else False) else KIND_APPENDIX
 
 
+def chapter_ordinal(key: Any = None, kind: Any = None) -> str:
+    """该章的**印刷序标**（可为空串 = 无编号附录 / 补篇）。命名判据唯一出口。
+
+    🔴 无编号附录（2026-09-21 用户裁定：附录没有序标不得伪造序标）：章键若
+    **就等于该 kind 的前缀词本身**（``"appendix"`` / ``"supplement"``，大小写
+    不敏感），说明这是一篇「有占位键、实际无号」的附录/补篇——序标取**空串**，
+    于是 ``chapter_json_name`` / ``unit_dir_name`` / ``chapter_label`` 全部退回
+    裸名 ``appendix`` / ``supplement``，绝不产出伪造的 ``附录7`` / ``AppendixA``。
+    其余章（数字章键、字母附录键 A/B…）序标 == 键本身，行为与历史零回归。
+    """
+    prefix = _KIND_PREFIX.get(_resolve_kind(key, kind), "appendix")
+    s = str(key).strip()
+    if s and s.lower() == prefix.lower():
+        return ""
+    return s
+
+
 def chapter_json_name(key: Any, kind: Any = None) -> str:
     """章 → 分章契约文件名：``ch{N}.json`` / ``appendix{X}.json`` /
-    ``supplement{S}.json``。"""
-    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}.json"
+    ``supplement{S}.json``；无编号附录 → ``appendix.json``。"""
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{chapter_ordinal(key, kind)}.json"
 
 
 def unit_dir_name(key: Any, kind: Any = None) -> str:
-    """章 → 单元子目录名：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``。"""
-    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}"
+    """章 → 单元子目录名：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``；
+    无编号附录 → ``appendix``。"""
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{chapter_ordinal(key, kind)}"
 
 
 def chapter_label(key: Any, kind: Any = None) -> str:
-    """章的显示标签 / 侧车文件名段：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``。
+    """章的显示标签 / 侧车文件名段：``ch{N}`` / ``appendix{X}`` / ``supplement{S}``；
+    无编号附录 → 裸 ``appendix``。
 
     与 :func:`chapter_json_name` / :func:`unit_dir_name` 同一判据（见
-    :func:`_resolve_kind`）。打印章号、拼接随章侧车文件名（ignore_* /
-    manual_overrides_* / figure 文件基名等）一律经此函数——
-    "ch" 只属于章，附录 appendix、补篇 supplement 各有其名。
+    :func:`_resolve_kind` + :func:`chapter_ordinal`）。打印章号、拼接随章侧车
+    文件名（ignore_* / manual_overrides_* / figure 文件基名等）一律经此函数——
+    "ch" 只属于章，附录 appendix、补篇 supplement 各有其名；无号附录不伪造序标。
     """
-    return f"{chapter_prefix(_resolve_kind(key, kind))}{key}"
+    return f"{chapter_prefix(_resolve_kind(key, kind))}{chapter_ordinal(key, kind)}"
 
 
 # ── 进程级 kind 注册表（由 chapter_map.json 灌注） ─────────────────────────
@@ -180,10 +199,12 @@ def list_chapter_keys(ext_dir: str) -> List[str]:
                 continue
             if fn.startswith("ch") and fn[2:-5].isdigit():
                 keys.append(((0, int(fn[2:-5]), ""), fn[2:-5]))
-            elif fn.startswith("supplement") and len(fn) > len("supplement.json"):
-                keys.append(((1, 0, fn[10:-5]), fn[10:-5]))
-            elif fn.startswith("appendix") and len(fn) > len("appendix.json"):
-                keys.append(((1, 0, fn[8:-5]), fn[8:-5]))
+            elif fn.startswith("supplement") and len(fn) >= len("supplement.json"):
+                des = fn[10:-5]                    # 字母序标；无编号附录为空串
+                keys.append(((1, 0, des), des or "supplement"))
+            elif fn.startswith("appendix") and len(fn) >= len("appendix.json"):
+                des = fn[8:-5]                      # 字母序标；无编号附录为空串
+                keys.append(((1, 0, des), des or "appendix"))
     return [k for _, k in sorted(keys)]
 
 

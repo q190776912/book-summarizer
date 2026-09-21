@@ -36,7 +36,7 @@ import functools
 # --- separator policy -------------------------------------------------------
 # Matching-class separator: real digit-to-digit separators only (no whitespace,
 # no comma) so unanchored scans stay precise.
-SEP_TIGHT = r'[.\-–·/．－〜]'
+SEP_TIGHT = r'[.\-–·/．－〜_~]'
 
 # Wide separator: any punctuation/whitespace that can separate numeric
 # components in a *bounded* context (re.split / canon). Includes the fullwidth

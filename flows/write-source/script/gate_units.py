@@ -113,6 +113,38 @@ _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S
 _KEY_NUM_RE = re.compile(r"(\d+(?:\.\d+)*)-(\d+)$")
 
 
+def _load_known_book(ext):
+    """读 verify_config.json 的 ``formula.known_book`` → 裸编号集合。
+
+    known_book 登记「书源确有、但被契约抽取器漏挂」的真实公式编号（典型：编号
+    与公式同行内联粘连，非独立右缘块）。门控据此豁免「编造编号」误判。兼容扁平
+    （顶层 ``formula``）与分段（``data[section]["formula"]``）两种配置形状；任何
+    缺失 / 异常 → 空集（不影响正常对账）。
+    """
+    path = os.path.join(ext, "verify_config.json")
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return set()
+    nums = set()
+
+    def _harvest(formula):
+        if isinstance(formula, dict):
+            for x in (formula.get("known_book") or []):
+                nums.add(str(x).strip())
+
+    _harvest(cfg.get("formula"))
+    data = cfg.get("data")
+    if isinstance(data, dict):
+        for sub in data.values():
+            if isinstance(sub, dict):
+                _harvest(sub.get("formula"))
+    return nums
+
+
 def _check_numbering(units):
     """B 层编号预检：同一节内 item 编号是否递增。返回问题列表。
 
@@ -269,6 +301,7 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         except Exception:
             tag_map = {}
     problems = []
+    known_book = _load_known_book(ext)
     present_files = set()
     for u in units:
         up = os.path.join(out_dir, u["file"])
@@ -299,7 +332,7 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             try:
                 ok_q, qproblems = _quality.check_body(
                     utype, u.get("name") or "", body,
-                    expected_tags=exp)
+                    expected_tags=exp, allow_extra=known_book)
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]

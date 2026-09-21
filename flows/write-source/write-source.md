@@ -138,7 +138,11 @@
      - **🔴 单元级公式序标对账（契约 tag 真值）**：以内容化契约
        （`chapter_tag_map`）要求该单元携带的 `formula.tag` 为真值对比单元正文
        `\tag{}`——**缺失（漏写编号公式）与编造（多出编号）均不通过**（Q 层是
-       章级末步，单元粒度提前拦；契约缺失时跳过对账）
+       章级末步，单元粒度提前拦；契约缺失时跳过对账）。**编造判定放行 `known_book`**：
+       `verify_config.json` 的 `formula.known_book`（源书真实存在、但因编号与正文粘连
+       未被契约 tagger 抓到的编号）在对账时作为**额外白名单**——单元正文出现这些编号
+       不算「编造」（`check_body(allow_extra=known_book)`）；「缺失」判定不受白名单影响，
+       仍严格按契约要求对账。
      - **🔴 序标校验不在本门控内跑（已移除冗余重跑），权威检测点见下**：B 层条目编号
        （`item_numbering_integrity`）的**权威检测在 book structure 完整性校验**（write-source
        步骤 3，`check_structure_completeness.py` 第 3 步：喂 book_structure 派生「合成 md」+

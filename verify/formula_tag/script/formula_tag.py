@@ -670,18 +670,29 @@ class SourceFormulaIndex:
         # ①确定性（优先）：首组件 ∈ 书章号集且 ≠ 当前章 → 跨章引用，剔除
         #   （多数决在自有公式少的章会失效——ch11/ch16/ch19 实测）；
         # ②多数决兜底：书章号集不可用时，首组件多数 == 当前章才启用同款过滤。
-        from collections import Counter as _C
-        _cnt = _C(n.split('.')[0] for s in sectioned.values() for n in s)
-        _book_chs = {str(k) for k in (getattr(self, '_book_chapter_keys', None)
-                                      or set())}
-        _majority = bool(_cnt) and _cnt.get(str(ch), 0) * 2 > sum(_cnt.values())
-        if _majority or _book_chs:
-            for _s in sectioned:
-                sectioned[_s] = {
-                    n for n in sectioned[_s]
-                    if n.split('.')[0] == str(ch)
-                    or (n.split('.')[0] not in _book_chs and not _majority)
-                }
+        # 🔴 该过滤仅在**多分量**编号（ncomp>=2，如 Katok "(1.5.6)"、en3 体例
+        # 标签首组件=章号）下有意义：此时 n.split('.')[0] 才是「章位」token，
+        # 可用来剔除跨章引用。对**单分量节级编号**（ncomp==1，如 Kreyszig /
+        # 常庚哲史济怀《数学分析教程》每节从 (1) 重排的裸号）而言，编号本就没有
+        # 章位分量，n.split('.')[0] == 整个编号，与「章号」毫无关系；若照常过滤，
+        # 会把所有恰好等于某个合法章号的真实公式号（裸 "1".."18"）当作跨章引用误删，
+        # 只留下与当前章号巧合相等的那一个，导致大面积假 FABRICATED。故 ncomp==1
+        # 时整段跳过。
+        _is_multi = (ncomp is None or ncomp >= 2)
+        if _is_multi:
+            from collections import Counter as _C
+            _cnt = _C(n.split('.')[0] for s in sectioned.values() for n in s)
+            _book_chs = {str(k) for k in (getattr(self, '_book_chapter_keys', None)
+                                          or set())}
+            _majority = (bool(_cnt)
+                         and _cnt.get(str(ch), 0) * 2 > sum(_cnt.values()))
+            if _majority or _book_chs:
+                for _s in sectioned:
+                    sectioned[_s] = {
+                        n for n in sectioned[_s]
+                        if n.split('.')[0] == str(ch)
+                        or (n.split('.')[0] not in _book_chs and not _majority)
+                    }
         # chapter-wide union (used for FABRICATED so source-section misalignment
         # can never produce a false FABRICATED)
         union: Set[str] = set()
@@ -692,8 +703,9 @@ class SourceFormulaIndex:
         # (which tests against this union) no longer false-flags them.  MISSING
         # is already suppressed per-section via the summary's covered_anywhere.
         if self._known_book:
+            _kb_multi = (ncomp is None or ncomp >= 2)
             for _n in self._known_book:
-                if _n.split('.')[0] == str(ch):
+                if (not _kb_multi) or _n.split('.')[0] == str(ch):
                     union.add(_n)
                     self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}

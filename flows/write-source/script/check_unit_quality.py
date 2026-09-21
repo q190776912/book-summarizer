@@ -286,13 +286,18 @@ def _run_format_verify_unit_checks(line_list):
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────────
-def check_body(utype, name, body, expected_tags=None):
+def check_body(utype, name, body, expected_tags=None, allow_extra=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
     ``expected_tags``：契约要求该单元携带的公式编号集合（裸编号字符串列表，
     来自内容化契约 formula.tag）——提供时做**单元级 tag 对账**：缺失（漏写
     编号公式）与多出（编造编号）均判不通过；None = 跳过（调用方无契约上下文）。
+    ``allow_extra``：可豁免「编造编号」判定的**真实书源编号**集合（裸编号字符串，
+    通常来自 ``verify_config.json`` 的 ``formula.known_book``）。契约抽取器只认
+    **独立成块**的右缘编号，若某编号在源页与公式**同行内联粘连**（如 ``…dx.(5.15)``）
+    则会被契约漏挂 → 单元按 verify（独立源扫描）补写的 ``\\tag`` 会被误判「编造」。
+    登记进 known_book 的编号即视为真实、不再判编造（缺失判定不受影响）。
     """
     if utype not in ("item", "desc", "exercise"):
         return True, []
@@ -453,9 +458,10 @@ def check_body(utype, name, body, expected_tags=None):
     #     必须提前拦「漏写编号公式」与「编造编号」）
     if expected_tags is not None:
         want = list(expected_tags)
+        allow = set(str(x) for x in (allow_extra or []))
         got = re.findall(r"\\tag\{([^}]*)\}", body_clean)
         missing = [t for t in want if t not in got]
-        extra = [t for t in got if t not in want]
+        extra = [t for t in got if t not in want and t not in allow]
         if missing:
             all_problems.append(
                 "缺编号公式 \\tag{%s}（契约要求该单元携带；漏写 = 书源编号公式"

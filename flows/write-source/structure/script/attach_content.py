@@ -244,7 +244,7 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
-    ncomp, _scope, letter, bare = formula_cfg(ext, ch)
+    ncomp, scope, letter, bare = formula_cfg(ext, ch)
     _dir = page_dir or ext
     blocks = []
     for p in range(int(start), int(end) + 1):
@@ -323,7 +323,8 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
         page_blocks.extend(_figure_blocks(ext, p))
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
         page_blocks = _attach_formula_tags(page_blocks, ncomp,
-                                           letter=letter, bare=bare)
+                                           letter=letter, bare=bare,
+                                           scope=scope, ch=ch)
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
@@ -394,7 +395,8 @@ def tag_re(ext, bare=True, ch=None):
     return formula_tag_re(ncomp, bare=bare, letter=letter)
 
 
-def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True):
+def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
+                         scope=None, ch=None):
     """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
     并从散文流剔除该文本块（纯版面锚点，不是正文）。
 
@@ -425,12 +427,27 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True):
     确定性复算两侧一致。
     """
     tags = []
+    # 跨章守卫（与 Q 层 `norm().split('.')[0] == ch` 同口径）：章级编号书
+    # （scope==2）中，只有首段 == 本章章号的编号才是「本章自带公式编号」；
+    # 首段不等者要么是**跨章引用**（如第 3 章正文里的 "(2.1)"），要么是 OCR
+    # 碎片（如指数 l-1 被误读成裸块 "2-1"），一律不得当作本章公式的锚点。
+    # 仅对纯数字 / 单字母章键启用；裸 "appendix"/"supplement" 等多字符键沿用
+    # 旧行为（无章号可比），book/section scope（1/3）不启用。
+    _guard_head = None
+    if scope == 2 and ch is not None:
+        _cks = str(ch).strip()
+        if _cks.isdigit() or (len(_cks) == 1 and _cks.isalpha()):
+            _guard_head = _cks
     for b in page_blocks:
         if b["kind"] != "text":
             continue
         raw = (b["text"] or "").strip()
         num = formula_tag_number(raw, ncomp, letter=letter, bare=bare)
         if num is not None:
+            if _guard_head is not None:
+                head = re.split(r"[.\-–]", str(num).strip(), maxsplit=1)[0]
+                if head.upper() != _guard_head.upper():
+                    continue   # 跨章引用 / OCR 碎片：不挂为编号
             tags.append((b, num, raw[:1] in "（("))
     if not tags:
         return page_blocks

@@ -160,3 +160,76 @@ G_PF_RE = re.compile(
     r'> \*\*(?:证明(?:思路|梗概|概要)?'
     r'|Proof(?:\s+(?:sketch|outline|of\s+[^*\n]+?))?)\b[*.:：]?\*\*'
 )
+
+
+# ── 共享「条目级 --- 分隔线」补齐（I-LAYER 检测逻辑的唯一实现） ────────────
+#
+# check_i_separators（校验）与 fix_i_separators（自动修）与 merge_units（拼接期
+# 归一化）三处必须**逐字一致**，否则「merge 补齐」与「verify 判定」会出现分歧：
+# merge 补了 verify 还判缺，或 merge 补到 verify 不要求的位置。故把「哪些行算
+# 条目 + 相邻条目对何时缺分隔线」收敛成这一个纯函数，三处共用。
+#
+# 判定完全照搬 check_i_separators：条目起始行 = I_ITEM_RE（顶层结构标签，含
+# 名称前缀定理/编号在前体例）∪ I_ITEM_EXAMPLE_RE（`> **例` 块引用例）。相邻两
+# 条目 (i, j) 若 j-i<=100 且开区间 (i, j) 内既无独立 `---` 也无 `#{1,6}` 标题，
+# 则在 j **之前**插入一段顶层 `---`（含上下空行）。跨节标题的大间隙（>100）与
+# 已被 `---`/标题分隔者不补，确保对已通过的章节是**空操作**（幂等、跨书安全）。
+_ITEM_HEADING_RE = re.compile(r'^#{1,6}\s')
+
+
+def _find_deficient_item_inserts(lines):
+    """返回需要在之前插入 `---` 的条目起始行下标集合（纯检测，无副作用）。"""
+    item_lines = []
+    for i, ln in enumerate(lines):
+        if I_ITEM_RE.match(ln) or I_ITEM_EXAMPLE_RE.match(ln):
+            item_lines.append(i)
+    item_lines = sorted(set(item_lines))
+    inserts = set()
+    for idx in range(len(item_lines) - 1):
+        i = item_lines[idx]
+        j = item_lines[idx + 1]
+        if j - i > 100:
+            continue
+        has_sep = False
+        section_between = False
+        for k in range(i + 1, j):
+            t = lines[k].strip()
+            if t == '---':
+                has_sep = True
+                break
+            if _ITEM_HEADING_RE.match(lines[k]):
+                section_between = True
+                break
+        if not has_sep and not section_between:
+            inserts.add(j)
+    return inserts
+
+
+def insert_item_separators(lines, owners=None):
+    """在缺分隔线的相邻条目之间补齐顶层 `---`（上下各一空行，不重复已有空行）。
+
+    owners 非 None 时须与 lines 等长（逐行归属单元，供回填定位）；补入的分隔线/
+    空行归属 None。返回 ``(new_lines, new_owners)``（给了 owners）或 ``new_lines``。
+    """
+    inserts = _find_deficient_item_inserts(lines)
+    if not inserts:
+        return (lines, owners) if owners is not None else lines
+    new_lines = []
+    new_owners = [] if owners is not None else None
+    for idx, ln in enumerate(lines):
+        if idx in inserts:
+            if new_lines and new_lines[-1].strip() != '':
+                new_lines.append('')
+                if new_owners is not None:
+                    new_owners.append(None)
+            new_lines.append('---')
+            new_lines.append('')
+            if new_owners is not None:
+                new_owners.append(None)
+                new_owners.append(None)
+        new_lines.append(ln)
+        if new_owners is not None:
+            new_owners.append(owners[idx])
+    if new_owners is not None:
+        return new_lines, new_owners
+    return new_lines

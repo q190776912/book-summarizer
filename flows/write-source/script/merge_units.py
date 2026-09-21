@@ -68,6 +68,7 @@ from data.book_structure.book_structure import (chapter_json_path, chapter_label
 import render_draft as _rd
 import split_draft_units as _split
 import gate_units as _gate
+from verify.script.struct_labels import insert_item_separators as _insert_item_seps
 
 _DONE_RE = re.compile(r"<!-- book-summarizer (?:DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
 _CH_NAME = re.compile(r"^([0-9A-Za-z]+)\s+(.+)$", re.DOTALL)
@@ -175,6 +176,14 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
             lines.append(""); owners.append(None)
         prev = {"section": "heading", "chapter": "heading",
                 "item": "item", "desc": "desc", "exercise": "item"}.get(utype, prev)
+
+    # 🔴 条目级 `---` 分隔线补齐（I-LAYER 归一化，与 check_i_separators /
+    # fix_i_separators 共用 struct_labels.insert_item_separators 同一检测逻辑）：
+    # 单元之间的分隔线状态机不覆盖**单元内部**——当一个契约节点打包了「定义 + 例1 +
+    # 例2 …」多个条目时，条目之间缺 `---` 会让 step-8 verify 的 I 层报错。故在拼接
+    # 产物上统一补齐。对已满足分隔线的章节是**空操作**（跨书 / 幂等安全）。
+    # owners 同步插入 None 以保持逐行对齐（回填据此定位源单元）。
+    lines, owners = _insert_item_seps(lines, owners)
 
     # 整理分隔线 + 空行（复用 render_draft，并同步 owners）
     lines, owners = _rd._tidy_separators(lines, owners)

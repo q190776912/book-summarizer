@@ -405,10 +405,14 @@ _LABEL_CANON = {
     '练习': '练习', 'uncat': 'uncat',
 }
 
+# 🔴 `Exercise` 在此收录（原只出现在 APP_LABEL_KINDS 里）：它与 EN 书的练习类
+# 条头同名，且不进 COMBINED 会让 md 侧的 type 1/2/3 完全解析不出 `**Exercise N**`
+# / `**Exercise N.N**` 条头（真条目被报 truly missing）。复数 `Exercises` 由
+# `_canon_label` 的 `-s` 回退自动归一到 `Exercise`。
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
                   'Assumption', 'Algorithm', 'Commentary', 'Application',
-                  'Variation', 'Porism']
+                  'Variation', 'Porism', 'Exercise']
 
 
 # --- 节点类型 ↔ 规范标签（类型词表单一来源） -------------------------------

@@ -64,7 +64,11 @@ ENTRY_RE_2 = re.compile(
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Example'
     r'|公理|Axiom'
     r'|问题|Problem'
-    r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
+    r'|注记|评注|注|Remark'
+    # 🔴 练习家族：与 COMBINED_LABEL_KINDS 的 练习/Exercise 对齐。ENTRY_RE_2 是手写
+    # 子集字面量（不随 COMBINED 自动派生），两边不同步会让 type 2 的 md 抽键与
+    # 新层级 _LABEL_ALT 口径不一致。
+    r'|练习|Exercise)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
 # 2026-08-27 补齐 例/Example/公理/Axiom/问题/Problem/示例 的 ENTRY_RE_2+PROSE_RE_2 覆盖
 # （之前仅含 定义|定理|引理|推论|命题|注记|评注|注|Remark，中文书籍的
@@ -75,7 +79,8 @@ PROSE_RE_2 = re.compile(
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Example'
     r'|公理|Axiom'
     r'|问题|Problem'
-    r'|注记|评注|注|Remark)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
+    r'|注记|评注|注|Remark'
+    r'|练习|Exercise)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
 
 def normkey(s):
     """Canonicalize a key to N.S-N dash form (N.S.N -> N.S-N, N·S·N -> N.S-N).
@@ -96,9 +101,12 @@ def normkey(s):
 # 收 `Problem`，CN 侧漏收 `问题` 会让 CN 合并 md 的 `**问题1-1**` 条头完全
 # 解析不出 → 章末 Problems 在 CN 侧整族报「truly missing」（Lee 2e 实测：
 # ch1–22 CN 各缺 8–31 条，全部是章末问题）。
+# 🔴 `练习` 在此收录：`_LABEL_CANON` 的 Exercise / 习题 都正名为 `练习`，exercise
+# group 的契约键就是 `练习N…`；CN 词表不收它就等于 CN 侧 md 条头整族解析不出。
+# (`习题` 暂不收：与 `练习` 同义但正名相同，收录面待评估，见 book 侧回归。)
 CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
                   '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法', '性质',
-                  '问题']
+                  '问题', '练习']
 # Combined (used when ordinal == ORDINAL_EN so either language matches).
 COMBINED_LABEL_KINDS = EN_LABEL_KINDS + CN_LABEL_KINDS
 ENTRY_RE_EN = re.compile(
@@ -215,10 +223,10 @@ ENTRY_RE_EN3_APP_C = re.compile(
     re.IGNORECASE)
 
 # --- ORDINAL_APP (type 13)：附录字母章号三级体例 --------------------------------
-# 附录标签集在 COMBINED_LABEL_KINDS 基础上额外纳入 Exercise：附录练习常印成
-# `Exercise A.4.1`（字母章位），而 Exercise 不在 COMBINED_LABEL_KINDS 中（避免正文
-# 交叉引用被误当编号项）。仅附录分支扩展，正文解析零影响。
-APP_LABEL_KINDS = tuple(COMBINED_LABEL_KINDS) + ('Exercise',)
+# 附录标签集 = COMBINED_LABEL_KINDS（含 Exercise / 练习）去重后的元组：附录练习
+# 常印成 `Exercise A.4.1`（字母章位），本表为其提供与正文同等宽的收录面。
+# dict.fromkeys 去重 —— 拼接出的正则 alternation 不得带重复分支。
+APP_LABEL_KINDS = tuple(dict.fromkeys(tuple(COMBINED_LABEL_KINDS) + ('Exercise',)))
 # 附录的章位是**单个字母**而非数字，条目形如
 #   `Definition A.1.1` / `Examples A.1.3` / `Theorem A.6.2`   （标签在前）
 #   `A.1.5` / `A.4.3`                                          （裸号，原书只印编号）

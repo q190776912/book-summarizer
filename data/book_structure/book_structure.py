@@ -221,7 +221,8 @@ def node_tags(node: Dict[str, Any]) -> List[str]:
         if not isinstance(c, dict):
             continue
         if c.get("tag"):
-            acc.append(str(c["tag"]))
+            # 多行公式组逐行编号：`tags` 为该块携带的全部编号，`tag` 仅首个
+            acc.extend(str(x) for x in (c.get("tags") or [c["tag"]]))
         elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
             acc.extend(node_tags(c))
     return acc
@@ -240,8 +241,10 @@ def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
 
     def _walk(n: Dict[str, Any]) -> None:
         # 章/节直属的散落公式块（不在任何条目内）归入容器自身 key
-        acc = [str(c["tag"]) for c in (n.get("sub_sec") or [])
-               if isinstance(c, dict) and c.get("tag")]
+        acc = []
+        for _c in (n.get("sub_sec") or []):
+            if isinstance(_c, dict) and _c.get("tag"):
+                acc.extend(str(x) for x in (_c.get("tags") or [_c["tag"]]))
         if acc and n.get("key") is not None:
             out.setdefault(str(n["key"]), []).extend(acc)
         for c in n.get("sub_sec") or []:

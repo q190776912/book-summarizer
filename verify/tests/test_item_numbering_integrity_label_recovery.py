@@ -88,8 +88,8 @@ class ItemNumberingIntegrityLabelRecoveryTest(unittest.TestCase):
         both scope=chapter / depth=2 (mirrors the Koopman v2 config shape)."""
         return BookConfig(
             ordinal=[
-                GroupConfig(type=4, name=['Theorem'], scope=2),
-                GroupConfig(type=4, name=['Definition'], scope=2),
+                GroupConfig(type=2, name=['Theorem'], scope=2),
+                GroupConfig(type=2, name=['Definition'], scope=2),
             ],
             ignore=list(ignore),
         )

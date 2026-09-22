@@ -214,17 +214,17 @@ class TestRequireComplete(unittest.TestCase):
         self.assertEqual(loader.book.ordinal[0].depth, 3)
         self.assertEqual(loader.book.ordinal[0].scope, 2)
 
-    # --- valid explicit four-level declaration -> no raise ----------------
-    def test_valid_array_ordinal_4_with_section_hierarchy_no_raise(self):
+    # --- valid explicit four-level section hierarchy -> no raise ----------
+    def test_valid_ordinal_with_four_level_section_hierarchy_no_raise(self):
         # `section_depths` is NOT a config field — depth is DERIVED from each
         # `section_types` role code via SECTION_TYPE_DEPTH.  Declaring only
         # `section_types` must be accepted, and the derived `section_depths`
         # property must equal [1, 2, 3, 4].
-        cfg = {"ordinal": [{"type": 4, "scope": 2}],
+        cfg = {"ordinal": [{"type": 2, "scope": 2}],
                "section_types": [1, 2, 3, 4]}
         loader = _loader_with_config(cfg)
         loader.require_complete()  # must not raise
-        self.assertEqual(loader.book.primary_type, 4)
+        self.assertEqual(loader.book.primary_type, 2)
         self.assertEqual(loader.book.section_types, [1, 2, 3, 4])
         self.assertEqual(loader.book.section_depths, [1, 2, 3, 4])
 
@@ -295,10 +295,14 @@ class TestRequireComplete(unittest.TestCase):
         # None 是「未声明 ordinal」的合法透传信号（返回 None，不是 0/3 之类的幻影）；
         # 任何未登记的 code 一律 OrdinalDepthError，绝不静默套 3。
         self.assertEqual(ordinal_depth(3), 3)
-        self.assertEqual(ordinal_depth(4), 2)
+        self.assertEqual(ordinal_depth(2), 2)
         self.assertEqual(ordinal_depth(13), 3)
         self.assertEqual(ordinal_depth(0), 0)
         self.assertIsNone(ordinal_depth(None))
+        # 已弃用码（4/9/10/11）不再登记 depth：调用一律报错，不吃幻影默认。
+        for deprecated in (4, 9, 10, 11):
+            with self.assertRaises(OrdinalDepthError):
+                ordinal_depth(deprecated)
         with self.assertRaises(OrdinalDepthError):
             ordinal_depth(999)
         # GroupConfig.depth 走同一入口：未登记 type 同样报错，不回退 3。

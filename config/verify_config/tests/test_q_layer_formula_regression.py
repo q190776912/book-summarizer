@@ -176,7 +176,7 @@ class OptInTest(unittest.TestCase):
 class MismatchMustFailTest(unittest.TestCase):
     def test_mismatch_scope2_must_fail(self):
         # Single-component source, but a DANGEROUS multi-component config
-        # (type4/depth2/scope2, the Kreyszig mis-set).  The layer must FAIL
+        # (type2/depth2/scope2, the Kreyszig mis-set).  The layer must FAIL
         # (q_inconsistent=[err_row]) and print [Q-LAYER ERROR] -- NOT silently
         # pass every \tag as cross-chapter INCONSISTENT (which operators would
         # "fix" by deleting all \tag).
@@ -190,7 +190,7 @@ class MismatchMustFailTest(unittest.TestCase):
                 "3.1-2 Lemma. We set b = 2 (2).",
             ])
             ctx = _ctx(3, 1, 2, md, ext,
-                       formula={'type': 4, 'scope': 2, 'ignore': []})
+                       formula={'type': 2, 'scope': 2, 'ignore': []})
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
                 res = QLayer().run(ctx)
@@ -354,8 +354,8 @@ class GlobalDetectionTest(unittest.TestCase):
                              msg=f"detect_formula failed: {r.stderr}")
             real = json.loads(r.stdout)
             self.assertIsNotNone(real, "detect_formula must not return None")
-            self.assertEqual(real['type'], 4,
-                             "production detector must read all 40 pages (two-component -> type 4)")
+            self.assertEqual(real['type'], 2,
+                             "production detector must read all 40 pages (two-component -> type 2)")
             self.assertNotIn('depth', real)
 
 

@@ -41,9 +41,9 @@ from lib.regexlib import (
     SEP_TIGHT, SEP_SPLIT_RE, KEY_RE, ENTRY_RE,
 )
 from verify_config import (
-    ORDINAL_TWO_LEVEL, ORDINAL_EN,
-    ORDINAL_EN3, ORDINAL_THREE_LEVEL, ORDINAL_SINGLE, ORDINAL_CN3LAB,
-    ORDINAL_ROSS, ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
+    ORDINAL_TWO_LEVEL,
+    ORDINAL_THREE_LEVEL, ORDINAL_SINGLE,
+    ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
     GroupConfig, _LABEL_CANON, EN_LABEL_KINDS,
     _canon_label,
 )
@@ -335,7 +335,8 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in PROSE_RE_2.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif t == ORDINAL_EN:
+                # EN 两级（原 ORDINAL_EN=4，已并入 type 2）：标签在前 / 数字在前 /
+                # 章内单数字三种形态，键同 type 2 规范键，保证 4→2 重映射书 md 解析一致。
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
@@ -348,28 +349,6 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in PROSE_RE_EN_C.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-            elif t in (ORDINAL_EN3, ORDINAL_CN3LAB):
-                # EN3（Label C.S.N，如 Lasota & Mackey）与 CN3LAB（标签C.S.N，如
-                # 孙文祥《遍历论》`定理1.1.1`）共用同一 md 侧解析：键 = 规范标签
-                # （_canon_label 双语归一，Theorem/定理 → 定理）+ 点分三段。
-                # COMBINED_LABEL_KINDS 同时含中英标签词，两侧天然对齐。
-                for m in ENTRY_RE_EN3_C.finditer(line):
-                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}"
-                    entries.add(key); allk.add(key)
-                for m in PROSE_RE_EN3_C.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
-                # Appendix letter-led items in EN3 books (e.g. Leinster App A:
-                # "**Lemma A.1**").  read_structure_items normalizes 'A.1' to
-                # canon-label + trailing number (e.g. 引理1); mirror that here so
-                # the md side can match.  Emit BOTH the letter key form and the
-                # number-only form to stay compatible with either contract shape.
-                for m in ENTRY_RE_EN3_APP_C.finditer(line):
-                    _cn = _canon_label(m.group(1))
-                    entries.add(f"{_cn}{m.group(3)}")
-                    allk.add(f"{_cn}{m.group(3)}")
-                    entries.add(f"{_cn} {m.group(2)}.{m.group(3)}")
-                    allk.add(f"{_cn} {m.group(2)}.{m.group(3)}")
             elif t == ORDINAL_SINGLE:
                 # Single-level EN book (e.g. Silverman "A Friendly Introduction to
                 # Number Theory" 4th ed — ordinal type 1): items carry ONE
@@ -386,12 +365,10 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}"
                     entries.add(key); allk.add(key)
-            elif t == ORDINAL_ROSS:
-                # Ross 体例（ORDINAL_ROSS = 11）：**Example 2a** / **Axiom 1** /
-                # **Proposition 4.1**。字母位键必须先于单数字形态（SINGLE 的负向
-                # 断言已拒字母尾，二者互斥，但顺序仍按特异度排）；点分两段形态由
-                # ENTRY_RE_EN_C 覆盖。规范键 = 规范中文标签 + 原编号
-                # （例2a / 公理1 / 命题4.1），与 read_structure_items 对齐。
+                # Ross 单级字母后缀（原 ORDINAL_ROSS=11，已并入 type 1）：
+                # **Example 2a** 字母位键 + **Axiom 1** / **Proposition 4.1** 两段
+                # 形态；规范键 = 规范中文标签 + 原编号（例2a / 公理1 / 命题4.1），
+                # 与 read_structure_items 对齐，保证 11→1 重映射书 md 解析一致。
                 for m in ENTRY_RE_ROSS_LETTER_C.finditer(line):
                     key = _ross_canon(m.group(1), m.group(2), m.group(3).lower())
                     entries.add(key); allk.add(key)
@@ -469,6 +446,16 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     entries.add(normkey(m.group(1)))
                 for m in KEY_RE.finditer(line):
                     allk.add(normkey(f'{m.group(1)}.{m.group(2)}-{m.group(3)}'))
+                # EN3 / CN3LAB（原 ORDINAL_EN3=9 / ORDINAL_CN3LAB=10，已并入 type 3）：
+                # 标签在前三段式 Label C.S.N（如 Lasota & Mackey `Remark 1.1.1` /
+                # 孙文祥《遍历论》`定理1.1.1`），键 = 规范中文标签 + 点分三段，
+                # 保证 9/10→3 重映射书 md 解析一致。
+                for m in ENTRY_RE_EN3_C.finditer(line):
+                    key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}"
+                    entries.add(key); allk.add(key)
+                for m in PROSE_RE_EN3_C.finditer(line):
+                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
                 # Appendix letter-led items ("**Lemma A.1**") in three-level
                 # books: read_structure_items normalizes 'A.1' to canon-label +
                 # trailing number (e.g. 引理1); mirror that here so the md side

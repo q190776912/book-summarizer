@@ -82,15 +82,13 @@ sys.stdout.reconfigure(encoding="utf-8")
 import scan_skeleton
 from extract_items import extract_items, extract_items_two_level
 from extract_items_cn_single import extract_items_cn_single
-from extract_items_cn3lab import extract_items_cn3lab
 from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
-from extract_items_ross import extract_items_ross
 from extract_items_hum import extract_items_hum
-from verify_config import (ORDINAL_EN, ORDINAL_EN3, ORDINAL_TWO_LEVEL,
+from verify_config import (ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_VAKIL,
-                              ORDINAL_THREE_LEVEL, ORDINAL_CN3LAB, ORDINAL_ROSS,
+                              ORDINAL_THREE_LEVEL,
                               ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
                               LABEL_TO_TYPE as _SHARED_LABEL_TO_TYPE,
                               ConfigLoader, ConfigError, BookConfig)
@@ -191,7 +189,7 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
     返回 "C.S"（字符串）或 None（交由页码归并）。
 
     ``chapter_first``：EN 两级编号下，key 首数究竟是章还是节。
-      * True（默认，ORDINAL_EN / ORDINAL_EN3）："Definition 6.1" = 第 6 章第 1 条，
+      * True（默认，英文两级 ORDINAL_TWO_LEVEL / 标签前置英文三级 ORDINAL_THREE_LEVEL）："Definition 6.1" = 第 6 章第 1 条，
         段号取 "C.S" = "6.1"。
       * False（节基书，如 Fraleigh："Definition 8.1" = §8 第 1 条，首数即『节号』）：
         段号取 "S" = "8"。
@@ -841,11 +839,6 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
         # （注入 § 记号使其不可被 B 层数字解析——引用号继承小节网格、天然稀疏，
         # 可解析会误报海量假断号；与 Ross 字母项同走优雅跳过路径）。
         return extract_items_hum(_dir, start, end)
-    if primary == ORDINAL_ROSS:
-        # Ross 体例（ORDINAL_ROSS = 11，config_setting 规则5 增量扩展）：标签在前 +
-        # 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。键保留原书印刷
-        # 形态；章末习题区过滤由调用方 build_chapter 按 exercise_region_headings 做。
-        return extract_items_ross(_dir, start, end)
     if primary == ORDINAL_SINGLE:
         # CN 单级编号书（如李庆扬《数值分析》第5版：定理1 / 定义3 / 例12 /
         # 算法2 / 性质4——「标签+单一数字」、章内连续或节内重置）：既有抽取器
@@ -855,55 +848,33 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
             return extract_items_cn_single(_dir, start, end, groups=book.ordinal,
                                             manual_overrides=manual)
         return _single_en_items(_dir, start, end, book)
-    if primary == ORDINAL_CN3LAB:
-        # CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 / 定义2.3.4，每类标签
-        # 独立计数、每节重置）：键内嵌规范中文标签（`定理1.1.1`，与 type 9 的
-        # `评注1.1.1` 同构），块首锚定天然排除三级小节标题与裸 C.S.N 公式号。
-        # 按 config_setting 规则5 走增量扩展的 extract_items_cn3lab。
-        return extract_items_cn3lab(_dir, ch, start, end, groups=book.ordinal)
-    if primary in (ORDINAL_EN, ORDINAL_EN3):
-        if primary == ORDINAL_EN:
-            # config_setting 规则5 增量扩展：config `ordinal` 各组 `name` 里
-            # EN_LABELS 没有的标签词（如 Lee 2e 的 Exercise / Problem）追加进
-            # 抽取标签集（_single_en_items 同构；Figure/Table/uncat 是图表管线
-            # 管辖的图注/兜底标记，不作为文本契约条目——🔴 比较须剥尾部句点，
-            # 否则 "Fig."（带点书写）漏网，图注 caption 会被抽成伪条目，
-            # Lee 2e ch1 实测 13 个 Fig.1.x 伪条目）。纯增量：组名都在基础
-            # 词表内的书行为不变（extract_items_en 对 extra_labels 去重）。
-            _non_text = {"uncat", "Figure", "Fig", "Fig.", "Table", "图", "表"}
-            _non_text_stripped = {t.rstrip(".") for t in _non_text}
-            extra = []
-            for _g in getattr(book, "ordinal", []) or []:
-                for _nm in getattr(_g, "name", []) or []:
-                    if _nm and _nm not in extra and \
-                            _nm.rstrip(".") not in _non_text_stripped:
-                        extra.append(_nm)
-            items = extract_items_en(_dir, start, end, want_examples=True,
-                                     section_scoped=book.section_scoped,
-                                     extra_labels=extra)
-        else:
-            items = extract_items_en3(_dir, ch, start, end, want_examples=True)
+    if primary == ORDINAL_TWO_LEVEL and getattr(book, "language", None) == "en":
+        # EN two-level books (former ORDINAL_EN=4, now folded into type 2): label-first /
+        # number-first / chapter-wide single-digit forms, all extracted by extract_items_en.
+        # Labels not in the base EN_LABELS set (e.g. Lee 2e's Exercise / Problem) are appended
+        # to the extractor's label set; Figure/Table/uncat are figure-pipeline concerns, not
+        # text-contract items -- strip trailing dots so "Fig." captions are not fake items.
+        _non_text = {"uncat", "Figure", "Fig", "Fig.", "Table", "图", "表"}
+        _non_text_stripped = {t.rstrip(".") for t in _non_text}
+        extra = []
+        for _g in getattr(book, "ordinal", []) or []:
+            for _nm in getattr(_g, "name", []) or []:
+                if _nm and _nm not in extra and \
+                        _nm.rstrip(".") not in _non_text_stripped:
+                    extra.append(_nm)
+        items = extract_items_en(_dir, start, end, want_examples=True,
+                                 section_scoped=book.section_scoped,
+                                 extra_labels=extra)
         kept = []
         for it in items:
             lab, _, num = it["key"].partition(" ")
             parts = num.split(".")
-            # Chapter-scoped EN (book.chapter_first == True, the ORDINAL_EN /
-            # ORDINAL_EN3 default): the first numeric component IS the chapter,
-            # so drop cross-chapter forward references (first != ch).
-            # Section-scoped EN books (book.chapter_first == False — first
-            # component is the SECTION, no chapter component; e.g. "Theorem 3.1"
-            # = §3 item 1) MUST keep these, so the filter is disabled. Single-
-            # number keys are never filtered (they have no chapter/section slot).
             if book.chapter_first and len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) != ch:
                 continue
             it = dict(it)
             it["key"] = f"{_canon_label(lab)}{num}"
             kept.append(it)
-        # ---- Merge manual overrides（OCR 漏识真实条目的 agent 回填通道）----
-        # 与 extract_items 末尾的合并同构：此前 EN 路径没有 overrides 通道，
-        # 印刷条目头被 OCR 整行丢失时（如 do Carmo Ch13 "2.7 Corollary …"）
-        # 契约永远缺号，A 层 EXTRA 无法消除。override 约定：key=印刷裸编号
-        # （如 "2.7"）、label=英文类别词、text=印刷标题。
+        # ---- Merge manual overrides (OCR-drop agent recovery) ----
         if manual:
             existing = {it["key"]: idx for idx, it in enumerate(kept)}
             for mo in manual:
@@ -917,6 +888,7 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
                     kept.append(item)
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
+
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
             or primary in (ORDINAL_APP, ORDINAL_APP2):
         # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The

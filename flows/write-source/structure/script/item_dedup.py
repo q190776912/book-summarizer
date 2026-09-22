@@ -38,6 +38,7 @@ def _after_of(it):
 
 _REF_AFTER_NEG = re.compile(
     r'^\.'                                              # 1. period right after number → sentence fragment
+    r'|^[）)]'                                          # 1b. ')' right after → truncated cross-ref "（定理1.5.1）"
     r'|\(below\)|\(above\)'                             # 2. (below)/(above)
     r'|in the next|in the following|in §|in sec'          # 3. forward/backward section ref
     r'|this\s+(?:theorem|lemma|space|definition|result|operator)\b'  # 4. "this X"
@@ -88,6 +89,7 @@ def _is_genuine(it):
     if _REF_AFTER_NEG.search(after):
         return False
     positive = (at_head
+                or it.get('glued_label')
                 or bool(_TYPE_POS.match(after))
                 or (after.startswith('(')
                     and '(below)' not in after[:20]

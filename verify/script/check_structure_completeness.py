@@ -46,8 +46,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
-    ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP, ORDINAL_APP2,
+    ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2,
     LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
     _canon_label, _load_ignore_file,
 )
@@ -178,22 +177,14 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
     （三级 = "C.S-N"；两级中文 = "标签C.S"；两级英文 = "标签 C.S"），
     以便回填后能被 write-source / verify 原样消费。
 
-    EN3 书（ORDINAL_EN3，标签在前三段式 `Label C.S.N`）特别处理：条目标号
-    恒带显式标签词，而图号/公式号（`FIGURE 1.1.1` / `(1.1.1)` / 图版面
-    `1.1.1b`）是「无标签的三段数字」。因此禁用数字前置的三段裸号方案
-    `en3_nf` / `cn3_nf`（它们会误吞图版面 `1.1.1b` 为 `1.1-18` 伪项），
-    仅保留标签前置方案。这与 extract_items_en3 的「要求标签词」一致。
-
-    （2026-08-19 root-cause fix）`primary_type == ORDINAL_THREE_LEVEL` 但
-    `language == "en"` 的「英文三级标签前置」书（Strogatz《Nonlinear Dynamics
-    and Chaos》、Lasota & Mackey 等）走的是与 ORDINAL_EN3 **完全相同**的编号体例
-    （条目恒带 `Example/Definition/...` 标签词，图号/公式号是无标签裸 `C.S.N`），
-    只是 config 里 ordinal 写成了默认三级 `3` 而非 `9`。`build_structure` 已对
-    此情形路由 `extract_items_en3`（标签前置），但本函数原先只在
-    `primary_type == ORDINAL_EN3` 时禁用 `en3_nf`/`cn3_nf`，导致此类书被数字前置
-    裸号方案 `en3_nf` 误吞 59+ 个图号/公式号/习题号为伪「缺项」，闸门永 FAIL。
-    故此处一并把 `THREE_LEVEL + language=="en"` 纳入「禁用数字前置三段裸号」范围，
-    与 build_structure 的分派对齐（单一真相源）。
+    英文三级「标签前置」书（`primary_type == ORDINAL_THREE_LEVEL` 且
+    `language == "en"`，如 Strogatz《Nonlinear Dynamics and Chaos》、Lasota &
+    Mackey；历史上曾是独立码 ORDINAL_EN3=9，现已并入三级 3）特别处理：条目标号
+    恒带显式标签词（`Label C.S.N`），而图号/公式号（`FIGURE 1.1.1` / `(1.1.1)` /
+    图版面 `1.1.1b`）是「无标签的三段数字」。因此禁用数字前置的三段裸号方案
+    `en3_nf` / `cn3_nf`（它们会把图版面 `1.1.1b` 误吞为 `1.1-18` 伪「缺项」，闸门
+    永 FAIL），仅保留标签前置方案 `en3_lf` / `cn3_lf`。这与 `extract_items_en3`
+    的「要求标签词」及 build_structure 的路由一致（单一真相源）。
 
     （2026-08-23 规则5增量扩展）CN 单级编号书（ORDINAL_SINGLE + language=="cn"，
     如李庆扬《数值分析》第5版：定理1/定义3/例12）：通用数字扫描会把三级小节
@@ -242,26 +233,6 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "has_label": True,
             })
         return out
-    if primary_type == ORDINAL_ROSS:
-        # （规则5增量扩展）Ross 体例（S. Ross《A First Course in Probability》）：
-        # 标签在前 + 节内作用域编号（Example 2a / Proposition 4.1 / Axiom 1）。
-        # 通用 _PATTERNS 会把三级小节标题/图号误读为伪项，直接委托
-        # extract_items_ross（与 build_structure 同一抽取真源）。canon 与
-        # _canon_key(ORDINAL_ROSS, key) 逐字段一致：字母位 a..z → 1..26。
-        from extract_items_ross import extract_items_ross
-        out = []
-        for it in extract_items_ross(ext, start, end):
-            c = _canon_key(ORDINAL_ROSS, it["key"])
-            if c is None:
-                continue
-            lab = (it.get("label") or "uncat")
-            out.append({
-                "key": it["key"], "label": lab,
-                "page": it["page"],
-                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
-                "scheme": "ross", "canon": c, "has_label": True,
-            })
-        return out
     if primary_type in (ORDINAL_APP, ORDINAL_APP2):
         # （附录字母章位，type 13 三级 / type 14 两段）条目形如
         # `Definition A.1.1` / 裸 `A.1.5`（13，Weibel）或 `Theorem B.2` /
@@ -286,29 +257,8 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "scheme": "app", "canon": c, "has_label": True,
             })
         return out
-    if primary_type == ORDINAL_CN3LAB:
-        # （规则5增量扩展）CN 三级标签前缀书（如孙文祥《遍历论》：定理1.1.1 /
-        # 定义2.3.4，每类标签独立计数、每节重置）。委托 extract_items_cn3lab
-        # （与 build_structure 同一抽取真源），禁用 _PATTERNS——数字前置的
-        # cn3_nf 会把三级小节标题（`2.3.1 标题`）误读为伪项，cn3_lf 的裸键
-        # `C.S-N` 也与本书「标签内嵌键」形不一致。
-        from extract_items_cn3lab import extract_items_cn3lab
-        out = []
-        for it in extract_items_cn3lab(ext, ch, start, end, groups=groups):
-            nums = re.findall(r"\d+", it["key"])
-            if len(nums) < 3:
-                continue
-            out.append({
-                "key": it["key"], "label": it.get("label") or "uncat",
-                "page": it["page"],
-                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
-                "scheme": "cn3lab",
-                "canon": tuple(int(x) for x in nums[:3]),
-                "has_label": True,
-            })
-        return out
     patterns = _PATTERNS
-    if primary_type == ORDINAL_EN3 or (primary_type == ORDINAL_THREE_LEVEL and language == "en"):
+    if primary_type == ORDINAL_THREE_LEVEL and language == "en":
         # EN3 书条目恒带显式标签词（`Label C.S.N`），且编号按类型独立成序
         # （Definition 2.1.1 与 Remark 2.1.1 并存）。禁用「数字前置三段裸号」方案
         # en3_nf / cn3_nf（会误吞图版面 `1.1.1b`→`1.1-18` 伪项），仅保留标签前置
@@ -316,6 +266,15 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
         # 方案也禁用——本书严格三级，避免把语篇里的 `Definition 2.1` 误判为两级项。
         patterns = [(rgx, sch) for (rgx, sch) in _PATTERNS
                     if sch in ('en3_lf', 'cn3_lf')]
+    elif primary_type == ORDINAL_THREE_LEVEL and language == "cn":
+        # 🔴 CN 三级标签前置书（如常庚哲《数学分析教程》：定义1.10.1 / 定理1.10.1
+        # 恒带标签词，与 build_structure 的 extract_items 同一抽取真源——后者只
+        # 抓带标签条目）：禁用「数字前置三段裸号」方案 cn3_nf。它把逗号分隔的散文
+        # 枚举（"1,2.3…n…" / "1,0,2,0,3…"）误读为裸三段号伪「缺项」，又把无标签的
+        # 交叉引用残句（"1.5.1,以下两个极限存在"）当成独立条目——而真实条目已由带
+        # 标签方案 cn3_lf 抓到。仅保留标签前置方案，与 EN3 分支同理（单一真相源）。
+        patterns = [(rgx, sch) for (rgx, sch) in _PATTERNS
+                    if sch == 'cn3_lf']
     out = []
     for p in range(start, end + 1):
         fp = os.path.join(ext, f"page_{p:03d}.json")
@@ -362,11 +321,11 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 if _is_three(scheme):
                     if len(nums) < 3:
                         continue
-                    # 两级书（ORDINAL_TWO_LEVEL / ORDINAL_EN）下的三段号是
-                    # 三级/四级小节标题（"2.2.1 Preliminaries"、"13.3.2 Algorithm"
-                    # —— 尾词恰为节题、会伪装成标签），不是编号条目——丢弃，
-                    # 否则回填出幻影项污染契约（Koopman 书实测）。
-                    if primary_type in (ORDINAL_TWO_LEVEL, ORDINAL_EN):
+                    # 两级书（ORDINAL_TWO_LEVEL，含原 EN 两级折叠而来的英文两级
+                    # 书）下的三段号是三级/四级小节标题（"2.2.1 Preliminaries"、
+                    # "13.3.2 Algorithm"—— 尾词恰为节题、会伪装成标签），不是编号
+                    # 条目——丢弃，否则回填出幻影项污染契约（Koopman 书实测）。
+                    if primary_type == ORDINAL_TWO_LEVEL:
                         break
                     key = f"{nums[0]}.{nums[1]}-{nums[2]}"
                     canon = (nums[0], nums[1], nums[2])
@@ -382,11 +341,12 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                     "canon": canon, "has_label": has_label,
                 })
                 break
-    # 🔴 section-scoped EN 两级书（chapter_first=False，如 Hilton & Stammbach）：
-    # 编号首段即节号，一章内同 (label, canon) 的真条目头只出现一次。行尾换行恰好
-    # 落在 "Theorem 2.4." 的引用残行会被本扫描当成第二个条目头；若保留，回填会把
-    # 幻影项写回契约。与 extract_items_en 的 unique_keys 去重同语义：保留首个。
-    if primary_type == ORDINAL_EN and not chapter_first:
+    # 🔴 section-scoped 英文两级书（type 2 + language=="en" + chapter_first=False，
+    # 如 Hilton & Stammbach）：编号首段即节号，一章内同 (label, canon) 的真条目头
+    # 只出现一次。行尾换行恰好落在 "Theorem 2.4." 的引用残行会被本扫描当成第二个
+    # 条目头；若保留，回填会把幻影项写回契约。与 extract_items_en 的 unique_keys
+    # 去重同语义：保留首个。
+    if primary_type == ORDINAL_TWO_LEVEL and language == "en" and not chapter_first:
         seen = set()
         uniq = []
         for it in out:
@@ -426,20 +386,6 @@ _LABEL_RE = re.compile(r'^(定义|定理|引理|推论|命题|例|练习|习题|
 
 def _canon_key(primary_type, key):
     """把契约/源侧 key 规范化为可比较的 int 元组（按方案）。"""
-    if primary_type == ORDINAL_ROSS:
-        # Ross 体例：字母位键 "Example 2a" → (节号, 字母位 a=1..z=26)；
-        # 点分键 "Proposition 4.1" → (节号, 节内序号)；单数字键 "Axiom 1" → (序号,)。
-        # 字母必须进 canon（否则 2a..2u 全折叠成 (2,)，契约缺例时假绿）。
-        m = re.match(r'^([A-Za-z]+)\s+(\d{1,2})(?:\.(\d{1,3}))?(?:([A-Za-z]))?$',
-                     str(key).strip())
-        if not m:
-            return None
-        n1 = int(m.group(2))
-        if m.group(3):
-            return (n1, int(m.group(3)))
-        if m.group(4):
-            return (n1, ord(m.group(4).lower()) - 96)
-        return (n1,)
     if primary_type in (ORDINAL_APP, ORDINAL_APP2):
         # 附录字母章位（type 13 三级 / type 14 两段）：契约键 "A.1-1"（normkey
         # 形）/ 源侧键 "A.1.1"，两级 "A.1"（type 14 的 Lee 体例 / Leinster 体
@@ -482,9 +428,7 @@ def _composite_key(primary_type, label, canon):
     相交、整章被误报缺失（2026-08-23 CN 单级书实测）。
     """
     if primary_type in (ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-                        ORDINAL_EN, ORDINAL_EN3, ORDINAL_SINGLE,
-                        ORDINAL_CN3LAB, ORDINAL_ROSS, ORDINAL_APP,
-                        ORDINAL_APP2):
+                        ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2):
         # ORDINAL_APP/APP2：Weibel 附录 Definition A.1.1 与 Exercise A.1.1
         # 同号并存（Lee 附录 Theorem B.2 与 Exercise B.2 同理），无标签复合键
         # 会把两类折叠、假绿。
@@ -606,15 +550,9 @@ def insert_item(tree, key, label, page, canon, snippet=""):
     itype = _type_of(label)
     title = _clean_title(snippet, key)
     name = (f"{key} {title}".strip()) if title else key
-    # CN3LAB（type 10）键形「标签+C.S.N」，节点名与 build_structure 同构（否则
-    # 单位渲染出的粗体头缺标签词）：2026-09-15《高等代数学》实测。
-    if _PRIMARY == ORDINAL_CN3LAB and label:
-        _lab = _canon_label(str(label))
-        if _lab and not str(key).startswith(_lab):
-            name = f"{_lab}{name}"
     node = _node(key, itype, name, page)
     sec_key = None
-    if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP, ORDINAL_CN3LAB) and len(canon) >= 2:
+    if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP) and len(canon) >= 2:
         sec_key = f"{canon[0]}.{canon[1]}"
     sn = _section_node(tree, sec_key) if sec_key else None
     if sn is None:

@@ -83,6 +83,15 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     before = txt[max(0, m.start()-25):m.start()]
     after = txt[m.end():m.end()+50]
 
+    # A type word GLUED immediately before the number (e.g. "定理1.10.1") at or
+    # near the block head is the item's OWN heading, not a range marker / cross-
+    # reference.  Computed early so guard steps (esp. step-3 range suppression)
+    # can exempt genuine headings.  The English "N.S-N Lemma" form (label AFTER
+    # the number) leaves `before` free of these tokens and is not affected.
+    _glued_before = re.search(
+        r'(定义|定理|引理|推论|命题|注|例)\s*[（(]?\s*$', before)
+    _glued = bool(_glued_before) and m.start() <= 4
+
     key_esc = re.escape(m.group())
 
     # 0. Citation words directly before the number (same OCR block)
@@ -146,9 +155,11 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
         if len(num_re.findall(txt[op:cl+1])) >= 2:
             return
 
-    # 3. Range marker with another number nearby (e.g. "例子（1.1-2到1.2-3）")
+    # 3. Range marker with another number nearby (e.g. "例子（1.1-2到1.2-3）").
+    #    🔴 A glued heading ("定理1.10.1设…") is exempt: its own statement may
+    #    cite another number ("…已在定义1.10.1中描述"), which is NOT a range.
     after_ctx = txt[m.end():m.end()+40]
-    if re.search(r'[例定引推]', before):
+    if not _glued and re.search(r'[例定引推]', before):
         if num_re.search(before) or num_re.search(after_ctx) or re.search(r'[到至～]', before + after_ctx):
             return
 
@@ -199,19 +210,31 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     # 2.7-9 锚到交叉引用页 的根因）。
     at_head = m.start() <= 1
     ctx_self = (before[-90:] if len(before) > 90 else before) + after[:160]
+    near_after = after[:30]
+    near_before = before[-12:] if before else ""
+    # 🔴 A type word GLUED IMMEDIATELY BEFORE the number (e.g. "定理1.10.3" /
+    #    "定义1.10.1") is the item's OWN heading label and must outrank any type
+    #    word that merely appears AFTER the number in the statement.  Without this
+    #    precedence, "定理1.10.3对数列{an},定义αn=inf…" was mislabelled 定义 (定义 is a
+    #    verb here, not a header), fabricating a phantom 定义1.10.3 item, and even
+    #    "定理1.10.1设…已在定义1.10.1中描述" was mislabelled because 定义 sits in `after`.
+    #    Only Chinese type words are matched here (this extractor's label-before
+    #    form); English "N.S-N Lemma" headings leave `before` free of these tokens
+    #    and still fall through to the near_after preference below.
+    if _glued_before:
+        label = _label_from_raw(_glued_before.group(1))
     # A type word IMMEDIATELY adjacent to the number is the item's own heading
     # label and outranks type words mentioned later in the same block as
     # cross-references (e.g. "8.3-4 Corollary (...). In Theorem 8.3-3" must be
     # Corollary, not Theorem). Prefer the occurrence closest to the number.
-    near_after = after[:30]
-    near_before = before[-12:] if before else ""
-    la = _first_label_pos(near_after)
-    if la:
-        label = la
-    elif near_before:
-        lb = _first_label_pos(near_before)
-        if lb:
-            label = lb
+    if label == 'uncat':
+        la = _first_label_pos(near_after)
+        if la:
+            label = la
+        elif near_before:
+            lb = _first_label_pos(near_before)
+            if lb:
+                label = lb
     if label == 'uncat':
         lm = label_re.search(ctx_self)
         if lm:
@@ -234,7 +257,8 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
 
     text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
     raw_matches.append({'key': key, 'page': p, 'label': label,
-                        'text': text_preview, 'mstart': m.start()})
+                        'text': text_preview, 'mstart': m.start(),
+                        'glued_label': _glued})
 
 # ---------------------------------------------------------------------------
 # TWO-LEVEL numbering scheme (中文二级标签）
@@ -442,7 +466,15 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
 
     # ---- regexes (defined BEFORE the section-scan loop below) ----
     # Step 2: broader pattern (also catches 1.3.9 → 1.3-9)
-    num_re = re.compile(r'(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)\s*' + SEP_NUMERIC + r'\s*(\d+)')
+    # 🔴 comma-free separator: a real three-level item number is split ONLY by
+    #    dot / dash / whitespace ("1.3.3", "1.3-3"), never by a comma.  The old
+    #    SEP_NUMERIC class contained the full/half-width comma, so prose
+    #    enumerations like "i=1,2,3" or "1,0,2,0,3,…" matched as 3-component
+    #    numbers — fabricating phantom items (1.0-2 / 1.2-3) AND tripping the
+    #    step-3 range guard into falsely suppressing REAL headings whose body
+    #    holds a comma list (定义1.3.3 / 定理1.5.1 in 常庚哲数学分析 ch1).
+    _SEP_ITEM = r'[\s.\-–·．－〜]'
+    num_re = re.compile(r'(\d+)\s*' + _SEP_ITEM + r'\s*(\d+)\s*' + _SEP_ITEM + r'\s*(\d+)')
     label_re = re.compile(
         r'(?:定义|定理|引理|推论|命题|练习|习题)\s*（'
         r'|例(?:子)?'
@@ -554,7 +586,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     # that happens when the source book prints the same number twice (a printing
     # off-by-one).  The full rationale + the page/name-aware split lives in
     # item_dedup.dedup_items (shared module).
-    items = dedup_items(raw_matches)
+    items = dedup_items(raw_matches, unique_keys=True)
 
     # ---- Merge manual overrides (e.g. OCR-garbled items recovered by agent) ----
     if manual_overrides:

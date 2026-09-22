@@ -194,14 +194,15 @@ class TestBookConfigFromDict(unittest.TestCase):
 
     def test_ordinal_section_types_backcompat_table(self):
         # The exact reverse-inference table mandated by the change.
+        # 已弃用码 4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 不再入表（4→2、9/10→3、11→1）。
         self.assertEqual(ORDINAL_SECTION_TYPES[1], [1])
         self.assertEqual(ORDINAL_SECTION_TYPES[2], [1, 2])
         self.assertEqual(ORDINAL_SECTION_TYPES[3], [1, 2, 3])
-        self.assertEqual(ORDINAL_SECTION_TYPES[4], [1, 2])
-        # 原 type 7 (fraleigh, 节基 EN 两级) 已并入 type 4（chapter_first:false），
-        # 不再单列；补覆盖 type 8 (vakil EN 三级) / 9 (en3)。
+        # 补覆盖 type 8 (vakil EN 三级) 与附录/HUM 章。
         self.assertEqual(ORDINAL_SECTION_TYPES[8], [1, 2, 3])
-        self.assertEqual(ORDINAL_SECTION_TYPES[9], [1, 2])
+        self.assertEqual(ORDINAL_SECTION_TYPES[12], [1, 1])
+        self.assertEqual(ORDINAL_SECTION_TYPES[13], [1, 2])
+        self.assertEqual(ORDINAL_SECTION_TYPES[14], [1])
 
 # ==========================================================================
 # 2) primitive helpers

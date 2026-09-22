@@ -10,18 +10,23 @@
   1. 若 <extract_dir>/verify_config.json 已存在且非 --force：打印跳过并 exit 0。
   2. best-effort 检测 ordinal 与 formula（两者都**全量**扫描整本书，整书聚合后
      确认全局配置，**禁止抽样前 N 页**）：
-     - **全量**扫描整本书所有 page_*.json（sorted(glob)，不切片前 N 页），
-       用轻量正则判断条目标签形态：
-         * EN 两级（Theorem/Lemma/Definition/Proposition/Corollary N.M）→ 候选 4（en）
-         * CN 三级（定义|定义|引理|推论|命题 N.M.K）→ 候选 3
-         * CN 两级（定义|定义|引理|推论|命题 N.M）→ 候选 2
-       - 按特异性优先（CN 三级 > EN > CN 两级），都无命中则默认 3（three_level）。
+     - **全量**扫描整本书所有 page_*.json（sorted(glob)，不切片前 N 页），用带
+       位置护栏 + 交叉引用过滤的标签扫描收集『作为编号标题出现』的条头串，再交给
+       `OrdinalStyle.detect_style`（lib/ordinal_styles.py，与 md 侧抽键**同一套判定
+       标准**）按特异性优先投票出编号族：
+         * 单级 `定理2` → 1；两级 `定义1.1` → 2；三级 `定理1.1.1` → 3；
+           附录字母章位三级 `Definition A.1.1` → 13、两段 `Theorem B.2` → 14。
+         * 🔴 只产出 ordinal_styles 实现的码 {1,2,3,8,12,13,14}；旧码 4/9/10/11 已
+           废弃并折入 2/3/1（见 verify_config.DEPRECATED_ORDINAL_REMAP）。
+         * 8（vakil，序标在前 + 第三维字母）与 12（hum，裸标签 / 纯字母序标）无法被
+           数字锚定的页扫投票命中，改由 chapter_map 显式声明采纳。
+         * 一条编号条头都检不到 → family=None，**不回退默认 3**，调用方省略 ordinal 组。
      - formula：detect_formula() **全量**扫描所有 page_*.json 的 text[]，统计
        standalone (N)/（N）与 (C.N)/Eq. C.N/式（C.N）的数量，整书聚合并确认全局
        公式配置（type/depth/scope）。单分量 ≫ 多分量 → type1/depth1（scope 由
        是否「全书数值回落」判定：回落→scope3 节级重排，否则→scope1 全书）；多分量
        多 → type4/depth2/scope2；都抽不到返回 None（不写 formula 键）。
-  3. 写出 {"ordinal": [<组>, ...], "language": <en if 候选 in (4,5,6,8,9) else cn>}：
+  3. 写出 {"ordinal": [<组>, ...], "language": <按实际检出的标签词形判 en / cn>}：
      - 在同一遍整书扫描中，按 LABEL_FORMS 收集『作为编号标题出现』的全部条目类型
        标签词（含 Remark/评注/注、Exercise/习题/练习/问题/Problem、Axiom/公理 等，
        不再刻意排除），**并按下文规则分组**：
@@ -78,10 +83,9 @@ import glob
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from lib.numbering import ordinal_depth
+from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
-                           ORDINAL_APP2,
-                           ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
-                           ORDINAL_CN3LAB)
+                           ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
 
@@ -382,25 +386,6 @@ def _unnumbered_levels_from_recognized(extract_dir, letter_chapter=False):
 
 
 
-
-# EN 两级条目标签（无章号位）：Theorem/Lemma/Definition/Proposition/Corollary N.M
-EN_TWO_RE = re.compile(
-    r'\b(Theorem|Lemma|Definition|Proposition|Corollary)\s+\d+\.\d+')
-
-# EN 三级条目标签（Kreyszig 型）：标签 + 三段编号，或 三段编号 + 标签，例如
-# "Definition 1.5-3" / "1.5-3 Definition" / "Theorem 8.16.3"。
-# 必须在 EN_TWO_RE 之前判定：EN_TWO_RE 的 `\d+\.\d+` 会顺带吃掉三级编号的
-# 前两段（"Definition 1.5-3" → 匹配到 "Definition 1.5"），从而把 EN 三级书
-# 误判为 EN 两级（type 4），导致每个 "C.S-N" 项塌缩成 "Label C.S" 两级 key、
-# 丢弃段/项计数器——这正是 Kreyszig 类书被 make_config 错误生成配置后
-# 重建分章契约出现「大量遗漏」的根因。
-EN_THREE_RE = re.compile(
-    r'(?:\b(?:Theorem|Lemma|Definition|Proposition|Corollary)\s+\d+\.\d+[\.\-]\d+'
-    r'|\b\d+\.\d+[\.\-]\d+\s+(?:Theorem|Lemma|Definition|Proposition|Corollary)\b)')
-
-# CN 条目标签：定义|定义|引理|推论|命题 ... N.M（两级）或 N.M.K（三级）
-CN_TWO_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+(?!\.\d)')
-CN_THREE_RE = re.compile(r'(定理|定义|引理|推论|命题)\s*\d+\.\d+\.\d+')
 
 # --- entry-type label vocabulary (detected as numbered headings) -----------
 # The set of theorem-ish / remark labels that can appear as NUMBERED HEADINGS
@@ -728,7 +713,7 @@ def detect_formula(extract_dir, pages=None):
             if first_of_later < prev_max:
                 scope = 2
                 break
-        return {"type": 4, "scope": scope, "ignore": [], "letter_ch": True}
+        return {"type": 2, "scope": scope, "ignore": [], "letter_ch": True}
 
     if single_count > dotted_count and single_count > 0:
         # Single-component candidate.  Require CONFIDENT evidence of a genuine
@@ -752,9 +737,9 @@ def detect_formula(extract_dir, pages=None):
     if dotted_count > single_count and dotted_count > 0:
         # Two-component candidate (e.g. "(C.N)", "Eq. C.N", "式（C.N）").
         # Require a comparable minimum count so a handful of incidental dotted
-        # numbers don't fabricate a type-4 formula scheme.
+        # numbers don't fabricate a type-2 formula scheme.
         if dotted_count >= _FORMULA_MIN_COUNT:
-            return {"type": 4, "scope": 2, "ignore": []}
+            return {"type": 2, "scope": 2, "ignore": []}
     return None
 
 
@@ -848,25 +833,6 @@ def _group_headings_by_counter(headings, depth, strict_reset=True):
     groups.insert(0, primary)
     return groups
 
-
-def _group_cn3lab_by_label(headings):
-    """cn3lab（type 10）按标签族分组：各标签独立计数（同 C.S-N 被多种标签共用），
-    不依赖共享计数器合并逻辑（_group_headings_by_counter 会把同窗重复号判独立、
-    其余判共享而误并）。返回 list of label-form lists，每族一组。"""
-    from collections import defaultdict
-    by_canon = defaultdict(lambda: {"forms": set()})
-    for (ci, f, c) in headings:
-        canon = _FORM_CANON.get(f.lower())
-        if canon is None:
-            continue
-        by_canon[canon]["forms"].add(f)
-    if not by_canon:
-        return [["uncat"]]
-    order = {ff: (i, j) for i, (_, forms) in enumerate(LABEL_FORMS)
-             for j, ff in enumerate(forms)}
-    def sort_forms(fs):
-        return sorted(fs, key=lambda x: order.get(x, (999, 999)))
-    return [sort_forms(data["forms"]) for data in by_canon.values()]
 
 def _shares_main_counter(cand_comps, main_comps, strict_reset=True):
     """True iff the candidate family shares the SAME ascending counter as the
@@ -968,16 +934,16 @@ def _ordinal_from_chapter_map(extract_dir):
 
     chapter_map.json is the structural source of truth authored from the book's
     own sectioning.  For a section-based two-level book (e.g. Fraleigh) every
-    chapter entry carries ``"ordinal": 4`` and ``"chapter_first": false`` — the
+    chapter entry carries ``"ordinal": 2`` and ``"chapter_first": false`` — the
     first numeric component of an item key is the SECTION, not the chapter
     (``"Theorem 8.1"`` = §8 item 1).  The page-text scan in
     `_detect_ordinal_from_pages` CANNOT tell a section-based two-level scheme
-    (type 4 + chapter_first=False) apart from a plain chapter-based EN two-level
-    (type 4 + chapter_first=True) — both look like "Label N.M" — so the scan
-    always votes 4 and cannot know chapter_first.  We therefore trust
+    (type 2 + chapter_first=False) apart from a plain chapter-based EN two-level
+    (type 2 + chapter_first=True) — both look like "Label N.M" — so the scan
+    always votes 2 and cannot know chapter_first.  We therefore trust
     chapter_map's declaration for ``chapter_first`` when present and consistent.
 
-    For the scan-ambiguous ORDINAL *codes* (8=vakil, 9=en3) we additionally
+    For the scan-ambiguous ORDINAL *codes* (8=vakil, 12=Humphreys) we additionally
     adopt the declared code over the scan's guess.  A book whose chapters disagree
     on the ordinal (or carry none) returns None and falls back to the scan vote.
     """
@@ -1073,9 +1039,14 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     (b) detect which entry-type labels appear as numbered headings, then GROUP
     them by whether they share ONE ascending counter.
 
-    Family vote: specificity-first (CN three > EN three > EN two > CN two); no
-    hits -> default 3.  The EN-three check precedes EN-two so a three-level EN
-    book (Kreyszig) is not mis-detected as EN two-level.
+    Family vote: delegated to ``OrdinalStyle.detect_style`` (lib/ordinal_styles.py)
+    — the SAME judgment standard the md-side key parser uses — run over the
+    position-guarded, cross-ref-filtered heading STRINGS collected below.  It
+    votes specificity-first (three-level > two-level > single-level; appendix
+    letter-slot forms → 13/14) and returns None when no numbering style matches,
+    so the ONLY codes this can emit are the ones ordinal_styles implements
+    ({1,2,3,8,12,13,14}) — there is NO default type 3; a book with no detectable
+    numbered heading yields family None (ordinal group omitted, not fabricated).
 
     Label detection + grouping: during the SAME scan we collect every
     (canon_idx, raw_form, comps) heading.  ``_group_headings_by_counter`` then
@@ -1083,14 +1054,16 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     into ONE group and gives labels with an independent reset their OWN group.
     This is what the ``ordinal`` ARRAY is for — NOT a fixed main/other split.
 
-    Returns ``(family_int, groups, lang)`` where ``groups`` is a list of raw-
-    form lists (one per counter), primary group first; ``lang`` is the detected
-    language or None.
+    Returns ``(family_int, groups, lang, chapter_first)`` where ``groups`` is a
+    list of raw-form lists (one per counter), primary group first; ``lang`` is
+    the detected language or None; ``chapter_first`` is the chapter_map-declared
+    flag (True when chapter_map carries no contrary declaration).
 
     `pages` restricts the scan to an explicit list of `page_*.json` paths (the
     APPENDIX generator passes the appendix range only).  `letter_chapter=True`
-    enables the appendix letter-slot numbering detection (``Definition A.1.1``)
-    and lets the family vote elect ``ORDINAL_APP`` (13).
+    enables the appendix letter-slot numbering detection (``Definition A.1.1`` /
+    ``Theorem B.2``) so ``detect_style`` elects ``ORDINAL_APP`` (13, three-level)
+    or ``ORDINAL_APP2`` (14, two-level).
 
     Phase guard: only runs AFTER MM Repair is finished (`_extraction_done.json`
     present).  If MM Repair is incomplete we RAISE — never return a degraded
@@ -1104,9 +1077,9 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
             '严禁手写/手改 verify_config.json 绕过本护栏。')
     pages = pages if pages is not None else sorted(
         glob.glob(os.path.join(extract_dir, 'page_*.json')))
-    counts = {'cn_three': 0, 'en_three': 0, 'en': 0, 'cn_two': 0}
     label_res = _build_label_heading_regexes(letter_chapter=letter_chapter)
     headings = []   # (canon_idx, raw_form, comps_tuple)
+    heading_texts = []   # 原始「标签+编号」条头串，喂给 OrdinalStyle.detect_style 判族
     seen_en = False
     seen_cn = False
     for pg in pages:
@@ -1123,10 +1096,6 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
         for block in blocks:
             if not block:
                 continue
-            counts['cn_three'] += len(CN_THREE_RE.findall(block))
-            counts['en_three'] += len(EN_THREE_RE.findall(block))
-            counts['en'] += len(EN_TWO_RE.findall(block))
-            counts['cn_two'] += len(CN_TWO_RE.findall(block))
             stripped = block.lstrip()
             lead = len(block) - len(stripped)   # leading whitespace before match
             for ci, rx, form_by_lower in label_res:
@@ -1153,76 +1122,37 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
                     if not comps:
                         continue
                     headings.append((ci, form, comps))
+                    heading_texts.append(m.group(0))
                     if form[0].isascii() and form[0].isalpha():
                         seen_en = True
                     else:
                         seen_cn = True
 
-    # family vote — derived from the ACTUAL detected headings (position-guarded,
-    # cross-ref-filtered), which is far more robust than the raw regex counts
-    # (those also catch body cross-references).  Specificity-first:
-    # three-level > two-level > single-level.  A PURE single-level book (every
-    # detected entry is "Label N", e.g. Silverman) must NOT fall through to the
-    # default type 3 — it votes type 1 here.
-    # 附录字母章号——首分量是 str 而非 int，按**实际段数**分流成独立族：
-    # 三级 `A.1.1`（字母 + 节.号）→ ORDINAL_APP(13)；两段 `B.N`（字母 + 一段
-    # 数字，Lee ISM 附录实测）→ ORDINAL_APP2(14)。🔴 段数即体例，绝不把两段
-    # 书混判成 13 再靠下游宽容解析兜底（no-default / must-match 原则同样
-    # 适用于 ordinal 的形态归属）。
-    n_app3 = sum(1 for h in headings
-                 if len(h[2]) >= 3 and isinstance(h[2][0], str))
-    n_app2 = sum(1 for h in headings
-                 if len(h[2]) == 2 and isinstance(h[2][0], str))
-    n_single = sum(1 for h in headings
-                   if len(h[2]) == 1 and not isinstance(h[2][0], str))
-    n_two = sum(1 for h in headings
-                if len(h[2]) == 2 and not isinstance(h[2][0], str))
-    n_three = sum(1 for h in headings
-                  if len(h[2]) >= 3 and not isinstance(h[2][0], str))
-    if n_app3 > 0 and n_app3 >= n_app2 and n_app3 >= n_single \
-            and n_app3 >= n_two and n_app3 >= n_three:
-        family = ORDINAL_APP
-    elif n_app2 > 0 and n_app2 >= n_single and n_app2 >= n_two \
-            and n_app2 >= n_three:
-        family = ORDINAL_APP2
-    elif n_three > 0 and n_three >= n_two and n_three >= n_single:
-        # 中文三级「标签紧贴编号」-> cn3lab（type 10）自动改判。探测器原本只会给 3
-        # （没有 cn3lab 形态分支），靠 _print_cn3lab_guard 打印「人工确认」提示，
-        # 导致每本 cn3lab 书都误判 type 3 -> 契约键 1.3-1 被当成单一编号、丢失
-        # 「定义/定理/推论各自独立计数」结构 -> B 层假缺号、Q 层连锁误报、agent 必改。
-        # 证据足够强时直接判 10：复用 scan_cn3lab_evidence 的 hits/collisions
-        # （与 guard 阈值一致：行首条头>=20 或同 C.S-N 多标签撞号）。撞号是
-        # 「各标签独立计数」铁证，优先级最高。附录字母章位体例不触发本改判。
-        if (not letter_chapter) and seen_cn and _cn3lab_probe(extract_dir):
-            family = ORDINAL_CN3LAB
-        else:
-            family = 3
-    elif n_two > 0 and n_two >= n_single:
-        # CN two-level (type 2) vs EN two-level (type 4)
-        family = 2 if (seen_cn and not seen_en) else 4
-    elif n_single > 0:
-        family = 1
-    else:
-        # No position-guarded headings were detected.  Per the strict
-        # "no-default" rule there is NO fallback to the raw regex counts
-        # (those also catch cross-references / prose mentions) and NO default
-        # type.  The book simply has no detectable ordinal numbering — signal
-        # this with family=None so the caller omits the ordinal group entirely
-        # instead of fabricating a `{"type": 3}` uncat entry.
-        family = None
-    # Prefer a per-chapter `ordinal` declared in chapter_map.json for the codes
-    # the page scan CANNOT infer (8=vakil, 9=en3, 12=hum).  🔴 The scan only
-    # ever votes {1,2,3,4,10,13,14} — it reads SEGMENT COUNTS and the appendix
-    # letter slot, never label position (number-first) — so those three codes
-    # carry numbering shapes
-    # indistinguishable from plain two/three-level and MUST come from an explicit
-    # chapter_map declaration.  (A section-based two-level book like Fraleigh is
-    # plain type 4 on both axes — the scan already votes 4 — but we still pull
-    # its `chapter_first` flag from chapter_map below.)
+    # family vote — the numbering FAMILY is elected by ordinal_styles'
+    # `OrdinalStyle.detect_style`, the SAME judgment standard the rest of the
+    # pipeline uses (lib/ordinal_styles.py).  We feed it the position-guarded,
+    # cross-ref-filtered heading STRINGS collected above (e.g. '定理1.1.1',
+    # 'Definition A.1.1', 'Theorem B.2'), so the family decision and the md-side
+    # key parsing share ONE source of truth.  detect_style votes specificity-first
+    # (three-level > two-level > single-level; appendix letter-slot → 13/14) and
+    # returns None when no numbering style matches (unnumbered book) — the caller
+    # then OMITS the ordinal group rather than fabricating a `{"type": 3}` entry.
+    # 🔴 Only the codes ordinal_styles implements can be emitted: {1,2,3,8,12,13,14}
+    #    (None = unnumbered).  The legacy codes 4/9/10/11 are DEPRECATED and folded
+    #    into 2/3/1 via verify_config.DEPRECATED_ORDINAL_REMAP: an EN two-level book
+    #    now elects 2, a cn3lab book elects 3 (bare `C.S-N` key — per-label counters
+    #    are no longer distinguished at the family level), exactly as the user-directed
+    #    clean migration accepts.
+    style = OrdinalStyle.detect_style(heading_texts)
+    family = style.code if style is not None else None
+    # chapter_map may declare a code the page scan still cannot separate
+    # confidently — vakil (8, number-first + letter third dim) and Humphreys
+    # (12, bare / LETTER-only headings that the digit-anchored scan never
+    # captures).  Trust the explicit declaration for those two.
     cm = _ordinal_from_chapter_map(extract_dir)
     cm_ord = cm[0] if cm else None
     cm_chapter_first = cm[1] if cm else True
-    if cm_ord is not None and cm_ord in (8, 9, ORDINAL_HUM):
+    if cm_ord is not None and cm_ord in (8, ORDINAL_HUM):
         family = cm_ord
     # language: derive from the ACTUAL label forms seen
     if seen_en:
@@ -1259,9 +1189,7 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     # counter per chapter, so the page scan has NO chapter window to separate
     # shared vs independent counters (the window logic in _shares_main_counter
     # needs >=2 components) — use the domain convention (_group_single_level).
-    if family == ORDINAL_CN3LAB:
-        groups = _group_cn3lab_by_label(headings)
-    elif family == 1:
+    if family == 1:
         groups = _group_single_level(headings)
     else:
         # 契约证据是完备样本：min==1 的 reset 判据关闭（共享计数器书各标签
@@ -1692,8 +1620,9 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
                       if ordinal is not None else 'cn'))
     depth = ordinal_depth(ordinal)
     formula_cfg = detect_formula(extract_dir, pages=pages)
-    # scope: 三级（type 3/5/13）按「节」重置计数器 → scope=3；其余按章重置 → 2。
-    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 4: 2, 5: 3, 6: 2, 10: 3, 13: 3}
+    # scope: 三级（type 3）与附录字母章位三级（13）按「节」重置 → scope=3；
+    # 其余（单级 1 / 两级 2 / vakil 8 / hum 12 / 附录两级 14）按章重置 → 2。
+    SCOPE_BY_TYPE = {1: 2, 2: 2, 3: 3, 8: 2, 12: 2, 13: 3, 14: 2}
     ordinal_arr = []
     if ordinal is not None:
         if is_appendix:
@@ -1912,88 +1841,6 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
     return 0
 
 
-# --- 形态守卫（暴露型告警：只报告证据，不擅自改判）-----------------------
-# family=3（裸键 `C.S-N`）与 family=10（cn3lab，`标签C.S.N`）的分水岭是
-# **条头是否带中文标签**。探测器目前只会给 3（它没有 cn3lab 形态分支），
-# 而判错的代价极大：契约键由 `1.3-1` 承担「定义1.3.1 / 定理1.3.1 / 推论1.3.1」
-# 三种独立编号序列，键撞车 → B 层假缺号、条目门控假「编号不递增」。
-# 故此处**独立从源侧取证据**并在生成报告里显著告警，由 agent 决定是否改判
-# （改判会重排全书编号体系，必须人工确认，不在此自动执行）。
-_CN3LAB_HEAD_RE = re.compile(
-    r"^\s*(定义|定理|引理|推论|命题|公理|性质|例|注)\s*(\d{1,2})\.(\d{1,2})\.(\d{1,3})")
-_CN3LAB_ANY_RE = re.compile(
-    r"(定义|定理|引理|推论|命题|公理|性质|例|注)\s*(\d{1,2})\.(\d{1,2})\.(\d{1,3})")
-
-
-def scan_cn3lab_evidence(extract_dir):
-    """源侧「中文标签 + 紧贴三级编号」证据。返回 (hits, samples, collisions)。
-
-    ``hits``——行首即条头的命中数；``samples``——样例；``collisions``——
-    **同一 C.S-N 编号被两种以上标签共用**的编号列表（如 `1.3-1` 同时是
-    定义1.3.1 与定理1.3.1），即「各类标签各自独立计数」的铁证。
-    """
-    hits = 0
-    samples = []
-    by_key = {}
-    for fp in sorted(glob.glob(os.path.join(extract_dir, "page_*.json"))):
-        try:
-            with open(fp, encoding="utf-8") as f:
-                j = json.load(f)
-        except Exception:
-            continue
-        for x in (j.get("text") or []):
-            s = x if isinstance(x, str) else (x.get("text") or "")
-            s = str(s).strip()
-            if not s:
-                continue
-            if _CN3LAB_HEAD_RE.match(s):
-                hits += 1
-                if len(samples) < 5:
-                    samples.append(s[:44])
-            for m in _CN3LAB_ANY_RE.finditer(s):
-                lab, c, sN, n = m.group(1), m.group(2), m.group(3), m.group(4)
-                by_key.setdefault("%s.%s-%s" % (c, sN, n), set()).add(lab)
-    collisions = sorted(k for k, v in by_key.items() if len(v) > 1)
-    return hits, samples, collisions
-
-
-def _cn3lab_probe(extract_dir):
-    """源侧 cn3lab 证据是否足够强（中文标签紧贴三级编号）。
-
-    复用 ``scan_cn3lab_evidence`` 的 hits / collisions；阈值与 ``_print_cn3lab_guard``
-    一致：行首条头 >= 20 或存在同 C.S-N 多标签撞号。撞号是「各标签独立计数」铁证，
-    优先级最高，故 collisions 非空即判强证据。
-    """
-    hits, _, collisions = scan_cn3lab_evidence(extract_dir)
-    return hits >= 20 or bool(collisions)
-
-
-def _print_cn3lab_guard(extract_dir, family, groups):
-    """cn3lab 探测结论提示。family=10 时确认已自动改判；family 仍为 3 但证据强时
-    说明判定异常，提示人工复核。"""
-    hits, samples, collisions = scan_cn3lab_evidence(extract_dir)
-    if hits < 20 and not collisions:
-        return False
-    n_groups = len(groups or [])
-    print("")
-    print("=" * 72)
-    if family == ORDINAL_CN3LAB:
-        print("[CN3LAB] OK 源侧检出「中文标签 + 紧贴三级编号」形态（行首条头 %d 处，"
-              "撞号 %d 处）-> 已自动判定 ordinal=10（cn3lab），ordinal 数组分 %d 个 "
-              "group（各标签族独立计数）。" % (hits, len(collisions), n_groups))
-    else:
-        print("[CN3LAB] WARN 源侧检出「中文标签 + 紧贴三级编号」形态（行首条头 %d 处），"
-              "但探测 family=%s（非 10）。" % (hits, family))
-        if collisions:
-            print("  * 撞号 %d 处：同一编号被多种标签共用（例：%s）"
-                  % (len(collisions), "、".join(collisions[:6])))
-            print("    -> 定义/定理/推论/例【各自独立计数】，并非共享一个计数器；")
-            print("      若 ordinal 把它们并成一组，B 层会把「定义1.3.1 + 定理1.3.1」当成缺号。")
-        print("  * 建议确认是否应改用 type 10（cn3lab）；当前判定需人工复核。")
-    print("=" * 72)
-    return True
-
-
 def main():
     args = sys.argv[1:]
     force = '--force' in args
@@ -2039,8 +1886,6 @@ def main():
     # Labels that ascend together share ONE group; labels with an independent
     # counter get their OWN group — that is what the `ordinal` ARRAY is for.
     config, family, groups, ordinal, depth = _build_config_dict(extract_dir, cfg_path)
-    # 🔴 形态守卫：family=3 时核对「中文标签紧贴编号」证据（cn3lab 判型风险）
-    _print_cn3lab_guard(extract_dir, family, groups)
 
     # 🔴 附录 / 补篇子配置：分别按 chapter_map 的 kind 扫对应页区间生成（字母章位
     # 体例），Supplement 与 Appendix 分别落键，绝不混称。缺某一类则回退主配置。
@@ -2085,8 +1930,8 @@ def main():
     print("     · 三级书（type 3/5，编号形如 1.5-3 / I.2.11）现在自动")
     print("       赋 scope=3（每段重置计数器）；此前写死 scope=2 会让")
     print("       item_numbering_integrity 误报跨节断号。EN 三级书（如 Kreyszig，")
-    print("       编号 Definition 1.5-3）也会正确判为 type 3，不再误判为 EN 两级")
-    print("       （type 4）而塌缩三级项。")
+    print("       编号 Definition 1.5-3）也会正确判为 type 3，不再误判为英文两级")
+    print("       （原 type 4，现并入 type 2）而塌缩三级项。")
     print("     · 小节层级 section_types 现已由 OCR 自动识别（2/3/4 级，上限 4），")
     print("       不再限制为 2 或 3 级；含混合深度（如 20.5 + 20.5.1）的书也会被完整识别；")
     print("       层级深度由 verify_config.py 的 SECTION_TYPE_DEPTH 派生，不单独存储。")

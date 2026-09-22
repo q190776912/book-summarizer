@@ -126,7 +126,8 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 # Canonical `type` -> numbering-depth map.  SINGLE source of truth in
 # `lib.numbering.ORDINAL_DEPTH`; depth is always derived from `type` via
 # `lib.numbering.ordinal_depth`, never a second, drift-prone local copy.
-from lib.numbering import ORDINAL_DEPTH, ordinal_depth, OrdinalDepthError
+from lib.numbering import (ORDINAL_DEPTH, ordinal_depth, OrdinalDepthError,
+                           resolve_ordinal_code)
 
 # Heading regex used to assign a book-source formula its enclosing section.
 # Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ..."
@@ -1206,7 +1207,8 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     agnostic_nums = agnostic.all_numbers()
 
     configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False,
-                                    ncomp=ordinal_depth(formula.get('type')))
+                                    ncomp=ordinal_depth(
+                                        resolve_ordinal_code(formula.get('type'))))
     configured.build(ctx.ch, ctx.start, ctx.end)
     configured_nums = configured.all_numbers()
 
@@ -1220,7 +1222,7 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
             return None
         _ft = formula.get('type')
         try:
-            _fd = ordinal_depth(_ft)
+            _fd = ordinal_depth(resolve_ordinal_code(_ft))
         except OrdinalDepthError:
             _fd = '未登记'
         return (f"`formula` 配置 (type={_ft}, "
@@ -1840,7 +1842,8 @@ class QLayer(VerifyLayer):
         # Cross-chapter guard (first component == current chapter) is ON iff
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
-        ncomp = ordinal_depth(ftype)
+        # raw config 里可能是存量弃用码（4/9/10/11），须先归一再取 depth。
+        ncomp = ordinal_depth(resolve_ordinal_code(ftype))
         # `formula.letter_ch` (default False): letter-chapter-led numbering
         # `(A.3)` / `（B.12）`（Lee ISM appendices）.  Patterns and norm() then
         # accept a single leading capital letter; the cross-chapter guard

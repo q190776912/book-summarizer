@@ -28,7 +28,7 @@ _boot.setup()
 from data.book_structure.book_structure import BookStructure
 
 from key_parse import keys_in_md, _first_num
-from verify_config import (ORDINAL_EN, ORDINAL_EN3,
+from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
                            ORDINAL_HUM, ORDINAL_APP, ORDINAL_APP2,
                            _canon_label,
                            TYPE_TO_LABEL_CN as TYPE_TO_LABEL)
@@ -234,7 +234,8 @@ def md_keys_for_chapter(md_file, cfg, ch):
     # 🔴 2026-08-26 fix: 单层键（无点分隔符，如 `例1`、`Remark 2`）的首数是
     # 条目号而非章号，chapter_first 过滤会把它们全部误删（例1→首数1≠3→丢弃）。
     # 仅对点分两层键（`定理3.3`、`命题3.7`）应用章过滤；单层键不过滤。
-    if cfg.primary_type in (ORDINAL_EN, ORDINAL_EN3) and cfg.chapter_first:
+    if (cfg.primary_type in (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL) and
+            getattr(cfg, "language", None) == "en") and cfg.chapter_first:
         entry_keys = {k for k in entry_keys if '.' not in k or _first_num(k) == ch}
         all_keys = {k for k in all_keys if '.' not in k or _first_num(k) == ch}
     return entry_keys, all_keys

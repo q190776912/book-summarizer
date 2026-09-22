@@ -136,12 +136,31 @@ def _load_known_book(ext):
             for x in (formula.get("known_book") or []):
                 nums.add(str(x).strip())
 
+    def _harvest_node(node):
+        """从一处配置节点采集 known_book：节点自身是 formula map，或节点是含
+        ``formula`` 子 map 的（子）配置组。"""
+        if not isinstance(node, dict):
+            return
+        _harvest(node.get("formula"))
+        # 节点自身即是一个 formula map（含 type/scope/known_book 键）的兜底
+        if "known_book" in node:
+            _harvest(node)
+
+    # 扁平形状：顶层 ``formula``
     _harvest(cfg.get("formula"))
+    # 外层 map 形状（当前 SSOT）：顶层按 kind 路由的组 ch/appendix/supplement，
+    # 每组的 ``formula.known_book``。
+    for grp in (cfg.get("ch"), cfg.get("appendix"), cfg.get("supplement")):
+        _harvest_node(grp)
+    # 历史 ``data`` 包装形状（若有）：data[section]["formula"]
     data = cfg.get("data")
     if isinstance(data, dict):
         for sub in data.values():
-            if isinstance(sub, dict):
-                _harvest(sub.get("formula"))
+            _harvest_node(sub)
+    # 兜底：遍历所有顶层 dict 值，采集其 ``formula.known_book``（对未知分组名稳健）
+    for v in cfg.values():
+        if isinstance(v, dict):
+            _harvest_node(v)
     return nums
 
 

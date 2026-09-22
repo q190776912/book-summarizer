@@ -76,7 +76,7 @@ import re
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
-from lib.numbering import ordinal_depth
+from lib.numbering import ordinal_depth, resolve_ordinal_code
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                        ConfigLoader, ConfigError)
 
@@ -469,7 +469,7 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
 # (western/EN/GM 2-level), or 'cn' (Chinese 3-level).
 def _mode_for_ordinal(ordinal, language=None):
     o = int(ordinal)
-    depth = ordinal_depth(o)
+    depth = ordinal_depth(resolve_ordinal_code(o))
     # Explicit book `language` (from verify_config.json) wins: a three-level
     # EN book (e.g. Vakil, ordinal=8 / 3 + language=en) numbers western-style
     # (number-first, N.S.item) and must use the `three-level` parser, NOT the

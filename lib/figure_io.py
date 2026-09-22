@@ -31,7 +31,7 @@ _NEVER_RE = re.compile(r"[^\s\S]")
 from lib.numbering import ordinal_depth, OrdinalDepthError
 # `ConfigError` 来自 verify_config —— lib -> config 的反向导入是既有安全模式
 # （见 lib/key_parse.py:43），boot 阶段已将 verify_config 注册为顶层可导入名。
-from verify_config import ConfigError
+from verify_config import ConfigError, DEPRECATED_ORDINAL_REMAP
 
 # Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
 # is matched separately (it carries no ASCII letters).
@@ -165,7 +165,12 @@ def load_fig_components(out_dir):
                         # 🔴 声明 figure group `type` 必须登记 depth；未登记即
                         # 注册/配置 bug（ordinal_depth 抛 OrdinalDepthError），
                         # type:0 (UNNUMBERED) = 显式「无图编号」-> depth 0。
-                        return ordinal_depth(t)
+                        # 🔴 本函数**直读 raw JSON**，绕过了 `BookConfig.from_dict`
+                        # 的弃用码归一，故必须自己套用 DEPRECATED_ORDINAL_REMAP
+                        # （4/9/10/11 -> 2/3/3/1）：存量 type-4 配置否则会拿未登记
+                        # 码去查 ORDINAL_DEPTH 并抛 OrdinalDepthError 硬崩
+                        # （实测：Koopman 全书 verify --all 因此崩溃）。
+                        return ordinal_depth(DEPRECATED_ORDINAL_REMAP.get(t, t))
                     # figure group 存在但缺 `type`：缺失即报错，不得默认。
                     raise ConfigError(
                         "figure group 已声明但缺 `type`：无图请显式声明 `type: 0`，"

@@ -88,8 +88,9 @@ from data.book_structure.book_structure import (chapter_json_path,
                                                 list_chapter_keys,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
-from lib.numbering import (ordinal_depth, formula_paren_tag_re,
-                           formula_tag_number, formula_tag_re)
+from lib.numbering import (ordinal_depth, resolve_ordinal_code,
+                           formula_paren_tag_re,
+                           formula_tag_number, formula_trailing_tag, formula_tag_re)
 from lib.page_dir import node_page_dir as _node_page_dir
 
 OUT_DIR_NAME = "book_structure"
@@ -247,6 +248,8 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
     ncomp, scope, letter, bare = formula_cfg(ext, ch)
     _dir = page_dir or ext
     blocks = []
+    # 跨页累积：已认领的公式编号（一个编号全书只挂一次，第二次出现是 OCR 碎片）
+    claimed = set()
     for p in range(int(start), int(end) + 1):
         fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
@@ -298,6 +301,15 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
         if disp_boxes:
             kept = []
             for tb in texts:
+                # 🔴 末尾编号载体豁免重复行剔除：OCR 把「公式文本 + 右缘编号」读成
+                # 一整块时，其 poly 与公式 bbox **大面积重合**（Koopman 实测
+                # 5.12 / 7.17 / 20.9 重叠 78–100%），若按重复行删掉，该编号就
+                # 永远挂不上（契约里直接消失）。保留它，交由 `_attach_formula_tags`
+                # 摘取末尾编号并消耗掉该块。
+                if formula_trailing_tag(tb["text"], ncomp, letter=letter,
+                                        bare=bare):
+                    kept.append(tb)
+                    continue
                 bx0, by0, bx1, by1 = tb["x"], tb["y"], tb["x1"], tb["bottom"]
                 ta = max(bx1 - bx0, 0.0) * max(by1 - by0, 0.0)
                 dup = False
@@ -324,7 +336,8 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
         page_blocks = _attach_formula_tags(page_blocks, ncomp,
                                            letter=letter, bare=bare,
-                                           scope=scope, ch=ch)
+                                           scope=scope, ch=ch,
+                                           claimed=claimed)
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
@@ -376,7 +389,7 @@ def formula_cfg(ext, ch=None):
             if not fc and isinstance(data.get("ch"), dict):
                 fc = data["ch"].get("formula")
             fc = fc or {}
-            ncomp = ordinal_depth(fc.get("type"))
+            ncomp = ordinal_depth(resolve_ordinal_code(fc.get("type")))
             s = fc.get("scope")
             if isinstance(s, int):
                 scope = s
@@ -396,7 +409,7 @@ def tag_re(ext, bare=True, ch=None):
 
 
 def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
-                         scope=None, ch=None):
+                         scope=None, ch=None, claimed=None):
     """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
     并从散文流剔除该文本块（纯版面锚点，不是正文）。
 
@@ -425,6 +438,19 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
 
     纯几何 + 文本判定，无状态，保证 check_content_completeness 的
     确定性复算两侧一致。
+
+    🔴 **一块可挂多个编号**：多行公式组在原书里逐行编号，几何上这些编号都落在
+    同一个（很高的）公式 bbox 内。全部合格编号按 y 升序一并挂上——``tag`` 取
+    首个（既有单号语义不变），``tags`` 为完整列表（供单元级 tag 对账作真值）。
+
+    🔴 **末尾编号**（OCR 把「公式文本 + 右缘编号」读成一整块，如
+    ``'…dt.  (3.35)'``）也算编号锚点，但需额外护栏：该文本块必须与 display 公式
+    **实质垂直重叠**（≥ 自身高度 60%）——它本就是公式的 OCR 读数行（实测真例
+    91–100%）。散文行末尾的交叉引用（``…flow (6.20),``）与公式无重叠，据此排除。
+    🔴 **一个编号只认一次**：``claimed`` 是跨页共享的「已认领编号」集合。同一
+    编号在全书只应出现一次（章级编号书的编号唯一），故第二次出现必是 OCR 碎片
+    或截断（实测 Koopman：p166 的 ``…=01.1.(6.7)`` 实为 ``(6.70)`` 的截断，
+    真正的 (6.7) 在 p153）→ 不得再挂，否则制造假「缺编号」。
     """
     tags = []
     # 跨章守卫（与 Q 层 `norm().split('.')[0] == ch` 同口径）：章级编号书
@@ -443,12 +469,26 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
             continue
         raw = (b["text"] or "").strip()
         num = formula_tag_number(raw, ncomp, letter=letter, bare=bare)
+        trailing = None
+        if num is None:
+            # 编号粘在文本块末尾：OCR 把「公式文本 + 右缘编号」读成一整块
+            tr = formula_trailing_tag(raw, ncomp, letter=letter, bare=bare)
+            if tr is not None:
+                num, trailing = tr[0], tr[1]
         if num is not None:
             if _guard_head is not None:
                 head = re.split(r"[.\-–]", str(num).strip(), maxsplit=1)[0]
                 if head.upper() != _guard_head.upper():
                     continue   # 跨章引用 / OCR 碎片：不挂为编号
-            tags.append((b, num, raw[:1] in "（("))
+            if trailing is None:
+                tx = b["x"]                      # 独立编号块：整块就是编号
+                paren = raw[:1] in "（("
+            else:
+                # 末尾编号：按字符数比例从右缘回推其横向位置
+                frac = min(len(trailing) / max(len(raw), 1), 1.0)
+                tx = b["x1"] - frac * max(b["x1"] - b["x"], 1.0)
+                paren = trailing[:1] in "（("
+            tags.append((b, num, paren, trailing is not None, tx))
     if not tags:
         return page_blocks
     consumed = set()
@@ -466,23 +506,45 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
         x_paren = min(b["x1"] - 5.0, b["x"] + 0.5 * fw)
         x_bare = min(b["x1"] - 5.0, b["x"] + 0.75 * fw)
         x_left = b["x"] + 5.0
-        best = None
-        for t, num, paren in tags:
+        hits = []
+        for t, num, paren, trailing, tx in tags:
             if id(t) in consumed:
                 continue
-            tcy = (t["y"] + t["bottom"]) / 2.0
-            ov = min(t["bottom"], b["bottom"]) - max(t["y"], b["y"])
-            if abs(tcy - cy) > 0.6 * hh and ov < -0.2 * hh:
+            # 已在别处认领过的编号不再挂（OCR 截断 / 碎片会造出重复编号）
+            if claimed is not None and str(num) in claimed:
                 continue
-            on_right = t["x"] >= (x_paren if paren else x_bare)
+            ov = min(t["bottom"], b["bottom"]) - max(t["y"], b["y"])
+            if trailing:
+                # 🔴 末尾编号必须与 display 公式**实质垂直重叠**——该文本行正是
+                # 公式的 OCR 读数行（实测真例 91–100% 自身高度）。散文行末尾的
+                # 交叉引用（``…flow (6.20),``）与最近公式 ov<0，据此排除。
+                if ov < 0.6 * min(max(t["bottom"] - t["y"], 1.0), hh):
+                    continue
+            else:
+                tcy = (t["y"] + t["bottom"]) / 2.0
+                if abs(tcy - cy) > 0.6 * hh and ov < -0.2 * hh:
+                    continue
+            on_right = tx >= (x_paren if paren else x_bare)
             on_left = t["x1"] <= x_left
             if not (on_right or on_left):
                 continue
-            if best is None or t["x"] < best[0]["x"]:
-                best = (t, num)
-        if best is not None:
-            b["tag"] = best[1]
-            consumed.add(id(best[0]))
+            hits.append((t, num))
+        if hits:
+            # 🔴 多行公式组（`\begin{array}` / aligned）在原书里**逐行编号**，而 MFD
+            # 把它识别成**一个**公式块（bbox 纵向很高）。旧实现「一块只挂一个编号」，
+            # 组内其余编号只能掉进散文 → 契约只认 1 个 tag，而 agent 在步骤 5 把
+            # array 拆成逐条公式并各自保留原书编号 → 门控报大量**假「编造」**
+            # （实测 Koopman ch3：块 y=[220,420] 内含 3.21+3.22，块 y=[692,819]
+            # 内含 3.23+3.24+3.25）。改为块内全部合格编号按文档序（y 升序）一并
+            # 挂上：`tag` 仍为首个（兼容既有单号语义），`tags` 为完整列表。
+            hits.sort(key=lambda z: (z[0]["y"], z[0]["x"]))
+            b["tag"] = hits[0][1]
+            if len(hits) > 1:
+                b["tags"] = [str(n) for _, n in hits]
+            for t, num in hits:
+                consumed.add(id(t))
+                if claimed is not None:
+                    claimed.add(str(num))
     if consumed:
         page_blocks = [b for b in page_blocks if id(b) not in consumed]
     return page_blocks
@@ -846,6 +908,9 @@ def _to_content(b):
     out = {"formula": b["latex"], "display": bool(b["display"])}
     if b.get("tag"):
         out["tag"] = b["tag"]
+    # 多行公式组逐行编号：`tags` 为该块携带的**全部**编号（文档序），`tag` 是首个。
+    if b.get("tags"):
+        out["tags"] = list(b["tags"])
     return out
 
 

@@ -100,29 +100,25 @@ SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 ORDINAL_SINGLE = 1
 ORDINAL_TWO_LEVEL = 2      # CN two-level (N.M, section-first); no chapter filter
 ORDINAL_THREE_LEVEL = 3    # CN three-level (N.M.K) — default
-ORDINAL_EN = 4             # EN two-level (N.M, chapter-first; rich EN labels)
+# 🔴 已弃用码（2026-09-21）：4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 不再作为独立
+#    编号类型产出或识别，其体例并入就近的 ordinal_styles 类型：
+#        4 → 2（EN 两级已由 ordinal_styles.OrdinalTwoLevelCN 覆盖）
+#        9 → 3（EN3 与 type 3 识别同构，规范键漂移为裸号 1.1-1）
+#       10 → 3（CN3LAB 同构，键漂移；与 type 3 共享计数）
+#       11 → 1（Ross 单级字母后缀，已由 OrdinalSingle._key_to_tuple 支持）
+#    存量 verify_config.json 若含这些码，由 BookConfig.from_dict 经
+#    DEPRECATED_ORDINAL_REMAP 在加载时透明映射并打印一次弃用警告；运行时只认
+#    ORDINAL_CODES 中的码。
+#    🔴 映射表本体 = `lib.numbering.DEPRECATED_ORDINAL_REMAP`（唯一真源，见本
+#    模块下方 import 处再导出），此处不复制字面量——两份必然漂移。
+_DEPRECATED_WARNED: Set[int] = set()
+def _warn_deprecated_ordinal(old: int, new: int) -> None:
+    if old in _DEPRECATED_WARNED:
+        return
+    _DEPRECATED_WARNED.add(old)
+    print(f"[CONFIG] ordinal type {old} deprecated, remapped to {new} on load (9/10->3, 11->1, 4->2)."
+          f" Re-run make_config.py --force to regenerate.", file=sys.stderr)
 ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
-ORDINAL_EN3 = 9             # EN three-level, LABEL-FIRST dots (Label C.S.N), e.g. Lasota & Mackey
-                          #   《Chaos, Fractals, and Noise》. 条目形如 `Remark 1.1.1` /
-                          #   `Definition 2.3.4` / `Theorem 3.2.1`，编号三段 C.S.N；与 type 3
-                          #   (CN 三级虚线键 `C.S-N`) 不同：要求显式英文标签词，因此天然
-                          #   排除 `FIGURE 1.1.1` / `(1.1.1)` 等图号/公式号（避免键碰撞）。
-ORDINAL_CN3LAB = 10         # CN three-level, LABEL-FIRST dots (标签C.S.N), e.g. 孙文祥《遍历论》.
-                          #   条目形如 `定理1.1.1` / `定义2.3.4` / `例2.1.6`，三段 C.S.N 且
-                          #   **每类标签各自独立计数、每节重置**（定义1.1.1 与 定理1.1.1 并存）。
-                          #   与 type 3（CN 三级裸键 `C.S-N`，共享计数器）不同：键内嵌规范中文
-                          #   标签（`定理1.1.1`，与 type 9 的 `评注1.1.1` 同构），要求块首显式
-                          #   标签词，天然排除三级小节标题（`2.3.1 Birkhoff遍历定理的陈述`——
-                          #   数字在前）与裸 `C.S.N` 图号/公式号，避免键碰撞。
-
-ORDINAL_ROSS = 11           # EN section-scoped LETTER-numbered (S. Ross《A First Course in
-                          #   Probability》). 条目形如 `Example 2a`（节号+小写字母，节内独立计数）、
-                          #   `Proposition 4.1` / `Theorem 7.1` / `Lemma 2.1` / `Corollary 4.1`
-                          #   （节号.节内序号）、`Axiom 1`（纯单数字）。键保留原书印刷形态
-                          #   （"Example 2a"），md/契约规范键 = 规范中文标签 + 原编号（例2a /
-                          #   命题4.1 / 公理1）。章末习题块（Problems / Theoretical Exercises /
-                          #   Self-Test Problems and Exercises）以 exercise_region_headings
-                          #   配置驱动扫描闩。
 
 ORDINAL_HUM = 12             # EN subsection-keyed BARE/LETTER items (Humphreys《Introduction
                           #   to Lie Algebras and Representation Theory》GTM 9,
@@ -170,30 +166,30 @@ ORDINAL_APP2 = 14             # APPENDIX LETTER-CHAPTER two-level (附录字母�
                               #   键解析分支保留两段宽容仅供历史 config 兼容。
                               #   （A/B/C…，可含 C/D/M 等与罗马字符同形的字母），
                               #   二者正则不可混用，故独立成码。
-ORDINAL_CODES = (0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14)
+ORDINAL_CODES = (0, 1, 2, 3, 8, 12, 13, 14)
 ORDINAL_NAME = {
     0: 'unnumbered',
     1: 'single', 2: 'two_level', 3: 'three_level',
-    4: 'en', 8: 'vakil', 9: 'en3', 10: 'cn3lab', 11: 'ross',
+    8: 'vakil',
     12: 'hum', 13: 'app', 14: 'app2',
 }
 # Numbering depth (numeric components) per ordinal code.
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
-from lib.numbering import ORDINAL_DEPTH, ordinal_depth  # noqa: F401  (re-exported)
+from lib.numbering import (ORDINAL_DEPTH, ordinal_depth,  # noqa: F401  (re-exported)
+                          DEPRECATED_ORDINAL_REMAP, resolve_ordinal_code)
 from data.book_structure.book_structure import (  # noqa: E402
     chapter_label, KIND_CHAPTER, KIND_APPENDIX, KIND_SUPPLEMENT, _resolve_kind,
     prime_chapter_kinds)
 # Structural style per ordinal code (None = common depth-driven parsing).
-ORDINAL_STRUCTURE = {0: None, 1: None, 2: None, 3: None, 4: None, 8: None, 9: None, 10: None,
-                     11: None, 12: None, 13: None, 14: None}
+ORDINAL_STRUCTURE = {0: None, 1: None, 2: None, 3: None, 8: None,
+                     12: None, 13: None, 14: None}
 # Default language per ordinal code (common CN families -> cn, EN families -> en).
-ORDINAL_LANGUAGE_DEFAULT = {0: 'cn', 1: 'cn', 2: 'cn', 3: 'cn', 4: 'en', 8: 'en', 9: 'en',
-                            10: 'cn', 11: 'en', 12: 'en', 13: 'en', 14: 'en'}
+ORDINAL_LANGUAGE_DEFAULT = {0: 'cn', 1: 'cn', 2: 'cn', 3: 'cn', 8: 'en',
+                            12: 'en', 13: 'en', 14: 'en'}
 # Back-compat: legacy STRING ordinal values -> int code (with a warning).
 _LEGACY_ORDINAL_STR = {
     'single': 1, 'two_level': 2, 'two-level': 2, 'three_level': 3, 'three-level': 3,
-    'en': 4,
 }
 
 # --- 静默回退显性化（进程级去重） -------------------------------------------
@@ -306,9 +302,8 @@ ORDINAL_SECTION_TYPES = {
     # 若本书节确实是 `## § <标题>` 无数字小节，显式标 `section_types: [1, 0]`
     # （role 0 = SECTION_ROLE_UNNUMBERED），届时走 recognize_sections 清单路径。
     0: [1],
-    1: [1], 2: [1, 2], 3: [1, 2, 3], 4: [1, 2],
+    1: [1], 2: [1, 2], 3: [1, 2, 3],
     8: [1, 2, 3],
-    9: [1, 2], 10: [1, 2, 3], 11: [1, 2, 3],
     # ORDINAL_APP（13）：附录章的节印 `A.1` / `A.2`（字母章位 + 节号两段）。
     # 通用 D 层路径按「token 首分量 == 章号」投影，而附录章号是字母 'A'、
     # 数字节号首分量是 1/2/…，二者永不相等 ⇒ D 层对附录章自然 vacuous PASS
@@ -829,6 +824,9 @@ class BookConfig:
                     raise ConfigError(
                         f"[CONFIG] ordinal[{i}].type={g.get('type')!r} 不是合法整数"
                         f"（编号体例匹配不成功）。")
+                if t in DEPRECATED_ORDINAL_REMAP:
+                    _warn_deprecated_ordinal(t, DEPRECATED_ORDINAL_REMAP[t])
+                    t = DEPRECATED_ORDINAL_REMAP[t]
                 if t not in ORDINAL_CODES:
                     raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）")
                 nm = g.get('name') or ["uncat"]

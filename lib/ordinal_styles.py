@@ -483,9 +483,9 @@ _LEAD_GUARD = (r'(?<!\d' + SEP_TIGHT + r')'
 #
 # page 形态同样双向 + 标签感知（type3 必须带标签，否则 ``1.1.1`` 这种节号会被
 # 误判），段数特异度由 classify 的 depth 降序保证。CN 三级「标签紧贴编号」
-# （type10 / cn3lab）在纯文本下与 type3 同形，区分交给 make_config 的
-# ``_cn3lab_probe``，不在本 pilot 的 classify 内（与 _detect_ordinal_from_pages
-# 默认 type3 一致）。
+# （原 type10 / cn3lab，已弃用并入 type3）在纯文本下与 type3 同形，故 detect_style
+# 直接把它选为 type3（裸 ``C.S-N`` 键、丢按标签独立计数），不再单设探针
+# （与 _detect_ordinal_from_pages 默认 type3 一致）。
 _PAGE_RE_SINGLE = re.compile(
     r'(?:(' + _LABEL_ALT + r')\s*(\d+)' + _SUFFIX_RE +
     r'|' + _LEAD_GUARD + r'(\d+)' + _SUFFIX_RE + r'\s*(' + _LABEL_ALT + r'))'

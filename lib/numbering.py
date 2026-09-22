@@ -35,11 +35,16 @@ HOM_MD_ENTRY_RE = re.compile(r'\*\*(定义|定理|引理|推论|命题)\s*(\d{1,
 # Numbering depth (= number of numeric components) per ordinal style code.
 # 🔴 这是 `ORDINAL_DEPTH` 的**唯一定义处**——`config/verify_config/verify_config.py`
 # 与 `lib/figure_io.py` 一律从这里导入，禁止再各抄一份（抄副本必然漂移）。
-ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 4: 2, 8: 3, 9: 3, 10: 3, 11: 2, 12: 1,
+ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 8: 3, 12: 1,
                  # 0 = UNNUMBERED：条目**不带任何编号**（无数字分量 ⇒ 段数 0）。
                  # 它是「未声明 ordinal」的内部兜底组，也可由用户显式声明
                  # （`{"type": 0, ...}` 表示本书条目无编号）。🔴 必须登记 0，否则
                  # `ORDINAL_DEPTH.get(0, 3)` 会给无编号组安上 depth=3 的幻影默认。
+                 # 🔴 已弃用码：4(EN 两级)→2、9(EN3)→3、10(CN3LAB)→3、11(Ross)→1；
+                 #    映射表 = 本文件下方 DEPRECATED_ORDINAL_REMAP（唯一真源，
+                 #    verify_config 只再导出）；BookConfig.from_dict 在加载时映射，
+                 #    运行时不再直接识别（见 verify_config.md）。直读 raw config
+                 #    的消费方须自调 resolve_ordinal_code 归一。
                  # 13 = ORDINAL_APP：附录字母章号三级体例 `Label A.1.1`（章位是
                  # 字母 A/B/C…，后跟 节.号 两个数字段），段数同样是 3。
                  13: 3,
@@ -73,9 +78,33 @@ def ordinal_depth(ocode):
     try:
         return ORDINAL_DEPTH[ocode]
     except KeyError:
-        raise OrdinalDepthError(
+            raise OrdinalDepthError(
             f"ordinal type {ocode!r} 未登记 depth：须在 ORDINAL_DEPTH 注册 "
             f"（合法码 {sorted(ORDINAL_DEPTH)!r}）")
+
+
+# ---------------------------------------------------------------------------
+# Deprecated ordinal codes（弃用码 -> 就近体例码）——唯一真源
+# ---------------------------------------------------------------------------
+# 🔴 与 ORDINAL_DEPTH 同处定义，`config/verify_config/verify_config.py`
+# 只做再导出，其余消费方（lib/figure_io、verify/formula_tag、
+# flows/…/attach_content、flows/…/scan_skeleton）一律从这里导入，
+# **禁止各抄一份字面量**——抄副本必然漂移。
+DEPRECATED_ORDINAL_REMAP = {4: 2, 9: 3, 10: 3, 11: 1}
+
+
+def resolve_ordinal_code(ocode):
+    """Normalise a possibly-deprecated ordinal `type` before `ordinal_depth`.
+
+    `ordinal_depth` 对未登记码（含已弃用的 4/9/10/11）**硬报错是故意的**：
+    注册/配置 bug 必须暴露，不做静默兜底。但**直读 raw verify_config.json**
+    的消费方不经过 `BookConfig.from_dict` 的归一，拿到的可能正是存量弃用码，
+    它们必须先调本函数归一再交给 `ordinal_depth`，否则存量 type-4 书会直接
+    崩溃（实测：Koopman 全书 `verify --all` 先后崩于 figure_io 与 formula_tag）。
+    """
+    if ocode is None:
+        return None
+    return DEPRECATED_ORDINAL_REMAP.get(ocode, ocode)
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +172,30 @@ def formula_tag_re(ncomp=None, bare=True, letter=False):
     注释）。
     """
     core = formula_num_core(ncomp, letter=letter)
+    return re.compile(r'^(?:%s)$' % '|'.join(_formula_tag_variants(ncomp, bare, letter)))
+
+
+def _formula_tag_variants(ncomp=None, bare=True, letter=False):
+    """公式编号的**形态变体**列表（唯一构造处，`formula_tag_re` / 末尾编号正则共用）。
+
+    🔴 两处必须共用同一份变体：各抄一份必然漂移（裸排 / 字母章位的开关逻辑
+    已踩过一次）。
+    """
+    core = formula_num_core(ncomp, letter=letter)
     variants = [r'[（(]\s*%s\s*[）)]' % core]        # (2.17) / （A.3）
     if bare and not letter:
         variants.append(core)                        # 裸排 2.17
-    return re.compile(r'^(?:%s)$' % '|'.join(variants))
+    return variants
+
+
+def formula_tag_tail_re(ncomp=None, bare=True, letter=False):
+    """**只锚定结尾**的编号正则（供 :func:`formula_trailing_tag`）。
+
+    :func:`formula_tag_re` 两端锚定（整块恰为编号），在「公式文本 + 末尾编号」
+    这种长文本块里 `finditer` 必然匹配不到，故末尾编号需要本变体。
+    """
+    return re.compile(r'(?:%s)$'
+                      % '|'.join(_formula_tag_variants(ncomp, bare, letter)))
 
 
 @functools.lru_cache(maxsize=None)
@@ -174,3 +223,32 @@ def formula_tag_number(text, ncomp=None, letter=False, bare=True):
     if len(s) > 1 and s[0] in '（(' and s[-1] in '）)':
         return s[1:-1].strip()
     return s
+
+
+def formula_trailing_tag(text, ncomp=None, letter=False, bare=True):
+    """文本**末尾**粘着公式编号时返回 ``(裸编号, 匹配原文)``，否则 ``None``。
+
+    成因：OCR 有时把「公式文本 + 右缘编号」读成**一个**文本块（Koopman 实测
+    ``'(y(t)-h(x(t)))…dt.  (3.35)'``、``'…, p_0 := p(0,x)， (8.9)'``），而
+    :func:`formula_tag_number` 要求整块恰为一个编号，这类永远匹配不上 →
+    编号挂不上 tag、掉进散文。本函数只认**紧贴结尾**的编号，且其前一个字符须
+    为空白或标点（防 ``abc(3.5)`` 这类粘连）。
+
+    🔴 调用方**仍须**用几何护栏确认它确实是某条 display 公式的行尾编号——
+    散文行末尾同样可能以交叉引用 ``(6.20),`` 结尾（见 ``attach_content``：
+    要求与 display 公式实质垂直重叠，实测真例 91–100%、反例 ov<0）。
+    """
+    s = (text or '').strip()
+    if not s:
+        return None
+    m = formula_tag_tail_re(ncomp, bare=bare, letter=letter).search(s)
+    if m is None:
+        return None
+    # 前一字符须为空白或标点（防 `abc(3.5)` 这类与词粘连）。含 OCR 常见替身：
+    # 右单引号 ’ / 右双引号 ” / 直角引号 ’（实测 Koopman 15.57 写作 `…z2’(15.57)`）。
+    if m.start() > 0 and not re.match(r"[\s,，.。;；:：)\]】、’”'\"）]", s[m.start() - 1]):
+        return None
+    raw = m.group(0).strip()
+    if len(raw) > 1 and raw[0] in '（(' and raw[-1] in '）)':
+        return raw[1:-1].strip(), raw
+    return raw, raw

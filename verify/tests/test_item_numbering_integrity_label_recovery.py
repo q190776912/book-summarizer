@@ -128,5 +128,42 @@ class ItemNumberingIntegrityLabelRecoveryTest(unittest.TestCase):
             'Theorem 12.7 is a real gap (not in ignore) -> must still block')
 
 
+class CnWarningNotationLabelTest(unittest.TestCase):
+    """Leinster BCT 实测（2026-09-23）：书里 Warning/Notation 条目在 CN 版写作
+    **警告1.2.17（…）** / **记号4.3.1**。EN 词表早有 Warning|Notation，CN 侧
+    _ENTRY_LABELS 漏收 警告/记号/术语 → CN md 该条解析不出，B 层假报「缺号」
+    （EN 过、CN 挂）。修复=CN 词表补齐 + _LABEL_NORM 配对恒等映射。"""
+
+    def _parse(self, inner, levels=3):
+        from item_numbering_integrity import _parse_entry
+        return _parse_entry(inner, levels)
+
+    def test_cn_warning_parsed(self):
+        got = self._parse('警告1.2.17（注意 $A$ 与 $A^{\\prime}$ 在定义中的角色）')
+        self.assertIsNotNone(got, 'CN 警告 条目必须被解析为条目')
+        self.assertEqual(got[0], [1, 2, 17])
+
+    def test_cn_notation_parsed(self):
+        got = self._parse('记号4.3.1')
+        self.assertIsNotNone(got, 'CN 记号 条目必须被解析为条目')
+        self.assertEqual(got[0], [4, 3, 1])
+
+    def test_cn_terminology_parsed(self):
+        got = self._parse('术语6.1.1')
+        self.assertIsNotNone(got, 'CN 术语 条目必须被解析为条目')
+        self.assertEqual(got[0], [6, 1, 1])
+
+    def test_label_norm_pairs_en_canon(self):
+        from item_numbering_integrity import _LABEL_NORM
+        self.assertEqual(_LABEL_NORM.get('警告'), 'Warning')
+        self.assertEqual(_LABEL_NORM.get('记号'), 'Notation')
+        self.assertEqual(_LABEL_NORM.get('术语'), 'Terminology')
+
+    def test_control_definition_still_parsed(self):
+        got = self._parse('定义1.2.16（忠实 (faithful) 与满 (full)）')
+        self.assertIsNotNone(got)
+        self.assertEqual(got[0], [1, 2, 16])
+
+
 if __name__ == '__main__':
     unittest.main()

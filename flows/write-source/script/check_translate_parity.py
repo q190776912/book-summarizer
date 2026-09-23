@@ -52,7 +52,8 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
-from data.book_structure.book_structure import chapter_label, list_chapter_keys, unit_dir_name
+from data.book_structure.book_structure import (chapter_label, list_chapter_keys,
+                                                prime_chapter_kinds, unit_dir_name)
 import split_draft_units as _split
 import gate_units as _gate
 
@@ -116,6 +117,7 @@ def _collect(body, rx):
 
 def check_chapter_parity(ext, ch_key):
     """比对单章源单元与翻译单元。返回 (ok, problems)。"""
+    prime_chapter_kinds(ext)  # 被当库调用时同样保证补篇/附录目录名正确
     src_dir = os.path.join(ext, _ac.OUT_DIR_NAME, SRC_SUB, unit_dir_name(ch_key))
     tgt_dir = os.path.join(ext, _ac.OUT_DIR_NAME, TGT_SUB, unit_dir_name(ch_key))
     problems = []
@@ -200,6 +202,10 @@ def main():
         print(__doc__)
         return 2
     ext = argv[0]
+    # 🔴 kind 注册表必须先灌注：unit_dir_name / chapter_label 判据来自 chapter_map，
+    # 未灌注时字母章一律回退成 appendixX → 补篇（supplementS）会被找成 appendixS，
+    # 报「缺 units-translate 目录」假 FAIL，且该章同构校验形同虚设。
+    prime_chapter_kinds(ext)
     try:
         chapters = [int(x) for x in argv[1:]]
     except ValueError:

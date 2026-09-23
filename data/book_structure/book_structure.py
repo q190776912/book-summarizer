@@ -228,6 +228,110 @@ def node_tags(node: Dict[str, Any]) -> List[str]:
     return acc
 
 
+def node_images(node: Dict[str, Any]) -> List[str]:
+    """**单个**契约节点自身携带的图片路径（含其 proof / 无 key 子节点内的图块），按文档序。
+
+    与 node_tags 同构：图片块（``{"image": "figure/….png"}``）与 text / formula 块
+    一样混排在节点的 ``sub_sec`` 块列表里，故必须**按节点**取、不按 key 聚合
+    （同 key 的不同节点各有归属）。供单元门控做「缺图 / 多图」对账真值。
+    """
+    acc: List[str] = []
+
+    def _collect(n: Dict[str, Any]) -> None:
+        for c in n.get("sub_sec") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("image"):
+                acc.append(str(c["image"]))
+            elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
+                _collect(c)
+
+    if isinstance(node, dict):
+        _collect(node)
+    return acc
+
+
+def chapter_image_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
+    """契约 → {条目/描述 key: [图片路径, ...]}（chapter_tag_map 的镜像，key 级回退真值）。
+
+    仅供**老 manifest（拆分时未写入 per-unit images）**做 key 级回退对账；主真值
+    是 split 时按节点写入 manifest 的 ``images``。同 key 多节点会聚合，故回退方
+    （gate_units）只在「该 key 仅对应一个内容单元」时使用，否则跳过交由章级覆盖闸。
+    """
+    out: Dict[str, List[str]] = {}
+
+    def _walk(n: Dict[str, Any]) -> None:
+        acc = []
+        for _c in (n.get("sub_sec") or []):
+            if isinstance(_c, dict) and _c.get("image"):
+                acc.append(str(_c["image"]))
+        if acc and n.get("key") is not None:
+            out.setdefault(str(n["key"]), []).extend(acc)
+        for c in n.get("sub_sec") or []:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("type")
+            if t in _CONTAINER_TYPES:
+                _walk(c)
+            elif c.get("key") and t != "proof":
+                imgs = node_images(c)
+                if imgs:
+                    out.setdefault(str(c["key"]), []).extend(imgs)
+
+    _walk(root)
+    return out
+
+
+def chapter_images(root: Dict[str, Any]) -> List[str]:
+    """契约树内**全部**图片路径（去重、保序）——章级「图片一个不漏」闸的真值集合。
+
+    单元级对账（manifest.images / chapter_image_map）会有「key 歧义跳过」的缝隙，
+    章级并集闸兜底：契约任一图片未被本章任何单元嵌入 = 图片被整体删除（曾发生
+    步骤 5 agent 清理 OCR 噪声时连图带正文一起删光），门控必须拦。
+    """
+    out: List[str] = []
+
+    def _w(n: Any) -> None:
+        if isinstance(n, dict):
+            img = n.get("image")
+            if img and str(img) not in out:
+                out.append(str(img))
+            for v in n.values():
+                _w(v)
+        elif isinstance(n, list):
+            for x in n:
+                _w(x)
+
+    _w(root)
+    return out
+
+
+def node_content_count(node: Dict[str, Any]) -> int:
+    """契约节点子树内内容块（text / formula / image）总数。
+
+    单元门控的「正文不得为空」真值：计数 >0 而单元正文只剩标头 = agent 把该单元
+    整体清空（writing-rules「编号项 / 习题单元须完整收录」的机械落实）；计数 =0
+    的是 OCR 错位产生的幻影节点（无可写内容），允许空正文（如 ch2 单元 0020）。
+    """
+    cnt = 0
+
+    def _w(n: Any) -> None:
+        nonlocal cnt
+        if isinstance(n, dict):
+            if any(k in n for k in ("text", "formula", "image")):
+                cnt += 1
+            for v in n.values():
+                _w(v)
+        elif isinstance(n, list):
+            for x in n:
+                _w(x)
+
+    if isinstance(node, dict):
+        for c in node.get("sub_sec") or []:
+            _w(c)
+    return cnt
+
+
 def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
     """契约 → {条目/描述 key: [公式序标 tag, ...]}（单元级 tag 对账的真值源）。
 

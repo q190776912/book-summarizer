@@ -571,7 +571,7 @@ class physical_evidence:
         return miss
 
     @staticmethod
-    def _units_gate_ok(units_dir, manifest):
+    def _units_gate_ok(units_dir, manifest, ch_key=None):
         """单元门控核心判定（内联，避免 import 耦合）：每单元文件存在、首行
         DONE、**质量校验通过**（写对，非仅重写）。返回 (ok, problems)。
 
@@ -581,6 +581,44 @@ class physical_evidence:
         ``gate_units.gate_chapter``（merge 前最后一道）按章批量真渲染。
         """
         problems = []
+        # known_book 白名单（与 gate_units._load_known_book 同语义）：登记「书源
+        # 确有、契约抽取器漏挂」的编号，豁免「编造编号」误判。从 units_dir 逐级
+        # 上溯找 verify_config.json（内联采集，避免 import 耦合，同上）。
+        known = set()
+        _d = os.path.abspath(units_dir)
+        for _ in range(6):
+            _vp = os.path.join(_d, "verify_config.json")
+            if os.path.exists(_vp):
+                try:
+                    with open(_vp, encoding="utf-8") as vf:
+                        _cfg = json.load(vf)
+
+                    def _harvest(formula):
+                        if isinstance(formula, dict):
+                            for x in (formula.get("known_book") or []):
+                                known.add(str(x).strip())
+
+                    _harvest(_cfg.get("formula"))
+                    for _node in (_cfg.get("data") or {}).values():
+                        if isinstance(_node, dict):
+                            _harvest(_node.get("formula"))
+                except Exception:
+                    known = set()
+                break
+            _d = os.path.dirname(_d)
+        # 章契约路径（tag 真值回退 / src_text 忠实豁免共用）：units_dir =
+        # <ex>/book_structure/units/<label>，ex 上溯三级；🔴 必须经
+        # chapter_json_path(ex, ch_key)——曾按 label 拼接出
+        # "units/book_structure/appendixch6.json" 式假路径，契约恒缺位 →
+        # src_text=None，gate-15 对书源原句「omitted here」假阳。
+        cpath = None
+        if ch_key is not None:
+            try:
+                from data.book_structure.book_structure import chapter_json_path
+                cpath = chapter_json_path(os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(units_dir)))), ch_key)
+            except Exception:
+                cpath = None
         mark_re = re.compile(
             r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
         for u in manifest.get("units") or []:
@@ -612,22 +650,38 @@ class physical_evidence:
                     # 🔴 不可只按 key 聚合：同节内定义/定理/推论各自编号、共用 key，
                     # 聚合会让「定义」单元被要求写出「定理」单元的编号公式。
                     expected = u.get("tags") if isinstance(u.get("tags"), list) else None
-                    if expected is None:
+                    if expected is None and cpath and os.path.exists(cpath):
                         try:
                             from data.book_structure.book_structure import (
-                                chapter_json_path, chapter_tag_map)
-                            label = os.path.basename(os.path.normpath(units_dir))
-                            cpath = chapter_json_path(
-                                os.path.dirname(os.path.normpath(units_dir)), label)
-                            if os.path.exists(cpath):
-                                with open(cpath, encoding="utf-8") as cf:
-                                    expected = chapter_tag_map(json.load(cf)).get(
-                                        str(u["key"]))
+                                chapter_tag_map)
+                            with open(cpath, encoding="utf-8") as cf:
+                                expected = chapter_tag_map(json.load(cf)).get(
+                                    str(u["key"]))
                         except Exception:
                             expected = None  # 契约不可得 = 跳过 tag 对账（其余检查照常）
+                    # 图片 / 内容块真值随 manifest 透传（与 gate_units 同一套对账；
+                    # 老 manifest 缺字段 = None 跳过，缺图由 gate_units 章级闸兜底）
+                    exp_imgs = u.get("images")
+                    if not isinstance(exp_imgs, list):
+                        exp_imgs = None
+                    exp_content = u.get("content")
+                    if not isinstance(exp_content, int):
+                        exp_content = None
+                    # 假省略闸「忠实引用豁免」源文（契约 key→内容块拼接原文；
+                    # 契约不可得 = None，不豁免，fail-closed 与 gate_units 同语义）
+                    src_text = None
+                    try:
+                        if cpath and os.path.exists(cpath):
+                            with open(cpath, encoding="utf-8") as cf:
+                                src_text = _quality.unit_source_map(
+                                    json.load(cf)).get(str(u["key"]))
+                    except Exception:
+                        src_text = None
                     ok_q, qp = _quality.check_body(
                         u["type"], u.get("name") or "", body,
-                        expected_tags=expected)
+                        expected_tags=expected, allow_extra=known,
+                        expected_images=exp_imgs, content_blocks=exp_content,
+                        source_text=src_text, key=str(u["key"]))
                 except Exception as e:
                     # 🔴 fail-closed：校验崩溃 = 该单元不合格，绝不放行
                     ok_q, qp = False, ["质量校验执行失败（fail-closed）：%r" % (e,)]
@@ -664,7 +718,7 @@ class physical_evidence:
             except Exception:
                 gate_fail.append((k, "manifest 非法 JSON"))
                 continue
-            ok_g, gprob = physical_evidence._units_gate_ok(units_dir, manifest)
+            ok_g, gprob = physical_evidence._units_gate_ok(units_dir, manifest, ch_key=k)
             if not ok_g:
                 gate_fail.append((k, gprob[0] if gprob else "门控未通过"))
                 continue
@@ -739,7 +793,7 @@ class physical_evidence:
             except Exception:
                 gate_fail.append((k, "源 units/manifest.json 缺失或非法——翻译禁止开始"))
                 continue
-            ok_src, src_prob = physical_evidence._units_gate_ok(src_dir, src_manifest)
+            ok_src, src_prob = physical_evidence._units_gate_ok(src_dir, src_manifest, ch_key=k)
             if not ok_src:
                 gate_fail.append((k, "源单元未全部修正完成（源门控未通过）——先修好源单元"
                                      "再翻译/重派生: " + (src_prob[0] if src_prob else "")))
@@ -755,7 +809,7 @@ class physical_evidence:
             except Exception:
                 gate_fail.append((k, "units-translate manifest 非法 JSON"))
                 continue
-            ok_g, gprob = physical_evidence._units_gate_ok(tdir, tmanifest)
+            ok_g, gprob = physical_evidence._units_gate_ok(tdir, tmanifest, ch_key=k)
             if not ok_g:
                 gate_fail.append((k, gprob[0] if gprob else "翻译单元门控未通过"))
                 continue

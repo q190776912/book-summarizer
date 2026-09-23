@@ -36,6 +36,9 @@
 
 ### 阻断性 / 可修复
 - 有图时 `fig_missing` 或 `fig_invalid` 非空 → 阻断 FAIL。
+- **嵌入覆盖（堵「检测到了却没嵌进 .md」的假绿）**：本章在 `figure_index.json` 中有**带 label 的真图**、但合并 md 里一条 `<img>` 都没嵌入 → `fig_zero_embed=True` → 阻断 FAIL（`E-LAYER FIGURE NOT EMBEDDED`）。典型成因：检测/合图后未跑 `embed_figures.py`，或中文笔记不引用图号而嵌入脚本的自引用回退只认英文 `Figure N`（→ 中文整章 0 嵌）。
+- `fig_unembedded` = 本章已检出但未嵌入的裁剪文件名列表；`fig_embedded` / `fig_detected` = 汇总行 `Emb:嵌入/检出` 的紧凑计数（无图章节该列显示 `-`）。
+- **部分覆盖仅 WARN**（`E-LAYER FIGURE PARTIAL COVERAGE`）：嵌了一部分但仍有未嵌——按「图被正文引用才嵌入」规则属可接受，故只告警不阻断。
 - `fig_extra` / `fig_invalid_warn` / `fig_misattributed` 仅 WARN（不阻断）。
 - `auto_fixable = False`。
 
@@ -74,4 +77,8 @@ fig_invalid
 fig_invalid_warn
 fig_misattributed
 fig_skipped
+fig_unembedded
+fig_zero_embed
+fig_embedded
+fig_detected
 ```

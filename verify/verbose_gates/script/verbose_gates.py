@@ -237,8 +237,8 @@ def _load_contract(ext_dir, ch):
     """返回 (sections, item_keys, letter_sub_pairs)。
 
     sections : list[(num, title)]，title 含印刷标题（用于习题节判定）。
-    item_keys: set[str]，允许出现的编号项编号集合（仅 three-level 点分格式，
-               与 md 侧 ITEM_LABEL_RE 对齐）。
+    item_keys: set[str]，允许出现的编号项编号集合（three-level 键，分隔符经
+               _norm_secnum 归一为点分，与 md 侧 ITEM_LABEL_RE 对齐）。
     letter_sub_pairs: list[(sec_key, letter, title)]，契约声明的裸字母子块
                （section 节点 letter_subs 元数据；无则空表 → 字母子节闸不启用）。
 
@@ -261,8 +261,19 @@ def _load_contract(ext_dir, ch):
                 if e.get("key"):
                     letter_sub_pairs.append(
                         (key, str(e["key"]), str(e.get("name", ""))))
-        elif t not in ("section", "chapter", "exercise"):
+        elif t not in ("section", "chapter"):
             k = str(n.get("key", ""))
+            # 🔴 Leinster 实测（2026-09-23）：build_structure 对无法从印刷
+            # 标签可靠判型的节点把键写成 dash 形（'6.1-5'），md 侧渲染为点分
+            # （**6.1.5**:）。旧判定只收点分键 → dash 键全部漏登记，P 层把这
+            # 15 个真实条目报成「编造条目」。归一化分隔符后再收，两种形态
+            # 与 md 侧 ITEM_LABEL_RE（点分）对齐。
+            # 🔴 练习节点同样纳入（原 `exercise` 被排除）：Leinster 练习与原书
+            # 条目共用节内计数器，写成点分裸号 `**2.1.13**`（非 `**Exercise …**`
+            # 标签式），命中 md 侧 ITEM_LABEL_RE；契约里它们是真实 `exercise` 节点
+            # （键 '2.1.13'），排除即把真实练习报成「编造条目」。下面的 `^\d+\.\d+\.\d+$`
+            # 守卫已把非三级键（如 'ex:2.1' 式练习）挡在外面，纳入 exercise 零回归。
+            k = _norm_secnum(k)
             if re.match(r"^\d+\.\d+\.\d+$", k):
                 item_keys.add(k)
     return sections, item_keys, letter_sub_pairs

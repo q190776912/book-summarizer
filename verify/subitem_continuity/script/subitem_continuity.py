@@ -64,6 +64,23 @@ _ROMAN_VALID = re.compile(
 
 _ROMAN_VALUES = {'i': 1, 'v': 5, 'x': 10, 'l': 50, 'c': 100, 'd': 500, 'm': 1000}
 
+def _o_is_seq_marker(line, pos):
+    """同一行内除行首锚点外的 `(x)` 捕获是否算作子项序号（Leinster 2.2.12 实测：
+    「…part (a) is called a reflection. (Compare Example 2.1.3(d).)」里
+    (a)/(d) 都是行文回指，被 finditer 全行捕获后拼出幻影序列 a,b,d → 假报缺 (c)）。
+
+    判据（保守）：
+    * 紧贴 `( 前的字符是字母/数字（'2.1.3(d)' 型附着回指）→ 不算；
+    * 否则要求其一成立：前面（去空格）是句读分隔符 '；;，,、:：.'，
+      或后随内容以大写/中文/数字开头（真正的「(b) Show …」条目样式）。"""
+    if pos > 0 and line[pos - 1].isalnum():
+        return False
+    before = line[:pos].rstrip()
+    if before and before[-1] in '；;，,、:：.':
+        return True
+    return bool(re.match(r'\s*\*{0,2}[A-Z\u4e00-\u9fff0-9]', line[pos:]))
+
+
 def _o_match_line(line):
     """Try to extract ordinal label(s) from a line. Returns a LIST of raw
     label strings (e.g. ['3'], ['ii'], ['b']) or [] if the line is not a
@@ -88,7 +105,8 @@ def _o_match_line(line):
     m = _O_PAREN_RE.match(line)
     if m:
         labels = [mm.group(1) for mm in
-                  re.finditer(r'[（(]([0-9]+|[a-z]+)[)）]', line)]
+                  re.finditer(r'[（(]([0-9]+|[a-z]+)[)）]', line)
+                  if mm.start() < m.end() or _o_is_seq_marker(line, mm.start())]
         if labels:
             return labels
         return [m.group(1)]

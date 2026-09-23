@@ -310,6 +310,11 @@ def _h_ext_is_legit_bq(s):
     # number-first form:  > **N.M-K 例  (book prints 编号在前)
     if re.match(r'^\*\*\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example|注|Note|Remark|证明|证|说明)', inner):
         return True
+    # CN 「X的证明(思路)」 proof header (Leinster 实测：> **引理2.2.2的证明思路**：
+    # 旧判定只认 `**证明` 开头 / EN `**Proof`，CN 标签前置的证明头不被承认，
+    # 其块内 `> $$` 落入 statement 区被 h_stmt_bq 误报）。
+    if re.match(r'^\*\*[^*\n]{0,15}?(的证明|证明思路|证毕)', inner):
+        return True
     # English openers (bilingual support)
     if re.match(r'^\*\*(?:Proof|Example|Solution|Note|Remark|Exercise)\b', inner):
         return True

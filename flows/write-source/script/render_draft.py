@@ -372,6 +372,30 @@ def _render_item(node, out, lang):
         out.extend(body)
 
 
+def section_heading_level(key, name, node=None):
+    """小节标题 `#` 数 - 1（level）：`#` 数 = level + 1。
+
+    - 显式 ``level`` 字段优先（无序号标小节结构层携带，Lee ISM 等）。
+    - 有编号小节：按序标段数推导——``§N``/``§N.M`` → level 1（``##``）、
+      ``§N.M.K`` → level 2（``###``）、``§N.M.K.L`` → level 3（``####``），
+      与「头部 # 数 = 嵌套层级」及 section_types 深度对齐（遍历论实测
+      section_types=[1,2,3] 要求 1.1.1 为三级标题）。
+    - 无序号标且无 level：回退 1（``##``）。
+    """
+    if node is not None and node.get("level") is not None:
+        return max(1, int(node.get("level") or 1))
+    k = str(key or "").strip()
+    if re.fullmatch(r"U\d+", k):
+        return max(1, int((node or {}).get("level") or 1))
+    m = re.match(r"(\d+(?:\.\d+)*)", k)
+    if not m:
+        m = re.match(r"(\d+(?:\.\d+)*)", str(name or "").strip())
+    if m:
+        ncomp = m.group(1).count(".") + 1
+        return max(1, ncomp - 1)
+    return 1
+
+
 def _render_node(node, out, lang="cn"):
     t = node.get("type")
     if t == "chapter":
@@ -382,14 +406,15 @@ def _render_node(node, out, lang="cn"):
     elif t == "section":
         key = str(node.get("key") or "")
         name = (node.get("name") or "").strip()
-        lvl = int(node.get("level") or 1)
+        lvl = section_heading_level(key, name, node)
         if re.fullmatch(r"U\d+", key):
             # 无序号标小节：仅保留 §。`#` 数 = level + 1（chapter 为 level 0 →
             # `#`，小节 level=1 → `## §`、level=2 → `### §`、level=3 → `#### §` …），
             # 忠实保留原书小节层级结构（Lee ISM 实测「Coordinate Charts」为 level-2）。
             out.append(("#" * (lvl + 1)) + " § " + name)
         else:
-            # 有编号小节（name 自带 "N.M 标题" 序标，恒为 level 1 → `## §name`）。
+            # 有编号小节：`#` 数 = 序标段数（§N.M → ##、§N.M.K → ###、§N.M.K.L → ####），
+            # 见 section_heading_level；显式 level 字段仍优先。
             out.append(("#" * (lvl + 1)) + " §" + name)
         out.append("")
         _CTX["prev"] = "heading"

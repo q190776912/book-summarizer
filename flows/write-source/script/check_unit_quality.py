@@ -31,6 +31,21 @@
     12. 单元级公式序标对账（`expected_tags` 提供时）：以内容化契约
         （`chapter_tag_map`）要求该单元携带的 `formula.tag` 为真值，缺失（漏写
         编号公式）与编造（多出编号）均判不通过——Q 层是章级末步，单元粒度提前拦
+    13. 单元级图片对账（`expected_images` 提供时）：契约节点 image 块为真值，
+        按 basename 比对 `<img src>`；缺图（内容丢失）与多图（编造/错位）均不通过
+    14. 空正文闸（`content_blocks` > 0 提供时）：契约节点有内容块而单元正文仅剩
+        标头 = 整体清空，不通过（desc/item 的幻影节点 content_blocks == 0 允许空；
+        exercise 的 0 块节点由第 16 项直接判不通过）
+    15. 假省略声明闸：正文写「consolidated problem set / omitted here / 此处省略 /
+        综合习题集」等措辞即不通过——有单元的习题节点必为 consolidated=false，
+        该措辞既虚假又掩盖题面缺失；豁免两条：① 命中措辞原样见于该单元契约节点
+        书源原文（``source_text``，Tier 1 忠实引用）；② **非** exercise/item 单元
+        且声明处局部上下文无「习题/证明/整节」内容指向词（``_OMISSION_ANCHOR_RE``）
+        = 「omit」的数学用法而非省略声明。无 source_text 不享豁免 ①
+    16. 幻影习题条目闸（契约切片缺陷，`utype == "exercise"`）：标题去序标后起于
+        句中 / 契约节点零内容块 / 节点携带**别的小节**的编号公式或插图 = OCR 把
+        跨条目续行切成独立条目、或把后续小节正文整段吞进习题节点；不通过，须契约
+        + 单元同步修（并回碎片、按书源复原题面），改措辞无效
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -111,6 +126,122 @@ _QED_BOX_LINE_RE = re.compile(r"^[口□■◻◼∎]$")
 # 单元内出现 ATX 标题行 = 自造层级 / 把标题并进条目（标题是独立 section 单元；
 # writing-rules：不得自创层级、不得无中生有）。
 _HEADING_LINE_RE = re.compile(r"\s{0,3}#{1,6}\s")
+# 🔴 「假省略声明」：把没写的习题谎称「原书把它们收进了综合习题集，此处省略」。
+# 拆分期（split_draft_units）对契约 `consolidated=true` 的章末集中习题块**根本不
+# 生成单元**——因此凡是存在单元的习题节点一律 consolidated=false（穿插/逐节习题，
+# 收录规则要求题面完整在位）。正文里出现下列措辞即等于对读者作虚假声明，且实际
+# 掩盖了整节题面缺失（曾在 Katok ch20 一次掩盖 22 道题）。
+_OMISSION_CLAIM_RE = re.compile(
+    r"consolidated\s+problem\s+set|omitted\s+here|not\s+reproduced\s+here"
+    r"|collected\s+as\s+a\s+consolidated"
+    r"|此处省略|此处从略|不再收录|未予收录|省略未收"
+    r"|归入综合习题|综合习题集", re.I)
+# 🔴 措辞指向**被省掉的总结内容**（习题 / 证明 / 整节）才算掩盖缺失。习题与编号项
+# 单元正文必须完整，一律直接判（不看措辞语境）；desc / section 等散文单元里
+# 「omit」常是**数学用法**（Katok ch5 D21：「a second chart … covers the vertically
+# downward vectors omitted here」= 第一张图不覆盖竖直向下向量，是正文内容本身），
+# 无内容指向即不构成虚假声明，否则门控对忠实转写的散文假阳。
+_OMISSION_ANCHOR_RE = re.compile(
+    r"exercise|problem|习题|综合题|题面|证明|proof|本节|该节|全节|末节|本章"
+    r"|this\s+section|these\s+sections|that\s+section|section\s*[§]?\d"
+    r"|all\s+the\s+exercises", re.I)
+# 判「内容指向」只看声明处**局部上下文**（±字符），不做全篇搜索：散文单元正文长，
+# 全篇搜「proof / 节」几乎必命中，等于没豁免。
+_OMISSION_CTX = 160
+# 🔴 「幻影习题条目」= OCR 把**跨条目续行**切成独立条目。抽取器按「序标 + 句号」
+# 认条目，而正文里 `…Theorem | 20.1.3. Let Per(t,ε)…`、`…(Definition | 20.2.5). In
+# analogy…` 这类断行同样形如序标，于是后半段被登记成一条「习题」。三种可机械判定
+# 的痕迹（曾在 Katok 全书命中 24 处，最严重一例让 ch20 20 道题被谎称省略）：
+#   (a) 条目标题起于**句中**（去掉序标残留后以小写字母 / `)` / `,` 开头）；
+#   (b) 节点**零内容块**——真习题不可能一块都没有；
+#   (c) 节点携带的编号公式 / 插图的**小节号 ≠ 该习题自己的小节号** = 把后续小节
+#       正文整段吞进习题节点（Katok ch9 的 9.1.5 吞了 §9.2 全节 684 块 4 图）。
+# 判据只到「该单元对应的契约节点有幻影痕迹」为止：修法是把碎片并回上一条目、
+# 按书源复原题面（契约 + 单元同步），不是把单元改措辞。
+# 两条按**单元正文形态**豁免（Leinster 全书 37 处误伤回归）：
+#   ① 标题去残留后以 `a)` / `b.` 等**子题标号**起头 = 原书分小题习题的合法
+#      条目（题面本身就是 "(a) Show that…"），不是句中续行；
+#   ② content_blocks==0 但题面其实**已落地单元正文**（name 非句中起头时）：
+#      契约 name 自带完整题面（≥6 个词元，如组标题 "Interactions between
+#      adjoint functors and limits"）；或正文**加粗标签**里写出本条目编号
+#      （"Exercises 4.3.15 Prove Lemma 4.3.8" 这类短题面，正文 `**4.3.15**`
+#      即落地证明；Katok 残渣 "for fows." 句中起头 → 两条均不适用，照旧拦）。
+#      两条豁免都要求正文非空（空正文照常 FAIL，防措辞掩盖）。
+_LABEL_RESIDUE_RE = re.compile(r"^[\s)\],;.0-9*†\-(/]+")
+_FIG_SECTION_RE = re.compile(r"fig(\d+)\.(\d+)", re.I)
+# 子题标号形态：单个/双/三个字母 + `)` 或 `.`（"(a)" 去残留后剩 "a) …"）
+_PART_LABEL_RE = re.compile(r"^[a-z]{1,3}[.)]\s")
+# 词元（字母词，含中日韩），用于判 name 是否「自带题面」而非两三词残渣
+_WORD_TOKEN_RE = re.compile(r"[^\W\d_]+")
+_NAME_STATEMENT_MIN_WORDS = 6
+
+
+def _name_carries_statement(name):
+    """契约 name 是否自带完整题面（≥6 个词元的实质文字而非切片残渣）。"""
+    return len(_WORD_TOKEN_RE.findall(str(name or ""))) >= _NAME_STATEMENT_MIN_WORDS
+
+
+def _key_ordinal(key):
+    """``4.3-15`` / ``4.3.15`` -> ``4.3.15``；无分段序标（如 ``6_3``）返回 None。"""
+    parts = [p for p in re.split(r"[.\-]", str(key or "")) if p != ""]
+    return ".".join(parts) if len(parts) >= 2 else None
+
+
+def _bold_carries_ordinal(body, ordinal):
+    """正文任一 ``**加粗**`` 标签含本条目编号 = 题面已落地该单元。"""
+    if not ordinal:
+        return False
+    return any(ordinal in seg for seg in re.findall(r"\*\*([^*]+)\*\*", body))
+
+
+def _sec_prefix(token):
+    """``9.1.5`` -> ``9.1``；不足三段（无小节可判）返回 None。"""
+    parts = [p for p in re.split(r"[.\-]", str(token or "")) if p != ""]
+    return ".".join(parts[:-1]) if len(parts) >= 3 else None
+
+
+def phantom_exercise_problems(name, content_blocks, expected_tags, expected_images,
+                              key, body=""):
+    """习题单元的「幻影条目」判据（见 ``_LABEL_RESIDUE_RE`` 注释）。返回问题列表。
+
+    ``body``：单元正文（供两条形态豁免判定，见注释①②；缺省空 = 不豁免）。
+    """
+    out = []
+    has_body = bool(str(body or "").strip())
+    residue = _LABEL_RESIDUE_RE.sub("", str(name or "")).strip()
+    mid_sentence = (residue[:1].islower() and residue[:1].isalpha()
+                    and not (has_body and _PART_LABEL_RE.match(residue)))
+    if mid_sentence:
+        out.append(
+            "契约习题条目「%s…」标题起于句中——OCR 把跨条目续行错切成独立条目"
+            "（幻影习题）；须把该碎片并回上一条目、按书源复原本题题面（契约与单元同步）"
+            % residue[:24])
+    if content_blocks == 0 and not (
+            has_body and not mid_sentence
+            and (_name_carries_statement(name)
+                 or _bold_carries_ordinal(str(body), _key_ordinal(key)))):
+        out.append(
+            "契约习题节点不含任何内容块（text/formula/image 全空）——真习题不可能"
+            "零内容，本单元对应的是 OCR 切片残渣；须在契约层并回上一条目后重拆")
+    own = _sec_prefix(key)
+    if own:
+        cross = [t for t in (expected_tags or []) if _sec_prefix(t) and _sec_prefix(t) != own]
+        if cross:
+            out.append(
+                "习题条目 %s（属 §%s）的契约节点携带后续小节 §%s 的编号公式 %s——"
+                "该节点吞并了别的小节的正文，须把这些内容块并回所属小节（契约层）"
+                % (key, own, "、§".join(sorted(set(_sec_prefix(t) for t in cross))),
+                   "、".join(map(str, cross[:6]))))
+        img_cross = []
+        for p in (expected_images or []):
+            m = _FIG_SECTION_RE.search(str(p))
+            if m and "%s.%s" % (m.group(1), m.group(2)) != own:
+                img_cross.append("%s(§%s.%s)" % (str(p).split("/")[-1], m.group(1), m.group(2)))
+        if img_cross:
+            out.append(
+                "习题条目 %s（属 §%s）的契约节点携带别的小节的插图 %s——同上，"
+                "吞并了后续正文，须在契约层把图块并回所属小节" % (key, own, "、".join(img_cross[:6])))
+    return out
 
 
 def _prose_text(line_list):
@@ -286,18 +417,105 @@ def _run_format_verify_unit_checks(line_list):
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────────
-def check_body(utype, name, body, expected_tags=None, allow_extra=None):
+def reconcile_images(want, got):
+    """(期望图片 basename 集合, 观测集合) → (missing, extra)。
+
+    别名豁免：契约 image 块若为**未标号占位图**（``chNN_unnamed_K.png``），它是
+    书源某图的备用裁剪——assign/figure_index 重跑后契约路径可能滞后（图被重新
+    命名为标号文件）。故 missing 中的 unnamed 项与 extra 中的标号图一一配对销账，
+    配对成功不报缺图/编造（契约是派生物，重建即自愈）；配不上的仍照报。
+    """
+    missing = sorted(want - got)
+    extra = sorted(got - want)
+    pool = list(extra)
+    kept_missing = []
+    for m in missing:
+        paired = False
+        if "unnamed" in m.lower():
+            mtag = m.split("_")[0]  # 章前缀 chNN：只与**同章**标号图配对
+            for i, e in enumerate(pool):
+                if e.split("_")[0] == mtag:
+                    pool.pop(i)
+                    paired = True
+                    break
+        if not paired:
+            kept_missing.append(m)
+    return kept_missing, pool
+
+
+def unit_source_map(contract):
+    """契约 key → 该节点子树全部 text/formula 块的拼接原文（供「假省略声明」闸
+    的忠实引用豁免：命中措辞原样见于书源原文 = Tier 1 忠实保留，非掩盖缺失）。
+    内容块 = 无 ``key`` 的 dict（同 attach_content 判据）；结构子节点的块同时记在
+    其自身 key 与祖先 key 下（父级散文不误伤）。"""
+    import collections
+    parts = collections.defaultdict(list)
+
+    def _subtree_blocks(node):
+        out = []
+
+        def _w(n):
+            for blk in n.get("sub_sec") or []:
+                if not isinstance(blk, dict):
+                    continue
+                if "key" in blk:
+                    _w(blk)
+                elif "text" in blk:
+                    out.append(str(blk.get("text") or ""))
+                elif "formula" in blk:
+                    out.append(str(blk.get("formula") or ""))
+        _w(node)
+        return out
+
+    def _walk(node, ancestor_texts):
+        key = str(node.get("key"))
+        mine = list(ancestor_texts)
+        for blk in node.get("sub_sec") or []:
+            if not isinstance(blk, dict):
+                continue
+            if "key" in blk:
+                _walk(blk, mine)
+                mine.extend(_subtree_blocks(blk))
+            elif "text" in blk:
+                mine.append(str(blk.get("text") or ""))
+            elif "formula" in blk:
+                mine.append(str(blk.get("formula") or ""))
+        parts[key].extend(mine)
+
+    if isinstance(contract, dict):
+        _walk(contract, [])
+    return {k: " ".join(v) for k, v in parts.items()}
+
+
+def check_body(utype, name, body, expected_tags=None, allow_extra=None,
+               expected_images=None, content_blocks=None, source_text=None,
+               key=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
     ``expected_tags``：契约要求该单元携带的公式编号集合（裸编号字符串列表，
     来自内容化契约 formula.tag）——提供时做**单元级 tag 对账**：缺失（漏写
     编号公式）与多出（编造编号）均判不通过；None = 跳过（调用方无契约上下文）。
+    ``expected_images``：契约要求该单元嵌入的图片路径列表（节点 image 块，
+    来自 manifest 的 ``images``）——提供时做**单元级图片对账**：缺失（agent
+    清噪时把图删掉 = 内容丢失）与多出（编造 / 错位到别的单元）均判不通过；
+    None = 跳过。按 basename 比对，容忍相对路径前缀差异。
+    ``content_blocks``：契约节点子树内容块数（manifest 的 ``content``）——
+    >0 而单元正文为空（只剩标头）= 整体清空，判不通过；0 = 幻影节点允许空；
+    None = 跳过。
     ``allow_extra``：可豁免「编造编号」判定的**真实书源编号**集合（裸编号字符串，
     通常来自 ``verify_config.json`` 的 ``formula.known_book``）。契约抽取器只认
     **独立成块**的右缘编号，若某编号在源页与公式**同行内联粘连**（如 ``…dx.(5.15)``）
     则会被契约漏挂 → 单元按 verify（独立源扫描）补写的 ``\\tag`` 会被误判「编造」。
     登记进 known_book 的编号即视为真实、不再判编造（缺失判定不受影响）。
+    ``source_text``：该单元所属契约节点的内容块原文（OCR 源文，调用方从分章
+    契约拼接）。仅用于「假省略声明」闸的**忠实引用豁免**：命中措辞若本就出现
+    在书源原文里（Tier 1 逐句保留的原书措辞，如 Leinster 6.3.11 "a little
+    cardinal arithmetic, omitted here"），不算掩盖缺失；None / 未命中 → 照常
+    判 FAIL（fail-closed：无契约上下文时不放行）。
+    ``key``：该单元的契约条目键（如 ``9.1.5``）。仅用于「幻影习题条目」闸判定
+    编号公式 / 插图是否属于**别的小节**；None = 该子判据跳过（句中起始与零内容块
+    两项不依赖 key，仍生效）。
     """
     if utype not in ("item", "desc", "exercise"):
         return True, []
@@ -472,5 +690,62 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None):
                 "编造编号 \\tag{%s}（契约中不存在；书无此编号严禁编造）"
                 % "}{".join(extra[:6])
                 + (" 等共 %d 个" % len(extra) if len(extra) > 6 else ""))
+
+    # 13) 单元级图片对账（契约节点 image 块为真值；按 basename 比对）——
+    #     曾发生：步骤 5 agent 把带 OCR 噪声 alt 的图块连同习题正文一起删光，
+    #     tag 有对账、图片没有 → 一路绿灯流入拼接。缺 = 内容丢失，多 = 编造/错位。
+    if expected_images is not None:
+        def _bn(p):
+            return str(p).replace("\\", "/").rstrip("/").split("/")[-1]
+        want = set(_bn(p) for p in expected_images if p)
+        got = set(_bn(m) for m in
+                  re.findall(r'<img[^>]+src="([^"]+)"', body_clean))
+        missing, extra_imgs = reconcile_images(want, got)
+        if missing:
+            all_problems.append(
+                "缺契约图片 %s（契约要求本单元嵌入；漏图 = 内容丢失，"
+                "须按 V-E 规则以 <img> 块补回）" % "、".join(missing[:6])
+                + (" 等共 %d 张" % len(missing) if len(missing) > 6 else ""))
+        if extra_imgs:
+            all_problems.append(
+                "嵌入了契约本单元之外的图片 %s（文件名须来自契约 image 块；"
+                "放错单元 = 按契约归属移到正确单元）" % "、".join(extra_imgs[:6]))
+
+    # 14) 空正文闸：契约节点有内容块而单元正文为空 = 整体清空（习题/条目单元
+    #     必须完整收录规则的死命令兜底；幻影节点 content_blocks==0 不受影响）
+    if content_blocks and not body_clean.strip():
+        all_problems.append(
+            "单元正文为空但契约节点含 %d 个内容块（text/formula/image）——"
+            "编号项/习题单元须完整收录，禁止清空正文" % content_blocks)
+
+    # 15) 假省略声明闸（见 ``_OMISSION_CLAIM_RE`` 注释）：单元正文谎称习题被省略 /
+    #     归入综合习题集 = 题面缺失被措辞掩盖，一律不通过。
+    #     豁免两条：① 命中措辞原样出现在该单元契约节点的书源原文里 = Tier 1
+    #        忠实保留的原书措辞（如 Leinster "cardinal arithmetic, omitted here"），
+    #        不是 agent 掩盖缺失；无 source_text 上下文则不豁免（fail-closed）。
+    #        ② 散文单元（desc/section/proof…）且该句不含内容指向词
+    #        （``_OMISSION_ANCHOR_RE``）= 「omit」的数学用法而非省略声明；
+    #        exercise / item 单元**不适用**此豁免（正文按规则必完整）。
+    m_om = _OMISSION_CLAIM_RE.search(body_clean)
+    if m_om:
+        _norm = lambda s: " ".join(str(s).split()).casefold()
+        _phrase = _norm(m_om.group(0))
+        _src = _norm(source_text or "")
+        _ctx = body_clean[max(0, m_om.start() - _OMISSION_CTX):
+                          m_om.end() + _OMISSION_CTX]
+        _prose = utype not in ("exercise", "item")
+        if _phrase not in _src and not (
+                _prose and not _OMISSION_ANCHOR_RE.search(_ctx)):
+            all_problems.append(
+                "正文出现假省略声明「%s」——能生成单元的习题节点契约里必为 "
+                "consolidated=false（章末集中块不生成单元），题面须按契约 text/formula "
+                "块完整复原，禁止用「省略」措辞掩盖缺失" % m_om.group(0))
+
+    # 16) 幻影习题条目闸（契约切片缺陷，见 ``_LABEL_RESIDUE_RE`` 注释）：单元本身
+    #     措辞再干净也不放行——题面/正文归属错在契约层，须契约 + 单元同步修。
+    if utype == "exercise":
+        all_problems.extend(phantom_exercise_problems(
+            name, content_blocks, expected_tags, expected_images, key,
+            body=body_clean))
 
     return (len(all_problems) == 0, all_problems)

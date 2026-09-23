@@ -25,6 +25,15 @@
      （``chapter_tag_map``）要求该单元携带的 ``formula.tag`` 集合为真值，对比
      单元正文 ``\tag{}``——缺失（漏写编号公式）与多出（编造编号）均不通过
      （Q 层是章级末步，单元粒度必须提前拦；契约缺失时跳过对账）。
+  ③b **单元级图片对账 + 空正文闸 + 章级图片覆盖**：
+     · manifest 的 ``images``（split 时按契约节点写入；老 manifest 在 key 唯一
+       对应一个内容单元时按 ``chapter_image_map`` 回退）为该单元应嵌图片真值，
+       缺图 / 多图均不通过（曾发生步骤 5 agent 清噪时把图块连同习题正文删光，
+       而旧门控只对账 tag、图片无人管 → 一路绿灯流入拼接）；
+     · manifest 的 ``content``（契约节点内容块数）> 0 而单元正文为空 = 整体
+       清空，不通过（幻影节点 content==0 允许空正文）；
+     · 章级兜底：契约全部图片（``chapter_images``）必须被本章单元**合起来**一个
+       不漏地嵌入，且单元不得嵌契约外图片。
   ④ **真实 KaTeX 渲染（按章批量）**：把本章全部 item/desc/exercise 单元正文拼进
      临时 md（``<extract>/_gate_render_tmp_<章目录名>.md``，带单元边界标记），跑
      ``katex_render.run_render_check``（katex_validate.js 真渲染），错误按行号
@@ -48,11 +57,15 @@
   🔴 **回填落点**：步骤 8 复检发现的缺号缺口由 **``backfill_ordinals.py``**（步骤 7 拼接
   之后运行）**写回其归属的总结单元 ``.md``**（你在哪个单元找回的序标就放回哪个单元），插入
   明确标注的占位条目（不编造内容），便利后续补全。默认 ``--dry-run``（只报告），``--apply`` 写盘。
-  🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对。
+  🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ③b图片/空正文/章级图片
+  覆盖对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对 + ⑨章级习题重号（幻影条目契约痕迹）。
 
 完整性核对（防漏项）：
   ⑦ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
-  ⑧ manifest 的 ``units`` 覆盖契约全部编号项单元（item）+ 章/节/描述单元。
+  ⑧ manifest 的 ``units`` 覆盖契约全部编号项单元（item）+ 章/节/描述单元；
+  ⑨ 习题条目键在本章内唯一——重号 = 契约里有一条 OCR 续行碎片被切成的幻影习题
+     （单元级配套判据见 ``check_unit_quality`` 第 16 项：句中起始标题 / 零内容块 /
+     吞并别的小节的编号公式或插图）。
 
 不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
@@ -103,7 +116,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
 from data.book_structure.book_structure import (
-    chapter_json_path, chapter_label, chapter_tag_map, list_chapter_keys,
+    chapter_json_path, chapter_label, chapter_tag_map, chapter_image_map,
+    chapter_images, list_chapter_keys,
     prime_chapter_kinds, unit_dir_name)
 import split_draft_units as _split
 import check_unit_quality as _quality
@@ -164,6 +178,13 @@ def _load_known_book(ext):
     return nums
 
 
+def _unit_source_map(contract):
+    """薄封装：真值实现见 ``check_unit_quality.unit_source_map``（单一来源，
+    假省略闸的忠实引用豁免用）。"""
+    import check_unit_quality as _quality
+    return _quality.unit_source_map(contract)
+
+
 def _check_numbering(units):
     """B 层编号预检：同一节内 item 编号是否递增。返回问题列表。
 
@@ -196,6 +217,32 @@ def _check_numbering(units):
                         sec[0], "（%s）" % sec[1] if sec[1] else "",
                         cur_key, cur_num, prev_key, prev_num))
     return problems
+
+
+def _check_exercise_key_uniqueness(units):
+    """章级闸：习题条目键必须唯一（manifest 与契约节点 1:1，重复即契约重号）。
+
+    同一章出现两个 ``key=2.1.7`` 的 exercise 记录 = 抽取器把 OCR 续行碎片切成了
+    第二条「习题」（Katok ch2/ch3/ch9/ch17 各一例）。后果：真条目被挤到错误的键上、
+    或凭空多出一个空单元，读者看到的习题编号与原书不符。修法在契约层（把碎片并回
+    上一条目 / 补回被吞的真条目），不是删单元文件了事。
+    """
+    seen = {}
+    dup = []
+    for u in units:
+        if u.get("type") != "exercise":
+            continue
+        k = str(u.get("key"))
+        if k in seen:
+            dup.append("%s（%s 与 %s）" % (k, seen[k], u.get("file")))
+        else:
+            seen[k] = u.get("file")
+    if not dup:
+        return []
+    return ["契约本章习题条目重号：%s——后一个是 OCR 续行碎片被误判成的幻影条目，"
+            "须在分章契约里并回所属条目（或补回被吞的真条目）后重拆/同步单元"
+            % "、".join(dup)]
+
 
 def _hash_text(text):
     import hashlib
@@ -312,16 +359,35 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     units = manifest.get("units") or []
     # 契约 tag 真值（单元级「缺失/编造编号」对账；契约缺失 = 跳过对账）
     tag_map = {}
+    img_map = {}
+    contract = None
     cpath = chapter_json_path(ext, ch_key)
     if os.path.exists(cpath):
         try:
             with open(cpath, encoding="utf-8") as f:
-                tag_map = chapter_tag_map(json.load(f))
+                contract = json.load(f)
+            tag_map = chapter_tag_map(contract)
+            img_map = chapter_image_map(contract)
         except Exception:
-            tag_map = {}
+            tag_map, img_map, contract = {}, {}, None
+    src_map = _unit_source_map(contract) if contract is not None else {}
     problems = []
     known_book = _load_known_book(ext)
     present_files = set()
+
+    def _bn(p):
+        return str(p).replace("\\", "/").rstrip("/").split("/")[-1]
+
+    # 契约图片真值（单元级对账回退 + 章级覆盖闸）：老 manifest（拆分时未写
+    # images/content）按 key 回退——仅当该 key 在章内只对应**一个**内容单元时才
+    # 做单元级对账，避免「定义/定理共用 key」式假缺图（同 tags 聚合陷阱）；
+    # 歧义情形交给章级覆盖闸兜底（契约任一图全无单元嵌入 = FAIL）。
+    contract_imgs = chapter_images(contract) if contract is not None else None
+    img_units_by_key = {}
+    for u in units:
+        if u["type"] in ("item", "desc", "exercise"):
+            img_units_by_key.setdefault(str(u["key"]), []).append(u["file"])
+    observed_imgs = set()
     for u in units:
         up = os.path.join(out_dir, u["file"])
         if not os.path.exists(up):
@@ -332,10 +398,14 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         if mark is None:
             problems.append("单元 %s（%s %s）首行标记缺失/损坏——须含 DONE 标记" % (
                 u["file"], u["type"], u["key"]))
+            observed_imgs.update(
+                _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
             continue
         if mark == "DRAFT":
             problems.append("单元 %s（%s %s）仍未处理（标记仍为 DRAFT）" % (
                 u["file"], u["type"], u["key"]))
+            observed_imgs.update(
+                _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
             continue
         # DONE：item / desc / exercise 单元必须「写对」——质量校验通过（公式闭合 /
         # 无裸数学 / 结构标签 / 无明显 OCR 残留 / 无内容审阅类残留）。
@@ -347,17 +417,50 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         exp = u.get("tags")
         if not isinstance(exp, list):
             exp = tag_map.get(str(u["key"])) if tag_map else None
+        # 图片 / 内容块真值（同 tags 语义）：主真值 = manifest.images / manifest.content
+        # （split 时按契约节点写入）；老 manifest 缺字段时按 key 回退，且仅在
+        # 该 key 唯一对应一个内容单元时使用（歧义交给章级覆盖闸兜底）。
+        exp_imgs = u.get("images")
+        if not isinstance(exp_imgs, list):
+            exp_imgs = None
+            if img_map:
+                _k = str(u["key"])
+                if len(img_units_by_key.get(_k, [])) == 1:
+                    exp_imgs = img_map.get(_k)
+        exp_content = u.get("content")
+        if not isinstance(exp_content, int):
+            exp_content = None
+        observed_imgs.update(
+            _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
         if utype in ("item", "desc", "exercise"):
             try:
                 ok_q, qproblems = _quality.check_body(
                     utype, u.get("name") or "", body,
-                    expected_tags=exp, allow_extra=known_book)
+                    expected_tags=exp, allow_extra=known_book,
+                    expected_images=exp_imgs, content_blocks=exp_content,
+                    source_text=src_map.get(str(u["key"])), key=str(u["key"]))
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]
             if not ok_q:
                 problems.append("单元 %s（%s %s）质量未达标（写错/格式破坏）：%s" % (
                     u["file"], u["type"], u["key"], "；".join(qproblems[:4])))
+    # 🔴 章级图片覆盖闸（契约图片全集 =「一个不漏」真值）：契约任一图未被任何
+    # 单元嵌入 = 图片被整体删除（ch2 事故：步骤 5 清噪时图块连正文一起删光，
+    # tag 有对账、图片没有 → 一路绿灯到 merge）；单元嵌契约外图 = 编造/引用未
+    # 回填契约的图。单元级对账有「key 歧义跳过」缝隙，本闸兜死。
+    if contract_imgs is not None:
+        want_set = set(_bn(p) for p in contract_imgs)
+        missing_imgs, stray_imgs = _quality.reconcile_images(
+            want_set, observed_imgs)
+        if missing_imgs:
+            problems.append(
+                "章级图片对账：契约图片 %s 未被任何单元嵌入（漏图 = 内容丢失，"
+                "按 V-E 归属回补到契约所在单元）" % "、".join(missing_imgs))
+        if stray_imgs:
+            problems.append(
+                "单元嵌入了契约之外的图片 %s（图片文件名须来自契约 image 块；"
+                "书源确有而契约缺图先回填契约再引用）" % "、".join(stray_imgs))
     # 多余文件检查（manifest 之外的 .md 属误放）
     for fn in sorted(os.listdir(out_dir)):
         if fn == "manifest.json" or not fn.endswith(".md"):
@@ -367,6 +470,8 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # B 层编号预检：同一节内编号是否递增
     numbering_probs = _check_numbering(units)
     problems.extend(numbering_probs)
+    # 🔴 章级习题重号闸（幻影习题条目的契约侧痕迹，单元级判据见 check_body 第 16 项）
+    problems.extend(_check_exercise_key_uniqueness(units))
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py

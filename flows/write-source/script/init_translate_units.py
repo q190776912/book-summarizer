@@ -120,7 +120,7 @@ def init_chapter(ext, ch_key, force=False, scaffold=False):
         # 🔴 src_hash = 初始化「那一刻」的源正文哈希（源单元已在步骤 5 定稿；
         # 之后源单元若再被修改，check_translate_parity 据此检出「译源不同步」）。
         cur = _hash_text(body.rstrip("\n"))
-        manifest["units"].append({
+        rec = {
             "id": u.get("id") or "",
             "file": u["file"],
             "type": u.get("type") or "",
@@ -128,7 +128,16 @@ def init_chapter(ext, ch_key, force=False, scaffold=False):
             "name": u.get("name") or "",
             "hash": cur,
             "src_hash": cur,
-        })
+        }
+        # 透传契约真值（公式序标/图片/内容块）：翻译门控与源门控共用同一套对账。
+        # 🔴 **仅在源 manifest 确有该键时透传**——缺键 ≠ 空列表：老源 manifest 无
+        # images 键时透传成 [] 会让翻译门控要求「本单元禁嵌任何图」（假编造）。
+        for _k in ("tags", "images", "ntype"):
+            if _k in u:
+                rec[_k] = u[_k]
+        if isinstance(u.get("content"), int):
+            rec["content"] = u["content"]
+        manifest["units"].append(rec)
         if scaffold:
             tf = os.path.join(out_dir, u["file"])
             if not os.path.exists(tf):

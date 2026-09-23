@@ -120,10 +120,11 @@ def _render_chapter(node, lang):
 def _render_section(node, lang):
     """仅标题行：`#` 数 = level + 1（chapter 为 level 0 → `#`；小节 level=1 →
     `## §`、level=2 → `### §` …），忠实保留原书小节层级。无序号标小节 ``## § name``，
-    有编号小节 ``## §name``（name 自带序标）。"""
+    有编号小节 ``§N.M`` → ``##``、``§N.M.K`` → ``###``（level 由序标段数推导，
+    见 render_draft.section_heading_level；显式 level 字段优先）。"""
     key = str(node.get("key") or "")
     name = (node.get("name") or "").strip()
-    lvl = int(node.get("level") or 1)
+    lvl = _rd.section_heading_level(key, name, node)
     prefix = "#" * (lvl + 1)
     if re.fullmatch(r"U\d+", key):
         return [prefix + " § " + name, ""]
@@ -154,9 +155,15 @@ def _emit_units(node, lang):
         # 写出「定理」单元的编号公式）。ntype = 契约节点类型（definition /
         # theorem / …），供门控按 kind 分组做编号单调预检。
         ntags = _bs.node_tags(node) if isinstance(node, dict) else []
+        # nimages / ncontent 同为**契约节点自身**真值：门控据此做「缺图/多图」与
+        # 「正文被整体清空」对账（agent 清噪时连图带正文删光曾漏过全部闸门）。
+        nimages = _bs.node_images(node) if isinstance(node, dict) else []
+        ncontent = _bs.node_content_count(node) if isinstance(node, dict) else 0
         units.append({"type": utype, "key": key or "", "name": name or "",
                       "ntype": (node.get("type") or "") if isinstance(node, dict) else "",
                       "ntags": ntags,
+                      "nimages": nimages,
+                      "ncontent": ncontent,
                       "lines": lines})
 
     def walk_container(container):
@@ -272,6 +279,8 @@ def split_chapter(ext, ch_key, language, force=False):
             "key": u["key"],
             "name": u["name"],
             "tags": u.get("ntags") or [],
+            "images": u.get("nimages") or [],
+            "content": u.get("ncontent") or 0,
             "hash": _hash_text("\n".join(body)),
         })
     mpath = os.path.join(out_dir, "manifest.json")

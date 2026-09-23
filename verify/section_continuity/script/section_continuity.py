@@ -29,6 +29,7 @@ import json
 
 from verify.script.base import VerifyLayer, LayerResult
 from lib.regexlib import SEP_TIGHT, SEC_LOCAL
+from lib.page_dir import resolve_page_dir
 from verify_config import (
     ORDINAL_THREE_LEVEL, BookConfig, ORDINAL_SECTION_TYPES,
 )
@@ -299,8 +300,9 @@ def _check_d_layer_chapter_local(ch, start, end, md_file, ext, cfg):
     raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
     src_subsec_letter = set()
     cur_src_sec = None
+    _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
-        fp = os.path.join(ext, f'page_{p:03d}.json')
+        fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
         try:
@@ -479,8 +481,9 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
             sub_re, sub_ok = _ss.SUB_GLOBAL, _ss._sub_global_title_ok
     except Exception:
         pass
+    _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
-        fp = os.path.join(ext, f'page_{p:03d}.json')
+        fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
         try:
@@ -633,12 +636,13 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
 
     raw_sec_header = {L: set() for L in range(1, max_level + 1)}
     raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
+    _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
-        fp = os.path.join(ext, f'page_{p:03d}.json')
+        fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
         with open(fp, encoding='utf-8') as f:
-            data = page_json.PageJson.load(os.path.join(ext, f'page_{p:03d}.json')).data
+            data = page_json.PageJson.load(fp).data
         for t in data.get('text', []):
             txt = t.get('text', '').strip()
             if not txt:

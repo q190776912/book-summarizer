@@ -15,6 +15,7 @@ import lib.boot as _boot
 _boot.setup()
 
 from data.book_structure.book_structure import BookStructure
+from lib.page_dir import resolve_page_dir
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/verbose_gates/verbose_gates.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """verbose_gates.py — P-LAYER (order 16): anti-regression gate for content/structure defects.
@@ -448,8 +449,9 @@ def _source_ngrams(ext_dir, ch, n=8):
         info = find_chapter(ext_dir, ch)
         start, end = int(info["start"]), int(info["end"])
         chunks = []
+        _pdir = resolve_page_dir(str(ext_dir), ch)
         for pg in range(start, end + 1):
-            fp = os.path.join(str(ext_dir), "page_%03d.json" % pg)
+            fp = os.path.join(_pdir, "page_%03d.json" % pg)
             if not os.path.exists(fp):
                 continue
             with open(fp, encoding="utf-8") as fh:

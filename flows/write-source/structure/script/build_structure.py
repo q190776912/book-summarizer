@@ -257,7 +257,7 @@ def _numbered_heading_y(ext, key, page, page_dir=None):
         return None
     pat = re.compile(
         r'^[\*§8Ss$]?\s*' + re.escape(str(key))
-        + r'(?:[.:：\s\u00a0]+(?=[A-Za-z\u4e00-\u9fff])|(?=[A-Za-z]))')
+        + r'(?:[.:\uff1a\s\u00a0]+(?=[A-Za-z\u4e00-\u9fff])|(?=[A-Za-z\u4e00-\u9fff])|(?![\dA-Za-z\u4e00-\u9fff]))')
     _dir = page_dir or ext
     fp = os.path.join(_dir, 'page_%03d.json' % int(page))
     if not os.path.exists(fp):

@@ -162,6 +162,22 @@ EN3_APP_BARE_MID_RE = re.compile(
     re.IGNORECASE)
 
 
+# 🔴 OCR 断块句中交叉引用判别（2026-09-22，Katok 实测）：OCR 常在句中把一
+# 段切成两块（如块 A "Corollary 2.1.5. Let h1,h2 ... satisfying the assertion
+# of" + 块 B "Proposition 2.1.3. Then there exists..."），使句中交叉引用的标签
+# 词恰好落在新块块首，被「块首锚定 = 真条头」的常规判据误升为条目头（且与
+# 真正首次出现的 Proposition 2.1.3 同号）。判据：上一块 strip 后以小写字母或
+# 逗号结尾 → 明确句中断开（真条头/正文段几乎总以句点、冒号或大写收尾）。
+_OPEN_SENT_RE = re.compile(r"(?:[a-z,]\s*)$")
+
+
+def _prev_block_ends_open(prev):
+    """True 当且仅当上一 OCR 块明显停在句中（末字符为小写字母或逗号）。
+    空/纯空白上一块返回 False（页首/新段，放行真条头）。"""
+    s = (prev or "").rstrip()
+    return bool(s) and bool(_OPEN_SENT_RE.search(s))
+
+
 def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
     """Extract EN three-level `Label C.S.N` entries for one chapter.
 
@@ -196,6 +212,14 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         if s > 20 or n > 60:
             return
         key = f"{label} {c}.{s}.{n}"
+        # 🔴 句中交叉引用幻影（块首回指）：Label+号 落在新块块首，但上一块停在
+        # 句中（小写字母/逗号收尾）且同号已在本章首次出现过 → 判为「…the
+        # assertion of」+「Proposition 2.1.3. Then…」式回指，非新条头，丢弃。
+        # 真·首现条头 key 未见过 → 不受影响；合法同号重印通常起于句读边界。
+        at_block_start = not txt[:m.start()].strip(_DECOR + " \t")
+        if (at_block_start and _prev_block_ends_open(prev)
+                and any(it["key"] == key for it in items)):
+            return
         snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
         items.append({"key": key, "label": label, "page": p, "text": snippet})
 
@@ -301,11 +325,28 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
                 # 恰以 "...Yoneda lemma" 结尾时，拼接出 "lemma 4.2.3" 幻影条头。
                 # 真印刷条头标签词首字母大写（或全大写）；纯小写 fragment 拒绝。
                 if frag[0].isupper() or frag.isupper():
-                    joined = (frag + txt.lstrip()) if tailm.group(2) \
-                        else (frag + " " + txt.lstrip())
-                    jm = EN3_LAB_RE.match(joined)
-                    if jm:
-                        _emit(joined, jm, p)
+                    if tailm.group(2):
+                        # 连字符/软连字符断词（"Proposi-" + "tion 4.10.3"）：标签词
+                        # 本身被跨块劈开，去连字符直拼恢复，属合法跨块条头。
+                        joined = frag + txt.lstrip()
+                        emit_join = True
+                    else:
+                        # 无连字符：上块以一个「完整标签词」结尾、下块以裸号开头。
+                        # 🔴 此形态与「句中交叉引用被 OCR 断块」高度同形——如
+                        # "...for the lift F of f as in Lemma"（上块尾）+ "2.4.7. If f
+                        # is close to Ek..."（下块头）拼成幻影 "Lemma 2.4.7"（Katok
+                        # 定理 2.4.6 证明实测，与真条头 "Lemma 2.4.7"（p94）同号二现）。
+                        # 真·换行条头的标签词必起于新句/新段：要求上块该词之前的文本
+                        # 为空或纯空白、或以句读终止（. : ; ! ? 。 ： ！？）；句中交叉
+                        # 引用尾（"...as in"）无终止符 → 拒绝，消除幻影条头。
+                        head = prev[:tailm.start()].rstrip()
+                        emit_join = (head == ""
+                                     or head[-1] in ".:;\u3002\uff1a\uff01\uff1f!?")
+                        joined = frag + " " + txt.lstrip()
+                    if emit_join:
+                        jm = EN3_LAB_RE.match(joined)
+                        if jm:
+                            _emit(joined, jm, p)
             prev = txt or prev
     # Collapse reference mentions but KEEP two genuinely different items that
     # share a (label, number) — e.g. a source book printing the same number

@@ -323,7 +323,12 @@ _SEC_SEP_RE = re.compile(r'[.\-–·/．－〜]')
 # 孙文祥《遍历论》实测还有 `$6.3熵映射`（§→$），一并容忍。
 # 2026-08-26 Ross 体例实测：节头脚注星号被 OCR 提到行首（`* 1.6 The Number…` /
 # `* 6.6 Order statistics`）——前缀类补 `\*`，否则整节漏检。
-_SEC_HEAD_RE = re.compile(r'^(?:[§8Ss$\*])?\s*(\d+(?:[.\-–·/．－〜]\d+)*)')
+# 2026-09-22 常庚哲《数学分析教程》实测：节头脚注/破折号被 OCR 粘到行首
+# （`-2.6无穷小与无穷大`，§2.6 因前导 `-` 被 universal 检测器整节漏检）——前缀
+# 类扩为「零或多」并纳入连字符族（ASCII `-`、en/em dash、全角 `－`）、项目符号
+# `•`/`·` 与空白，覆盖「空白+破折号+编号」等行首装饰形态；数字本体判据不变。
+_SEC_HEAD_RE = re.compile(
+    r'^(?:[§8Ss$\*\-–—－•·\s])*(\d+(?:[.\-–·/．－〜]\d+)*)')
 _SEC_TITLE_LABEL_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
@@ -423,6 +428,14 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
         # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。
         if re.search(r'[.;；]\s+[A-Z一-鿿]', _rest_stripped):
+            return None
+        # CJK 粘连句读守卫：真中文节标题是**无句读**的短名词短语（"无穷小与无穷大"
+        # /"函数的上极限和下极限"）；若标题内部出现「句点/逗号/分号（半角或全角）
+        # + 汉字」（OCR 把跨行引用行首的编号+散文残片粘成一行），判为散文碎片。
+        # 常庚哲《数学分析教程》实测：引理 2.12.3 的正文跨行「2.12.3的要求都满足.
+        # 因此…」被当作三级小节伪节头 → 契约凭空多出 §2.12.3。枚举顿号 `、` 不在
+        # 本类，真节标题（含"、"者）不受影响。
+        if re.search(r'[。，,；;]\s*[一-鿿]', _rest_stripped):
             return None
         # 句首虚词守卫（见 _SEC_TITLE_SENTENCE_STARTS 注释）。
         if _SEC_TITLE_SENTENCE_STARTS.match(_rest_stripped):

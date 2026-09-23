@@ -180,6 +180,25 @@ def print_result(r):
                   f"references an item but it is not inside that item's block):")
             for l in r['fig_misattributed']:
                 print(l)
+        # --- figure embed coverage (detect-but-not-embedded false-green) ---
+        if r.get('fig_zero_embed'):
+            problems += 1
+            print(f"\nE-LAYER FIGURE NOT EMBEDDED (BLOCKING): figure_index.json has "
+                  f"figures for this chapter but the markdown embeds ZERO <img>. "
+                  f"Either embed_figures.py was never run after (re-)detection/merge, "
+                  f"or the note cites none of them. Re-run: python embed_figures.py "
+                  f"<book_dir> --chapter {r['ch']}. Unembedded crops:")
+            for n in r.get('fig_unembedded', []):
+                try:
+                    print(f"  ! {n}")
+                except UnicodeEncodeError:
+                    print(f"  ! {n.encode('ascii', errors='replace').decode('ascii')}")
+        elif r.get('fig_unembedded'):
+            print(f"\nE-LAYER FIGURE PARTIAL COVERAGE ({len(r['fig_unembedded'])}): "
+                  f"detected figure(s) not embedded in the markdown (non-blocking — "
+                  f"the note does not cite them; embed-when-referenced rule):")
+            for n in r['fig_unembedded']:
+                print(f"  ~ {n}")
 
     # ===========================================================================
     # F-LAYER FORMAT: 统一格式校验总结。

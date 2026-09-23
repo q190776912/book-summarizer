@@ -49,6 +49,7 @@ from lib.util import blk_text
 _boot.setup()
 
 from data.book_structure.book_structure import BookStructure
+from lib.page_dir import resolve_page_dir
 
 
 _LABEL_PREFIX = re.compile(
@@ -138,12 +139,13 @@ def _chapter_range(ext, ch):
     return rng.get(ch)
 
 
-def _scan_ocr_noise(ext, start, end):
+def _scan_ocr_noise(ext, start, end, ch=None):
     """章页面区间内是否存在『带标签但无干净编号』的条头（OCR 丢号迹象）。"""
     if not start or not end:
         return False
+    _pdir = resolve_page_dir(ext, ch) if ch is not None else ext
     for p in range(max(1, int(start)), int(end) + 1):
-        fp = os.path.join(ext, f"page_{p:03d}.json")
+        fp = os.path.join(_pdir, f"page_{p:03d}.json")
         if not os.path.exists(fp):
             continue
         try:
@@ -247,7 +249,7 @@ def run_audit(ext, chapter=None):
             continue
         canons = _load_chapter_canons(ext, ch)
         rng = _chapter_range(ext, ch)
-        noise = _scan_ocr_noise(ext, rng[0] if rng else None, rng[1] if rng else None)
+        noise = _scan_ocr_noise(ext, rng[0] if rng else None, rng[1] if rng else None, ch=ch)
         for key, reason, src, parsed in ch_entries:
             num = parsed[2] if len(parsed) == 3 else None
             rec = {"key": key, "chapter": ch, "source": src, "reason": reason}

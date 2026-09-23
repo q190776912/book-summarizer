@@ -43,6 +43,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 from page_json import PageJson
+from lib.page_dir import resolve_page_dir
 
 import sys, os, json, glob, re
 
@@ -298,11 +299,11 @@ def _load_page_context(ext, ch, key, items):
         pg = int(detail['page'])
     except ValueError:
         return None
-    fp = os.path.join(ext, f'page_{pg:03d}.json')
+    fp = os.path.join(resolve_page_dir(ext, ch), f'page_{pg:03d}.json')
     if not os.path.exists(fp):
         return None
     with open(fp, encoding='utf-8') as f:
-        data = PageJson.load(os.path.join(ext, f'page_{pg:03d}.json')).data
+        data = PageJson.load(fp).data
     text_blocks = data.get('text', [])
     item_text = detail['text']
     for block in text_blocks:
@@ -438,6 +439,10 @@ def verify_all(ext, book_dir, extra_ignore=None):
         dcont = len(r['d_layer'].get('continuity_sections', []))
         fgmiss = '-' if r.get('fig_skipped') else len(r.get('fig_missing', []))
         fginv = '-' if r.get('fig_skipped') else len(r.get('fig_invalid', []))
+        if r.get('fig_skipped'):
+            emb_disp = '-'
+        else:
+            emb_disp = f"{r.get('fig_embedded', 0)}/{r.get('fig_detected', 0)}"
         ggaps = len(r.get('quote_gaps', []))
         epg = len(r.get('ex_proof_gaps', [[]])[0]) if r.get('ex_proof_gaps') else 0
         hbq = len(r.get('h_structural_bq', []))
@@ -461,7 +466,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
         qi = len(r.get('q_inconsistent', []) or [])
         qm = len(r.get('q_missing', []) or [])
         print(f"  {chapter_label(r['ch']):>9s}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
-              f"FgMiss:{fgmiss} FgInv:{fginv} F:{f_n} Osub:{osub} "
+              f"FgMiss:{fgmiss} FgInv:{fginv} Emb:{emb_disp} F:{f_n} Osub:{osub} "
               f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
 
     pass_count = sum(1 for r in results if r['status'] == 'PASS')

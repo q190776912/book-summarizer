@@ -14,6 +14,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 import page_json
+from lib.page_dir import resolve_page_dir
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/item_numbering_integrity/item_numbering_integrity.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """
@@ -898,8 +899,9 @@ def _scan_book_category_items(ch, start, end, ext_dir):
     the chapter's first char (A→4 etc). Returns {(sec, cat): sorted[num,]}.
     Block-anchored (^) so cross-references like '由定义 4.7-1' are excluded."""
     by = defaultdict(list)
+    _pdir = resolve_page_dir(ext_dir, ch)
     for p in range(start, end + 1):
-        fp = os.path.join(ext_dir, f'page_{p:03d}.json')
+        fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
         try:

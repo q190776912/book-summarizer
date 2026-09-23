@@ -255,8 +255,8 @@ def check_example_blockquote(md_file):
 _H_UL_OPENERS = re.compile(
     r'^\s*>\s*\*\*(?:'
     r'(?:\d{1,3}[.．]\s*)?(?:'
-    r'(?:证明|证|例|注|说明'
-    r'|Proof|Example|Solution|Note|Remark'
+    r'(?:证明|证|例|注|说明|算法'
+    r'|Proof|Example|Solution|Note|Remark|Algorithm'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
     r')'
     # number-first form:  > **N.M-K 例  (some books print 编号在前, e.g. Kreyszig `8.1-6 例子`)

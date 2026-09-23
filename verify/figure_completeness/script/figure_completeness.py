@@ -39,6 +39,7 @@ from verify.script.base import VerifyLayer, LayerResult
 import os, json, re
 
 from page_json import PageJson
+from lib.page_dir import resolve_page_dir
 from verify.script.fig_common import normfig, load_figure_index, fig_cap_re, sortkey, cv2
 from lib.figure_io import load_fig_components, fig_label_from_match, figure_abs
 
@@ -203,8 +204,9 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
     caption = set()
     cap_re = fig_cap_re(ext)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
     components = load_fig_components(ext)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
+    _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
-        fp = os.path.join(ext, f'page_{p:03d}.json')
+        fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
             continue
         with open(fp, encoding='utf-8') as f:
@@ -261,6 +263,32 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
     return {'missing': missing, 'extra': extra, 'invalid': errors, 'invalid_warn': warns}
 
 
+_IMG_EMBED_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]*)"')
+
+
+def check_figure_coverage(md_file, ch_entries):
+    """Return ``(embedded, unembedded)`` for this chapter's figures.
+
+    ``embedded`` = set of crop basenames referenced by ``<img src=".../X.png">``
+    in the markdown; ``unembedded`` = list of crop basenames that exist in
+    ``figure_index.json`` (and whose file is present on disk) but are NOT
+    embedded in the md. This closes the false-green where the E-layer reported
+    PASS for a chapter whose source figures were detected but never placed.
+    """
+    names = []
+    for e in ch_entries:
+        f = e.get('file') or ''
+        if f:
+            names.append(os.path.basename(f))
+    embedded = set()
+    if md_file and os.path.exists(md_file):
+        with open(md_file, encoding='utf-8') as fh:
+            for m in _IMG_EMBED_RE.finditer(fh.read()):
+                embedded.add(os.path.basename(m.group(1)))
+    unembedded = [n for n in names if n not in embedded]
+    return embedded, unembedded
+
+
 class ELayer(VerifyLayer):
     code = 'E'
     name = 'figure'
@@ -276,6 +304,21 @@ class ELayer(VerifyLayer):
             # double-guard: ensure every contract key present even when skipped
             res = {'missing': [], 'extra': [], 'invalid': [], 'invalid_warn': []}
         misattributed = check_figure_attribution(ctx.md_file)
+        # --- embed coverage (closes the false-green: figures detected in
+        # figure_index.json but never embedded as <img> into the markdown) ---
+        ch_entries = []
+        idx = load_figure_index(ctx.ext_dir)
+        if idx is not None:
+            ch_entries = _chapter_entries(idx, ctx.ch)
+        embedded, unembedded = check_figure_coverage(ctx.md_file, ch_entries)
+        embeddable = [e for e in ch_entries if e.get('file')]
+        # Blocking zero-embed only counts genuinely captioned figures: an
+        # unnamed detect-crop the note never cites is legitimately omitted
+        # (embed-when-referenced rule), so it must not hard-fail a chapter.
+        labeled = [e for e in embeddable if e.get('label')]
+        labeled_names = {os.path.basename(e['file']) for e in labeled}
+        labeled_embedded = labeled_names & embedded
+        fig_zero_embed = bool(labeled) and not labeled_embedded
         return LayerResult(code=self.code, legacy=res, metadata={
             'fig_missing': res['missing'],
             'fig_extra': res['extra'],
@@ -283,4 +326,8 @@ class ELayer(VerifyLayer):
             'fig_invalid_warn': res['invalid_warn'],
             'fig_misattributed': misattributed,
             'fig_skipped': fig_skipped,
+            'fig_unembedded': unembedded,
+            'fig_zero_embed': fig_zero_embed,
+            'fig_embedded': max(0, len(embeddable) - len(unembedded)),
+            'fig_detected': len(embeddable),
         })

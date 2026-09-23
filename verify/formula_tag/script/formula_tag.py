@@ -14,6 +14,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 from page_json import PageJson
+from lib.page_dir import resolve_page_dir
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/formula_tag/formula_tag.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """formula_tag.py — Q-LAYER (order 17): FORMULA SEQUENCE-LABEL audit.
@@ -366,13 +367,14 @@ class SourceFormulaIndex:
         self._walk_last_page = 0
         self._cur_heading = None
         nums: Set[str] = set()
+        _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
-            fp = os.path.join(self.extract_dir, f'page_{pg:03d}.json')
+            fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
                 continue
             try:
                 with open(fp, encoding='utf-8') as f:
-                    data = PageJson.load(os.path.join(self.extract_dir, f'page_{pg:03d}.json')).data
+                    data = PageJson.load(fp).data
             except Exception:
                 continue
             for block in data.get('text', []) or []:
@@ -451,13 +453,14 @@ class SourceFormulaIndex:
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
+        _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
-            fp = os.path.join(self.extract_dir, f'page_{pg:03d}.json')
+            fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
                 continue
             try:
                 with open(fp, encoding='utf-8') as f:
-                    data = PageJson.load(os.path.join(self.extract_dir, f'page_{pg:03d}.json')).data
+                    data = PageJson.load(fp).data
             except Exception:
                 continue
             # Bug #23 (2026-08, Ross): chapter-opening CONTENTS pages list every
@@ -1155,13 +1158,14 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         _standalone = re.compile(r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*')
         _has_math = SourceFormulaIndex._block_has_math
         single = dotted = 0
+        _pdir = resolve_page_dir(ext_dir, ctx.ch)
         for pg in range(int(start), int(end) + 1):
-            fp = os.path.join(ext_dir, f'page_{pg:03d}.json')
+            fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
                 continue
             try:
                 with open(fp, encoding='utf-8') as f:
-                    data = PageJson.load(os.path.join(ext_dir, f'page_{pg:03d}.json')).data
+                    data = PageJson.load(fp).data
             except Exception:
                 continue
             for b in data.get('text', []) or []:
@@ -1260,7 +1264,7 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     return None
 
 
-def _detect_letter_led_formulas(ext_dir: str, start, end) -> Set[str]:
+def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
     """RESERVED probe: find letter / Roman-led formula numbers in the book
     source (e.g. `(A.3)` / `（I.2）`).
 
@@ -1271,8 +1275,9 @@ def _detect_letter_led_formulas(ext_dir: str, start, end) -> Set[str]:
     tokens (for the surfaced message), or an empty set when none are found.
     """
     found: Set[str] = set()
+    _pdir = resolve_page_dir(ext_dir, ch) if ch is not None else ext_dir
     for pg in range(int(start), int(end) + 1):
-        fp = os.path.join(ext_dir, f'page_{pg:03d}.json')
+        fp = os.path.join(_pdir, f'page_{pg:03d}.json')
         if not os.path.exists(fp):
             continue
         try:
@@ -1922,7 +1927,7 @@ class QLayer(VerifyLayer):
                 # numbering IS validated; multi-letter/Roman stays RESERVED).
                 # A letter-led book must not silently pass via section scope.
                 _ll_sec = ([] if letter else
-                           _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end))
+                           _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
                 ll_note_sec = _letter_led_note(_ll_sec)
                 if ll_note_sec is not None:
                     print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note_sec}",
@@ -1951,7 +1956,7 @@ class QLayer(VerifyLayer):
         # (`II.5` / `App.2`, still unsupported → BLOCKING WARN).  See
         # _letter_led_note for the two branches.
         _ll = ([] if letter else
-               _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end))
+               _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
         ll_note = _letter_led_note(_ll)
         if ll_note is not None:
             print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note}", file=sys.stderr)

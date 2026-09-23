@@ -107,12 +107,12 @@ ENTRY_RE = re.compile(r'\*\*[^*]*?(\d+' + SEP_TIGHT + r'\d+' + SEP_TIGHT + r'\d+
 # Chinese-scheme section-heading detectors (extract.scan_skeleton +
 # verify.script.audit_counts).  OCR noise: §→8, glue of §/number, no space before title.
 SEC_CN = re.compile(
-    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})'
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s\-\u2013\u2014\uFF0D]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})'
     r'[\.\．·。]?(?!\s+[\u4e00-\u9fff])(?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 SECBARE_CN = re.compile(
-    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})$')
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s\-\u2013\u2014\uFF0D]*[.．·]?(\d{1,2})[\.\．·](\d{1,2})$')
 SECGLUE_CN = re.compile(
-    r'^[§Ss8*+x$\u00d7\u2605\u2606\s]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
+    r'^[§Ss8*+x$\u00d7\u2605\u2606\s\-\u2013\u2014\uFF0D]*[Ss8§](\d{1,2})[\.\．·]?(\d{1,2})'
     r'[^\s\d](?=[^\d.．·。]*[\u4e00-\u9fff]).{0,24}$')
 
 # Chapter-LOCAL single-number section header (Karlin-style: sections RESET per

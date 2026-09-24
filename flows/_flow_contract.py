@@ -118,6 +118,8 @@ RUN_COMMANDS = {
     "write_source.merge_all": ("cmd",
         # 文档步骤 7：一次拼接源语言 + 翻译语言两组 md。
         # merge_units 自带强制门控（拼接前先 gate_units，--units-dir 同步生效）。
+        # 🔴 规则3：拼接后任一合并形态章 md > MERGED_MD_CHAR_LIMIT 字符必须跑
+        # tools/split_chapters.py 按节拆分（merge_all 证据复核硬拦，见 merge_all_ok）。
         "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all && "
         "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all "
         "--units-dir units-translate"),
@@ -129,6 +131,10 @@ RUN_COMMANDS = {
         "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
 }
 
+
+# 🔴 规则3（write-source.md）：合并形态章 md 超此字符数必须经 tools/split_chapters.py
+# 按节拆分。阈值与 split_chapters.DEFAULT_THRESHOLD 保持一致。
+MERGED_MD_CHAR_LIMIT = 60000
 
 # --------------------------------------------------------------------------
 # 物理证据检查：只看磁盘产物，不依赖账本
@@ -598,10 +604,30 @@ class physical_evidence:
                             for x in (formula.get("known_book") or []):
                                 known.add(str(x).strip())
 
+                    def _harvest_node(node):
+                        """节点自身是 formula map，或是含 ``formula`` 子 map 的配置组。"""
+                        if not isinstance(node, dict):
+                            return
+                        _harvest(node.get("formula"))
+                        if "known_book" in node:
+                            _harvest(node)
+
+                    # 扁平形状：顶层 ``formula``
                     _harvest(_cfg.get("formula"))
-                    for _node in (_cfg.get("data") or {}).values():
-                        if isinstance(_node, dict):
-                            _harvest(_node.get("formula"))
+                    # 外层 map 形状（当前 SSOT）：ch/appendix/supplement 组
+                    for _grp in (_cfg.get("ch"), _cfg.get("appendix"),
+                                 _cfg.get("supplement")):
+                        _harvest_node(_grp)
+                    # 历史 ``data`` 包装形状（若有）：data[section]["formula"]
+                    _data = _cfg.get("data")
+                    if isinstance(_data, dict):
+                        for _node in _data.values():
+                            _harvest_node(_node)
+                    # 兜底：遍历所有顶层 dict 值（对未知分组名稳健，与
+                    # gate_units._load_known_book 同语义）
+                    for _v in _cfg.values():
+                        if isinstance(_v, dict):
+                            _harvest_node(_v)
                 except Exception:
                     known = set()
                 break
@@ -859,6 +885,24 @@ class physical_evidence:
         return [f for f, _ in secs]
 
     @staticmethod
+    def _oversized_merged_md(md_files):
+        """🔴 规则3 机械闸：合并形态（无节号）章 md 字符 > MERGED_MD_CHAR_LIMIT
+        而未按节拆分 → 返回 [(文件名, 字符数)]。已拆分（节文件形态）不查——
+        规则只拆到「节」一级，单个节文件超阈是允许形态。"""
+        over = []
+        for f in md_files:
+            if physical_evidence._sec_num(f) is not None:
+                continue
+            try:
+                with open(f, encoding="utf-8-sig") as fh:
+                    n = len(fh.read())
+            except OSError:
+                continue
+            if n > MERGED_MD_CHAR_LIMIT:
+                over.append((os.path.basename(f), n))
+        return over
+
+    @staticmethod
     def _contract_names_missing(ex, k, md_files):
         """结构契约骨架节 + 编号项在 md 组中的在位核对；返回缺失名列表。"""
         contract_path = os.path.join(
@@ -902,7 +946,7 @@ class physical_evidence:
         keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
-        missing, missing_names, degraded = [], [], []
+        missing, missing_names, degraded, oversized = [], [], [], []
         for k in keys:
             src = physical_evidence._src_manifest(ex, k)
             if src is None:
@@ -917,6 +961,9 @@ class physical_evidence:
                 if not md_files:
                     missing.append((k, lang))
                     continue
+                ov = physical_evidence._oversized_merged_md(md_files)
+                if ov:
+                    oversized.append((k, lang, ov))
                 miss = physical_evidence._contract_names_missing(ex, k, md_files)
                 if miss:
                     missing_names.append((k, lang, miss))
@@ -924,6 +971,13 @@ class physical_evidence:
             (k, lang) = missing[0]
             return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_all 拼接）: "
                            f"{chapter_label(k)} [{lang}]" + (f" 等 {len(missing)} 组" if len(missing) > 1 else ""))
+        if oversized:
+            k, lang, ov = oversized[0]
+            return False, (f"{len(oversized)} 章/版为合并形态且超 {MERGED_MD_CHAR_LIMIT} 字符"
+                           f"未拆（write-source 规则3）: {chapter_label(k)} [{lang}] "
+                           f"{ov[0][0]} = {ov[0][1]} 字符；"
+                           f"跑 python tools/split_chapters.py \"{book_dir}\" "
+                           f"按节拆分（默认删合并文件）后复核")
         if missing_names:
             k, lang, miss = missing_names[0]
             return False, (f"{len(missing_names)} 组 md 相对结构契约漏骨架节/编号项: "

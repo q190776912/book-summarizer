@@ -46,6 +46,8 @@
         句中 / 契约节点零内容块 / 节点携带**别的小节**的编号公式或插图 = OCR 把
         跨条目续行切成独立条目、或把后续小节正文整段吞进习题节点；不通过，须契约
         + 单元同步修（并回碎片、按书源复原题面），改措辞无效
+    17. 行内公式边界粘连闸（`math_glue_problems`）：散文（EN 字母/数字/`)`、CN
+        汉字）紧贴 `$...$` 任一侧 = OCR 粘连未清理；标点/引号紧贴豁免
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -508,6 +510,52 @@ def reconcile_images(want, got):
 _BOLD_LABEL_LINE_RE = re.compile(r"^\*\*([^*\n]+)\*\*")   # 行首条目/习题粗体标签
 
 
+# ── 第 17 项：行内公式边界粘连（math glue）────────────────────────────────
+# Weibel 全书实战（2026-09-24）：单元正文按 OCR 原样留下「散文紧贴 $...$」的
+# 粘连（`maps$C_n \to C_{n-1}$are`、`couple$\varepsilon$&`），门控与 verify 都
+# 不查，一路流入合并 md。按 `$` 奇偶分段（偶数段=散文）判两侧：EN 散文以字母/
+# 数字/`)` 紧贴公式开界或公式闭界紧贴字母/`(`，CN（units-translate）汉字紧贴任一
+# 侧，均判粘连。豁免三类：
+#   ① 紧贴标点/引号（`$R$-module`、`$X$;`、`“$n$-胞腔”` 的起引号）；
+#   ② 序数后缀（`$n$th`、`$(n-1)$st` = 书排 "nth syzygy" 的合法 LaTeX 写法）；
+#   ③ 函数式记法（散文词 + 紧跟 `(` 开界的公式：`cone$(f)$`、`Sheaves$(X)$`，
+#      Weibel ch1 通篇如此排版）；`$` 奇数行与 `$$` 围栏行不判（另有判据）。
+_GLUE_EN_BEFORE = re.compile(r"[A-Za-z0-9\)]$")
+_GLUE_EN_AFTER = re.compile(r"[A-Za-z(]")
+_GLUE_HAN_BEFORE = re.compile(r"[\u4e00-\u9fff]$")
+_GLUE_HAN_AFTER = re.compile(r"[\u4e00-\u9fff]")
+_GLUE_ORDINAL = re.compile(r"(?:th|st|nd|rd|Th|St|Nd|Rd)\b")
+
+
+def math_glue_problems(body, limit=4):
+    """行内公式与散文粘连检测 → 问题列表（按行判，行内 `$` 须成对）。"""
+    hits = []
+    for ln in str(body or "").split("\n"):
+        s = ln.strip()
+        if not s or "$$" in ln or s.startswith("<!--") or "\\$" in ln:
+            continue
+        if ln.count("$") % 2:
+            continue
+        parts = ln.split("$")          # 偶数段=散文，奇数段=数学
+        for k in range(0, len(parts) - 1, 2):
+            before, math = parts[k], parts[k + 1]
+            after = parts[k + 2] if k + 2 < len(parts) else ""
+            if math.startswith("("):
+                before = ""            # 豁免③ 函数式：coker$(f_n)$
+            if _GLUE_ORDINAL.match(after):
+                after = ""             # 豁免② 序数：$n$th、$(n-1)$st
+            if _GLUE_EN_BEFORE.search(before) or _GLUE_HAN_BEFORE.search(before):
+                hits.append((ln, before[-18:] + "|" + math[:14]))
+            elif _GLUE_EN_AFTER.match(after) or _GLUE_HAN_AFTER.match(after):
+                hits.append((ln, math[-10:] + "|" + after[:18]))
+    if not hits:
+        return []
+    out = ["行内公式与正文粘连（`$...$` 两侧须有空格，标点/引号/序数/函数式紧贴除外）"]
+    out += ["  %s" % frag for _, frag in hits[:limit]]
+    if len(hits) > limit:
+        out.append("  …共 %d 处" % len(hits))
+    return ["\n".join(out)]
+
 def label_key_problems(body, ord_keys, ch_num):
     """第 23 项：单元行首**粗体条目/习题标签**里的三级序标必须是本章契约登记的编号。
 
@@ -841,5 +889,9 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
         all_problems.extend(phantom_exercise_problems(
             name, content_blocks, expected_tags, expected_images, key,
             body=body_clean))
+
+    # 17) 行内公式边界粘连（Weibel ch8 2026-09-24：OCR 原样「maps$C_n\to C_{n-1}$are」
+    #     式粘连逃过全部既有检测流入合并 md；纯行形态判据，exercise 单元同样执行）
+    all_problems.extend(math_glue_problems(body_clean))
 
     return (len(all_problems) == 0, all_problems)

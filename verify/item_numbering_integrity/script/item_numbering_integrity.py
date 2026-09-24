@@ -108,7 +108,7 @@ _ENTRY_LABELS = (
 # 🔴 Weibel「Calculation 6.2.1」这类以计算命名的条目：缺该类型词时条头解析
 # 不出编号 → 假「缺号」（实测 ch6 §6.2 报缺 1）。
 # Labels that open the independent exercise window (see bucket routing below).
-_EXERCISE_LABELS = ('exercise', 'exercse', 'problems', 'problem', '习题', '问题')
+_EXERCISE_LABELS = ('exercise', 'exercse', 'problems', 'problem', '习题', '练习', '问题')
 # Label-first:  LABEL  NUMPATH   (e.g. "定理 4.1", "Definition 2.1")
 
 # Normalize a CN entry label to its EN canonical so that `known_gaps` entries
@@ -672,9 +672,11 @@ def _md_gap_blocking(ctx):
         # 1..N 序列，此处不得为 exercise 另开窗，否则定理号全被报成「练习缺号」。
         # Problem 无论何种模式都独立开窗——它用 N-M 编号（Lee 章末 Problems
         # 印作 "1-1."），与条目的 N.M 不同形，并入会与 Theorem 1.1 撞号。
+        # 🔴 '练习' 是 CN 译版对 Exercise 的常用标签（Weibel 2026-09 实战：漏它
+        # 则 CN 侧 练习X.Y.n 落进条目窗造成「同号二现」WARN 一片）。
         _shared = bool(getattr(cfg, 'exercise_shared_numbering', False))
         _routed_ex = False
-        if _lab in _EXERCISE_LABELS and not (_shared and _lab in ('exercise', 'exercse', '习题')):
+        if _lab in _EXERCISE_LABELS and not (_shared and _lab in ('exercise', 'exercse', '习题', '练习')):
             if ':' in gk:
                 _gh, _gb = gk.split(':', 1)
                 gk = f"{_gh}:ex:{_gb}"

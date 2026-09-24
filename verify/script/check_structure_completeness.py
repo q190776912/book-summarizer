@@ -46,7 +46,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
-    ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2,
+    ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2, ORDINAL_VAKIL,
     LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
     _canon_label, _load_ignore_file,
 )
@@ -454,6 +454,14 @@ def load_contract(tree):
                 walk(k)
             return
         if t in ("exercise", "problem"):
+            # 🔴 练习类节点仍登记「存在性」：源侧 scan_raw_items 全方案扫描会把
+            # "12.1.3. Problem." 这类练习类条扫成候选，契约侧若不登记，差集会把它
+            # 当缺失重要概念自动回填，造出同号重复节点、B 层随即报顺序错乱
+            # （Rising Sea ch12 实测）。items 只作成员判定；回填目标另有
+            # 「排除练习类」规则，登记练习类不会导致练习被回填。
+            canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
+            if canon is not None:
+                items[_composite_key(_PRIMARY, _TYPE_TO_LABEL.get(t, "uncat"), canon)] = n
             return
         canon = _canon_key(_PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
         if canon is not None:
@@ -930,6 +938,21 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
         garbled = not (len(c) >= 1 and all(isinstance(x, int) for x in c)
                        and (len(c) < 2 or c[1] <= 60) and (len(c) < 3 or c[2] <= 200))
         is_ref = bool(_REF_RE.search(it.get("snippet", "")))
+        if cfg.primary_type == ORDINAL_VAKIL and not garbled and \
+                (len(c) == 2 or (len(c) >= 3 and c[-1] == 0)):
+            # Vakil 体例结构不可能形态 → 幻影，不回填、不拦闸（Rising Sea 实测）：
+            #  * 两段（"Proposition 10.1" ← 断号交叉引用 "Proposition 10.1.13)"、
+            #    "Definition 2.2" ← 节标题 "2.2 Definition of sheaf…"——条目键恒为
+            #    三段 C.S-N 或字母 C.S.A，两段只可能是引用/节号）；
+            #  * 末段 0（练习字母 O 的 OCR 数字替身：5.5.O → 5.5-0；条目计数器
+            #    从 1 起，C.S.0 在本体例中不存在）。
+            missing_items.append({
+                "key": it["key"], "label": it["label"], "page": it["page"],
+                "snippet": it["snippet"], "canon": list(c),
+                "has_label": it.get("has_label", False),
+                "status": "reference",
+            })
+            continue
         if garbled:
             # OCR 字母↔数字无法干净还原 → 交 agent 凭读图/知识回填。
             status = "needs_agent"

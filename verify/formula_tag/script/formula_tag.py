@@ -755,6 +755,11 @@ class SourceFormulaIndex:
             if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
                 return
             tail2 = s[hm.end():].strip().strip('.').strip()
+            # OCR 断句把「…参见 20.6 节…」之类的行中引用切成以编号开头的独立块
+            # （"20.6 and it is stated without proof."）——真标题的尾巴以大写字母
+            # 或 CJK 起头（"20.4 Performance" / "3.1 预备知识"），小写起头必为散句。
+            if tail2[:1].isascii() and tail2[:1].islower():
+                return
             if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
                 self._cur_heading = _head_norm(hm.group(1))
 
@@ -891,6 +896,17 @@ class SourceFormulaIndex:
         rest = txt[end:]
         if rest[:1] == '.' and rest[1:2].isdigit():
             return True          # 更长编号链的头部（3.1 ⊂ 3.1.2）
+        # 集合 / 表格里被 { } [ ] 包裹的元素（如 Koopman 模态表单元 "{18,19}"
+        # 逗号归一为 18.19）——绝非带括号显示的公式标签，跳过位置锚定。
+        if rest[:1] in ('}', ']'):
+            return True
+        # 前导引用关键词 "Eq./Equation/Section/Fig./Formula"（可带点与开括号），
+        # 例如 "Eq. (5.39)" / "Eq.(18.1)" 散文交叉引用；真实显示标签是独立
+        # "(N.M)"，前面只有空白或行首，不含这些词。
+        if re.search(r'(?:\b(?:eq(?:uation)?s?|sec(?:tion)?|fig(?:ure)?s?|'
+                     r'formula(?:e)?)\b)\s*[.、．]?\s*[\(\[（［]?\s*$',
+                     txt[:start], re.IGNORECASE):
+            return True
         j = start - 1
         while j >= 0 and txt[j] in ' \u3000':
             j -= 1
@@ -899,6 +915,8 @@ class SourceFormulaIndex:
         c = txt[j]
         if c in '例义理题论质习节章图表§Ss':
             return True          # 紧邻条目词 / 节字形（定义3.1、§3.1、S4.2）
+        if c in '{[':
+            return True          # 集合 / 列表括号左边界（{18,19}）
         # 紧邻 CJK 汉字或拉丁字母（如 OCR 数学碎片 "的2·2-1"、"为2·3n"、"x2.1"）
         # ——独立公式标签的左边界只会是行首/空白/开括号/标点，绝不可能是文字
         if ('\u4e00' <= c <= '\u9fff') or c.isascii() and c.isalpha():

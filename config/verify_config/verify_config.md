@@ -12,7 +12,7 @@
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
 | `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。可选 `bare_number`（见下）。 |
 | `exercise_shared_numbering` | `bool` | **练习与条目共用同一条章内计数器**的书（Lee《Intro to Smooth Manifolds》：Theorem 1.2 / Example 1.3 / Exercise 1.6 是同一条 1..N 序列上的连续槽位）置 `true`。B 层默认把练习/问题强制划入独立编号窗（`:ex:`，为 Katok 那种「练习按节重排」的书而设），对共享序列的书会把每个定理号报成「练习缺号」——整章数百条结构性假 BLOCKING。Problem 无论此开关如何都独立开窗（`N-M` 编号与条目的 `N.M` 不同形，合并会撞号）。默认 `false`。 |
-| （无 `figure` 字段） | — | 🔴 **图序标不再单独成块**，而是 `ordinal` 里的一个 **Figure 组**：`{"type": <components>, "name": ["图","Figure","Fig",…], "scope": <components>}`。`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号**段数（components）**：`1`=全局整数 / `2`=章.图 / `3`=章.节.图。图号前缀词写进该组 `name`（Figure/图/Fig/Scheme/Illustration…），由 `lib.figure_io.load_fig_labels` 读取；`components`（=depth）由 `load_fig_components` 从组的 `type` 派生。🔴 **无图序标**的书"不在 `ordinal` 里放任何 Figure 组"即可（figure_io 回落 `FIGURE_LABELS_DEFAULT`）；若需显式**零匹配**（禁止任何图号前缀），保留过渡 `{"figure": {"labels": []}}` 由 figure_io 识别为标记号（见下）。 |
+| （无 `figure` 字段） | — | 🔴 **图序标不再单独成块**，而是 `ordinal` 里的一个 **Figure 组**：`{"type": <components>, "name": ["图","Figure","Fig",…], "scope": <components>}`。`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号**段数（components）**：`1`=全局整数 / `2`=章.图 / `3`=章.节.图 / **`0`=无图编号（显式零匹配）**。图号前缀词写进该组 `name`（Figure/图/Fig/Scheme/Illustration…），由 `lib.figure_io.load_fig_labels` 读取；`components`（=depth）由 `load_fig_components` 从组的 `type` 派生。🔴 **Figure 组必须存在**（2026-09-24 起）：`load_fig_components` 缺组直接抛 `ConfigError`、verify 全书中断，**没有任何静默回落**（旧「不放组即可，figure_io 回落默认」语义已废）。`make_config.py` 探测印刷图题系列自动落组——无图题系列的图书落 `type: 0`；手工修 config 同理，禁止删组。若需显式**零标签**（禁止任何图号前缀词），保留过渡 `{"figure": {"labels": []}}` 由 figure_io 识别为标记号（见下）。 |
 | `formula.bare_number` | `bool` | 默认 `true`：Q 层抽书源公式编号时额外收录**裸 `N.M`**（任何出现在正文里的数字 token 都算）。**正文满是带号交叉引用**的书（Lee：满页 `(Fig. 1.2)`，外加 `1-11` 这种 Problem 标签）会产生大量幻影编号，每条都被报成「总结漏写公式」——此时置 `false`，只认显式形态 `(N.M)` / `Eq. N.M` / `Equation N.M` / `式（N.M）`。默认 `true`，无该体例的书零影响。 |
 | `section_types` | `List[int]` | **逐层级**列表，从**章层级（元素 0）**排到最深的 `## §` 层级；每个元素 = 该层级 `## §` 标题携带的数字段数（ordinal depth），**不是**"章/节/小节"角色名：`1`=一级序标 `## §N`、`2`=二级序标 `## §N.M`、`3`=三级序标 `## §N.M.K`、`4`=四级序标 `## §N.M.K.L`、`5`=**字母标号子节**（Karlin/Arnold 体例原书印 `A. Title`，md 写 `### §A`，父节靠位置；Arnold 式附录的字母**节**也归此形态语境）、`0`=**无序号标**。深度由段数经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。**列表长度必须等于章节层级总数（章计入）**——单层级书是 `[0]`、章+无序号标小节的书是 `[0, 0]`（两个层级，**不能合并成一个**）。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`，标准书会 prepend 章前缀 `1`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。「章=1/节=2」只是**标准书**下这些段数的*典型称呼*，并非硬语义——一本书完全可以 `section_types: [1, 1, 1]` 或 `[0, 0]`（Silverman）。缺节闸门对含 `0` 的层级按「位置/数量」比对、绝不编造 `## §N`。 |
 | `sections_global` | `bool` | **全书全局单序标节号书**（Arnold《数学方法》：节印 `§12．变分法`，§1..§52 跨章连续、首分量**不是**章号）置 `true`。D 层通用路径据此豁免「token 首分量==章号」前缀要求（该要求对全局节号书毫无意义且必产幻影尾节），改为「契约节号 ∪ md 已写」交集验收；配合 `section_types` 含 role `5` 时校验裸字母子块（原书印 `A. 变分`，父节靠位置；md 写 `### §A`）。与 `chapter_local_sections` 正交（那是每章重起）。默认 `false`，标准 §C.S 书零影响。 |
@@ -230,16 +230,19 @@ EN 两级：
 }
 ```
 
-无图序标（不在 `ordinal` 放任何 Figure 组即可；figure_io 回落默认前缀 `["图","Figure","Fig"]`）：
+无图序标（🔴 **仍须放 Figure 组**，用 `type: 0` 显式声明「无图编号」——`load_fig_components` 缺组即抛 `ConfigError` 中断全书 verify，2026-09-24 起无静默默认；`make_config.py` 会自动探测图题并落此组）：
 
 ```json
 {
-  "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
+  "ordinal": [
+    {"type": 3, "name": ["uncat"], "scope": 2},
+    {"type": 0, "name": ["Figure"], "scope": 2}
+  ],
   "language": "cn"
 }
 ```
 
-> 🔴 若需**显式零匹配**（严格禁止任何图号前缀、不回落默认），保留过渡写法 `{"figure": {"labels": []}}`——`lib.figure_io.load_fig_labels` 仍识别空数组 `[]` 为"无图序标"标记号，返回真正的零匹配集。普通"无图书"直接不放 Figure 组即可，无需此标记。
+> 🔴 若需**显式零标签**（严格禁止任何图号前缀词、不回落默认前缀 `["图","Figure","Fig"]`），保留过渡写法 `{"figure": {"labels": []}}`——`lib.figure_io.load_fig_labels` 仍识别空数组 `[]` 为"无图标签"标记号，返回真正的零匹配集。注意这与上面的 `type: 0`（零**分量**，图号段数为 0、不匹配任何编号）是两个正交通道：普通"无图书"用 `type: 0` 即可，无需 `labels: []`。
 
 ## 附录：小节标题 `§` 的 OCR 漏识诊断（D 层）
 

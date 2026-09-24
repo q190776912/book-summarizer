@@ -66,6 +66,16 @@ class TestLeadingExerciseLabelsKeepBucket(unittest.TestCase):
         self.assertEqual(ini._parse_entry("习题 6.7.5", 3, "cn"),
                          ([6, 7, 5], "习题"))
 
+    def test_cn_lianxi_first(self):
+        # CN 译版对 Exercise 的另一常用标签：必须解析为行首习题 label（不降级）。
+        self.assertEqual(ini._parse_entry("练习 3.5.1", 3, "cn"),
+                         ([3, 5, 1], "练习"))
+
+    def test_lianxi_in_exercise_labels(self):
+        # 🔴 路由名单缺 '练习' 曾使 Weibel CN 侧 练习X.Y.n 落进条目窗，
+        # 造成 ch2/ch3 共 11 处「同号二现」WARN（2026-09 根治）。
+        self.assertIn('练习', ini._EXERCISE_LABELS)
+
     def test_named_lemma_still_content(self):
         self.assertEqual(ini._parse_entry("Shapiro's Lemma 6.3.2", 3, "en"),
                          ([6, 3, 2], "Lemma"))

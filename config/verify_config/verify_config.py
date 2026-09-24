@@ -177,7 +177,8 @@ ORDINAL_NAME = {
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
 from lib.numbering import (ORDINAL_DEPTH, ordinal_depth,  # noqa: F401  (re-exported)
-                          DEPRECATED_ORDINAL_REMAP, resolve_ordinal_code)
+                          DEPRECATED_ORDINAL_REMAP, resolve_ordinal_code,
+                          is_fig_group)
 from data.book_structure.book_structure import (  # noqa: E402
     chapter_label, KIND_CHAPTER, KIND_APPENDIX, KIND_SUPPLEMENT, _resolve_kind,
     prime_chapter_kinds)
@@ -411,7 +412,7 @@ _LABEL_CANON = {
 # `_canon_label` 的 `-s` 回退自动归一到 `Exercise`。
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
-                  'Assumption', 'Algorithm', 'Commentary', 'Application',
+                  'Assumption', 'Condition', 'Algorithm', 'Commentary', 'Application',
                   'Variation', 'Porism', 'Exercise']
 
 
@@ -432,6 +433,10 @@ TYPE_TO_LABEL_CN = {
     'remark': '评注', 'exercise': '练习', 'problem': '问题',
     'assertion': '断言', 'conjecture': '猜想', 'assumption': '假设',
     'algorithm': '算法', 'axiom': '公理', 'property': '性质',
+    # 条件类编号环境（控制论文献常见 "Condition 5.1"，_LABEL_CANON 已把
+    # Condition/条件 正名为「条件」）：不登记进本表会让契约侧 type='condition'
+    # 节点经 TYPE_TO_LABEL.get 落到 'uncat'、被 B 层 extracted 排除 → 假 EXTRA。
+    'condition': '条件',
     'uncat': 'uncat',
 }
 TYPE_TO_LABEL_EN = {
@@ -440,6 +445,7 @@ TYPE_TO_LABEL_EN = {
     'remark': 'Remark', 'exercise': 'Exercise', 'problem': 'Problem',
     'assertion': 'Assertion', 'conjecture': 'Conjecture', 'assumption': 'Assumption',
     'algorithm': 'Algorithm', 'axiom': 'Axiom', 'property': 'Property',
+    'condition': 'Condition',
     'uncat': 'uncat',
 }
 
@@ -586,6 +592,16 @@ class BookConfig:
     # ordering).  Default False — books whose item number's second component
     # IS the section number keep the number-derived placement.
     chapter_scoped_items: bool = False
+    # Gelfand-Manin《Methods of Homological Algebra》体例（config_setting 规则5
+    # 增量扩展）：条目是「节内共享一条计数器的裸整数头、数字在前」——"3. Theorem"
+    # / "5. Definition." / 描述子块 "1. Main Definitions" 同占一条 N.M 序列的槽位，
+    # 交叉引用写作 Chapter.Section.N（如 Theorem III.1.3）。节头 "§N. Title" 每章
+    # 内重排且 § 常被 OCR 成 $/S/8 或丢失，与节内 descriptive 子块同形，通用
+    # scan_skeleton 完全失明（实测整章塌成 1 个 description 节点）。置 True 时
+    # build_structure 改走专用抽取器 extract_items_gm（按印刷 TOC 节锚 + 本节内
+    # 单调计数器），产出标准三级键 "C.S-N"，下游 B/D/Q/key_parse/backfill 全兼容。
+    # 默认 False —— 其余书零影响。
+    gm_bare_numbered: bool = False
     # Exercises/Problems SHARE the chapter's single item counter with theorems,
     # lemmas and examples (Lee《Intro to Smooth Manifolds》: Theorem 1.2,
     # Example 1.3 and Exercise 1.6 are consecutive slots of ONE 1..N sequence).
@@ -685,9 +701,15 @@ class BookConfig:
     # --- grouping helpers (config-side, so every consumer is consistent) ---
     @property
     def primary_group(self) -> 'GroupConfig':
-        """First non-uncat group; falls back to [0] if all are uncat."""
+        """First non-uncat, figure-excluded group; falls back to [0].
+
+        🔴 figure-only 组（Fig/Figure/图）是图像管线关注点，**永不**充当正文
+        primary：Vakil 体例书正文计数器以 `uncat` 兜底组声明，若不排除 Figure
+        组，primary_type 会被劫持成图注体例码，抽取器分派整书错路
+        （Rising Sea 实测 items=0）。
+        """
         for g in self.ordinal:
-            if not g.is_uncat:
+            if not g.is_uncat and not is_fig_group(g):
                 return g
         return self.ordinal[0]
 
@@ -899,6 +921,7 @@ class BookConfig:
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
             chapter_scoped_items=bool(data.get('chapter_scoped_items', False)),
+            gm_bare_numbered=bool(data.get('gm_bare_numbered', False)),
             exercise_shared_numbering=bool(data.get('exercise_shared_numbering', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             sections_global=bool(data.get('sections_global', False)),

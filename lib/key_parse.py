@@ -171,7 +171,7 @@ PROSE_RE_EN_C = re.compile(
 # `**Label N.N**` (already captured by ENTRY_RE_EN_C) so it is NOT also emitted
 # as a spurious single-level key `Label N`.
 ENTRY_RE_EN_SINGLE_C = re.compile(
-    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\d)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
     re.IGNORECASE)
 
 # --- Ross（ORDINAL_ROSS = 11）：节内作用域编号，例题带字母位 ----------------

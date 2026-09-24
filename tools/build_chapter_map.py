@@ -379,6 +379,11 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
             if (ch_int is not None and op["label_norm"] is not None
                     and op["label_norm"] != ch_int):
                 continue
+            # 🔴 A0 也须受申报窗口约束：TOC 续页首行恰为 "Chapter N."（如
+            # The Rising Sea p5 'Chapter 11.'/'Dimension'）与真开页同形同分，
+            # 窗口外开页会凭「先见之明」压过申报的近因，把起点误锚到 TOC 页。
+            if not _in_window(op["page"], claimed_start, claimed_end, max_dev):
+                continue
             best_o = -1.0
             for cand in op["title_cands"]:
                 s = title_similarity(cand, target) if (cand and target) else 0.0

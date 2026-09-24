@@ -86,6 +86,7 @@ from extract_items_en import extract_items_en
 from extract_items_en3 import extract_items_en3
 from extract_items_vakil import extract_items_vakil
 from extract_items_hum import extract_items_hum
+from extract_items_gm import extract_items_gm, scan_gm
 from verify_config import (ORDINAL_TWO_LEVEL,
                               ORDINAL_SINGLE, ORDINAL_VAKIL,
                               ORDINAL_THREE_LEVEL,
@@ -881,6 +882,13 @@ def _single_en_items(ext, start, end, book):
 def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
     primary = book.primary_type
     _dir = page_dir or ext
+    if getattr(book, "gm_bare_numbered", False):
+        # Gelfand-Manin《Methods of Homological Algebra》（config_setting 规则5
+        # 增量扩展）：条目是「节内共享一条计数器的裸整数头、数字在前」（"3. Theorem"
+        # / "5. Definition." / 描述子块也占同一槽），交叉引用写作 Chapter.Section.N。
+        # 既有抽取器无一覆盖（无标签词可锚、节局部重排），专用抽取器按印刷 TOC 节锚
+        # + 本节内单调计数器走查，产出标准三级键 "C.S-N" → 下游 B/D/Q/key_parse 全兼容。
+        return extract_items_gm(_dir, ch, start, end)
     if primary == ORDINAL_HUM:
         # Humphreys GTM 9（config_setting 规则5 增量扩展）：条目头只印裸标签
         # （"Lemma."）或节内字母号（"Lemma A"），编号由所在小节隐式给出。
@@ -1116,11 +1124,21 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     page_dir = _resolve_page_dir(ext, ch)
 
     # 1) skeleton 原始行
-    rows = scan_skeleton.scan(page_dir, ch, start, end, mode,
-                              section_depths=section_depths,
-                              chapter_first=book.chapter_first,
-                              exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
-                              plain_sec_heads=(ordinal == ORDINAL_HUM))
+    if getattr(book, 'gm_bare_numbered', False):
+        # Gelfand-Manin：节头 "§N. Title" 被 OCR 打成 $/S/8 或丢失，且与节内
+        # descriptive 子块（"1. Main Definitions"）同形，通用扫描器彻底失明
+        # （实测整章塌成 1 个 description 节点）。改由专用抽取器按印刷 TOC 节锚
+        # + 本节内单调计数器识别真节界（sec_rows），条目走 _extract_items 的 gm 支。
+        gm_sec_rows, _ = scan_gm(page_dir or ext, ch, start, end)
+        rows = [(p, "SEC", num, title, y)
+                for (p, _k, num, title, y) in gm_sec_rows]
+    else:
+        rows = scan_skeleton.scan(page_dir, ch, start, end, mode,
+                                  section_depths=section_depths,
+                                  chapter_first=book.chapter_first,
+                                  exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
+                                  plain_sec_heads=(ordinal == ORDINAL_HUM),
+                                  sections_global=getattr(book, 'sections_global', False))
     ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。

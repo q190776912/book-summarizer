@@ -82,6 +82,23 @@ def read_structure_items(ext_dir, ch, primary_type=None):
                     'page': n.page_start,
                     'text': n.name,
                 })
+            else:
+                # 单编号「Problem 1」型正式命名问题（非章末两断号 Problems N-M）：
+                # 两段式正则不中时，从裸 key（'1'）或 name 末尾整数（'问题1'/
+                # 'Problem 1'）取单号，输出规范键 问题{N}，与 keys_in_md 对 md 头
+                # '问题1' / 'Problem 1' 的键形一致。build_structure 从不产出单号
+                # problem 节点，故本分支只影响手工补全的契约，零回归。
+                _rawk = str(n.key or '').strip()
+                _sm = re.match(r'^(?:问题)?\s*(\d{1,3})$', _rawk)
+                if not _sm:
+                    _sm = re.search(r'(\d{1,3})\s*$', str(n.name or '').strip())
+                if _sm:
+                    items.append({
+                        'key': f"问题{_sm.group(1)}",
+                        'label': '问题',
+                        'page': n.page_start,
+                        'text': n.name,
+                    })
             continue
         # Canonicalize the structure key into the SAME key space that
         # `keys_in_md` emits for the .md, so the A-layer truly-missing / extra

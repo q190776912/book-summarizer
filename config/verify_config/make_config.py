@@ -83,22 +83,11 @@ import glob
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from lib.numbering import ordinal_depth
+from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_io / primary_group 同源）
 from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
-
-
-def _is_fig_kw(name):
-    """True iff `name` is a figure-label keyword (Fig / Figure / 图).
-
-    Mirrors lib.figure_io._is_fig_kw so make_config and the runtime figure
-    pipeline agree on which `ordinal` group is the Figure group."""
-    s = str(name)
-    if "图" in s:
-        return True
-    low = "".join(ch for ch in s.lower() if ch.isalpha())
-    return low in ("fig", "figure")
 
 
 def _load_old_ordinal(cfg_path, section_key="ch"):
@@ -1284,6 +1273,62 @@ ear a page that carries an "Exercises/练习" header).  That
     return False
 
 
+# 🔴 图编号体例探测（2026-09-24 Atiyah–Macdonald 实测坑）：`lib.figure_io.load_fig_components`
+# 已禁止静默默认——`ordinal` 缺 Figure 组直接抛 ConfigError，verify --all 在首个读图配置
+# 的章**全局中断**。而旧 make_config 只为 HUM 书或老配置已有组的书产出 Figure 组，普通
+# 「图无编号」书生成出的 config 必崩，且 `--force` 重生成同样缺组（唯一 sanctioned 出路被
+# 堵死）。修在生成侧：探测印刷图题（≥2 个不同图号的系列，防交叉引用假阳性）产出对应段数
+# 组；无系列则显式 `type: 0`（UNNUMBERED，图号零匹配），保证生成器输出恒满足消费者契约。
+_FIG_CAP_RE = re.compile(
+    r'(?:(?:^|(?<=[\s(]))(?:Figure|Figures|Fig|Figs)\.?\s*'
+    r'([0-9]+(?:[.\-．][0-9]+){0,2})\b)'
+    r'|(?<![A-Za-z])(?:图|圖)\s*([0-9]+(?:[.\-．][0-9]+){0,2})',
+    re.IGNORECASE)
+
+
+def _detect_fig_numbering(extract_dir, pages=None):
+    """Return ``(depth, labels)`` describing the book's printed figure scheme.
+
+    depth：图号**段数众数**（1=全局整数 / 2=章.图 / 3=章.节.图），无图题系列则 0
+    （显式无图编号）。labels：观测到的印刷前缀（"Figure"/"Fig"/"图" 子集）。
+    判据要求 **≥2 个不同图号**——正文交叉引用（"see Figure 7"）即便高频也只贡献同号，
+    不会伪造出一个体例；真图题天然成系列。
+    """
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    seen = set()      # 不同图号（系列判据）
+    depths = {}       # 段数 -> 命中数
+    labels = set()
+    for pg in pages:
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            text = blk_text(b) if isinstance(b, dict) else ''
+            if not text:
+                continue
+            for m in _FIG_CAP_RE.finditer(text):
+                num = m.group(1) or m.group(2)
+                seen.add(num)
+                comps = 1 + num.count('.') + num.count('-') + num.count('．')
+                d = max(1, min(3, comps))
+                depths[d] = depths.get(d, 0) + 1
+                surf = m.group(0)
+                if '图' in surf or '圖' in surf:
+                    labels.add('图')
+                elif re.search(r'(?i)figur', surf):
+                    labels.add('Figure')
+                else:
+                    labels.add('Fig')
+    if len(seen) < 2:
+        return 0, sorted(labels)
+    # 段数取众数；平票取**更大**段数（三级书常混出两级交叉引用，取大不取小）
+    best = sorted(depths.items(), key=lambda kv: (-kv[1], -kv[0]))[0][0]
+    return best, sorted(labels)
+
+
 # Appendix exercises print a LETTER chapter slot and are NOT part of
 # LABEL_FORMS (which deliberately omits Exercise to avoid cross-reference
 # fabrication).  Detect them separately so the appendix config can carry the
@@ -1688,6 +1733,18 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
                 else:
                     ordinal_arr.append(g)
                 break
+    # 🔴 生成器契约自洽（2026-09-24 AM 实测坑，负向测试
+    # config/verify_config/tests/test_fig_group_guarantee.py）：figure_io 的
+    # load_fig_components **禁止静默默认**——缺 Figure 组即抛 ConfigError 且中断
+    # 整轮 verify。探测/老配置继承两条来源都没有组时，必须显式落组：探到图题系列
+    # 按其段数（1/2/3），否则 `type: 0`（UNNUMBERED = 图号零匹配，显式而非默认）。
+    if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
+        _fig_depth, _fig_labels = _detect_fig_numbering(extract_dir, pages=pages)
+        ordinal_arr.append({
+            "type": _fig_depth,
+            "name": _fig_labels or ["Figure"],
+            "scope": 1 if _fig_depth == 1 else 2,
+        })
     config = {
         "ordinal": ordinal_arr,
         "strict": True,

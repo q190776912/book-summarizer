@@ -54,6 +54,7 @@ cn（中文三级，标签在前，如 "定理1.4.1 ..."）：
 """
 import os
 import sys
+import collections
 from pathlib import Path
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
@@ -76,7 +77,8 @@ import re
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
-from lib.numbering import ordinal_depth, resolve_ordinal_code
+from lib.numbering import (ordinal_depth, resolve_ordinal_code,
+                           has_exercise_word, is_exercise_head_text)
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                        ConfigLoader, ConfigError)
 
@@ -85,6 +87,20 @@ from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
 SEC_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z].{3,72})$')
 ITEM_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})\.\s*(.{0,90})')
 EXER_3 = re.compile(r'^(\d{1,2})\.(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
+# 🔴 空格分隔变体（Rising Sea 实测 57 处）：「印刷 C.S.X 后接空格而非句点」
+# （'4.3.F IMPORTANT EASY EXERCISE…' / '14.2.F EXERCISE…'）——EXER_3 要求
+# 字母后紧跟 `.` 整行失配；SEC_3（`N.M` + 大写词）反而先命中，条头被伪造
+# 成节行、去重时连同真习题一起消失。本变体 `C.S.X + 空白 + 大写词` 须在
+# SEC_3 之前判，且**必须**命中习题题头词形（is_exercise_head_text），
+# 否则与真节头 '10.1 Separated morphisms' 无法区分。
+EXER_3_SV = re.compile(r'^(\d{1,2})\.(\d{1,2})\.([A-Z])\s+([A-Z].{0,90})')
+# 字母练习号字形乱码恢复（Vakil《Rising Sea》全书实测 58 处）：OCR 把字母
+# 练习号 C.S.O / C.S.I 读成数字 0 / 1（该体例无 0 号、且 "C.S.1" 与真条目
+# 10.1.1 撞键被去重吞掉）。仅当 0/1 位后的同行为【练习头形态】（修饰词 +
+# EXERCISE + 边界标点，SSOT lib.numbering.is_exercise_head_text）才升回字母，
+# 真条目头（"10.1.1. Motivation."）与跨引用行不受影响。
+EXER_3_GARBLE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.([01])\.\s*(.{0,110})')
+_EXER_GARBLE_LETTER = {'0': 'O', '1': 'I'}
 
 # Two-level section: "2 Riemannian Metrics" / "1. Introduction".  Allow an
 # OPTIONAL leading noise char before the number — do Carmo's OCR mis-reads the
@@ -367,7 +383,11 @@ _SEC_TITLE_SENTENCE_STARTS = re.compile(
     r'Those|There|Here|We|But|And|Or|If|When|While|Suppose|Let|Assume|Recall|'
     r'Notice|Observe|Consider|Prove|Show|Verify|Explain|Describe|Derive|'
     r'Compute|Calculate|However|Although|Moreover|Furthermore|Next|Similarly|'
-    r'Indeed|Proof)\b')
+    # 'Proof' 例外（Rising Sea 2026-09-24 实测）：真节标题就是名词短语
+    # "11.5 ⋆⋆Proof of Krull's Principal Ideal and Height Theorems"、
+    # "29.8 ⋆⋆Proof of the Theorem on Formal Functions"——`Proof of …` 放行；
+    # 散文证明行（"Proof." / "Proof by induction" / "Proof:"）照旧拦。
+    r'Indeed|Proof\b(?! of\b))\b')
 # 标签词 + 后随数字 = 条目标题；仅含标签词（无数字）是合法章节标题。
 _SEC_TITLE_LABEL_NUM_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
@@ -407,6 +427,14 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     5 nested levels).
     """
     def _validate(num_str, m_end):
+        # 🔴 星标装饰串否决（Rising Sea 2026-09-24 实测）：真节头打印为
+        # `C.S ⋆⋆Title`，⋆ 被 OCR 成 '+'——而 '+' 恰是数字分隔符，_SEC_HEAD_RE
+        # 贪婪捕获会把装饰吃进号（"11.5 + + Proof" → num '11.5+1' depth3、
+        # "29.8 ++ Proof" → num '29.8+2'）。捕获串一旦含 '+'，其"分量"必是
+        # 装饰符而非数字（真数字分量绝不以 '+' 起头）→ 截回 '+' 前重验。
+        _pl = num_str.find('+')
+        if _pl > 0:
+            num_str = num_str[:_pl].rstrip(' .-–·/．－〜_~')
         comps = [x for x in _SEC_SEP_RE.split(num_str) if x]
         if len(comps) < 2 or len(comps) > max_depth:
             return None
@@ -415,12 +443,37 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         depth = len(comps)
         if depths is not None and depth not in depths:
             return None
-        rest = ln[m_end:].lstrip()
+        # 🔴 三级条/练习头否决（Rising Sea 实测 57 处）：印刷体例「编号紧跟
+        # 题头」的书，`C.S.` 后若直接粘连大写字母（'10.1.E.EXERCISE …' /
+        # '4.3.F IMPORTANT …'）——`.`+大写+`.` 是三级字母条头（练习）形态，
+        # 真节标题从不以「单字母+句点」起头。旧逻辑 _SEC_HEAD_RE 只吃数字
+        # '10.1'，余下 'E.EXERCISE (…' 被当成节标题 → 伪 SEC 行 + 错误重置
+        # 习题闩锁，真练习头整条丢失（10.1.E/F 在 p283/284 实测）。
+        _r0 = ln[m_end:]
+        if _r0.startswith('.') and re.match(r'^\.[A-Z]\.', _r0):
+            return None
+        rest = _r0.lstrip()
         # Tolerate an optional dot right after the number ("1-2. Parametrized
         # Curves", do Carmo) — a real header may print `C.S. Title`; strip the
         # punctuation run before the alnum check below.
         rest = rest.lstrip('.．。').lstrip()
-        if not rest or not (rest[0].isalnum() or rest[0] in _SEC_TITLE_SYMBOLS):
+        # 前导装饰符（Rising Sea 2026-09-24 实测）：星标节的印刷 ⋆/⋆⋆ 被 OCR
+        # 成 '+' 或 'xx'（"12.7 + Valuative criteria…"、"11.5 xx Proof of
+        # Krull…"）粘在编号与标题之间 → rest[0] 非字母数字，整节被通用检测器漏发
+        # （§12.7/12.8/12.9/11.5/29.8 全部如此，靠 D 层回填也只是空壳节）。剥掉
+        # 装饰串后再验题（真节标题从不以 ⋆+*×x 起头，SEC_3 模式分支早已同款容错
+        # `[+*x×⋆☆]?`；剥后若以小写起头仍被下方散文守卫拒）。
+        rest = re.sub(r'^[⋆★☆*+x×\u2726\s]+', '', rest)
+        # 🔴 括号起头的真节标题（Rising Sea §18.1 实测）：印刷标题
+        # "18.1 (Desired) properties of cohomology" 以 '(' 起头——只要括号内
+        # 首个字母字符是**大写或 CJK**（Title-Case 名词短语）即放行；
+        # "(the proof…)" 型小写散文仍拒。
+        _ok_head = bool(rest) and (rest[0].isalnum()
+                                   or rest[0] in _SEC_TITLE_SYMBOLS)
+        if not _ok_head and rest and rest[0] in '([':
+            _fa = next((c for c in rest if c.isalnum()), '')
+            _ok_head = bool(_fa) and (_fa.isupper() or '一' <= _fa <= '鿿')
+        if not _ok_head:
             return None  # number with no following title -> not a header
         title = rest[:20]
         # 标签词只有后随数字才是条目标题（"2.1 Definition of ..."）；纯含标签词的
@@ -444,7 +497,10 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 以句读收尾的「编号+短词」行是散文碎片（OCR 掉括号的公式引用行
         # "1.5.3. First,"——原书 "(1.5.3). First, ..."）不是节头。句号收尾
         # 不拒：部分书真节头带句点（do Carmo 同款守卫亦只堵逗号类）。
-        if _rest_stripped[-1:] in (',', ';', ':', '，', '；', '：'):
+        # 🔴 只拦短碎片（Rising Sea §5.5 实测）：真节标题可以是长名词短语且
+        # 合法地以冒号收尾——"5.5 The crucial points of a scheme that control
+        # everything:"（印刷原样）；散文残粒恒为短行，长度 >= 40 放行。
+        if _rest_stripped[-1:] in (',', ';', ':', '，', '；', '：') and len(_rest_stripped) < 40:
             return None
         # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
         # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。
@@ -555,7 +611,7 @@ def _chap_title_norm(extract_dir: str, ch) -> str:
 
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
-         exercise_headings=None, plain_sec_heads=False):
+         exercise_headings=None, plain_sec_heads=False, sections_global=None):
     rows = []
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
@@ -588,8 +644,23 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # Global single-number sections (Arnold-style "§12．变分法", section_types
     # like [1, 1]): enabled iff a section level BELOW the chapter level has
     # depth 1.  Standard books ([1, 2]...) have no such level -> branch off.
-    global_sec = bool(section_depths) and any(
-        isinstance(d, int) and d == 1 for d in section_depths[1:])
+    # 🔴 CHAPTER-LOCAL single-segment sections (Hilton & Stammbach "1. Modules"
+    # reset every chapter; section_types [1, 1] too) are INDISTINGUISHABLE from
+    # book-global ones by depth alone — both are a single number at the level
+    # under the chapter.  The pure-depth heuristic below therefore wrongly flags
+    # them global and (via `not global_sec`) suppresses the SEC_2 branch that is
+    # the ONLY detector catching bare "N. Title" heads → 0 sections.  The
+    # authoritative signal is the config flag `sections_global` (default False,
+    # set True only for Humphreys/Arnold-type global books), already used by the
+    # D-layer (`section_continuity`) and structure builder.  When the caller
+    # passes it explicitly, honor it; fall back to the depth heuristic only for
+    # legacy callers that do not (zero regression for global books, which set the
+    # flag).
+    if sections_global is not None:
+        global_sec = bool(sections_global)
+    else:
+        global_sec = bool(section_depths) and any(
+            isinstance(d, int) and d == 1 for d in section_depths[1:])
     # Current global §N while scanning (for SUB letter-head parentship).
     cur_global_sec = None
     # 🔴 Only enable the universal (depth-agnostic) detector when there is at
@@ -630,7 +701,13 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # 其后直到章末不再有正文/节。
                 in_exercise = True
                 continue
-            if EXER_HEADING.match(ln):
+            if EXER_HEADING.match(ln) and not ln.strip().rstrip('. ．·').islower():
+                # 🔴 全小写散文碎屑不闩（Vakil《Rising Sea》ch10 p293 实测）：OCR 把
+                # 「…prove this as an / exercise.」断成独立一行 "exercise."，IGNORECASE
+                # 锚定正则整行命中 → 错误激活习题区闩锁，其后真条目（10.3.1 Definition
+                # 等）被 EXER_3N 改判成数字习题、字母习题头 10.3.A 被压成裸节号 10.3。
+                # 真习题块标题排版为大写族（EXERCISES / Exercises），全小写只可能是
+                # 句尾散文词 → 拒绝闩锁与补发 SEC。
                 # 🔴 无 `not in_exercise` 前置（Casella & Berger 实测）：本书页眉
                 # 印「Section 1.7 ／ EXERCISES」两行——页首的裸 "EXERCISES" 已把
                 # 闩锁激活，随后页中的真节头 "1.7 Exercises" 若因 `not in_exercise`
@@ -884,7 +961,39 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     continue
                 m = EXER_3.match(ln)
                 if m and int(m.group(1)) == ch:
-                    rows.append((p, 'EXER', '%s.%s.%s' % m.group(1, 2, 3), m.group(4).strip()))
+                    htxt = (m.group(4) or '').strip()
+                    # 🔴 幻影条头压制（Rising Sea ch4 p149 / ch8 p233 实测）：跨页
+                    # 散文「…Exercises 4.5.K and / 4.5.L. If you prefer that, by all
+                    # means do so.)」与句尾回指「…in Exercises 8.2.A and / 8.2.F.」被
+                    # OCR 切成独立行后整行命中 EXER_3，凭空多出与真习题同键的幻影
+                    # 节点。判据保守：本行不含 EXERCISE 关键词，且题面为空或以 ')' 收
+                    # 尾（真条头恒含关键词；全书 1362 条字母条头实测仅这 2 条例外）
+                    # → 丢弃。含关键词的同号二现不在此拦（交 dedup / 人工核）。
+                    # 🔴 I↔1 混淆闸（Rising Sea §0.0 实测）：字母 I 与条目号 1
+                    # 同形，"0.0.I. The importance of exercises." 实为印刷条目
+                    # "0.0.1. …"（句中散文词 exercises 不得当成习题关键词）——
+                    # I 号头未命中习题题头词形时按条目 "C.S.1" 收回（真条目
+                    # 常只以这一种形态出现，落空就整条丢失）。其余字母无混淆。
+                    if (m.group(3) == 'I' and htxt
+                            and not is_exercise_head_text(htxt)):
+                        rows.append((p, 'ITEM', '%s.%s.1' % m.group(1, 2), htxt))
+                        continue
+                    elif (has_exercise_word(htxt)
+                            or not (htxt == '' or htxt.endswith(')'))):
+                        rows.append((p, 'EXER', '%s.%s.%s' % m.group(1, 2, 3), htxt))
+                        continue
+                mG = EXER_3_GARBLE.match(ln)
+                if mG and int(mG.group(1)) == ch and is_exercise_head_text(mG.group(4)):
+                    rows.append((p, 'EXER',
+                                 '%s.%s.%s' % (mG.group(1), mG.group(2),
+                                               _EXER_GARBLE_LETTER[mG.group(3)]),
+                                 mG.group(4).strip()))
+                    continue
+                mSV = EXER_3_SV.match(ln)
+                if (mSV and int(mSV.group(1)) == ch
+                        and is_exercise_head_text(mSV.group(4))):
+                    rows.append((p, 'EXER', '%s.%s.%s' % mSV.group(1, 2, 3),
+                                 mSV.group(4).strip()))
                     continue
                 m = ITEM_3.match(ln)
                 if m and int(m.group(1)) == ch:
@@ -894,6 +1003,62 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # 《数学物理方程》ch7 实测 "7.7 所示"），一律剔除。
     if global_sec:
         rows = [r for r in rows if r[1] != 'SEC' or '.' not in str(r[2])]
+    # 🔴 C.S.1 二现冲突破解（Rising Sea 实测 35+ 节）：印刷字母习题 I 被
+    # OCR 读成数字 1（"10.1.I. EXERCISE." p285 → "10.1.1. ExERCISE. …"），
+    # 与该节真条目 "10.1.1. Motivation…" 撞键。数字条目在同节内不可能
+    # 印刷两次同号 → 二现必有一假，按头形态裁决：真习题头（大写修饰词 +
+    # EXERCISE + 边界，条头行必以题头起）者改回字母 I；两者皆/皆非题头
+    # 形态时不动（宁缺勿滥，交审计暴露）。
+    _one_occ = {}
+    for _i, _r in enumerate(rows):
+        if _r[1] == 'ITEM':
+            _k = str(_r[2])
+            _c = re.match(r'^(\d{1,2})\.(\d{1,2})\.1$', _k)
+            if _c:
+                _one_occ.setdefault(_k[:_c.end(2)], []).append(_i)
+    _exer_keys = {str(r[2]) for r in rows if r[1] == 'EXER'}
+    for _sec, _idxs in _one_occ.items():
+        if len(_idxs) != 2:
+            continue
+        _ik = _sec + '.I'
+        if _ik in _exer_keys:
+            continue
+        _heads = [is_exercise_head_text(str(rows[_i][3] or '')) for _i in _idxs]
+        if sum(_heads) == 1:
+            _bad = _idxs[_heads.index(False)]
+            _r = rows[_bad]
+            rows[_bad] = (_r[0], 'EXER', _ik, _r[3], _r[4] if len(_r) > 4 else None)
+    # 🔴 字母序列位修正（Rising Sea 16.7 实测）：字母习题在一节内严格递增
+    # 排布（A,B,C,…，同号不可能印刷两次）→ 「同节同字母二现 + 下一字母
+    # 缺席」时二现必是相邻字形误读（F→E，OCR 把 '16.7.F.' 读成 '16.7.E.'）。
+    # 把第二次出现改判为缺失的下一字母。仅限无数字混淆的字母（I/O 已由
+    # 上方词形裁决处理）。
+    _lseq = {}
+    for _i, _r in enumerate(rows):
+        if _r[1] == 'EXER':
+            _mm = re.match(r'^(\d{1,2}\.\d{1,2})\.([A-Z])$', str(_r[2]))
+            if _mm:
+                _lseq.setdefault(_mm.group(1), []).append((_i, _mm.group(2)))
+    for _sec, _its in _lseq.items():
+        _lets = [l for _, l in _its]
+        _cnt = collections.Counter(_lets)
+        _have = set(_lets)
+        for _l, _n in _cnt.items():
+            if _n < 2 or _l in ('I', 'O'):
+                continue
+            _nxt = chr(ord(_l) + 1)
+            if _nxt in _have or _nxt > 'Z':
+                continue
+            _seen1 = False
+            for _i, _lt in _its:
+                if _lt != _l:
+                    continue
+                if _seen1:
+                    _r = rows[_i]
+                    rows[_i] = (_r[0], 'EXER', _sec + '.' + _nxt, _r[3],
+                                _r[4] if len(_r) > 4 else None)
+                    break
+                _seen1 = True
     # 统一 5 元组 (p, kind, num, title, y)：SEC 行发射处已带块顶 y（页眉压制的
     # glue 变体与同页 y 感知归都依赖它）；EXER/ITEM/SUB 行 y=None。
     rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None) for r in rows]

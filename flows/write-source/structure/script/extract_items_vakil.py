@@ -16,6 +16,7 @@ _boot.setup()
 from page_json import PageJson
 
 import os, re, sys, json
+from lib.numbering import is_exercise_head_text
 
 # ---------------------------------------------------------------------------
 # VAKIL-aware extraction (ordinal = ORDINAL_VAKIL = 8).
@@ -67,6 +68,12 @@ def extract_items_vakil(extract_dir, chapter, start_page, end_page, manual_overr
                     c, s, n = int(m.group(1)), int(m.group(2)), int(m.group(3))
                     if c != chapter:
                         continue
+                    # 🔴 字形乱码练习头（Rising Sea 实测 58 处）："5.5.0. ExERCISE."
+                    # 实为字母 O、"10.1.1. ExERCISE." 实为字母 I。它们不是数字条目，
+                    # 一律不收（skeleton EXER 路径按字母键恢复）；真条目头
+                    # （"10.1.1. Motivation."）非练习头形态，照常收录。
+                    if n in (0, 1) and is_exercise_head_text(m.group(4)):
+                        continue
                     key = f"{c}.{s}-{n}"
                     if key in seen:
                         continue
@@ -75,6 +82,13 @@ def extract_items_vakil(extract_dir, chapter, start_page, end_page, manual_overr
                     ml = LABEL_RE.match(ln)
                     if ml:
                         label = ml.group(1)
+                        # 🔴 装饰性跨引用标题（"24.5.11. Exercise 24.5.M can be
+                        # improved:"）：以 Exercise 词起头但非练习头形态 → 是条目标题
+                        # 不是练习标签；不抹掉会被 build_structure 3a 转成练习节点，
+                        # 真条目 24.5-11 整条从编号项消失。
+                        if label.lower().startswith('exercis') \
+                                and not is_exercise_head_text(m.group(4)):
+                            label = ''
                     items.append({'key': key, 'label': label, 'page': p,
                                   'text': ln[:120]})
                     continue

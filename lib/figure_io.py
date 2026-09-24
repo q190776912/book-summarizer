@@ -34,16 +34,9 @@ from lib.numbering import ordinal_depth, OrdinalDepthError
 from verify_config import ConfigError, DEPRECATED_ORDINAL_REMAP
 
 # Figure-label keywords that identify a figure group inside `ordinal`.  CJK 图
-# is matched separately (it carries no ASCII letters).
-_FIG_KW = ("fig", "figure")
-
-
-def _is_fig_kw(name):
-    """True iff `name` is a figure-label keyword (Fig / Figure / 图)."""
-    s = str(name)
-    if "图" in s:
-        return True
-    return re.sub(r"[^a-z]", "", s.lower()) in _FIG_KW
+# is matched separately (it carries no ASCII letters).  🔴 SSOT 在
+# lib/numbering.is_fig_label_name（primary_group 判据同源），此处仅别名。
+from lib.numbering import _FIG_LABEL_KW as _FIG_KW, is_fig_label_name as _is_fig_kw
 
 
 def _figure_group(data):
@@ -189,7 +182,8 @@ def load_fig_components(out_dir):
     raise ConfigError(
         "缺少 figure 配置：请显式声明 ordinal 中的 figure group"
         "（无图 `type: 0` / 有图 `type: 1/2/3` 等已登记体例），"
-        "禁止依赖无配置的 2-分量默认")
+        "禁止依赖无配置的 2-分量默认。重跑 `make_config.py --force`"
+        "（现自动探测图题并显式补组）或按 verify_config.md 手工补声明。")
 
 
 def build_fig_label_re(labels, components=2):

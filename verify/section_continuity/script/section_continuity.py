@@ -82,6 +82,25 @@ D_LABEL_KW = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则'
     r'|Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|Remark)')
 
+# 🔴 行首深一层条目头证据（Rising Sea 2026-09-24 实测：§12.8 整节静默漏过
+# D 层闸）：section 最深 n 级而条目印成 n+1 段号的书（Vakil 式：节 C.S、条目
+# C.S.N）里，通用 d_item_re 只能取 n 段号，且「区间延续守卫」会把行首
+# "12.8.3. Theorem" 中段 12.8 当长号切碎跳过 → 该节必须有碰巧的小写交叉引用
+# 才有 labeled 证据，条目全是 Theorem/Fact 起头的 §12.8 直接消失。补救：
+# **行首** (n+1) 段号 + 号后句读边界 + 近旁标签词 = 节级 labeled 证据。
+# 负形（Casella 实测）："(Exercises 8.38-8.42" 非行首数字、区间号中段被
+# 后顾 `(?![SEP]\d)` 拒，均不误入。
+_D_SEP_NEG = r'[.\-–·/．－〜]'
+
+
+def _build_deeper_item_re(deeper):
+    """行首恰 `deeper` 段号的条目头正则（缓存）。尾部 (?!\d)(?!SEP\d)
+    保证不吃更长号（4 段号列表 / 区间号）。"""
+    rx = re.compile(
+        r'^(\d{1,3}' + (r'[.\-–·/．－〜]\d{1,3}' * (deeper - 1)) + r')(?![\d])(?!'
+        + _D_SEP_NEG + r'\d)')
+    return rx
+
 # Item-regex cache keyed by hi (built lazily, module-level so repeated calls in
 # a run reuse the compiled pattern).
 _ITEM_RE_CACHE = {}
@@ -621,6 +640,8 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
     max_level = len(section_depths)
     hi = max(section_depths) if section_depths else 3
     d_item_re = _build_item_re(hi)
+    deeper = hi + 1
+    d_deeper_re = _build_deeper_item_re(deeper)
 
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
@@ -658,6 +679,17 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
                 c = _split_num(m.group(1))
                 if c and c[0] == ch:
                     _project(c, section_depths, raw_sec_header)
+            # 深一层行首条目头 → 节级 labeled 证据（见 _build_deeper_item_re 注释）
+            for line in txt.split('\n'):
+                s = line.strip()
+                m2 = d_deeper_re.match(s)
+                if not m2:
+                    continue
+                c = _split_num(m2.group(1))
+                if not c or len(c) != deeper or c[0] != ch or c[-1] == 0:
+                    continue
+                if D_LABEL_KW.search(s[m2.end():m2.end() + 30]):
+                    _project(c, section_depths, raw_labeled_item)
             for m in d_item_re.finditer(txt):
                 c = [int(g) for g in m.groups()]
                 if c[0] != ch or c[-1] == 0:

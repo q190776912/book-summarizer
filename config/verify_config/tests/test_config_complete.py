@@ -516,7 +516,17 @@ class TestMakeConfig(unittest.TestCase):
         self.assertIsInstance(body["ordinal"], list)
         self.assertGreaterEqual(len(body["ordinal"]), 1)
         for g in body["ordinal"]:
-            self.assertIn(g["type"], (1, 2, 3, 4, 5, 6, 8, 9))
+            # Figure group is now always emitted by make_config; a no-caption
+            # book yields `type: 0` (UNNUMBERED), which is NOT an item-counter
+            # depth code. Item (text) groups keep the 1..9 set.
+            is_fig = any(any(c in str(nm).lower() or "图" in str(nm)
+                             for nm in g.get("name", []))
+                         for c in ("fig", "figure"))
+            if is_fig:
+                self.assertIn(g["type"], (0, 1, 2, 3),
+                              "figure group type = components (0 unnumbered / 1 / 2 / 3)")
+            else:
+                self.assertIn(g["type"], (1, 2, 3, 4, 5, 6, 8, 9))
             self.assertNotEqual(g.get("name"), ["uncat"])
 
     def test_make_config_existing_config_skips_exit_0(self):
@@ -603,7 +613,12 @@ class TestMakeConfig(unittest.TestCase):
                           "detected label %s missing from group names %r"
                           % (expected, all_names))
         # type 3 (CN three-level) + scope 3 still hold alongside the label fill.
+        # The guaranteed figure group is exempt: no captions here -> type 0.
         for g in body["ordinal"]:
+            if any("图" in str(nm) or "fig" in str(nm).lower()
+                   for nm in g.get("name", [])):
+                self.assertEqual(g["type"], 0)
+                continue
             self.assertEqual(g["type"], 3)
             self.assertEqual(g["scope"], 3)
 
@@ -651,7 +666,12 @@ class TestMakeConfig(unittest.TestCase):
             self.assertIn(expected, all_names,
                           "detected label %s missing from group names %r"
                           % (expected, all_names))
+        # Guaranteed figure group exempt (no captions -> type 0).
         for g in body["ordinal"]:
+            if any("图" in str(nm) or "fig" in str(nm).lower()
+                   for nm in g.get("name", [])):
+                self.assertEqual(g["type"], 0)
+                continue
             self.assertEqual(g["type"], 3)
             self.assertEqual(g["scope"], 3)
         self.assertEqual(body["language"], "en")

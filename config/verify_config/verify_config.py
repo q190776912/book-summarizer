@@ -387,7 +387,12 @@ _LABEL_CANON = {
     # (例子 ≠ 练习). A book that checks examples uses a group named
     # ["Example"] (canon -> 例); a book that checks exercises uses
     # ["练习","习题"] (canon -> 练习). The two are distinct on purpose.
-    'Exercise': '练习', '习题': '练习',
+    'Exercise': '练习', '习题': '练习', '练习题': '练习', '练习题目': '练习',
+    # 🔴 常庚哲《数学分析》2026-09-24 实测：节末习题头印作裸 `**练习题13.1**`，
+    # 本表只收 `练习/习题` 未收「练习题」→ _canon_label('练习题') 原样返回 →
+    # group_for_label 落 uncat →（本书无 uncat 组）回退 ordinal[0]=Example 组，
+    # 于是每节一个「练习题 N.M」被误记成 Example 条目号 N，污染例计数器 →
+    # B 层跨全书假「缺号」BLOCKING。补「练习题→练习」纯增键，零回归。
     # 🔴 Problem 正名为「问题」，不是练习（Lee 2e 实测 + 用户 2026-09-12 拍板）：
     # 章末 Problems 是发展性结果、会被正文证明引用（如 ch21 引 Problem 20-11），
     # 与节内即时练习（Exercise/练习）是两类东西。key_parse 的条目识别正则

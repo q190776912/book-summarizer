@@ -99,11 +99,16 @@ def _numpath_regexes(levels):
 # is then treated as prose by _after_label_boundary and the entry is dropped
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
-    r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习|习题|引例|附注'
+    r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习题|练习|习题|引例|附注'
     r'|算法|性质|构造|应用|变式|警告|记号|术语'
     r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Examples|Remark|Remarks'
     r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology|Application|Variation|Porism'
+    r'|Calculation'
 )
+# 🔴 Weibel「Calculation 6.2.1」这类以计算命名的条目：缺该类型词时条头解析
+# 不出编号 → 假「缺号」（实测 ch6 §6.2 报缺 1）。
+# Labels that open the independent exercise window (see bucket routing below).
+_EXERCISE_LABELS = ('exercise', 'exercse', 'problems', 'problem', '习题', '问题')
 # Label-first:  LABEL  NUMPATH   (e.g. "定理 4.1", "Definition 2.1")
 
 # Normalize a CN entry label to its EN canonical so that `known_gaps` entries
@@ -297,10 +302,16 @@ def _parse_entry(inner, levels, lang=None):
         # 在余串里搜索首个类型词当 label，边界检查放到类型词之后。
         lm = re.search(r'(?:' + _ENTRY_LABELS + r')', tail)
         if lm:
+            _w = lm.group(0)
+            if lm.start() > 0 and _w.strip().lower() in _EXERCISE_LABELS:
+                # 🔴 专名内嵌习题词（「6.6.2 扩张问题 (Extension Problem)」）：
+                # 不是习题环境标记，降级候选 '~Word'，由窗算术两步法最终裁决。
+                comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+                return comps, '~' + _w
             if not _after_label_boundary(tail[lm.end():]):
                 return None
             comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
-            return comps, lm.group(0)
+            return comps, _w
         # 无标准类型词：描述性标题（「4.11-2 必要条件」）→ 归 uncat，
         # combined 下并入节序列一起计连续性（仍是真实条目，不应漏计）。
         if tail and not _is_reference_tail(tail, lang):
@@ -329,8 +340,44 @@ def _parse_entry(inner, levels, lang=None):
         if _is_header_boundary(inner[m3.end():]):
             comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
             label = re.match(r'^(?:' + _ENTRY_LABELS + r')', inner[m3.start():], re.IGNORECASE).group(0)
+            # 🔴 专名内嵌的 exercise/Problem 词不是习题环境标记（Weibel 条目
+            # 「Extension Problem 6.6.2」被误路由进习题窗 → 条目窗假「缺号 2」）。
+            # 仅当类型词在条头开头（re_label_first 路径）才直接开习题窗；
+            # 非开头时降级为候选 '~Word'，由窗算术两步法裁决归属窗。
+            if m3.start() > 0 and label.strip().lower() in _EXERCISE_LABELS:
+                label = '~' + label
             return comps, label
     return None
+
+
+def _norm_entry_label(label):
+    """归一条头类型词。专名内嵌习题词被 _parse_entry 降级为 '~Word' 形态，
+    此处统一还原为内容标签 'uncat' 并回传原习题词，供两步法窗算术裁决。"""
+    if label and label.startswith('~'):
+        return 'uncat', label[1:]
+    return label, None
+
+
+def _resolve_demoted_entries(entries, demoted):
+    """两步法窗算术：专名内嵌习题词的条头（'~Exercise'/'~Problem'/ '~问题'）先
+    按内容窗登记（entries 里 label 即 '~Word'）；随后，仅当其目标习题窗已存在
+    且窗内恰缺该号时，才把该条改路由回习题窗。
+
+    Weibel 实测双向案例：ch6「Extension Problem 6.6.2」是内容条目（习题窗 6.6
+    的 2 号已有真习题头 → 不回补，留在内容窗）；ch10「Topology Exercise 10.9.2」
+    是真习题（习题窗 10.9 缺 2 号且 10.9.2 内容另有其头 → 回补）。"""
+    ex_present = {}
+    for gk, num, _key, _lab, _pfx in entries:
+        if 'ex' in gk.split(':'):
+            ex_present.setdefault(gk, set()).add(num)
+    for idx, gi, prefix_str, item_num in demoted:
+        ex_gk = f"{gi}:ex:{prefix_str}"
+        have = ex_present.get(ex_gk)
+        if have is not None and item_num not in have:
+            gk0, num0, key0, lab0, pfx0 = entries[idx]
+            entries[idx] = (ex_gk, num0, key0, lab0, pfx0)
+            have.add(item_num)
+    return entries
 
 
 def _source_item_comps_label(it, cfg):
@@ -571,6 +618,7 @@ def _md_gap_blocking(ctx):
 
     _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
     entries = []  # (group_key, item_num, unique_key, label, prefix_str)
+    _demoted = []  # 习题窗两步法候选：(entries 下标, gi, prefix_str, item_num)
     for span in _SPAN_RE.finditer(txt):
         inner = span.group(1).strip()
         parsed = None
@@ -583,6 +631,7 @@ def _md_gap_blocking(ctx):
         comps, label = parsed
         if not comps:
             continue
+        label, _demoted_word = _norm_entry_label(label)
         g = cfg.group_for_label(label)
         gi = cfg.ordinal.index(g)
         gpl = g.group_prefix_len()
@@ -624,14 +673,22 @@ def _md_gap_blocking(ctx):
         # Problem 无论何种模式都独立开窗——它用 N-M 编号（Lee 章末 Problems
         # 印作 "1-1."），与条目的 N.M 不同形，并入会与 Theorem 1.1 撞号。
         _shared = bool(getattr(cfg, 'exercise_shared_numbering', False))
-        if _lab in ('exercise', 'exercse', 'problems', 'problem', '习题', '问题') \
-                and not (_shared and _lab in ('exercise', 'exercse', '习题')):
+        _routed_ex = False
+        if _lab in _EXERCISE_LABELS and not (_shared and _lab in ('exercise', 'exercse', '习题')):
             if ':' in gk:
                 _gh, _gb = gk.split(':', 1)
                 gk = f"{_gh}:ex:{_gb}"
             else:
                 gk = f"{gk}:ex"
+            _routed_ex = True
+        if _demoted_word and prefix_str and not _routed_ex:
+            # 习题词内嵌于专名（'~Word'）：暂存候选，窗算术两步法稍后裁决。
+            _dw_norm = _norm_label(_demoted_word)
+            _dgi = cfg.ordinal.index(cfg.group_for_label(_dw_norm))
+            _demoted.append((len(entries), _dgi, prefix_str, item_num))
         entries.append((gk, item_num, key, label, prefix_str))
+
+    _resolve_demoted_entries(entries, _demoted)
 
     groups = defaultdict(list)
     # 🔴 顺序错乱检测必须按 (prefix, type) 分组，不能仅按 prefix_str 混排所有类型。

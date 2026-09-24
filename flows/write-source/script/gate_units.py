@@ -134,6 +134,56 @@ _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S
 _KEY_NUM_RE = re.compile(r"(\d+(?:\.\d+)*)-(\d+)$")
 
 
+def _formula_layer_enabled(ext):
+    """本书该 extract 是否**声明**了公式序标层（Q 层 / `\tag` 对账）。
+
+    Q 层是 opt-in：只有 `verify_config.json` 配置了 `formula` 块（含 `type` /
+    `known_book` / `ignore` 等键）才启用。门控的单元级 `\tag` 对账必须与章级 verify
+    的 Q 层同开同关——否则「未声明公式层」的书（如 Vakil：make_config 判定为不追踪
+    编号公式）会因 build_structure 在 `ncomp=None` 下**过度**给裸数字 / 交叉引用挂上
+    `tag`，被单元门控误判成「漏写编号公式」而阻断（且这类编号本就不作 `\tag` 呈现）。
+    兼容扁平 / 分组（ch/appendix/supplement）/ 历史 data 三种配置形状。
+    """
+    path = os.path.join(ext, "verify_config.json")
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return False
+
+    def _is_formula_map(node):
+        return isinstance(node, dict) and any(
+            k in node for k in ("type", "known_book", "ignore", "letter_ch",
+                                "bare_number", "enabled"))
+
+    def _node_enabled(node):
+        if not isinstance(node, dict):
+            return False
+        if _is_formula_map(node.get("formula")):
+            return True
+        # 节点自身即是一个 formula map 的兜底（含 type/known_book 键）
+        if "known_book" in node or ("type" in node and "scope" not in node):
+            return _is_formula_map(node)
+        return False
+
+    if _is_formula_map(cfg.get("formula")):
+        return True
+    for grp in (cfg.get("ch"), cfg.get("appendix"), cfg.get("supplement")):
+        if _node_enabled(grp):
+            return True
+    data = cfg.get("data")
+    if isinstance(data, dict):
+        for sub in data.values():
+            if _node_enabled(sub):
+                return True
+    for v in cfg.values():
+        if isinstance(v, dict) and _node_enabled(v):
+            return True
+    return False
+
+
 def _load_known_book(ext):
     """读 verify_config.json 的 ``formula.known_book`` → 裸编号集合。
 
@@ -215,6 +265,19 @@ def _check_numbering(units):
     problems = []
     for sec, items in sorted(sections.items()):
         items.sort(key=lambda x: x[0])
+        # 🔴 与 verify B 层语义对齐（「按阅读顺序**去重**后的编号须单调递增」）：
+        # 同 (节, 种类, 号) 的重复先去重再比较——个别书源自身排印重复同号条目
+        # （Lasota-Mackey §5.6 两条 Remark 5.6.1，PDF p124/p126 目视核实），
+        # B 层在最终 md 上去重后放行；预检若不去重会假报「编号不递增」。
+        # 真正的抽取器重号错误由 exercise 键唯一性闸与步骤 8 B 层兜底。
+        deduped = []
+        seen_nums = set()
+        for num, f, k in items:
+            if num in seen_nums:
+                continue
+            seen_nums.add(num)
+            deduped.append((num, f, k))
+        items = deduped
         for i in range(1, len(items)):
             prev_num, prev_file, prev_key = items[i - 1]
             cur_num, cur_file, cur_key = items[i]
@@ -426,6 +489,10 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     ord_keys = chapter_ordinals(contract) if contract is not None else set()
     problems = []
     known_book = _load_known_book(ext)
+    # 🔴 `\tag` 对账与章级 verify 的 Q 层同开关：未声明公式层时，单元级跳过 `\tag`
+    # 缺失/编造对账（含 phantom 的跨节编号判定），不把 build_structure 过度挂上的
+    # 裸数字/交叉引用 tag 当作硬真值。图片/结构/渲染等其余质量校验不受影响。
+    formula_on = _formula_layer_enabled(ext)
     present_files = set()
 
     def _bn(p):
@@ -470,6 +537,8 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         exp = u.get("tags")
         if not isinstance(exp, list):
             exp = tag_map.get(str(u["key"])) if tag_map else None
+        if not formula_on:
+            exp = None
         # 图片 / 内容块真值（同 tags 语义）：主真值 = manifest.images / manifest.content
         # （split 时按契约节点写入）；老 manifest 缺字段时按 key 回退，且仅在
         # 该 key 唯一对应一个内容单元时使用（歧义交给章级覆盖闸兜底）。

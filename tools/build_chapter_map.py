@@ -280,13 +280,29 @@ def scan_headings(pages_dir: str):
             if i <= 6:
                 s = line.strip()
                 if s and not NUM_LINE_RE.match(s) and len(re.sub(r"[^A-Za-z]", "", s)) >= 4:
-                    nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                    # Progressive concat candidates (same trick as Mode A's
+                    # title_cands): real chapter headings are often set in a
+                    # large font that splits the title across 2-3 near-top
+                    # lines, while the running head repeats it on ONE small
+                    # line. Concatenating the following lines (skipping page
+                    # numbers / bare labels) lets the split opener match the
+                    # full title exactly (1.0) instead of losing to the
+                    # running head's slightly-higher single-line score.
+                    raws = [s]
+                    acc = s
+                    for j in range(i + 1, min(i + 4, len(lines))):
+                        t = lines[j].strip()
+                        if not t or NUM_LINE_RE.match(t) or _looks_like_label(t):
+                            continue
+                        acc = (acc + " " + t).strip()
+                        raws.append(acc)
                     title_lines.append({
                         "page": page,
                         "line_idx": i,
                         "norm": norm_title(s),
+                        "norms": [norm_title(r) for r in raws],
                         "raw": s,
-                        "next_raw": nxt,
+                        "next_raw": lines[i + 1].strip() if i + 1 < len(lines) else "",
                         "page_first": lines[0].strip(),
                     })
     return headings, title_lines
@@ -465,7 +481,11 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
             # avoid matching a section heading like "1.1 Complexes ..."
             if re.match(r"^\d+(\.\d+)*\s", tl["raw"]):
                 continue
-            sim = title_similarity(tl["norm"], target)
+            # Best over the single line AND its progressive concat candidates —
+            # a large-font opener title split across lines matches the full
+            # title only after concatenation (see scan_headings).
+            cands = tl.get("norms") or [tl["norm"]]
+            sim = max(title_similarity(cn, target) for cn in cands if cn)
             if sim < 0.9:
                 continue
             score = sim

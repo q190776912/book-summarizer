@@ -84,5 +84,44 @@ class DashKeyContractTest(unittest.TestCase):
         self.assertIn('编造条目', out[0])
 
 
+class LabelledHeaderTest(unittest.TestCase):
+    """标签式条目头（``**Exercise 9.1.4\\***`` / ``**习题 …**`` / ``**Corollary …**``）
+    与裸编号同判据（Katok 实测：EN 版全带词头，旧 ITEM_LABEL_RE 只认裸编号 →
+    「编造条目」闸对英文版整体失明，同一缺陷只在中文版报出）。"""
+
+    def test_en_labelled_invented_exercise_flagged(self):
+        ext = _mk_ext('9.1-5', None, exercise_keys=('9.1.3',))
+        out = check_extra_items(
+            ["**Exercise 9.1.4\\***. Prove that every limit cone is terminal."],
+            ext, 9)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn('9.1.4', out[0])
+
+    def test_cn_labelled_invented_exercise_flagged(self):
+        ext = _mk_ext('9.1-5', None, exercise_keys=('9.1.3',))
+        out = check_extra_items(["**习题 9.1.4**. 证明每个极限锥都是终止的。"], ext, 9)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn('9.1.4', out[0])
+
+    def test_prefixed_contract_key_admits_labelled_header(self):
+        """契约键带中文词头（Katok「引理12.3.2」）时，英文标签头不得被误报。"""
+        ext = _mk_ext('9.1-5', None)
+        ext2 = _mk_ext('9.1-5', '引理9.1.7')
+        out = check_extra_items(["**Lemma 9.1.7**. Every epimorphism in Set is split."],
+                                ext2, 9)
+        self.assertEqual(out, [], out)
+        self.assertEqual(len(check_extra_items(["**9.1.4** nothing"], ext, 9)), 1)
+
+    def test_cross_chapter_bold_reference_not_flagged(self):
+        ext = _mk_ext('9.1-5', None)
+        out = check_extra_items(
+            ["**Definition 3.2.1**（见第 3 章）给出等价刻画。"], ext, 9)
+        self.assertEqual(out, [], out)
+
+    def test_no_number_bold_label_not_flagged(self):
+        ext = _mk_ext('9.1-5', None)
+        self.assertEqual(check_extra_items(["**证明**：由归纳法即得。"], ext, 9), [])
+
+
 if __name__ == '__main__':
     unittest.main()

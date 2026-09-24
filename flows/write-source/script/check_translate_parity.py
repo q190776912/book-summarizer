@@ -21,6 +21,11 @@
 7. **未翻译残留（WARN 升 FAIL）**：item / desc 单元译文哈希 == 源文哈希，即整单元未翻译。
    仅对**含散文**的单元判定（`_has_prose` 先剥掉 `$$...$$` 与 `$...$`）——纯公式单元
    （如 `$y \\in \\Re$`）与纯图单元两侧本就应逐字一致，不算漏译。
+8. **英文残留（半截翻译，2026-09-24 real-analysis ch21/22 教训）**：第 7 项只抓
+   逐字全等——把 `> **证明**：` 译掉、条目标签与证明散文仍整段英文的单元因哈希
+   一变即逃逸。本项不看哈希只看语言（复用 `check_unit_quality.english_residues`）：
+   译文单元含英文条目/证明粗体标签（`**Theorem 21.10**` / `**Proof**`）或
+   无 CJK 且 ≥8 连续英文词的散文行 → FAIL。
 
 用法
 ----
@@ -56,6 +61,7 @@ from data.book_structure.book_structure import (chapter_label, list_chapter_keys
                                                 prime_chapter_kinds, unit_dir_name)
 import split_draft_units as _split
 import gate_units as _gate
+import check_unit_quality as _quality
 
 SRC_SUB = "units"
 TGT_SUB = "units-translate"
@@ -156,6 +162,11 @@ def check_chapter_parity(ext, ch_key):
                 and _has_prose(sb) \
                 and _hash_text(sb.rstrip("\n")) == _hash_text(tb.rstrip("\n")):
             problems.append("单元 %s 译文与源文完全相同（未翻译）" % a["file"])
+
+        # 8) 英文残留（半截翻译：标签/证明散文仍是英文，哈希对账抓不住）
+        if utype in ("item", "desc", "exercise") and tb.strip():
+            for p in _quality.english_residues(tb):
+                problems.append("单元 %s 未翻译：%s" % (a["file"], p))
 
         # 2) \tag 一致
         st, tt = _collect(sb, _TAG_RE), _collect(tb, _TAG_RE)

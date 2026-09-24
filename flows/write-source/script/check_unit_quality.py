@@ -52,6 +52,8 @@
     该单元按「质量未达标」处理，绝不放行。
 
 用法：``check_unit_quality.check_body(utype, name, body) -> (ok, problems)``
+译文语言残留：``check_unit_quality.english_residues(body) -> problems``（仅
+units-translate 单元调用，由 gate_units 翻译分支与 check_translate_parity 共用）
 """
 import os
 import re
@@ -416,6 +418,66 @@ def _run_format_verify_unit_checks(line_list):
             pass
 
 
+# ── 翻译语言残留检测（仅译文单元调用；gate_units units-translate 分支 / parity 共用）──
+# 2026-09-24 real-analysis-for-graduate-students ch21/22 教训：parity 旧判据
+# 「译文哈希 == 源文哈希」只抓逐字未动；把 `> **证明**：` 译掉、标签与证明散文
+# 仍整段英文的**半截翻译**因哈希一变即逃逸。本函数给出不看哈希、只看语言的机械判据。
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_EN_ITEM_LABEL_RE = re.compile(
+    r"\*\*\s*(Theorem|Proposition|Lemma|Corollary|Definition|Remark|Example|Exercise|"
+    r"Problem|Solution|Answer|Proof|Notation|Claim)\b[^*\n]*\*\*")
+_EN_PROSE_MIN_RUN = 8     # 连续英文词 ≥8 = 成句散文，不可能是术语/人名豁免情形
+_EN_PROSE_MIN_CHARS = 40  # 行短于此按专名/括注处理，不判散文残留
+
+
+def _en_word_run(text):
+    """最长连续英文词数（数字/符号/非 ASCII 连字符词均打断）。"""
+    best = cur = 0
+    for tok in re.split(r"\s+|[,;:.!?()\[\]\"'“”‘’]+", text):
+        if not tok:
+            continue
+        if re.fullmatch(r"[A-Za-z][A-Za-z'-]*", tok):
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
+
+
+def english_residues(body):
+    """译文单元语言残留检测 → 问题列表（空 = 干净）。
+
+    规则 1（标签）：粗体标签以英文条目/证明词开头（``**Theorem 21.10**`` /
+    ``**Proof**``）= 标签未翻译；中英并写 ``**定理 21.10（Theorem 21.10）**``
+    因 bold 首词是中文不触发。
+    规则 2（散文）：剥掉公式 / HTML / LaTeX 命令后**不含任何 CJK**、长度
+    ≥40 且含 ≥8 连续英文词的行 = 未翻译英文散文。含 CJK 的行（中文句内嵌
+    Lebesgue 等专名）、纯公式行、纯图行天然豁免。
+    """
+    problems = []
+    m = _EN_ITEM_LABEL_RE.search(body)
+    if m:
+        problems.append("英文条目/证明标签未翻译：%s" % m.group(0)[:50])
+    s = re.sub(r"\$\$[\s\S]*?\$\$", " ", body)
+    s = re.sub(r"\$[^$\n]*\$", " ", s)
+    s = re.sub(r"<!--[\s\S]*?-->", " ", s)
+    hits = []
+    for ln in s.split("\n"):
+        t = ln.strip().lstrip(">").strip()
+        if not t or _CJK_CHAR_RE.search(t):
+            continue
+        t = re.sub(r"<[^>]+>", " ", t)
+        t = re.sub(r"\*\*[^*\n]*\*\*", " ", t)   # bold 标签交由规则 1 判定
+        t = re.sub(r"\\[A-Za-z]+\*?", " ", t)
+        t = re.sub(r"[{}&\\$_]+", " ", t)
+        t = t.strip()
+        if len(t) >= _EN_PROSE_MIN_CHARS and _en_word_run(t) >= _EN_PROSE_MIN_RUN:
+            hits.append(t[:60])
+    if hits:
+        problems.append("%d 行未翻译英文散文（例：%r）" % (len(hits), hits[0]))
+    return problems
+
+
 # ── 主入口 ────────────────────────────────────────────────────────────────
 def reconcile_images(want, got):
     """(期望图片 basename 集合, 观测集合) → (missing, extra)。
@@ -441,6 +503,38 @@ def reconcile_images(want, got):
         if not paired:
             kept_missing.append(m)
     return kept_missing, pool
+
+
+_BOLD_LABEL_LINE_RE = re.compile(r"^\*\*([^*\n]+)\*\*")   # 行首条目/习题粗体标签
+
+
+def label_key_problems(body, ord_keys, ch_num):
+    """第 23 项：单元行首**粗体条目/习题标签**里的三级序标必须是本章契约登记的编号。
+
+    现场（Katok ch2 / ch13 / ch17，2026-09-23）：OCR 把上一节末尾的习题接在下一节
+    开头散文前面，``build_structure`` 整段挂成 description 节点——契约里既无该习题
+    节点，agent 又把题面照书写进单元，于是单元里凭空出现 ``**2.4.3.**`` /
+    ``**Exercise 13.3.3\\***`` / ``**习题 13.3.3**``。这类「标签有、契约无」过去只有
+    步骤 8 verify 的 P 层看得见，且 P 层只认裸编号（标签式形态漏检，见
+    ``verify/verbose_gates``），故在单元门控提前拦住，判据两侧共用
+    ``data.book_structure.chapter_ordinals`` 真值。
+
+    只认**行首**粗体标签（条目头的书写形态），且只认首分量等于本章章号的序标：
+    正文中间的 ``**Definition 9.6.1**`` 式跨章粗体引用因此不会被误报。
+    """
+    from lib.util import sec_ordinals
+    out = []
+    for ln in str(body or "").replace("\r", "").split("\n"):
+        m = _BOLD_LABEL_LINE_RE.match(ln.strip())
+        if not m:
+            continue
+        for ordn in sec_ordinals(m.group(1)):
+            if ordn.split(".")[0] != str(ch_num) or ordn in (ord_keys or set()):
+                continue
+            out.append("单元标签 %r 的编号 %s 在本章契约中无对应条目节点——契约漏抽"
+                       "（多为跨节被吞的习题），须在分章契约补建条目并同步拆分单元"
+                       % (m.group(1).strip(), ordn))
+    return out
 
 
 def unit_source_map(contract):

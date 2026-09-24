@@ -16,7 +16,8 @@
   2b. **公式序标完整性（独立真值）**：`page_*.json` 中**独立成块**的公式编号
      （形态由本书 `formula.type` 经 `ORDINAL_DEPTH` 派生，**不是**写死的
      `(C.N)`；章级编号书要求首分量等于本章章号）必须在该章契约中被“交代”：
-       * 挂在某个公式块的 `tag` 上 —— 正常；
+       * 挂在某个公式块的 `tag` / `tags` 上 —— 正常（`tags` 是多行公式组逐行编号时
+         `attach_content` 挂在同一块上的完整编号列表，`tag` 仅为首个）；
        * 编号仍在契约正文中（未挂上，作为散落的 `(C.N)` 文本块保留）—— **WARN**
          （信息未丢，但序标没挂到公式上，agent 调整时须手工补 `\tag`）；
        * 两者都没有（编号随文本块一起被噪声过滤/丢弃）—— **FAIL**（编号真丢了）。
@@ -242,7 +243,16 @@ def check_chapter(ext, ch_node):
                          f"页区间内，多为跨页图）：{sorted(extra_img)[:4]}")
 
     # ②b 公式序标完整性（page_*.json 独立真值，不经 attach 管线）
-    got_tags = {b["tag"] for b in ac._iter_blocks(saved) if b.get("tag")}
+    # 🔴 序标真值 = `tag` ∪ `tags`：多行公式组（`\begin{array}` / 相邻两式被 MFD
+    # 并成一个高 bbox）在原书里逐行编号，attach_content 把**全部**编号挂到同一块上
+    # （`tag` 首个、`tags` 完整列表），`node_tags` / `chapter_tag_map` 也按 `tags`
+    # 取真值。只读 `tag` 会把这类**已交代**的编号判成「丢失」→ 假 FAIL 阻断拆分。
+    got_tags = set()
+    for b in ac._iter_blocks(saved):
+        if b.get("tag"):
+            got_tags.add(str(b["tag"]))
+        for _t in (b.get("tags") or []):
+            got_tags.add(str(_t))
     ch_key_s = str(ch_node.get("key") or "")
     ncomp, scope, f_letter, f_bare = ac.formula_cfg(ext, ch_key_s)
     # 🔴 与 Q 层一致**opt-in**：书未配 `formula` 时整项跳过。否则段数兜底正则

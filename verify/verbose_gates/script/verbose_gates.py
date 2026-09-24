@@ -16,6 +16,7 @@ _boot.setup()
 
 from data.book_structure.book_structure import BookStructure
 from lib.page_dir import resolve_page_dir
+from lib.util import norm_secnum, sec_ordinals
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/verbose_gates/verbose_gates.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """verbose_gates.py — P-LAYER (order 16): anti-regression gate for content/structure defects.
@@ -96,6 +97,12 @@ NOISE_RES = [
     re.compile(r'^\s*[A-Z][A-Z ]{13,}[A-Z]\s*$'),
 ]
 
+#: 参考文献条目的行首引用键形态（`[CE] …` / `[Bourbaki] …`）。此类行是
+#: 正文书目而非页眉/版权噪声，check_noise 对其豁免（Weibel 附录 A 参考文献实测：
+#: "[CE] Cartan … Princeton: Princeton University Press, 1956." 被
+#: 'Princeton University Press' 判据误伤）。
+BIB_ENTRY_RE = re.compile(r'^\[[A-Za-z][A-Za-z0-9]{0,11}\]\s')
+
 # ── number-first 裸编号（条目标题缺失） ──────────────────────────────────
 BARE_ITEM_3 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,2})\.(\d{1,3})\*\*\s*$')
 BARE_ITEM_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s*$')
@@ -136,6 +143,11 @@ def check_noise(lines):
         # running prose (e.g. do Carmo citing "Princeton University Press,
         # 1957-1958" in a remark) are legitimate content, not header noise.
         if len(s) > 120:
+            continue
+        # 书目条目（`[CE] Cartan, H., and S. Eilenberg. *Homological Algebra*.
+        # Princeton: Princeton University Press, 1956.`）是参考文献正文，非页眉
+        # 噪声——`[Xxx]` 引用键行首形态与 running header 无交集（Weibel 附录实测）。
+        if BIB_ENTRY_RE.match(s):
             continue
         for rx in NOISE_RES:
             if rx.search(s):
@@ -276,14 +288,23 @@ def _load_contract(ext_dir, ch):
             k = _norm_secnum(k)
             if re.match(r"^\d+\.\d+\.\d+$", k):
                 item_keys.add(k)
+            # 🔴 前缀词键（Katok「推论6.2.5」「引理12.3.2」）也要登记：这类键整串
+            # 不匹配裸三级式，旧判定把它们全漏在 item_keys 外，于是 md 侧的标签式
+            # 习题头（**Exercise 13.3.3\***）既进不了白名单、又躲得过只认裸编号的
+            # ITEM_LABEL_RE——EN 侧「编造条目」整体失明（CN 写裸编号 **13.3.3\***.
+            # 才被抓）。取键里的三级序标并入白名单，两侧判据同源（lib.util）。
+            item_keys.update(sec_ordinals(k))
     return sections, item_keys, letter_sub_pairs
 
 
 def _norm_secnum(s):
     """Normalize a section-number token for comparison: dash/EN-dash/en-dot
     separators all collapse to '.' so contract keys printed as '1-1' (do Carmo)
-    match md headings written `## §1.1`."""
-    return re.sub(r'[.\-\u2013\u00b7\uff0e]+', '.', (s or '').strip())
+    match md headings written `## §1.1`.
+
+    真值实现见 :func:`lib.util.norm_secnum`（与单元门控第 23 项共用同一归一，
+    避免两处对「同一编号的两种排版形态」各有一套判断）。"""
+    return norm_secnum(s)
 
 
 # md 侧 token（全局节号书 / 字母子节）：
@@ -392,6 +413,11 @@ def check_missing_sections(md_lines, ext_dir, ch, cfg=None):
 
 # md 中的编号条目标签（数字 K，排除 `**Exercise ...` 练习标签）
 ITEM_LABEL_RE = re.compile(r'^\*\*(\d{1,2}\.\d{1,2}\.\d{1,3})')
+# 行首粗体标签整体（词头 + 编号皆可）：给「编造条目」闸的**标签式**形态用
+# （``**Exercise 13.3.3\***`` / ``**习题 13.3.3**`` / ``**Corollary 6.2.5**``）。
+# 上一行只认紧跟 ``**`` 的裸编号，英文版一律带词头 → 同一缺陷中文版报出、英文版
+# 静默（2026-09-23 Katok 实测），故两形共用本判据 + ``lib.util.sec_ordinals`` 取号。
+_BOLD_LABEL_HEAD_RE = re.compile(r'^\*\*([^*\n]+)\*\*')
 
 # ── 过度照抄：证明/解答块引用过长（Tier 3 闸门） ─────────────────────────
 # 盯证明/解答类块引用（注记 Remark/Aside 与例的题面一样按 Tier 1 高保真：保留完整、少修改，豁免）
@@ -611,16 +637,38 @@ def check_verbose_proofs(lines):
 
 
 def check_extra_items(md_lines, ext_dir, ch):
-    """编造条目：md 出现、但结构契约编号项清单中没有的编号条目（无中生有结构）。"""
+    """编造条目：md 出现、但结构契约编号项清单中没有的编号条目（无中生有结构）。
+
+    两种形态都要查（2026-09-23 Katok 实测：英文版整类漏检，同一缺陷只在中文版
+    报出，两版判据不对称）：
+      1. 裸编号头 ``**13.3.3\\***.``（旧判据 ``ITEM_LABEL_RE``，原样保留）；
+      2. **标签式**头 ``**Exercise 13.3.3\\***`` / ``**习题 13.3.3**`` /
+         ``**Corollary 6.2.5**``——只认「行首粗体 + 三级序标」，且首分量必须等于
+         本章章号，故正文里的跨章引用（``**见 9.6.1**``）不会被误伤。
+    白名单与单元门控第 23 项同源（``lib.util.sec_ordinals`` 对契约键取序标）。
+    """
     _, item_keys, _ = _load_contract(ext_dir, ch)
     if not item_keys:
         return []
+    ch_num = re.match(r"\d+", str(ch))
     out = []
     for i, ln in enumerate(md_lines):
         m = ITEM_LABEL_RE.match(ln)
         if m and m.group(1) not in item_keys:
             # 排除练习标签（以 Exercise 开头不在此正则范围，这里仅数字条目）
             out.append(f"  x L{i+1}: 编造条目（契约无此编号，属无中生有结构，须删除或改为散文/备注）— {ln.strip()[:78]}")
+            continue
+        if m or not ch_num:
+            continue          # 裸编号形态由上一分支负责；字母章不做标签式判定
+        hm = _BOLD_LABEL_HEAD_RE.match(ln.strip())
+        if not hm:
+            continue
+        for ordn in sec_ordinals(hm.group(1)):
+            if ordn.split(".")[0] != ch_num.group(0) or ordn in item_keys:
+                continue
+            out.append(f"  x L{i+1}: 编造条目（标签式编号 {ordn} 契约无对应条目节点，"
+                       f"多为跨节被吞习题或无中生有，须查契约并回填/删除）— {ln.strip()[:78]}")
+            break
     return out
 
 

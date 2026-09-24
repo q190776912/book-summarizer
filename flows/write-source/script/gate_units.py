@@ -58,7 +58,8 @@
   之后运行）**写回其归属的总结单元 ``.md``**（你在哪个单元找回的序标就放回哪个单元），插入
   明确标注的占位条目（不编造内容），便利后续补全。默认 ``--dry-run``（只报告），``--apply`` 写盘。
   🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ③b图片/空正文/章级图片
-  覆盖对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对 + ⑨章级习题重号（幻影条目契约痕迹）。
+  覆盖对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对 + ⑨章级习题重号（幻影条目契约痕迹）
+  + ⑩契约→manifest 反向覆盖对账 + 单元标签编号须契约在账（质量校验第 23 项）。
 
 完整性核对（防漏项）：
   ⑦ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
@@ -66,6 +67,12 @@
   ⑨ 习题条目键在本章内唯一——重号 = 契约里有一条 OCR 续行碎片被切成的幻影习题
      （单元级配套判据见 ``check_unit_quality`` 第 16 项：句中起始标题 / 零内容块 /
      吞并别的小节的编号公式或插图）。
+  ⑩ 契约→manifest **反向**对账：契约里每个应成单元的节点（``unit_node_entries``，
+     含 description / 编号项 / 非 consolidated 习题）都必须有至少一条单元记录，
+     否则该内容在 merge 后**整条消失**而既有闸门（全部按 manifest 遍历）看不见。
+     比较按「习题 / 结果项分桶 + 序标归一」——Katok 实测：结果项与习题共用编号
+     空间（不分桶会互相销账），而 manifest 旧键形 ``6.2-5`` 与重建后的契约键
+     ``推论6.2.5`` 同号（直比字符串会假报整条丢失）。
 
 不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
@@ -117,8 +124,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 import attach_content as _ac
 from data.book_structure.book_structure import (
     chapter_json_path, chapter_label, chapter_tag_map, chapter_image_map,
-    chapter_images, list_chapter_keys,
-    prime_chapter_kinds, unit_dir_name)
+    chapter_images, list_chapter_keys, prime_chapter_kinds, unit_dir_name,
+    chapter_ordinals, unit_node_entries)
 import split_draft_units as _split
 import check_unit_quality as _quality
 
@@ -242,6 +249,50 @@ def _check_exercise_key_uniqueness(units):
     return ["契约本章习题条目重号：%s——后一个是 OCR 续行碎片被误判成的幻影条目，"
             "须在分章契约里并回所属条目（或补回被吞的真条目）后重拆/同步单元"
             % "、".join(dup)]
+
+
+def _check_contract_unit_coverage(contract, units, ch_key):
+    """章级闸 ⑩：契约里每个应成单元的节点都必须在 manifest 有记录（反向对账）。
+
+    正向对账（manifest 记录 → 契约）早就有（tag / 图片 / 正文非空），但**反向**一直
+    缺位：契约里的条目被 manifest 漏掉时，该条目内容在 merge 后凭空消失，而所有
+    既有闸门（按 manifest 遍历）都看不见它。Katok ch17 实测：习题 17.6.3/17.6.4
+    的题面被塞进无关 description 单元里，两者都没有自己的记录。
+    同键多记录是合法形态（同节定义/定理共用键），故只报「零记录」不报重复。
+
+    两条必要的比较细则（Katok 实测，缺一即假阳/假阴）：
+    1. **按 kind 分桶**（习题 / 结果项）：结果项与习题共用编号空间（Exercise 6.2.5
+       与 Corollary 6.2.5 同号），不分桶会让真丢的习题拿同号结果项销账。
+    2. **序标归一后比较**：manifest 键可能是拆分当时的旧形态（``6.2-5`` 连字符体例、
+       无「推论」前缀），而契约已重建为 ``推论6.2.5``。键串直比会把这些「内容其实
+       在单元里」的条目误报成整条丢失（ch6/ch12 三例）。
+    """
+    if contract is None:
+        return []
+    from lib.util import norm_secnum, sec_ordinals
+    buckets = {}   # kind -> (归一键集合, 序标集合)
+    for u in units:
+        t = u.get("type")
+        if t not in ("item", "desc", "exercise", "section"):
+            continue
+        nk, ho = buckets.setdefault("exercise" if t == "exercise" else "content",
+                                    (set(), set()))
+        kn = norm_secnum(u.get("key"))
+        nk.add(kn)
+        ho.update(sec_ordinals(kn))
+    missing = []
+    for kind, key in unit_node_entries(contract):
+        nk, ho = buckets.get(kind, (set(), set()))
+        kn = norm_secnum(key)
+        if kn in nk or (set(sec_ordinals(kn)) & ho) or key in missing:
+            continue
+        missing.append(key)
+    if not missing:
+        return []
+    shown = "、".join(missing[:8]) + ("…（共 %d 个）" % len(missing) if len(missing) > 8 else "")
+    return ["契约条目 %s 在 manifest 无对应单元记录（内容不会出现在合并 md 里 = "
+            "整条丢失）——须按契约重拆（split_draft_units）或补建记录后同步单元"
+            % shown]
 
 
 def _hash_text(text):
@@ -371,6 +422,8 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         except Exception:
             tag_map, img_map, contract = {}, {}, None
     src_map = _unit_source_map(contract) if contract is not None else {}
+    # 契约序标真值（单元标签对账：单元里写出的条目/习题编号必须契约有登记）
+    ord_keys = chapter_ordinals(contract) if contract is not None else set()
     problems = []
     known_book = _load_known_book(ext)
     present_files = set()
@@ -442,9 +495,26 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]
+            # 第 23 项：单元行首标签的编号须在契约登记（契约漏抽的跨节习题在此拦，
+            # 不等步骤 8 verify 的 P 层——P 层只认裸编号，标签式形态会漏）
+            try:
+                _lp = _quality.label_key_problems(body, ord_keys, str(ch_key))
+                if _lp:
+                    ok_q = False
+                    qproblems = list(qproblems) + _lp
+            except Exception as e:
+                ok_q, qproblems = False, list(qproblems) + [
+                    "标签对账执行失败（fail-closed）：%r" % (e,)]
             if not ok_q:
                 problems.append("单元 %s（%s %s）质量未达标（写错/格式破坏）：%s" % (
                     u["file"], u["type"], u["key"], "；".join(qproblems[:4])))
+            # 🔴 译文语言残留闸（仅 units-translate；2026-09-24 real-analysis
+            # ch21/22 教训：标签译了、证明散文仍整段英文的半截翻译，哈希对账抓不住）
+            if units_sub != "units":
+                lang_probs = _quality.english_residues(body)
+                if lang_probs:
+                    problems.append("单元 %s（%s %s）翻译语言残留：%s" % (
+                        u["file"], u["type"], u["key"], "；".join(lang_probs)))
     # 🔴 章级图片覆盖闸（契约图片全集 =「一个不漏」真值）：契约任一图未被任何
     # 单元嵌入 = 图片被整体删除（ch2 事故：步骤 5 清噪时图块连正文一起删光，
     # tag 有对账、图片没有 → 一路绿灯到 merge）；单元嵌契约外图 = 编造/引用未
@@ -472,6 +542,8 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     problems.extend(numbering_probs)
     # 🔴 章级习题重号闸（幻影习题条目的契约侧痕迹，单元级判据见 check_body 第 16 项）
     problems.extend(_check_exercise_key_uniqueness(units))
+    # 🔴 章级闸 ⑩：契约 → manifest 反向对账（契约条目没有单元记录 = merge 后整条消失）
+    problems.extend(_check_contract_unit_coverage(contract, units, ch_key))
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py

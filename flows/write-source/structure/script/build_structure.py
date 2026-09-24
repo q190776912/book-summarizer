@@ -374,6 +374,38 @@ from lib.page_dir import (rel_page_dir as _rel_page_dir,
                           resolve_page_dir as _resolve_page_dir)
 
 
+# OCR 数字↔形近字母映射（与 extract_items_en.OCR_DIGIT 同源，反向：数字→可混淆字母集）。
+# 用于 _item_pos 的「OCR 容错条头」兜底：抽取器已能把 "Corollary 1l" 归一为
+# 序标 11（key 携带规范号），但 _item_pos 用 re.escape 的字面号去锚定源页块文本
+# 时，"corollary 11" 匹配不到印成 "Corollary 1l" 的真条头 → y=-1 → 同页误排最前
+# （Arnold《ODE》ch3 §27 实测：推论11 '1l' 排到 9、10 之前，B 层顺序错乱 BLOCKING）。
+_OCR_LETTERS_FOR_DIGIT = {
+    '0': 'OoQD', '1': 'Ili', '2': 'Zz', '3': 'Ee', '4': '',
+    '5': 'Ss', '6': 'G', '7': 'Tt', '8': 'Bb', '9': 'g',
+}
+
+
+def _ocr_tolerant_head_re(k):
+    """把条头 key 变体（如 "corollary 11"）编译成 OCR 容错条头正则。
+
+    数字段逐位展开为 [该数字|其 OCR 形近字母] 字符类；大小写不敏感；保留
+    「序标后不接数字」边界守卫（(?![\\d])），避免 "corollary 1" 误命中
+    "corollary 11"。仅在严格头/包含匹配全部失配后作为最后兜底调用。"""
+    if not k:
+        return None
+    out = []
+    for ch in k:
+        if ch.isdigit():
+            cls = ch + _OCR_LETTERS_FOR_DIGIT.get(ch, '')
+            out.append('[' + ''.join(sorted(set(cls))) + ']')
+        else:
+            out.append(re.escape(ch))
+    try:
+        return re.compile('^' + ''.join(out) + r'(?![\d])', re.IGNORECASE)
+    except re.error:
+        return None
+
+
 def _item_pos(ext, it, page_dir=None):
     """编号项在源页上的 (page, y)：取其 key/片段首个匹配块的 poly 顶边。
 
@@ -483,6 +515,23 @@ def _item_pos(ext, it, page_dir=None):
         return (p, min(ys_head))
     if ys_contain:
         return (p, min(ys_contain))
+    # 最后兜底：OCR 数字↔形近字母容错条头（严格头/裸头/包含均未命中时才启用）。
+    # 覆盖印刷序标被读成形近字母（"Corollary 1l"↔号 11）导致锚定失败、y=-1 误排
+    # 最前的场景；仅追加匹配、不改动上面既有命中，零回归。
+    _tol = [r for r in (_ocr_tolerant_head_re(k) for k in key_variants) if r]
+    if _tol:
+        ys_tol = []
+        for b in d.get("text", []):
+            if not isinstance(b, dict):
+                continue
+            s = blk_text(b).strip()
+            if not s:
+                continue
+            if any(r.match(s) for r in _tol):
+                poly = b.get("poly") or []
+                ys_tol.append(poly[1] if len(poly) >= 8 else 0)
+        if ys_tol:
+            return (p, min(ys_tol))
     return (p, -1)
 
 
@@ -1124,7 +1173,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         # from the faithfully-written md and resolve each section's source page
         # for item page-proximity placement.
         md_secs = _chapter_local_sections_from_markdown(ext, ch)
-        sec_rows = [("md", "SEC", n, title) for (n, title) in md_secs]
+        # 🔴 md 行必须携带**真实源页**（下方章首目录页免疫逻辑按 row[0] 做
+        # `_op + 1`，要求 int，并统计「同页首现节数」）：占位串 "md" 会在
+        # ≥3 节的章上直接 TypeError，在 ≤2 节的章上把该占位当成目录污染页。
+        # 用源 "N. Title" 首现页解析（与 1331 分支同一函数，幂等）。
+        sec_rows = [(_find_chapter_local_section_page(ext, ch, int(n), start, end,
+                                                      page_dir=page_dir),
+                     "SEC", n, title)
+                    for (n, title) in md_secs]
     else:
         sec_rows = [r for r in rows if r[1] == "SEC"]
         if _is_appendix:

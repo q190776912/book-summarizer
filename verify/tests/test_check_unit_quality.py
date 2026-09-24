@@ -421,5 +421,92 @@ class RenderMappingTest(unittest.TestCase):
             self.assertTrue(any("公式渲染检查" in p for p in problems), problems)
 
 
+class LabelKeyContractTest(unittest.TestCase):
+    """23) 单元行首标签的编号必须在契约登记（跨节被吞习题的单元侧痕迹）。
+
+    现场（Katok ch2 / ch13 / ch17）：OCR 把上一节末尾习题接在下一节散文前面，
+    ``build_structure`` 整段挂成 description，契约里没有该习题节点，而单元里
+    照样写出 ``**2.4.3.**`` / ``**Exercise 13.3.3\\***`` / ``**习题 13.3.3**``。
+    """
+
+    def _p(self, body, ord_keys, ch="2"):
+        return cq.label_key_problems(body, ord_keys, ch)
+
+    def test_unregistered_ordinal_flagged(self):
+        probs = self._p("**2.4.3.** Prove that the shift is expansive.\n",
+                        {"2.4.1", "2.4.2"})
+        self.assertTrue(any("2.4.3" in p for p in probs), probs)
+
+    def test_en_and_cn_label_forms_both_flagged(self):
+        """星号/前缀词形态不得成为漏检缝隙（P 层曾因只认裸编号而 EN 侧失真）。"""
+        for body in ("**Exercise 13.3.3\\***. Prove that ...\n",
+                     "**习题 13.3.3**. 证明……\n"):
+            probs = self._p(body, {"13.3.1", "13.3.2"}, ch="13")
+            self.assertTrue(any("13.3.3" in p for p in probs), body + str(probs))
+
+    def test_registered_ordinal_passes(self):
+        self.assertEqual(
+            self._p("**2.4.3.** Prove that the shift is expansive.\n",
+                    {"2.4.1", "2.4.2", "2.4.3"}), [])
+
+    def test_cross_chapter_bold_reference_passes(self):
+        """正文里的跨章粗体引用（首分量非本章章号）不得误报。"""
+        self.assertEqual(
+            self._p("**Definition 9.6.1**（见第 9 章）给出了另一等价刻画。\n",
+                    {"2.1.1"}, ch="2"), [])
+
+
+class ContractUnitCoverageTest(unittest.TestCase):
+    """章级闸 ⑩：契约 → manifest 反向对账（分桶 + 序标归一）。"""
+
+    @staticmethod
+    def _node(typ, key, ntext=2):
+        return {"type": typ, "key": key, "name": key,
+                "sub_sec": [{"text": "内容 %d" % i, "line_start": i}
+                            for i in range(ntext)]}
+
+    def _contract(self, nodes):
+        return {"type": "chapter", "key": "6",
+                "sub_sec": [{"type": "section", "key": "6.2", "sub_sec": nodes}]}
+
+    # 节节点自身也占一个单元（split 对每个 section 发 section 单元），
+    # 除「缺单元」用例专门演示该报告外，其余用例先把它补齐。
+    SECTION_UNIT = {"type": "section", "key": "6.2", "file": "0002_section.md"}
+
+    def test_missing_exercise_reported(self):
+        contract = self._contract([self._node("exercise", "4.3.16")])
+        probs = gu._check_contract_unit_coverage(
+            contract, [dict(self.SECTION_UNIT)], "6")
+        self.assertTrue(any("4.3.16" in p for p in probs), probs)
+
+    def test_stale_dash_key_form_not_reported(self):
+        """manifest 旧键形（``6.2-5`` 无「推论」前缀）与契约键 ``推论6.2.5`` 同号 =
+        内容其实在单元里，不得报「整条丢失」。"""
+        contract = self._contract([self._node("corollary", "推论6.2.5")])
+        units = [dict(self.SECTION_UNIT),
+                 {"type": "item", "key": "6.2-5", "file": "0010_item.md"}]
+        self.assertEqual(gu._check_contract_unit_coverage(contract, units, "6"), [])
+
+    def test_same_ordinal_other_bucket_does_not_silence(self):
+        """结果项与习题共用编号空间：Corollary 6.2.5 的单元不能替 Exercise 6.2.5 销账。"""
+        contract = self._contract([self._node("corollary", "推论6.2.5"),
+                                   self._node("exercise", "6.2.5")])
+        units = [dict(self.SECTION_UNIT),
+                 {"type": "item", "key": "6.2-5", "file": "0010_item.md"}]
+        probs = gu._check_contract_unit_coverage(contract, units, "6")
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("6.2.5", probs[0])
+
+    def test_zero_content_node_skipped(self):
+        """零内容节点是 OCR 切片残渣（幻影），由单元级质量闸处置，不在本闸。"""
+        contract = self._contract([self._node("exercise", "6.2.9", ntext=0)])
+        self.assertEqual(
+            gu._check_contract_unit_coverage(
+                contract, [dict(self.SECTION_UNIT)], "6"), [])
+
+    def test_no_contract_returns_empty(self):
+        self.assertEqual(gu._check_contract_unit_coverage(None, [], "6"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

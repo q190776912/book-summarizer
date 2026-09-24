@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from chapter_map import KIND_APPENDIX, KIND_CHAPTER, KIND_SUPPLEMENT
 
@@ -330,6 +330,77 @@ def node_content_count(node: Dict[str, Any]) -> int:
         for c in node.get("sub_sec") or []:
             _w(c)
     return cnt
+
+
+def unit_node_entries(root: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """契约里应成单元的节点，返回 ``[(kind, key), ...]``。
+
+    ``kind`` 只有两值：``"exercise"``（exercise / problem 节点）与 ``"content"``
+    （section / description / 编号项）。门控反向对账必须**分桶**比较：Katok 体例里
+    结果项与习题项共用同一编号空间（Exercise 6.2.5 与 Corollary 6.2.5 同号），
+    不分桶就会拿习题单元替结果项销账，真丢的习题条目反而看不见。
+    """
+    out: List[Tuple[str, str]] = []
+
+    def _w(container: Dict[str, Any]) -> None:
+        for c in container.get("sub_sec") or []:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("type")
+            if t == "proof":
+                continue
+            if t == "section":
+                out.append(("content", str(c.get("key") or "")))
+                _w(c)
+                continue
+            if t in ("exercise", "problem") and c.get("consolidated"):
+                _w(c)
+                continue
+            if node_content_count(c) > 0:
+                out.append(("exercise" if t in ("exercise", "problem") else "content",
+                            str(c.get("key") or "")))
+            _w(c)
+
+    if isinstance(root, dict):
+        _w(root)
+    return [(k, key) for k, key in out if key]
+
+
+def unit_node_keys(root: Dict[str, Any]) -> List[str]:
+    """契约里**应当成为单元**的节点键清单（门控反向对账真值：契约 → manifest）。
+
+    判据与 ``split_draft_units._emit_units`` 一一对应：section / description /
+    编号项 / exercise(problem，``consolidated`` 的成堆习题除外) 各出一个单元，
+    裸内容块与 proof（挂在条目内部）不出单元。只收录**含内容块**的节点：
+    零内容节点是 OCR 切片残渣（幻影），由单元级质量闸另行处置。
+    需要区分习题 / 结果项时改用 :func:`unit_node_entries`。
+    """
+    return [k for _, k in unit_node_entries(root)]
+
+
+def chapter_ordinals(root: Dict[str, Any]) -> set:
+    """本章契约节点键里出现过的全部三级序标（分隔符归一后）。
+
+    「条目/习题编号必须在契约登记」的对账真值：单元与 md 的行首粗体标签
+    （``**定理 3.1.2**`` / ``**Exercise 4.3.2\\***`` / ``**习题 4.3.2**``）里的
+    三级序标若不在该集合内，即「无中生有的条目」或「契约漏抽的条目」。
+    """
+    from lib.util import sec_ordinals
+    out = set()
+    for n in _iter_nodes(root):
+        out.update(sec_ordinals(n.get("key")))
+    return out
+
+
+def _iter_nodes(node: Any):
+    """深度优先遍历契约节点（不含内容块），供键集合类判据复用。"""
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _iter_nodes(v)
+    elif isinstance(node, list):
+        for x in node:
+            yield from _iter_nodes(x)
 
 
 def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:

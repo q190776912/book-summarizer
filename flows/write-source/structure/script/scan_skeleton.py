@@ -150,6 +150,27 @@ SEC_GLOBAL = re.compile(
 # second alternative with the same title/separator guards.
 SEC_GLOBAL_9 = re.compile(
     r'^9(\d{1,2})[．.、。:]\s*([A-Za-z\u4e00-\u9fff][^\n]{1,60})$')
+# SPACED-prefix global § heads (Arnold《Ordinary Differential Equations》2e 实测):
+# 真节头印「§ + 空格 + 数字 + (可选「.」) + 空格 + 英文标题」，如
+#   '§ 1. Phase Spaces' / '$ 21. The Classification…' / 'S 11. First-order…'
+#   / '§ 26 Quasi-polynomials'（§26 数字后【无句点】）/ '§ 18.Complexification…'
+#   （句点后无空格、且粘连页码）。既有 SEC_GLOBAL 要求前缀字符【紧贴】数字
+#   （不允许中间空格），本书几乎每处都带空格 → 整批 § 漏检，仅极少数粘连页眉
+#   '§6. Symmetries' 侥幸命中（实测全书只抓到 §1/§6）。本变体允许前缀与数字间
+#   零或多空格、数字后分隔符可选，靠【强制 §-族前缀 + 标题首字母大写】两道闸
+#   把真节头与噪声干净区分：
+#   * 前缀类收紧为 [§$S]（§ 及其 OCR 变形 $/S），剔除 8/s/6——它们会与页码
+#     '88 Chapter…'、正文 'S1 there are…' 碰撞（放宽时空格+可选题号分隔符放大误报）；
+#   * 标题必须 [A-Z] 开头——本书全部真节题首字母大写；小写开头的 'S1 there are
+#     points…'（公式行）被杀；汉字节题（Arnold《数学方法》'§12．变分法'）本变体
+#     不触发、仍由 SEC_GLOBAL 消费 → 对既有 global_sec 书零回归；
+#   * 号后 `(?!\d)` 防吃进多位号；`[．.]?` 兼容 §26 无点与 §1 有点两形态。
+SEC_GLOBAL_SPACED = re.compile(
+    r'^([§$S])\s*(\d{1,2})(?!\d)[．.]?\s*([A-Z][^\n]{1,60})$')
+# Trailing OCR page-number glued/space-separated to an English section title
+# ('Phase Flows 57' / 'Complexification and Realification177'): strip for the
+# contract name. English math section titles never end in bare digits.
+_SEC_SPACED_TRAIL_PAGE = re.compile(r'(?:\s{1,3}\d{1,4}|\d{2,4})\s*$')
 # Glued / prefix-lost single-number section heads (谷超豪《数学物理方程》3ed 实测):
 # 「§N 标题」的 § 被 OCR 整个丢掉或读成 S/8，且数字与标题直接粘连、分隔符
 # [．.、。:] 一并丢失（"1方程的导出、定解条件"、"83初边值问题的分离变量法"、
@@ -738,6 +759,19 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     in_exercise = False
                     cur_global_sec = int(m.group(1))
                     continue
+                # SPACED-prefix global § heads (Arnold ODE 2e: '§ N. Title' with a
+                # space between § and the number, which SEC_GLOBAL cannot match —
+                # see SEC_GLOBAL_SPACED comment).  Guarded to English (title starts
+                # [A-Z]) + forced §-family prefix, so Chinese global_sec books
+                # (Arnold《数学方法》) never enter here -> zero regression.  Strip a
+                # trailing OCR page number glued/space-separated to the title.
+                m = SEC_GLOBAL_SPACED.match(ln)
+                if m and int(m.group(2)) <= 60:
+                    _title = _SEC_SPACED_TRAIL_PAGE.sub('', m.group(3)).strip()
+                    rows.append((p, 'SEC', m.group(2), _title, ln_y))
+                    in_exercise = False
+                    cur_global_sec = int(m.group(2))
+                    continue
                 # Glued / separator-less variant（谷超豪《数学物理方程》体例，见
                 # SEC_GLOBAL_GLUE 注释）。守卫：页眉区 y 压制 + 短行宽闸 + 标题校验。
                 # 🔴 plain_sec_heads 书（Humphreys GTM 9）禁用本变体：glue 正则的
@@ -791,6 +825,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                           or _norm_title_txt(m.group(2))
                           != _chap_title_norm(extract_dir, ch))
                 if (not use_universal_sec and not in_exercise and not plain_sec_heads
+                        and not global_sec
                         and m and _sec_ch_ok and _rh_ok
                         and _sec2_title_ok(m.group(2))
                         and int(m.group(1)) <= SEC_MAX_NUMBER

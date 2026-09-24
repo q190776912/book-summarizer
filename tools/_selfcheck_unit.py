@@ -1,7 +1,24 @@
-"""临时：单元质量自检（write_chapters 用）"""
-import sys, io, os, json, re
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import re
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+for _p in (_ROOT, os.path.join(_ROOT, "lib"),
+           os.path.join(_ROOT, "flows", "write-source", "script")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import lib.boot as _boot
+_boot.setup()
+
+"""单元质量自检：对单个单元文件跑 check_unit_quality.check_body 并打印问题。"""
 from check_unit_quality import check_body
 
 def main():

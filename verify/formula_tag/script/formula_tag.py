@@ -1270,10 +1270,16 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     #    (robust to the per-section restart), NOT by the distinct-number set.
     #    🔴 同①口径：仅当总结确有 \tag 时才可能误判——总结无编号公式（如纯证明
     #    附录章，其单分量号已登记 formula.ignore / 不打算打 tag）时静默放行。
+    #    🔴 追加口径（ch5 实测）：本判据是「书源单分量 vs 配置 scope=2」的冲突，
+    #    只有当**算子自己打的 \\tag 也是单分量**（max_tag_ncomp<=1，与②同量）时才
+    #    真正矛盾。若总结里的 \\tag 本就是多分量 (C.N)（如 ch5 唯一 tag \\tag{5.1}），
+    #    那它与 scope=2 的章级守卫完全自洽；此时源页 OCR 偶发的裸 (1)/(100)（页边
+    #    数字、习题计数、括号列表）把 s 顶过 d 只是噪声，绝不能据此改判 scope=3。
+    #    故再加 max_tag_ncomp<=1 前置门——只会抑制假阳性，绝不新增报错（回归安全）。
     scope = formula.get('scope', 2)
     if scope == 2 and _summary_has_tags(ctx.md_file):
         s, d = _count_shapes(ctx.ext_dir, ctx.start, ctx.end)
-        if s > d and s > 0:
+        if s > d and s > 0 and max_tag_ncomp <= 1:
             return (f"书源公式为单分量编号（如 (N)，单分量 {s} ≫ 多分量 {d}），"
                     f"但 formula.scope=2（章级跨章守卫）会把每个 \\tag{{N}} 误判为"
                     f"跨章 INCONSISTENT；应改为 scope=3（节级重置）。"

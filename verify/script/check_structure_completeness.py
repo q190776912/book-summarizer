@@ -779,6 +779,39 @@ def _contract_item_num_tuples(tree):
     return out
 
 
+def _foreign_sections(bs, ch):
+    """跨章引用节号集合（节级编号英文两级书专用，如 Tu《流形导论》/ Hilton-Stammbach）。
+
+    全局节编号书（`chapter_first=False` + `ORDINAL_TWO_LEVEL`）的条号首段即**节号**，
+    而节唯一归属某一章。`build_structure` / `scan_raw_items` 按**页码区间**扫某章，
+    区间内常混排**指向他章的交叉引用**（如 ch4 页上 "Theorem 11.15" —— §11 属 ch3）。
+    因 `chapter_first=False`，扫描侧不能用「首段 != 章号」过滤（首段是节号不是章号），
+    于是这些引用被当成「本章缺项」。
+
+    本函数返回**归属于其他章**的节号整数集合：调用方据此把首段落在此集合的扫描项判为
+    交叉引用（reference），既不回填、也不阻断闸门。附录节号为字母（非纯数字）自然排除，
+    不会与数字章节号混淆。
+    """
+    foreign = set()
+    root = getattr(bs, "root", None) if bs is not None else None
+    if root is None:
+        return foreign
+    target = str(ch).strip()
+    for chap in getattr(root, "sub_sec", []) or []:
+        if getattr(chap, "type", None) != "chapter":
+            continue
+        ck = str(getattr(chap, "key", "")).strip()
+        if ck == target:
+            continue  # 本章自己的节号不算「跨章」
+        for node in getattr(chap, "sub_sec", []) or []:
+            if getattr(node, "type", None) != "section":
+                continue
+            k = str(getattr(node, "key", "")).strip()
+            if re.fullmatch(r"\d+", k):
+                foreign.add(int(k))
+    return foreign
+
+
 def step2_sections(ch, start, end, ext, cfg, tree):
     """第 2 步：用 section_continuity（D 层）校验遗漏章节并回填 book_structure。
 
@@ -832,7 +865,7 @@ def step2_sections(ch, start, end, ext, cfg, tree):
 
 
 # === 第 3 步：item_numbering_integrity 校验遗漏重要概念 ======================
-def step3_items(ch, start, end, ext, cfg, tree, contract_items):
+def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     """第 3 步：用 item_numbering_integrity（B 层）校验遗漏定义/定理/例等重要概念并回填。
 
     做法（避免在写书前依赖「已写 .md」，与 verify 端 B 层解耦）：
@@ -845,6 +878,15 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
     """
     global _PRIMARY
     _PRIMARY = cfg.primary_type
+
+    # 🔴 跨章引用节号集（节级编号英文两级书，如 Tu/Hilton-Stammbach）：某章页区间内
+    # 混排「指向他章」的交叉引用（如 ch4 页 "Theorem 11.15" 属 ch3 §11），因
+    # chapter_first=False 扫描侧不能按「首段!=章号」过滤，会被当成缺项。守卫条件与
+    # 下方去重逻辑一致，其他类型书 foreign_secs 恒空、行为不变。
+    _foreign_secs = set()
+    if (bs is not None and not getattr(cfg, "chapter_first", True)
+            and cfg.primary_type == ORDINAL_TWO_LEVEL and cfg.language == "en"):
+        _foreign_secs = _foreign_sections(bs, ch)
 
     raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
                                              groups=getattr(cfg, "ordinal", None))
@@ -924,6 +966,18 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items):
         if ck in contract_items:
             continue
         c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
+        # 🔴 跨章引用降级（节级编号英文两级书，Tu 实测）：该扫描项的首段（节号）归属
+        # 其他章 → 是「指向他章」的交叉引用，非本章缺项。判 reference：不回填、不阻断，
+        # 仅在报告留痕供复核（其真实条目已由归属章契约承载）。
+        if _foreign_secs and isinstance(c, tuple) and len(c) >= 2 and c[0] in _foreign_secs:
+            missing_items.append({
+                "key": it["key"], "label": it["label"], "page": it["page"],
+                "snippet": it["snippet"], "canon": list(c),
+                "has_label": it.get("has_label", False),
+                "status": "reference",
+                "note": "cross-chapter reference (section %d owned by another chapter)" % c[0],
+            })
+            continue
         if _shared and c in canon_labels:
             _cand = {str(it["label"]).lower(),
                      str(_canon_label(str(it["label"]))).lower()}
@@ -1013,12 +1067,70 @@ def _run_b_layer(ch, start, end, ext, cfg, tree, source_items):
 
 
 # === 第 4 步：完整性与连续性闸门 =============================================
+def _node_f(n, k, default=None):
+    return n.get(k, default) if isinstance(n, dict) else getattr(n, k, default)
+
+
+def _sec_key_nums(key):
+    """`2.1.3` → (2, 1, 3)；含非数字段（字母附录位、裸标题）返回 None。"""
+    parts = re.split(r"[.\-]", str(key or "").strip())
+    try:
+        return tuple(int(p) for p in parts if p != "")
+    except ValueError:
+        return None
+
+
+def subsection_order_problems(node):
+    """🔒 同父小节键序闸（步骤3 blocking 项）。
+
+    同一父节点下的 `section` 子节点，其**数字键**必须随契约列表顺序严格递增。
+    成因（Rosen 8e ch2 实测）：章扉页只印 §N.M 级目录，`build_structure`
+    的「目录页免疫回扫」把 §2.1.1 的通用词标题（`Introduction`）撞上**别的小节**
+    （§2.6.1）的裸标题块 → §2.1.1 锚到 p211，契约里 §2.1 的子节序变成
+    `2.1.2 … 2.1.8, 2.1.1`，§2.1 窗口被拖成 144–211，p211 的内容同时挂进
+    §2.1.1 与 §2.6.1 两个节点（最终 md 里整段重复）。
+
+    为什么必须由本闸兜住：D 层（section_continuity）只比对到 §N.M 一级——契约里
+    没有 subsection 容器节点，level 3 的断裂/逆序它结构性失明；B/Q 层也不看节序。
+    此处在**拆分单元之前**阻断，返工成本最低。
+
+    判据只取「逆序」不取「缺号」：小节从 `.2` 起（首节无印刷序号）是合法形态，
+    不算异常。字母附录位等非数字键一律跳过（不参与比较）。
+    """
+    out = []
+
+    def rec(n, path):
+        kids = _node_f(n, "sub_sec") or []
+        seq = [(_node_f(c, "key"), _node_f(c, "page_start"),
+                _node_f(c, "type")) for c in kids]
+        prev = None
+        for key, pg, typ in seq:
+            if typ != "section":
+                continue
+            nums = _sec_key_nums(key)
+            if nums is None:
+                continue
+            if prev is not None and nums < prev[0]:
+                out.append(
+                    "节序逆序：§%s（锚点页 %s）排在 §%s（锚点页 %s）之后"
+                    "——小节锚点页与印刷节号自相矛盾（多半是章目录回扫把该节"
+                    "锚到了别的小节的页面），须回 build_structure 修锚点后重跑本闸"
+                    % (key, pg, prev[0] and ".".join(str(x) for x in prev[0]),
+                       prev[1]))
+            prev = (nums, pg)
+        for c in kids:
+            rec(c, path + "/%s" % _node_f(c, "key"))
+
+    rec(node, "")
+    return out
+
+
 def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     """第 4 步：回填后重跑第 2 / 第 3 步，断言遗漏章节 / 可读遗漏项 / B 层 blocking 全部归零，
     保证 book_structure 既完整（无遗漏）又连续（章节序列 / 条目编号无洞）。"""
     tree2, items2, _secs2 = load_contract(ch_node_after)
     miss_sec2, _ = step2_sections(ch, start, end, ext, cfg, tree2)
-    miss_it2, bmeta2 = step3_items(ch, start, end, ext, cfg, tree2, items2)
+    miss_it2, bmeta2 = step3_items(ch, start, end, ext, cfg, tree2, items2, bs)
 
     readable_left = [m for m in miss_it2 if m["status"] == "readable"]
     b_blocking = bmeta2.get("blocking", [])
@@ -1059,12 +1171,17 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         if not (isinstance(b, dict) and b.get("exercise_block_only", False))
         and not _is_exercise_gap(b)
     ]
-    passed = (not sec_left) and (not readable_left) and (not real_b_blocking)
+    # 🔴 同父小节键序闸（见 subsection_order_problems 注释）：D 层对 level 3
+    # 结构性失明，锚点回扫扫歪时整节内容会重复挂两个节点，必须在拆单元前阻断。
+    order_problems = subsection_order_problems(ch_node_after)
+    passed = (not sec_left) and (not readable_left) and (not real_b_blocking) \
+        and (not order_problems)
     return {
         "passed": passed,
         "residual_sections": sec_left,
         "residual_readable_items": [m["key"] for m in readable_left],
         "residual_b_blocking": real_b_blocking,
+        "residual_section_order": order_problems,
     }
 
 
@@ -1088,7 +1205,7 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     missing_sections, sec_detail = step2_sections(ch, start, end, ext, cfg, tree)
 
     # ---- 第 3 步：item_numbering_integrity 校验遗漏重要概念 ----
-    missing_items, bmeta = step3_items(ch, start, end, ext, cfg, tree, contract_items)
+    missing_items, bmeta = step3_items(ch, start, end, ext, cfg, tree, contract_items, bs)
 
     backfilled_items = []
     backfilled_sections = []
@@ -1207,7 +1324,11 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
           f"items={len(missing_items)}[{n_read}r/{n_ref}ref/{n_agent}a])"
           + (f" | BACKFILLED(items={len(backfilled_items)}, sections={len(backfilled_sections)})" if backfill else "")
           + f" | GATE={'PASS' if gate['passed'] else 'FAIL'}"
-          + (f" | IGNORE-AUDIT(suspect={report['ignore_audit']['suspect_count']})" if report['ignore_audit']['suspect_count'] else ""))
+          + (f" | IGNORE-AUDIT(suspect={report['ignore_audit']['suspect_count']})" if report['ignore_audit']['suspect_count'] else "")
+          + (f" | SUBSEC-ORDER({len(gate.get('residual_section_order', []))})"
+             if gate.get('residual_section_order') else ""))
+    for p in gate.get('residual_section_order') or []:
+        print("  BLOCKING(节序): " + p)
     return report
 
 

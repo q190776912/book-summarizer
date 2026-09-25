@@ -7,6 +7,20 @@ proof prose left verbatim) passed ``check_translate_parity`` because its only
 ``check_unit_quality.english_residues`` is the language-based mechanical gate,
 now wired into both the gate_units units-translate branch and parity rule 8.
 """
+import os
+import sys
+from pathlib import Path
+
+for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
+    if (_c / "SKILL.md").exists():
+        _ROOT = str(_c)
+        break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[3])
+for _p in (_ROOT, os.path.join(_ROOT, "lib"),
+           os.path.join(_ROOT, "flows", "write-source", "script")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
 

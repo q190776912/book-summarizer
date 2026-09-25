@@ -156,6 +156,9 @@ def _colon(lang):
 # （"定义1.1"），英文书草稿头部必须是纯英文（writing-rules 双语铁律）——渲染时
 # 把 CN 标签+编号换回 EN 标签+编号；印刷标题若以同一编号开头则去重（避免
 # "Definition 1.1 1.1 (...)" 双编号）。
+# 🔴 编号**可以完全没有分隔符**（Rosen 8e 按节重排：key = "例1" / "定义1"，
+# 印刷名又是 "例1 1"）——旧式 `数字[-.]数字` 强制要求小数点/连字符，单级序标
+# 完全不匹配 → CN 标签原样漏进英文书草稿（"例1 1: Washington, D.C. …"）。
 _EN_LABEL = {"定义": "Definition", "定理": "Theorem", "引理": "Lemma",
              "推论": "Corollary", "命题": "Proposition", "例": "Example",
              "评注": "Remark", "注": "Remark", "假设": "Assumption",
@@ -163,7 +166,9 @@ _EN_LABEL = {"定义": "Definition", "定理": "Theorem", "引理": "Lemma",
              "断言": "Assertion", "性质": "Property", "练习": "Exercise",
              "习题": "Exercise"}
 _CN_KEY_RE = re.compile(
-    r'^(' + '|'.join(_EN_LABEL) + r')([0-9A-Za-z]+[-.][0-9A-Za-z.\-]*)\s*(.*)$',
+    r'^(' + '|'.join(_EN_LABEL) + r')\s*'
+    r'(?=[0-9A-Za-z]*[0-9])'          # 序标必含数字，否则是散文首词（"注 The …"）
+    r'([0-9A-Za-z]+(?:[-.][0-9A-Za-z.\-]*)?)\s*(.*)$',
     re.DOTALL)
 
 
@@ -175,7 +180,7 @@ def _item_header_name(name, lang):
     if not m:
         return name
     lab, num, rest = m.group(1), m.group(2), m.group(3).strip()
-    rest = re.sub(r'^' + re.escape(num) + r'(?=[\s(:．.])', '', rest).strip()
+    rest = re.sub(r'^' + re.escape(num) + r'(?=[\s(:．.]|$)', '', rest).strip()
     return _EN_LABEL[lab] + " " + num + ((" " + rest) if rest else "")
 
 

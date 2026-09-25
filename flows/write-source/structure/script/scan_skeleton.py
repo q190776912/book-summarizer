@@ -383,11 +383,42 @@ _SEC_TITLE_SENTENCE_STARTS = re.compile(
     r'Those|There|Here|We|But|And|Or|If|When|While|Suppose|Let|Assume|Recall|'
     r'Notice|Observe|Consider|Prove|Show|Verify|Explain|Describe|Derive|'
     r'Compute|Calculate|However|Although|Moreover|Furthermore|Next|Similarly|'
-    # 'Proof' 例外（Rising Sea 2026-09-24 实测）：真节标题就是名词短语
-    # "11.5 ⋆⋆Proof of Krull's Principal Ideal and Height Theorems"、
-    # "29.8 ⋆⋆Proof of the Theorem on Formal Functions"——`Proof of …` 放行；
-    # 散文证明行（"Proof." / "Proof by induction" / "Proof:"）照旧拦。
-    r'Indeed|Proof\b(?! of\b))\b')
+    r'Indeed)\b')
+# 🔴 Proof 冠头判据（Rosen《Discrete Mathematics》8e 实测 2026-09-25）：旧规则
+# `Proof\b(?! of\b)` 一刀切拦「Proof 起头」，误杀 Rosen 三个真节标题
+# "1.7.6 Proof by Contraposition"、"1.8.5 Proof Strategies"、
+# "1.8.7 Proof Strategy in Action"（整节从骨架消失）。Rising Sea 散文证明行
+# （"Proof." / "Proof by induction is…" / "Proof:"）与真节标题的**通用**形态差
+# 别是：真节标题是 Title-Case 名词短语，Proof 后必带大写实词；散文行全小写虚
+# 词延续。故判据改为：Proof 之后若不存在「大写开头的非停用词」→ 散文，拦；
+# 存在 → 标题，放行。`Proof of Krull's …`（Rising Sea 旧豁免）是本规则特例
+# （Krull 大写），行为不变；"Proof by induction"（小写延续）照旧拦。
+_PROOF_STEM_RE = re.compile(r'^Proof(?![a-zA-Z])')
+_PROOF_STOPWORDS = {'of', 'by', 'in', 'and', 'or', 'the', 'a', 'an', 'on', 'to',
+                    'for', 'with', 'that', 'this', 'is', 'are', 'be', 'as',
+                    'at', 'from', 'not', 'it', 'we', 'their'}
+# 小写首词虚词/代词表（「技术术语首词豁免」的负名单，见 _validate 小写守卫）：
+# 真节标题首词若是这些功能词，必是 OCR 粘连散文行；技术名词（n-ary/gcds/ip 等）
+# 不在表内。大写形态（And/If/…）已由 _SEC_TITLE_SENTENCE_STARTS 拦截。
+_SEC_TITLE_FUNC_WORDS = {
+    'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'if', 'in',
+    'into', 'is', 'it', 'its', 'nor', 'not', 'of', 'on', 'or', 'over', 'so',
+    'see', 'than', 'that', 'the', 'their', 'them', 'then', 'there', 'these',
+    'this', 'those', 'to', 'we', 'were', 'when', 'where', 'which', 'while',
+    'with', 'without', 'also', 'thus', 'hence'}
+
+
+def _proof_title_is_prose(rest_stripped):
+    """True = rest begins with the stub 'Proof' and carries NO capitalized
+    content word after it (prose proof line); False = 'Proof <Title Case …>'
+    heading (or the rest does not start with Proof at all)."""
+    if not _PROOF_STEM_RE.match(rest_stripped):
+        return False
+    for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", rest_stripped[5:]):
+        if w[0].isupper() and w.lower() not in _PROOF_STOPWORDS:
+            return False
+    return True
+
 # 标签词 + 后随数字 = 条目标题；仅含标签词（无数字）是合法章节标题。
 _SEC_TITLE_LABEL_NUM_RE = re.compile(
     r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
@@ -489,8 +520,12 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 2-3 字真标题（孙文祥《遍历论》"熵映射"/"平衡态"）保留。
         _rest_stripped = rest.strip()
         if len(_rest_stripped) < 4 and not re.search(r'[一-鿿]', _rest_stripped):
-            return None  # too short to be a title ("A"/"B" junk from OCR'd
-            # section-dependency diagrams like "5-6.A") — real titles have words
+            # 🔴 全大写缩写豁免（Rosen 8e 实测 2026-09-25）：真节标题就是
+            # "9.2.5 SQL"——3 字母缩写整词大写，与 'A'/'B' 型 OCR 图示残粒
+            # （"5-6.A"）形态不同（残粒恒为 1–2 字母）。
+            if not re.fullmatch(r'[A-Z]{3}[.,;:]?', _rest_stripped):
+                return None  # too short to be a title ("A"/"B" junk from OCR'd
+                # section-dependency diagrams like "5-6.A") — real titles have words
         if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
             return None
         # 句读尾守卫（Casella & Berger 实测）：真节标题从不以逗号/分号/冒号收尾；
@@ -517,6 +552,11 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 句首虚词守卫（见 _SEC_TITLE_SENTENCE_STARTS 注释）。
         if _SEC_TITLE_SENTENCE_STARTS.match(_rest_stripped):
             return None
+        # Proof 冠头判据（见 _proof_title_is_prose 注释）：只拦无大写实词的
+        # 散文证明行，Title-Case 的 "Proof by Contraposition" / "Proof Strategies"
+        # 真节标题放行。
+        if _proof_title_is_prose(_rest_stripped):
+            return None
         # A genuine section title is Title-Case / Han / starts with a digit — reject
         # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
         # "14-1-0359 and W911NF..." grant numbers glued to text).  Only a leading
@@ -525,7 +565,21 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         if first is not None and 'a' <= first <= 'z':
             # 容忍「小写符号变量 + 连字 + 大写词」型标题：Brin & Stuck §5.3
             # "∈-Orbits" 被 OCR 读成 'e-Orbits'——首字符小写但非散文。
-            if not re.match(r"[a-z][-–—][A-Z]", rest):
+            _accept_lc = bool(re.match(r"[a-z][-–—][A-Z]", rest))
+            if not _accept_lc:
+                # 🔴 技术术语首词豁免（Rosen 8e 实测）：真节标题首词可以是
+                # 小写技术名词（"9.2 n-ary Relations and Their Applications"、
+                # "4.3.8 gcds as Linear Combinations"），判据 = 首词**不是**
+                # 常用虚词/代词 且 其后存在 Title-Case 大写延续词（名词短语
+                # 形态）。散文粘连行（"20.6 and it is stated…"、"14-1-0359 and
+                # W911NF…"）首词恒为虚词 → 仍拒；"valuative criteria for…"型
+                # 全小写延续无大写词 → 仍拒（Rising Sea 旧负例不变）。
+                _w0 = re.match(r"[a-z][a-zA-Z'\-]*", rest.strip())
+                if (_w0 and _w0.group(0).lower() not in _SEC_TITLE_FUNC_WORDS
+                        and re.search(r'\b[A-Z][a-zA-Z]',
+                                      rest.strip()[_w0.end():])):
+                    _accept_lc = True
+            if not _accept_lc:
                 return None
         rest = rest.strip()
         # 印刷页码右缘粘连清尾：「…极限点25」型——CJK 后紧跟 1–3 位数字收尾，
@@ -610,6 +664,53 @@ def _chap_title_norm(extract_dir: str, ch) -> str:
     return _CHAP_TITLE_CACHE[key]
 
 
+# 🔴 数字/标题分块粘连回收（Rosen 8e 实测 2026-09-25）：OCR 常把节头的编号与
+# 标题拆成左右/上下相邻两个块（"9.6.1" + "Introduction"、"8.4.4" + "Using
+# Generating Functions to Solve…"），逐行检测对「裸编号行」因无标题恒拒 →
+# 15+ 个真节头（含 §7.4.7/§10.3.5/§11.3.3/§12.3.4/§13.5.3 与多个节父号）从
+# 骨架消失。回收判据极窄：本行**恰为纯编号**（\d+\.\d+…），下一文本块首行为
+# 短标题形态（字母/CJK 起头、无数字、无数学/括号字符、≤80 字符），且两块
+# 几何相邻（同页同行右侧，或下方 ≤250pt）；合并串仍交 `_section_header_info`
+# 全量校验（章号过滤 + 深度声明 + 散文守卫），表行（"3.88 Adams"/"0.0817 N"）
+# 由首分量≠章号或标题形态约束恒拒。
+_BARE_SEC_NUM_RE = re.compile(r'^\d+\.\d+(?:\.\d+)*$')
+_MERGE_TITLE_BAD_CHARS = set('0123456789=+*/()<>[]{}$\\_,;:.')
+
+
+def _poly_tl(blk):
+    try:
+        p = blk.get('poly') or []
+        return float(p[0]), float(p[1])
+    except Exception:
+        return None
+
+
+def _merge_bare_num_head(ln, bi, blocks):
+    """Return `'<num> <title>'` if line `ln` (bare section number, block `bi`)
+    is horizontally/vertically adjacent to a short title-looking next block."""
+    if not _BARE_SEC_NUM_RE.match(ln) or bi + 1 >= len(blocks):
+        return None
+    nxt_raw = (blocks[bi + 1].get('text') or '').split('\n')[0].strip()
+    nxt = nxt_raw.rstrip('$').strip()
+    if not (2 <= len(nxt) <= 80):
+        return None
+    c0 = nxt[0]
+    # 字母（大小写）/ CJK 起头才尝试（'n-ary' 型小写技术术语交由校验器裁决）
+    if not (('a' <= c0 <= 'z') or ('A' <= c0 <= 'Z') or '一' <= c0 <= '鿿'):
+        return None
+    if any(ch in _MERGE_TITLE_BAD_CHARS for ch in nxt):
+        return None
+    a, b = _poly_tl(blocks[bi]), _poly_tl(blocks[bi + 1])
+    if a is None or b is None:
+        return None
+    dy = b[1] - a[1]
+    if dy < -40 or dy > 250:
+        return None
+    if dy <= 40 and b[0] <= a[0]:
+        return None  # 同行形态必须右邻；上下形态允许左缘微漂
+    return f"{ln} {nxt}"
+
+
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
          exercise_headings=None, plain_sec_heads=False, sections_global=None):
     rows = []
@@ -677,7 +778,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             continue
         with open(fp, encoding='utf-8') as fh:
             d = PageJson.load(os.path.join(extract_dir, 'page_%03d.json' % p)).data
-        for it in d.get('text', []):
+        _blocks = d.get('text', []) or []
+        for _bi, it in enumerate(_blocks):
             poly = it.get('poly') or []
             try:
                 ln_w = (float(poly[2]) - float(poly[0])) if len(poly) >= 3 else None
@@ -738,6 +840,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # "3.11 Two cards..." 会被 universal 检测误判为真节头并错误解除闩锁）。
             if depths_set is not None and not (sticky_exer and in_exercise):
                 sec = _section_header_info(ln, ch=ch, depths=depths_set)
+                if sec is None:
+                    # 数字/标题分块粘连回收（见 _merge_bare_num_head 注释）：
+                    # 裸编号行 + 紧邻短标题块 → 合并串重新走全量校验。
+                    _mg = _merge_bare_num_head(ln, _bi, _blocks)
+                    if _mg is not None:
+                        sec = _section_header_info(_mg, ch=ch, depths=depths_set)
                 if sec is not None:
                     num_str, _depth, title = sec
                     if in_exercise and num_str == cur_exer_sec:

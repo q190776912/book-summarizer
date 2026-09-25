@@ -17,6 +17,7 @@ from page_json import PageJson
 
 import os, sys
 
+import bisect
 import json, re
 from lib.regexlib import SEP_TIGHT
 from item_dedup import dedup_items
@@ -222,7 +223,7 @@ EN_LAB_RE_NF = re.compile(
 
 
 def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False,
-                     single=False, extra_labels=None):
+                     single=False, extra_labels=None, restart_per_section=None):
     """Extract English item headings from OCR pages.
 
     ``single``: when True (single-level EN books, e.g. Silverman's "A Friendly
@@ -238,6 +239,18 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     Rosen's "Algorithm N" / "Axiom N" blocks, which base EN_LABELS lacks.
     Purely additive: labels already in the base set are de-duplicated, and
     callers not passing it keep exact prior behavior.
+
+    ``restart_per_section``: ``(lowercase_label_set, [(page, sec_num), ...])``
+    for books whose single-component counters RESET AT EVERY SECTION (config
+    ordinal group ``scope == 3``, e.g. Rosen: "Example 1..16" in §1.1, then
+    "Example 1..11" again in §1.2).  The chapter-wide monotonic / seen-key
+    guards (added for Han-Lin) treat every restart as a stale cross-reference
+    and collapse the section (Rosen ch1: 138 examples → 28).  For the listed
+    labels the guards bucket by *current section window* instead: the
+    (page, sec_num) windows are sorted into reset boundaries — a section number
+    that merely nests under the previous one ("1.1.1" after "1.1") does NOT
+    reset, matching the print convention that restarts happen at the top-level
+    section.  Labels not in the set keep chapter-wide behavior.
     """
     items = []
     # 已抓到的条目 key（同一次调用 = 同一章）。用于识别「续行型交叉引用」：
@@ -245,6 +258,28 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     seen_keys = set()
     # (标签, 章号) -> 该桶已抓到的最大编号元组；同标签编号必须严格递增。
     _max_per_label = {}
+    # restart_per_section: fold the (page, sec_num) windows into *reset
+    # boundaries* — nested numbers ("1.1.1" right after "1.1") share the
+    # parent bucket; any non-nested number opens a fresh bucket.
+    _rst_labels, _rst_boundaries = set(), []
+    if restart_per_section:
+        _rl, _rws = restart_per_section
+        _rst_labels = {str(x).strip().lower() for x in (_rl or [])}
+        _anchor = None
+        for _pg, _num in sorted(_rws or [], key=lambda t: (t[0], str(t[1]))):
+            _s = str(_num)
+            # nested under the current bucket's anchor section ("1.1.2" inside
+            # anchor "1.1") → same reset bucket; anything else opens a new one.
+            if _anchor is None or not _s.startswith(_anchor + '.'):
+                _rst_boundaries.append((_pg, len(_rst_boundaries)))
+                _anchor = _s
+    _rst_pages = [pg for pg, _ in _rst_boundaries]
+
+    def _rst_bucket_for(p):
+        """Current section-window bucket id for a page (None before the first
+        detected section head — caller then keeps chapter-wide behavior)."""
+        idx = bisect.bisect_right(_rst_pages, p) - 1
+        return _rst_boundaries[idx][1] if idx >= 0 else None
     # Section-scoped books also accept numbered graphics (Table/Figure) as items.
     lab_labels = SECTION_LABELS if section_scoped else EN_LABELS
     if extra_labels:
@@ -257,6 +292,14 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     # while prose like "Examples3D"/"Exampletext" still cannot (next char is
     # a letter).
     _lab_tail = r')(?![A-Za-z])\s*(?:\([^)]*\))?\s*'
+    # 🔴 标题粘连回退（Rosen 8e 实测 2026-09-25）：真条头被 OCR 粘上标题首词
+    # （"EXAMPLE 9Determine …"、"EXAMPLE 9Translate …"），而 EN_OCR_NUM 的
+    # 易混字母类（BDEGIOQSTZ+begilostz）贪婪吞进 "9Dete"/"9T" → 键被归一成
+    # 垃圾、真实条目消失（§1.3/§1.5 例9 漏抽）。不改正则（IGNORECASE 使
+    # [a-z] 前瞻失去大小写区分），改在匹配后对编号串做 `_trim_glued_title_tail`
+    # 归约：字母尾巴 >= 2 个，或尾巴 1 个字母且其后仍是字母（标题词延续，
+    # 如 "9T"+"ranslate"）→ 砍回前导数字（"9"，标题从 'D'/'T' 起）。合法
+    # OCR 形不动："1o "（10 的 OCR，尾 1 字母+后随空格）、"EXAMPLE3"（纯数字）。
     if single:
         lab_re = re.compile(
             r'\b(' + '|'.join(lab_labels) + _lab_tail +
@@ -311,12 +354,29 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # IGNORECASE is needed above, but it also widens prose capture).
                 if txt[:m.start()].strip():
                     continue
+                # 🔴 标题粘连回退（Rosen §1.3/§1.5 例9 实测）：单级模式下
+                # EN_OCR_NUM 贪婪吞进标题首词字母（"EXAMPLE 9Determine" → 组
+                # "9Dete"；"EXAMPLE 9Translate" → "9T"+"ranslate"），旧守卫链
+                # （小写起头=散文）把被截断的标题尾巴当散文拒掉整条。回溯：
+                # 编号 token 砍回前导数字并同步 match 终点（合法 OCR 尾字母
+                # "1o " 不满足条件，行为不变）。
+                _mend = m.end()
+                _mend2 = m.end(2)   # 一级数字组的终点（两级模式下 ≠ m.end()）
+                _tok_adj = m.group(2)
+                if single:
+                    _dm2 = re.match(r'^(\d+)([A-Za-z]+)$', m.group(2) or '')
+                    if _dm2:
+                        _nxt_c = txt[_mend:_mend + 1]
+                        if (len(_dm2.group(2)) >= 2
+                                or (_nxt_c.isascii() and _nxt_c.isalpha())):
+                            _mend = _mend2 = m.start(2) + len(_dm2.group(1))
+                            _tok_adj = _dm2.group(1)
                 # Reject cross-reference headings: a genuine entry heading is
                 # followed by a sentence period / space + title, never a closing
                 # delimiter.  do Carmo prints entries NUMBER-FIRST, so a label-
                 # first "Example 4.8)" is a reference, not a heading; without this
                 # guard it fabricates a phantom item.
-                _after = txt[m.end():m.end() + 1]
+                _after = txt[_mend:_mend + 1]
                 if _after and _after in ")]},;:":
                     continue
                 # 🔴 同族换行残片守卫（Lee《Introduction to Smooth Manifolds》2e
@@ -325,7 +385,7 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # 恰是标签+号，但号后紧跟「句点+右括号」（".]" / ".)"），
                 # 这是引用残片而非条目头：单字符守卫被句点骗过，不拒则产出
                 # 幻影练习节点（16.12 / 22.24，与真 Problem 16-12 / 22-24 并存）。
-                if txt[m.end():m.end() + 2] in (".]", ".)"):
+                if txt[_mend:_mend + 2] in (".]", ".)"):
                     continue
                 # 🔴 正文交叉引用守卫（Bass《Real Analysis》实测）：段落本身就是
                 # "Example 5.16 will illustrate why this is a less useful theorem
@@ -333,12 +393,29 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # 一致，旧守卫（只看块首 / 闭合定界符）拦不住。抓住它会在真条目
                 # （同号、后一页）之前插入一个幻影，B 层报「顺序错乱」并阻断闸门。
                 # 判据：编号后首个词是**小写**且属于引用动词表 → 引用，非条目。
-                _w = re.match(r"[A-Za-z]+", txt[m.end():].lstrip())
-                if _w and _w.group(0).islower() and _w.group(0) in MENTION_VERBS:
+                # 🔴 粘连还原（Tu《流形导论》8.13 实测）：引用句 "Example 8.13
+                # shows that…" 被 OCR 连写成 "Example8.13shows"，而 EN_OCR_NUM
+                # 含易混字母（s→5），使编号组吞下动词首字母（组="13s"），仅余
+                # "hows"——旧判据只看待选词 "hows" 不在动词表，幻影漏网、且因
+                # 页码靠前在 dedup 中吃掉真条头（p108 "Example 8.13 (…)"）。
+                # 若编号 token 与后续字母之间**无空白**（粘连），把被吞进数字的
+                # 尾随字母拼回候选词再比对；有空白则维持旧行为。真条头后恒为
+                # 句点/空格+大写标题或 "( 标题)"，几乎不会是引用动词表里的小写
+                # 词，故本还原只多拦引用、不误杀真头。
+                _rest = txt[_mend:]
+                _wm = re.match(r"\s*([A-Za-z]+)", _rest)
+                _wd = _wm.group(1) if _wm else ""
+                _glued = bool(_wd) and _rest[:1] not in (" ", "\t", "\n")
+                _gnum = ((m.group(3) if m.re.groups >= 3 else None)
+                         or _tok_adj or "")
+                _tm = re.search(r'(?<=\d)[A-Za-z]+$', _gnum)
+                _tail = _tm.group(0) if _tm else ""
+                _cand = (_tail + _wd) if _glued else _wd
+                if _cand and _cand.lower() in MENTION_VERBS and not _cand[:1].isupper():
                     continue
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.
-                n1 = _ocr_int_glue(m.group(2), txt[m.end(2):m.end(2) + 1])
+                n1 = _ocr_int_glue(_tok_adj, txt[_mend2:_mend2 + 1])
                 if n1 is None:
                     continue
                 # 🔴 Section-scoped books (chapter_first=False, e.g. Hilton &
@@ -353,7 +430,7 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     raw_tok = m.group(2)
                     if raw_tok and re.fullmatch(r"[IVXLCivxlc]+", raw_tok):
                         continue
-                    if m.group(3) is None:
+                    if m.re.groups < 3 or m.group(3) is None:
                         continue
                 # single-mode regex has only 2 groups (label + number); the
                 # optional second component (group 3) exists ONLY in two-level
@@ -376,9 +453,22 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # Let...") are kept.  Applies only to single-component keys
                 # (single mode, or a two-level key whose n2 half was absent).
                 if single or m.group(3) is None:
-                    after = txt[m.end():].lstrip()
-                    if after and after[0].isascii() and after[0].islower():
+                    after = txt[_mend:].lstrip()
+                    # 🔴 分部小题号（Rosen 例7 实测 "EXAMPLE 7a) How many cards
+                    # must be selected…"）：编号后紧跟 `a)` / `(b)` 这类小题标记，
+                    # 首字母小写但不是散文连接词——条目头照收，号仍取 7。
+                    if re.match(r'^\(?\s*[a-z]{1,3}\s*\)\s', after):
+                        pass
+                    elif after and after[0].isascii() and after[0].islower():
                         continue
+                # restart_per_section：该标签按节重置 → 两道守卫的桶/键都
+                # 折进「当前节窗口」，§1.2 的 Example 1 与 §1.1 的 Example 1
+                # 互不压制；页在首个已检出节头之前则维持章级行为。
+                _rb = _rst_bucket_for(p) if _rst_labels else None
+                _rst_on = _rb is not None and \
+                    str(label).strip().lower() in _rst_labels
+                _nkey = re.sub(r'\s+', ' ', key).lower()
+                _gkey = (_rb, _nkey) if _rst_on else _nkey
                 # 🔴 续行型交叉引用守卫（Han-Lin《Elliptic PDEs》实测）：上一行
                 # 末是 "…Applying Lemma"、编号与后半句被 OCR 折到块首时，新块以
                 # "Lemma 1.26 to any ball B_R(0)…" 开头，形态与真条头完全一致
@@ -391,8 +481,8 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # "Theorem 1.5" 与 "Lemma 1.5" 互不影响）。
                 # 大小写/OCR 噪声归一后再比对（真条头常全大写 "LEMMA 1.26"，
                 # 折行续句常是 "Lemma 1.26"，不作归一等于判不出重复）。
-                if re.sub(r'\s+', ' ', key).lower() in seen_keys:
-                    _dup_after = txt[m.end():].lstrip()
+                if _gkey in seen_keys:
+                    _dup_after = txt[_mend:].lstrip()
                     if (not _dup_after
                             or (_dup_after[0].isascii() and _dup_after[0].islower())):
                         continue
@@ -407,12 +497,14 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     _lab_norm = str(label).strip().lower()
                     _bucket = (_lab_norm, n1) if (not single and m.group(3) is not None) \
                         else (_lab_norm,)
+                    if _rst_on:
+                        _bucket = _bucket + (_rb,)
                     _comp = (n1, n2) if (not single and m.group(3) is not None) else (n1,)
                     if _comp <= _max_per_label.get(_bucket, (-(1 << 30),)):
                         continue
                     _max_per_label[_bucket] = _comp
-                seen_keys.add(re.sub(r'\s+', ' ', key).lower())
-                snippet = txt[max(0, m.start() - 5):m.end() + 90].replace("\n", " ")
+                seen_keys.add(_gkey)
+                snippet = txt[max(0, m.start() - 5):_mend + 90].replace("\n", " ")
                 items.append({"key": key, "label": label,
                               "page": p, "text": snippet})
             # Section-scoped EN source also prints NUMBER-FIRST headings

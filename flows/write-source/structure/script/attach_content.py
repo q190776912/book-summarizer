@@ -90,7 +90,8 @@ from data.book_structure.book_structure import (chapter_json_path,
 import build_structure as _bs
 from lib.numbering import (ordinal_depth, resolve_ordinal_code,
                            formula_paren_tag_re,
-                           formula_tag_number, formula_trailing_tag, formula_tag_re)
+                           formula_tag_number, formula_trailing_tag, formula_tag_re,
+                           formula_tag_shape_ok)
 from lib.page_dir import node_page_dir as _node_page_dir
 
 OUT_DIR_NAME = "book_structure"
@@ -347,7 +348,7 @@ _FORMULA_CFG_CACHE = {}
 
 
 def formula_cfg(ext, ch=None):
-    """本书公式序标配置 → ``(ncomp, scope, letter, bare)``；未配置时为 ``(None, None, False, True)``。
+    """本书公式序标配置 → ``(ncomp, scope, letter, bare)``；未配置时为 ``(None, None, False, False)``。
 
     🔴 **编号段数必须由 `verify_config.json` 的 `formula.type` 经
     `ORDINAL_DEPTH` 派生，不得硬编码**。各书形态差异极大（全语料实测）：
@@ -367,14 +368,20 @@ def formula_cfg(ext, ch=None):
     回退顶层/`ch` 段——主配置 digit 形态对字母编号抽不到，零污染）。附录段的
     `formula.letter_ch: true` 置 ``letter=True``（`(A.3)` 字母章位形态）。
 
-    `bare` 读 `formula.bare_number`（默认 True；显式 false 的书——如 Lee——
-    裸排 `1-11` Problem 标签不可当编号，挂 tag 侧与 Q 层同口径）。
+    `bare` 读 `formula.bare_number`（**书已配置 `formula` 时**默认 True；显式
+    false 的书——如 Lee——裸排 `1-11` Problem 标签不可当编号，挂 tag 侧与 Q 层
+    同口径）。
+    🔴 **书未配置 `formula`（无编号公式的书）时默认 False**：没有 Q 层同源真值
+    仲裁，裸排形态与练习列表号 / 位串 / 矩阵元素**无形态区别**——Rosen 8e 实测
+    把练习号 `9.` / 位运算例子的 `0001`、`1010` 挂成 tag，单元门控随即要求写手
+    补写 `\tag{0001}`（= 逼 agent 编造）。带括号的 `(1)` 形态照收，不误伤真有
+    编号公式但未配置的书。
     """
     ck = _FORMULA_CFG_CACHE
     cache_key = (ext, None if ch is None else str(ch))
     if cache_key not in ck:
         ncomp = scope = None
-        letter, bare = False, True
+        letter, bare = False, False
         try:
             with open(os.path.join(ext, "verify_config.json"),
                       encoding="utf-8-sig") as f:
@@ -394,10 +401,10 @@ def formula_cfg(ext, ch=None):
             if isinstance(s, int):
                 scope = s
             letter = bool(fc.get("letter_ch"))
-            bare = bool(fc.get("bare_number", True))
+            bare = bool(fc.get("bare_number", bool(fc)))
         except Exception:
             ncomp = scope = None
-            letter, bare = False, True
+            letter, bare = False, False
         ck[cache_key] = (ncomp, scope, letter, bare)
     return ck[cache_key]
 
@@ -435,6 +442,13 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
       * **垂直**：与公式带**垂直有交集**（含相切，容差 0.2 倍行高的外扩），
         **或**垂直中心距 ≤ 行高 0.6 倍。中心距判据对居中编号有效；交集判据补上
         MFD bbox 偏上（带上下限 / 多行公式）导致编号落在下缘甚至略下方的情况。
+
+    🔴 **未配置 `formula`（``ncomp is None``）的书还须过形态闸** ``formula_tag_shape_ok``
+    （且仅在非 ``letter`` 时）：兜底正则段数不限，会把散文里恰成一块的括号内容
+    当编号——Rosen 离散数学 8e 实测 7 例假 tag（位串 ``(01)``、坐标 ``(2, 0)``、
+    小数 ``(0.1)``、母函数表行号 ``(7)``），Vakil 把 ``\\rightarrow 0`` 的尾 ``0``
+    当编号。被收割的文本块会**离开正文流**，而假 tag 又成契约对账真值 → 逼步骤
+    5 造 ``\\tag{}``。形态不可信者当场不认，该块原位留作正文。
 
     纯几何 + 文本判定，无状态，保证 check_content_completeness 的
     确定性复算两侧一致。
@@ -480,6 +494,13 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
                 head = re.split(r"[.\-–]", str(num).strip(), maxsplit=1)[0]
                 if head.upper() != _guard_head.upper():
                     continue   # 跨章引用 / OCR 碎片：不挂为编号
+            # 🔴 未配 `formula` 的书（ncomp is None = 按约定「无编号公式」）再过一道
+            # **形态闸**：宽兜底正则会把位串 `(01)` / 坐标 `(2, 0)` / 小数 `(0.1)` /
+            # 表行号 `(7)` 收成编号，**并把这些文本块从正文流删掉**。在收割处拒 =
+            # 既不产 tag、原文又留在散文里（契约 tag 是 gate 的对账真值，误挂会逼
+            # 写手凭空 `\tag{}`）。见 lib.numbering.formula_tag_shape_ok。
+            if ncomp is None and not letter and not formula_tag_shape_ok(num):
+                continue
             if trailing is None:
                 tx = b["x"]                      # 独立编号块：整块就是编号
                 paren = raw[:1] in "（("
@@ -1021,6 +1042,55 @@ def _to_skeleton(node):
     return node
 
 
+def _dedupe_sibling_nodes(node):
+    """合并同父、同 `(key, type)` 的**重号结构节点**（原地，递归）。
+
+    成因（Rosen 8e 实测 ch5 §5.4 / ch6 §6.5、§6.6 / ch8 §8.3 / ch9 §9.2 /
+    ch10 §10.2、§10.3 共 7 组）：scan_skeleton 对**同一个练习集**能报出两行
+    EXER——节末大标题 `EXERCISES` 一行、其下 `Exercise Set 10.2` 小标题又一
+    行——`build_chapter` 逐行建节点，于是契约里出现两个 `key=10.2
+    type=exercise` 兄弟。拆分成两个单元后，🔴 `gate_units` 的「契约本章习题
+    条目重号」直接 FAIL（整章无法 mark），而空壳那个单元 merge 后只剩一个光标题。
+
+    只在 `_to_skeleton` 之后、**挂内容之前**调用，此时重号节点都是只差
+    `name`/`page_start` 的空壳，所以「合并」= 选一个代表，不涉及正文：
+      * `page_start` 取组内**最晚**者——练习节点应贴着题面起始；attach 按
+        「位置 ≤ 块位置的最后一个锚点」分派，取最早者会把**上一节的尾段散文**
+        吸进练习节点（实测该形态里空壳在前、真标题在后）。
+      * `name` 取组内首个**不等于裸 key** 的名字（保住印出来的标题，弃
+        `10.2` 这类裸号名），子节点仍按文档序保留并集。
+    """
+    kids = node.get("sub_sec")
+    if not isinstance(kids, list):
+        return
+    merged, by_id = [], {}
+    for c in kids:
+        if not (isinstance(c, dict) and "key" in c and "type" in c):
+            merged.append(c)
+            continue
+        gid = (str(c.get("key")), str(c.get("type")))
+        if gid not in by_id:
+            by_id[gid] = c
+            merged.append(c)
+            continue
+        keep, new = by_id[gid], c
+        try:
+            later = int(new.get("page_start") or 0) > int(keep.get("page_start") or 0)
+        except (TypeError, ValueError):
+            later = False
+        if later:
+            keep["page_start"] = new.get("page_start")
+            keep["page_end"] = max(int(keep.get("page_end") or 0),
+                                   int(new.get("page_end") or 0)) or new.get("page_end")
+        if str(keep.get("name") or "").strip() == gid[0].strip():
+            keep["name"] = new.get("name")
+        keep["sub_sec"] = (keep.get("sub_sec") or []) + (new.get("sub_sec") or [])
+    node["sub_sec"] = merged
+    for c in merged:
+        if isinstance(c, dict) and "key" in c:
+            _dedupe_sibling_nodes(c)
+
+
 def build_chapter_contract(ext, node, page_dir=None):
     """纯函数：由骨架章节点 + page_*.json 构建该章内容化契约（含 stats）。
 
@@ -1033,6 +1103,8 @@ def build_chapter_contract(ext, node, page_dir=None):
     复算比对（脚本确定性输出 => 可校验完整性）。
     """
     node = _to_skeleton(node)          # 幂等：已挂内容（重复 attach）先还原为骨架
+    _dedupe_sibling_nodes(node)        # 重号结构节点先并掉（否则拆成两个单元、门控判重号 FAIL）
+    _dedupe_sibling_nodes(node)        # 重号结构节点（Rosen 练习集双行）合并后再分派内容
     # page_dir 未显式给出时从契约自带字段派生（多册书章级 `page_dir`；老契约缺
     # 字段 → 按章号走 lib.page_dir 的证据链）。**绝不能默认成 ext**：多册书各册
     # 页码重复，读 ext 会静默命中某一册、把内容挂到别的册的章上且不报错。

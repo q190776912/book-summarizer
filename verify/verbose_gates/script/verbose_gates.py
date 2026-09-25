@@ -539,9 +539,21 @@ def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
     out = []
     n = len(lines)
     i = 0
+    in_fence = False
     while i < n:
         ln = lines[i]
         s = ln.strip()
+        # 🔴 跳过 ``` 围栏代码块（MATLAB / Python 等）——代码不是「散文」，绝不参与
+        # 照抄闸门（2026-09-25 Heath ch15 实测：自适应求值 quads/quade 的 ```matlab
+        # 代码块被当成 577 / 922 字「顶层散文」误报）。遇 ``` 开 / 闭切换状态，块内
+        # 行整段跳过。只减不增告警 → 对已通过章节零回归。
+        if s.startswith('```'):
+            in_fence = not in_fence
+            i += 1
+            continue
+        if in_fence:
+            i += 1
+            continue
         if not s or s.startswith('>') or s.startswith('#') or s.startswith('$$') \
            or s.startswith('---') or s.startswith('|') \
            or s.startswith(('<div', '</div', '<img')):

@@ -245,6 +245,38 @@ def formula_num_core(ncomp=None, letter=False):
     return r'\d+(?:%s\d+){%d}%s' % (_FORMULA_SEP, n, _FORMULA_SUFFIX)
 
 
+_TAG_SHAPE_RE = re.compile(r'^[1-9]\d{0,2}(?:[.\-·](?:[1-9]\d{0,2}|0))+[a-zA-Z]?$')
+
+
+def formula_tag_shape_ok(num):
+    r"""**未配置** `formula` 的书（`ncomp is None`）里，候选编号形态是否可信。
+
+    `formula_num_core` 的 ``ncomp is None`` 分支段数不限（集合论 / 表示论等**没有
+    编号公式**的书走的兜底正则），配合 `formula_tag_re` 的两端锚定，会把散文里
+    恰成一块的括号内容一并收成「独立编号」，并把该文本块从正文流**删掉**、把
+    编号写进契约 `tag`——而契约 tag 是 `gate_units` / `_flow_contract` 的**对账
+    真值**，于是写手被逼凭空造 `\tag{}`（漏写 FAIL、多出判编造）。实测三本未配
+    置的书全是假阳性：Rosen 离散数学 8e 16 章 7 例（位串 `(01)`/`(11)`、坐标
+    `(2, 0)`（`_FORMULA_SEP` 含逗号）、小数 `(0.1)`/`(0.99999)`、母函数对照表行号
+    `(7)`、`(10)`）；Vakil rising-sea 26 例（`\rightarrow 0` 的尾 `0`、`= 3` 的
+    尾 `3`）；methods-of-homological-algebra 页码 `(121)`/`(259)` 与粘连 `(0j)`/
+    `(9x)`。**宁可漏挂**（少一个 tag，单元只是不带编号），**不可误挂**。
+
+    可信形态（同时满足，`^[1-9]\d{0,2}(?:[.\-·](?:[1-9]\d{0,2}|0))+[a-zA-Z]?$`）：
+      * **≥2 段**：单级整数 `(7)` 与列表号 / 脚注号 / 页码无形态区别——真有单级
+        编号的书必须在 `verify_config.json` 声明 `formula`（`make_config` 探测）。
+      * **首段非 0**：杀小数 `0.1` / `0.025` / `0.99999` 与前导零位串 `(01)`。
+      * 分隔符只认 `.` `-` `·`，**不认逗号**：逗号是有序对 / 坐标列表 `(x, y)`。
+      * 每段 ≤3 位、无前导零，**但允许中段 0**：Vakil 的 `1.5.0.1` / `13.1.0.1`
+        （`.0.` = 定义/例子第 0 项即其展示式）是真编号，必须放过。
+      * 可带单个字母后缀（`8.11a` 子式编号）。
+
+    只对**未配置**的书调用；`letter=True`（字母章位 `(A.3)`）时不适用，由调用方
+    自行跳过。
+    """
+    return bool(_TAG_SHAPE_RE.match(str(num or '').strip()))
+
+
 @functools.lru_cache(maxsize=None)
 def formula_tag_re(ncomp=None, bare=True, letter=False):
     """匹配「**整块**恰为一个公式编号」的锚定正则。

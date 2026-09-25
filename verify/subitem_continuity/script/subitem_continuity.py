@@ -58,6 +58,17 @@ _O_CONTEXT_RE = re.compile(
     r'(注解|注释|注[：:]|备注|说明|Remarks?|Notes?|Comments?)', re.IGNORECASE
 )
 
+# 🔴 行内（非行首）子项标记。三条检测正则全部行首锚定：`_O_PLAIN_DOT_RE` 不接受
+# `**` 前缀、`_O_BOLD_DOT_RE` 要求 `**a)**` 紧贴、`_O_PAREN_RE` 要求括号打头，于是
+#   `**1. Limits in Abelian Categories**: a) Prove …`   （Gelfand–Manin ch2 习题 II.6）
+#   `3. Affine Schemes. a) Let $A$ be …`                （同上 ch1 习题 §1.5）
+#   `**3. Massey 积 (Massey product)。** a) 设 …`        （同上 ch4 习题 IV.3）
+# 行里的 `a)` 对 O 层完全不可见：后一条 `b)` 自成一队 → HEAD gap「缺 (a)」假报。
+# 只用于 HEAD 缺号的「已在前文出现」抑制（与 prev_ords 同一宽松设计：只减少告警）。
+# 守卫：紧贴字母/数字的附着回指（`II.6.18a)`、`f ( x )`）不算，且要求标记后随内容。
+_O_INLINE_BARE_RE = re.compile(r'(?<![0-9A-Za-z])([a-z]{1,3})\)(?=\s|[:：]|\*)')
+_O_INLINE_PAREN_RE = re.compile(r'[（(]([a-z]{1,3})[)）](?=\s|[:：]|\*)')
+
 _ROMAN_VALID = re.compile(
     r'^(m{0,3})(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$', re.I
 )
@@ -178,6 +189,35 @@ def _alpha_to_int(lb):
             return 0
     return n
 
+
+def _label_ordinals(lb):
+    """一个原始标签的**全部合理解读**（数字 / 字母 / 罗马）序号集合。
+
+    只喂给「前文已见」抑制集合（`block_meta['ords']`、行内标记集合），这些集合
+    仅参与 HEAD / INTERNAL 缺号的**抑制**判定 → 取宽（多解并存）只会减少告警，
+    不可能凭空造出告警。"""
+    vals = set()
+    if lb.isdigit():
+        vals.add(int(lb))
+    elif lb.isalpha():
+        a = _alpha_to_int(lb)
+        if a:
+            vals.add(a)
+        r = _roman_to_int(lb)
+        if r:
+            vals.add(r)
+    return vals
+
+
+def _o_inline_ordinals(line):
+    """行内子项标记的序号集合（见 _O_INLINE_BARE_RE 上方的说明）。"""
+    s = _INLINE_MATH_RE.sub(' MATH ', line)
+    vals = set()
+    for rx in (_O_INLINE_BARE_RE, _O_INLINE_PAREN_RE):
+        for m in rx.finditer(s):
+            vals |= _label_ordinals(m.group(1))
+    return vals
+
 # 🔴 异质序列守卫（2026-09-16，statistical-inference 3.33/3.34 实测）：
 # 相邻编号跳幅上限。超过即判定为「两条不同序列被并进同一窗」，而非单条序列缺号。
 # 真缺号是「中间少几个」（跳幅小）；把另一条序列的头接进来才会「跳到很远」。
@@ -278,6 +318,7 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
 
     # Phase 1: find all numbered/lettered lines
     item_lines = []  # (line_idx, raw_label)
+    inline_ords = {}  # line_idx -> {ordinal, ...}（行内标记，仅用于抑制）
     in_math = False
     for i, ln in enumerate(lines):
         # Skip display-math ($$) blocks entirely: formula content lines may
@@ -291,6 +332,9 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         labels = _o_match_line(ln)
         for lb in labels:
             item_lines.append((i, lb))
+        iv = _o_inline_ordinals(ln)
+        if iv:
+            inline_ords[i] = iv
 
     if not item_lines:
         return []
@@ -316,6 +360,13 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
     for blk in blocks:
         st, oi = _classify_block(blk)
         ords = set() if st == 'mixed' else {v for _, v in oi if v > 0}
+        # 🔴 异质块不得整块作废。`3. Affine Schemes. a) …` 之后紧跟的
+        # `['3','b','c','d','e']` 块走 _classify_block 的 numeric 兜底，字母项被
+        # 归零丢弃（`mixed` 时更是全丢）→ 后一块（`f) …`，被中间的公式块撑开行距 >4
+        # 而另起）的 HEAD 判定看不到 a)…e)，凭空报「缺 a、b、c、d、e」。
+        # 这里把块内每个标签的全部合理解读补进抑制集合（只减少告警，见 _label_ordinals）。
+        for _, lb in blk:
+            ords |= _label_ordinals(lb)
         block_meta.append({'ords': ords,
                            'first': blk[0][0], 'last': blk[-1][0]})
 
@@ -346,6 +397,24 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
                 break
             prev_ords |= block_meta[pj]['ords']
 
+        # 🔴 数字型顶层编号清单（习题 / 问题列表）承接判定放宽（2026-09-25，Heath ch9/ch3 实测）：
+        # 一条长习题表会被其中的公式块、插图、代码、多行题面撑成多个「行距 >4」的子块，
+        # 整表动辄数百行，120 行窗口只够看到最近几题，导致后段被误报 HEAD 缺号（如 ch9
+        # 习题 15-21 以为缺 1-14、ch3 问题 18-23 以为缺 1-17——其实 1-14 / 1-17 都在同章
+        # 更早处）。故对 **numeric** 序列，HEAD 缺号的「已在前文出现」判定放宽到**全部前序块**
+        # （缺的前导号只要在本文件更早的任一编号块出现过，即视为同一条列表的延续）。
+        # 只放宽 HEAD、**不**放宽 INTERNAL（中间真缺的某个号仍须人工核对）；且该放宽**只减少
+        # 告警、绝不新增** → 对已通过的章节零回归。
+        prev_ords_wide = set()
+        for pj in range(bi):
+            prev_ords_wide |= block_meta[pj]['ords']
+
+        # 行内标记（`**1. Title**: a) …` 里的 a)）不在任何块里，只能按行扫描补进
+        # HEAD 抑制窗口（同样 120 行）。
+        head_inline_ords = set()
+        for li in range(max(0, block_meta[bi]['first'] - 120), block_meta[bi]['first']):
+            head_inline_ords |= inline_ords.get(li, set())
+
         # Find context header (look up to 5 lines above first item)
         ctx_label = ""
         for k in range(max(0, block[0][0] - 5), block[0][0]):
@@ -375,7 +444,8 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         # HEAD gap: sequence starts above 1 — suppress if the leading numbers
         # already appear in a nearby preceding block (cross-theorem continuation)
         if min_ord > 1:
-            if not set(range(1, min_ord)).issubset(prev_ords):
+            _head_prev = (prev_ords_wide if seq_type == 'numeric' else prev_ords) | head_inline_ords
+            if not set(range(1, min_ord)).issubset(_head_prev):
                 head_missing = [_fmt(v) for v in range(1, min_ord)]
                 out.append(
                     f"  x L{first_line}: [{ctx_label}] HEAD gap ({type_tag}) — "

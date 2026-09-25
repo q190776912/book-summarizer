@@ -849,7 +849,7 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
 # 生成分章契约后，verify 与 write-source 均消费该契约（BookStructure.load 聚合），不再重跑抽取器。
 # ---------------------------------------------------------------------------
-def _single_en_items(ext, start, end, book):
+def _single_en_items(ext, start, end, book, sec_windows=None):
     """EN 单级编号书（ORDINAL_SINGLE + language=="en"，如 Evans PDE 2ed /
     Silverman《Friendly Introduction to Number Theory》：`Theorem 1` 单一数字）。
 
@@ -867,9 +867,23 @@ def _single_en_items(ext, start, end, book):
         for _nm in getattr(_g, "name", []) or []:
             if _nm and _nm not in _non_text and _nm not in extra:
                 extra.append(_nm)
+    # 🔴 按节重置计数器（config ordinal 组 scope==3，Rosen 实测）：把 scope==3
+    # 组的标签词 + 节窗口下传抽取器，令「同标签章级单调守卫 / 续行去重守卫」
+    # 按节分桶——否则 §1.2 起重号的 Example 1 被 §1.1 的 Example 16 压掉
+    # （ch1 实测 138 例只抽 28）。无 scope==3 组 / 无窗口时行为逐字不变。
+    _rst_labels = []
+    if sec_windows and not book.section_scoped:
+        for _g in getattr(book, "ordinal", []) or []:
+            if getattr(_g, "scope", None) == 3:
+                for _nm in getattr(_g, "name", []) or []:
+                    if _nm and _nm.lower() not in _rst_labels:
+                        _rst_labels.append(_nm.lower())
     items = extract_items_en(ext, start, end, want_examples=True,
                              section_scoped=book.section_scoped, single=True,
-                             extra_labels=extra)
+                             extra_labels=extra,
+                             restart_per_section=(
+                                 set(_rst_labels), list(sec_windows or []))
+                             if _rst_labels else None)
     kept = []
     for it in items:
         lab, _, num = it["key"].partition(" ")
@@ -879,7 +893,64 @@ def _single_en_items(ext, start, end, book):
     return kept
 
 
-def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
+# ---------------------------------------------------------------------------
+# 🔴 EN 三级「数字前置」条头探针（Kreyszig 实测 2026-09 根治）。
+# ORDINAL_THREE_LEVEL + language=en 此前硬分派到 en3 抽取器（标签前置
+# "Definition 1.1.1"），而条头印成「编号在前 + 标签在后」（"1.1-1 Definition
+# (Metric space, metric)."）的书会整章近乎漏抽（Kreyszig ch1 仅抓到 3/50）。
+# 通用三级抽取器 extract_items 明确支持英文 "N.S-N Lemma" 形态（其源码注释
+# 即以 Kreyszig 为范本），但从不被该分派放行。探针按块首统计本章页面两种
+# 条头形态的出现次数，数字前置占绝对优势（≥5 且严格多于标签前置）时改走
+# 通用抽取器；标签前置书（Strogatz / Lasota & Mackey）探针必然失配，零回归。
+_NF_HEAD_RE = re.compile(
+    r'^\s*\d{1,2}[.\-–]\d{1,2}[.\-–]\d{1,3}\s+(?:\([^)]{0,60}\)\s*)?'
+    r'(?:Definition|Theorem|Lemma|Corollary|Proposition|Example|Remark)'
+    r'\b', re.IGNORECASE)
+_LF_HEAD_RE = re.compile(
+    r'^\s*(?:Definition|Theorem|Lemma|Corollary|Proposition|Example|Remark)'
+    r'\s+\d{1,2}[.\-–]\d{1,2}[.\-–]\d{1,3}\b', re.IGNORECASE)
+
+
+# 条头形态是**全书统一排版惯例**，探针按整书页面判定并缓存——逐章判定会让
+# 条目稀疏章（Kreyszig ch11 全书仅 4 条且全部数字前置）达不到阈值而漏章。
+_NF_PROBE_CACHE: dict = {}
+
+
+def _three_level_en_number_first(_dir, start=None, end=None):
+    """True iff this BOOK's headings are predominantly NUMBER-FIRST
+    (`C.S-N Label`) rather than label-first (`Label C.S.N`).  Scans ALL
+    page_*.json in _dir once (memoized per dir)."""
+    key = os.path.abspath(_dir)
+    cached = _NF_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    nf = lf = 0
+    try:
+        names = sorted(os.listdir(_dir))
+    except OSError:
+        return False
+    for name in names:
+        if not (name.startswith("page_") and name.endswith(".json")):
+            continue
+        fp = os.path.join(_dir, name)
+        try:
+            d = scan_skeleton.PageJson.load(fp).data
+        except Exception:
+            continue
+        for t in d.get('text', []) or []:
+            txt = (t.get('text') or '')
+            for ln in txt.split('\n'):
+                if _NF_HEAD_RE.match(ln):
+                    nf += 1
+                elif _LF_HEAD_RE.match(ln):
+                    lf += 1
+    verdict = nf >= 5 and nf > lf
+    _NF_PROBE_CACHE[key] = verdict
+    return verdict
+
+
+def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
+                   sec_windows=None):
     primary = book.primary_type
     _dir = page_dir or ext
     if getattr(book, "gm_bare_numbered", False):
@@ -904,7 +975,7 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
         if getattr(book, "language", "cn") == "cn":
             return extract_items_cn_single(_dir, start, end, groups=book.ordinal,
                                             manual_overrides=manual)
-        return _single_en_items(_dir, start, end, book)
+        return _single_en_items(_dir, start, end, book, sec_windows=sec_windows)
     if primary == ORDINAL_TWO_LEVEL and getattr(book, "language", None) == "en":
         # EN two-level books (former ORDINAL_EN=4, now folded into type 2): label-first /
         # number-first / chapter-wide single-digit forms, all extracted by extract_items_en.
@@ -945,6 +1016,16 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
                     kept.append(item)
             kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
         return kept
+
+    if primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en" \
+            and _three_level_en_number_first(_dir, start, end):
+        # Kreyszig 式「数字前置」三级英文书（探针判定，见上）：en3 标签前置
+        # 抽取器整章漏抽，改走通用三级抽取器（其交叉引用守卫明确按
+        # "N.S-N Lemma" 英文形态设计）。键为裸号 "C.S-N"，与 en3 分支的
+        # normkey 输出同形，下游 B/D/Q 无感。
+        items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual,
+                                    cfg=book)
+        return items
 
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
             or primary in (ORDINAL_APP, ORDINAL_APP2):
@@ -1010,7 +1091,58 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None):
 # ---------------------------------------------------------------------------
 # 单章结构构建
 # ---------------------------------------------------------------------------
-def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None):
+def _has_foreign_sibling(page, y, foreign, tol=80.0):
+    """text 候选是否与**异号**裸节号块同页同行带（= 那是那个号的标题）。
+
+    OCR 常把一个节头切成「裸号块 + 标题块」（Rosen p211: `2.6.1` / `Introduction`），
+    于是通用词标题（Introduction/Summary…）会被任意一节的同名标题撞上。裸号与
+    标题两块 y 相差仅几磅，用行带容差判相邻。tol 内没有异号裸块 = 真·无号节头
+    （Rosen ch11 场景），候选保留。
+    """
+    if y is None:
+        return False
+    for fp, fy, _n in foreign:
+        if fp == page and abs(float(fy) - float(y)) <= tol:
+            return True
+    return False
+
+
+_TOC_LINE_GAP = 250.0   # 目录带内相邻行的最大行距；更大的空隙 = 目录结束
+
+
+def _toc_band_bottom(ys, gap=_TOC_LINE_GAP):
+    """章扉页「目录带」的下界 y（无命中返回 None）。
+
+    从最上方一条节号首现命中起，沿目录行距连续向下延伸，遇到 >gap 的空隙即停
+    ——正文区与目录之间隔着一整段引言散文，空隙远大于目录行距（Rosen p144：
+    目录 385/431/481/529/610/693，正文节头 1635，间隙 942）。
+    不能直接取「该页首现命中的最大 y」：只列 §N.M 的章目录里，§N.M.K 的**正文
+    节头**就是它自己的首现命中，会把带界顶到自己头上（严格大于即失效）。
+    """
+    v = sorted(float(y) for y in (ys or []) if y is not None)
+    if not v:
+        return None
+    bottom = v[0]
+    for y in v[1:]:
+        if y - bottom > gap:
+            break
+        bottom = y
+    return bottom
+
+
+def _hit_below_toc_band(y, band_bottom):
+    """章首目录页上的 SEC 命中是否**已在目录带之下**（= 它就是正文节头）。
+
+    目录只列 §N.M 的书（Rosen 8e）里 §N.M.K 的首现命中是真节头，回扫反而会
+    撞上别的小节的同号/同名行；band_bottom = 该页全部首现命中的最大 y。
+    等于带底的行按「目录行本身」处理（保守回扫，与旧行为一致）。
+    """
+    return (y is not None and band_bottom is not None
+            and float(y) > float(band_bottom))
+
+
+def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None,
+                                title_text=None):
     """在页码 [lo, hi] 内找首个「以节号 num 开头的标题行」所在页。
 
     用于章首目录页免疫的回扫：章扉页目录把节号的 SEC 首现页污染成章首页时，
@@ -1027,11 +1159,42 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None):
       * 🔴 min_y：真节头可能与目录同页（ch5 扉页即 §5.1 起始页）——此时 lo 页
         上只接受块顶 y 严格大于污染行（目录命中）的匹配，否则回扫永远跳过
         真节头所在的首章页、错挂到后文习题/解答行的同号行上。
+
+    2026-09-25 Rosen 体例两处失明修正：
+      * 🔴 **页眉（running head）一票否决**：正文节头若被 OCR 掉号（ch11
+        "Introduction to Trees" 无 11.1）或裸号成块（ch10 扉页 blk "10.1"），
+        回扫会命中后续各页**页顶印刷页眉** `11.1 Introduction to Trees 783`
+        → 节锚点晚 1~2 页，章首的定义/定理/例整批漂到 'file' 窗前。判据：
+        去掉行尾页码后的同一文本在扫描区间内出现于 ≥2 个不同页 = 页眉，弃。
+      * **裸号行可作节头**：OCR 常把节头切成「纯 `N.M`」一块 + 标题另块
+        （ch10 p696 y=1197 `10.1`）。标题形态候选全灭时才接受裸号候选，
+        且同样受页眉禁令与 min_y 约束。
+      * 🔴 **无号正文节头（`title_text`）**：Rosen ch11 的 §11.2/11.4/11.5
+        正文节头整块**没有印序号**（"Applications of Trees" 单块，序号被 OCR
+        吞掉）→ 前两类候选全灭，只能拿扉页目录行的标题文本回匹配独立成块的
+        标题行。三类候选优先级 title > bare > text，全无则返回 None 让调用方
+        退回目录页（= 章首页，§N.1 场景正是它）。
+      * 🔴 **text 候选的「异号兄弟」否决**（Rosen ch2 §2.1.1 实测）：OCR 把
+        节头切成裸号块 + 标题块两半（p211 上是 `2.6.1` / `Introduction`），
+        于是**别的小节**的标题块会被本节的通用词标题（`Introduction` 这类每节
+        都有的词）撞上 → §2.1.1 锚到 p211，整节内容错挂、§2.1 窗口被拖到
+        211 页。判据：text 候选同一页、同一行带（|Δy| ≤ 80）上存在**本节号
+        以外**的裸节号块 = 它是那个号的标题，不是本节的 → 弃。真·无号节头
+        （ch11 场景）旁边没有别的裸号块，零回归。
     """
     pat = re.compile(
         r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?:[\.．:：]|[\s\u00a0]+)\s*[A-Za-z]')
     pat_glue = re.compile(r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?=[A-Za-z])')
+    pat_bare = re.compile(r'^[\*§]?\s*' + re.escape(str(num)) + r'\s*[\.．:：]?\s*$')
+    pat_foreign_bare = re.compile(r'^[\*§]?\s*(\d+(?:[\.\-·]\d+)+)[\.\-·:：]?\s*$')
+    _tq = (title_text or "").strip()
+    pat_text = None
+    if len(_tq) >= 4:
+        pat_text = re.compile(r'^[\*§]?\s*' + re.escape(_tq)
+                              + r'(?:[\s\u00a0][^\d]|$)', re.I)
     _dir = page_dir or ext
+    cands = []          # (page, y, folio_stripped_text, kind)  kind: 'title' | 'bare' | 'text'
+    foreign = []        # [(page, y, num)] 本节的**异号**裸节号块（text 候选兄弟判定）
     for p in range(int(lo), int(hi) + 1):
         fp = os.path.join(_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
@@ -1049,18 +1212,62 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None):
                 by = float(poly[1]) if len(poly) >= 8 else None
             except Exception:
                 by = None
-            for ln in blk_text(b).split('\n'):
+            _blines = blk_text(b).split('\n')
+            for ln in _blines:
                 ln = ln.rstrip('$').strip()
                 if not ln or len(ln) > 70 or ln.endswith((',', ';')):
                     continue
+                _fo = pat_foreign_bare.match(ln)
+                if _fo and _fo.group(1) != str(num):
+                    foreign.append((p, by, _fo.group(1)))
+                kind = None
                 m = pat.match(ln) or pat_glue.match(ln)
                 if m:
-                    if (p == int(lo) and min_y is not None
-                            and (by is None or by <= float(min_y))):
-                        continue    # 目录命中本身 / 其上方的更早行，跳过
+                    kind = 'title'
+                elif pat_bare.match(ln) and len(_blines) == 1:
+                    kind = 'bare'
+                elif (pat_text is not None and len(_blines) == 1
+                        # 目录页（lo）上的标题片段一律不算正文节头——TOC 条目常
+                        # 换行成独立块（Rosen ch11 p804 blk21 "Spanning"）；
+                        # §N.1 真在扉页起始时调用方 fallback 已给 lo 页。
+                        and p > int(lo)
+                        and pat_text.match(ln)
+                        and not re.search(r'\d', ln)
+                        and not ln.endswith('.')):
+                    kind = 'text'
+                if kind is None:
+                    continue
+                if (p == int(lo) and min_y is not None
+                        and (by is None or by <= float(min_y))):
+                    continue    # 目录命中本身 / 其上方的更早行，跳过
+                if kind == 'title':
                     rest = ln[m.end():]
-                    if len(re.findall(r'[A-Za-z\u00c0-\u017f\u4e00-\u9fff]', rest)) >= 2:
-                        return p
+                    if len(re.findall(r'[A-Za-z\u00c0-\u017f\u4e00-\u9fff]', rest)) < 2:
+                        continue
+                cands.append((p, by, re.sub(r'\s+\d{1,4}$', '', ln), kind))
+    if not cands:
+        return None
+    # 页眉禁令：同一文本（去行尾印刷页码后）出现在 ≥2 个不同页 → running head
+    _pages_of = {}
+    for _p, _y, _t, _k in cands:
+        _pages_of.setdefault(_t, set()).add(_p)
+    # 🔴 页眉首现页 = 本节锚点的**上界**（节头必然不晚于自己的页眉出现：
+    # Rosen p816 页顶印 "11.2 Applications of Trees 793"，正文节头在同页
+    # y=1401）。有了这条界，无号标题文本候选就不会在几十页外的散文里
+    # 撞见同名单元块（ch11 §11.1 的 "Introduction" 若无上界会挂到 p831）。
+    _hdr_pages = [c[0] for c in cands if len(_pages_of.get(c[2], ())) >= 2]
+    _hbound = min(_hdr_pages) if _hdr_pages else None
+    _kept = [c for c in cands
+             if len(_pages_of.get(c[2], ())) < 2
+             and (_hbound is None or c[0] <= _hbound)]
+    if not _kept:
+        return None
+    for _kind in ('title', 'bare', 'text'):
+        _pk = [c for c in _kept if c[3] == _kind]
+        if _kind == 'text':
+            _pk = [c for c in _pk if not _has_foreign_sibling(c[0], c[1], foreign)]
+        if _pk:
+            return _pk[0][0]
     return None
 
 
@@ -1242,11 +1449,95 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         seen.add(num)
         dedup_sec.append(sec_best[num])
 
+    # 2b) 章节骨架页图（skeleton SEC → sec_pages），须在条目抽取**之前**算好：
+    # 单级按节重置书（config ordinal scope==3，如 Rosen「§1.1 例1..16 → §1.2
+    # 例1..11」）要把节窗口喂给抽取器做「按节分桶」的守卫（否则章级单调守卫把
+    # 每一节的起重编号都当陈旧交叉引用丢掉）。sec_pages/sec_titles/sec_pos 在
+    # 下方 4) 派生小节管线继续原样使用，语义不变。
+    sec_pages = {}   # num -> 最佳候选页（skeleton）
+    sec_titles = {}  # num -> 标题
+    sec_pos = {}     # num -> (page, y)；仅 sections_unnumbered 路径填充（y 感知归并）
+    # 章首目录页免疫（2026-08-25 Evans 实测）：章扉页常印「本章小节目录」，SEC
+    # 扫描把每个节号都「首现」在章首页 → 各节 sec_pages 全等于章首页，条目按页
+    # 就近归节时全部错挂到最后一个真实节。判据：同一页上「首现」≥_OPENER_K 个
+    # 不同节号 → 该页是章首目录页，其上的 SEC 命中不计入 sec_pages（取其后首个
+    # 正文命中；若某节只有目录命中则退回原值——与旧行为一致，不比旧差）。
+    _OPENER_K = 3
+    _first_hit = {}
+    for row in dedup_sec:
+        _first_hit.setdefault(row[2], row)
+    _page_first_cnt = {}
+    for _num, _row in _first_hit.items():
+        _p = _row[0]
+        _page_first_cnt[_p] = _page_first_cnt.get(_p, 0) + 1
+    _opener_pages = {p for p, c in _page_first_cnt.items() if c >= _OPENER_K}
+    # 🔴 目录跨页续排（2026-08-26 Ross ch9 实测）：章首目录主体在扉页（≥3 个
+    # 节号首现），末尾条目（9.4）续排到次页页顶（y≈103）——该首现命中不在
+    # 扉页上，逃过上面的判据。补则：紧随某目录页之后的一页，若其全部首现
+    # 命中都贴顶（y < 350），同样视为目录污染页（回扫 min_y 会自动跳过续排
+    # 行本身；真节头唯一时退回原值，不比旧差）。
+    if _opener_pages:
+        for _op in list(_opener_pages):
+            _ys = [float(_r[4]) for _r in _first_hit.values()
+                   if _r[0] == _op + 1 and _r[4] is not None]
+            if _ys and all(y < 350.0 for y in _ys):
+                _opener_pages.add(_op + 1)
+    # 🔴 目录带下界（Rosen 8e ch2 §2.1.1 实测）：章目录通常只列 §N.M，于是
+    # §N.M.K 的首现命中**本身就是正文节头**（Rosen p144 目录带 y=385..693，
+    # 真节头 "2.1.1 Introduction" 在 y=1635）。旧代码一律按「目录污染行」处理
+    # → min_y 严格大于把真节头自己排除，回扫只能撞上别的小节的同号/同名行
+    # （见 _find_numbered_heading_page 的兄弟块否决）。判据：命中 y 已落在该页
+    # 目录带（= 该页全部首现命中的最大 y）之下 = 真节头，直接采用、不回首扫。
+    _toc_band = {}
+    for _num, _row in _first_hit.items():
+        if _row[0] in _opener_pages:
+            _toc_band.setdefault(_row[0], []).append(_row[4])
+    _toc_band = {p: _toc_band_bottom(ys) for p, ys in _toc_band.items()}
+    if not getattr(book, "sections_unnumbered", False):
+        # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
+        # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
+        # 「agent 校验识别」产物 _recognized_sections.json 的权威小节清单注入。
+        for row in dedup_sec:
+            p, num, title, y = row[0], row[2], row[3], row[4]
+            _poisoned = p in _opener_pages
+            if num in sec_pages:
+                if title and not sec_titles.get(num):
+                    sec_titles[num] = title
+                continue
+            if _poisoned:
+                # 章首目录命中：回扫正文节头；扫不到退回原值。min_y = 污染行
+                # （目录命中）块顶——真节头与目录同页时（ch5 扉页即 §5.1 起始），
+                # 只接受目录行下方的匹配。
+                _tb = _toc_band.get(p)
+                if _hit_below_toc_band(y, _tb):
+                    pg = p          # 命中已在目录带之下 = 真节头，原位采用
+                else:
+                    pg = _find_numbered_heading_page(
+                        ext, num, p, end, min_y=y, page_dir=page_dir,
+                        title_text=title) or p
+                    y = None
+            elif getattr(book, 'chapter_local_sections', False):
+                # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
+                # 首现页作为真实页码，供条目按页就近归节。
+                pg = _find_chapter_local_section_page(ext, ch, int(num), start, end, page_dir=page_dir)
+                y = None
+            else:
+                pg = p
+            sec_pages[num] = pg
+            # 节头 (page, y) 进 sec_pos：同页「条目在上、节头在下」的 y 感知归并
+            # （谷超豪《数学物理方程》实测：ch6 性质4 与 §5 节头同页）。
+            sec_pos.setdefault(num, (pg, float(y) if y is not None else 0.0))
+            if title and not sec_titles.get(num):
+                sec_titles[num] = title
+
     # 3) 抽取器条目（权威 ITEM，排除练习类 + 练习区页）
     #    习题块（"EXERCISES FOR CHAPTER N" 起至章末）内的页码一律不从抽取器
     #    进入 ITEM 合同，否则习题题号（如 Strogatz `3.1.1`）会被误判为
     #    Example/Definition 条目，造成重复键、错类型、乱序。
-    raw_items = _extract_items(ext, ch, start, end, book, manual=manual, page_dir=page_dir)
+    raw_items = _extract_items(ext, ch, start, end, book, manual=manual,
+                               page_dir=page_dir,
+                               sec_windows=[(pg, n) for n, pg in sec_pages.items()
+                                            if not str(n).startswith("U")])
     ex_start = _exercise_region_start(ext, ch, start, end, page_dir=page_dir)
 
     # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器
@@ -1355,66 +1646,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     items = sorted(_by_key.values(),
                    key=lambda x: ((x.get("page") or 0), _nat_key_digits(x["key"])))
 
-    # 4) 章节骨架：skeleton SEC ∪ 条目/练习派生章节号
-    sec_pages = {}   # num -> 最佳候选页（skeleton）
-    sec_titles = {}  # num -> 标题
-    sec_pos = {}     # num -> (page, y)；仅 sections_unnumbered 路径填充（y 感知归并）
-    # 章首目录页免疫（2026-08-25 Evans 实测）：章扉页常印「本章小节目录」，SEC
-    # 扫描把每个节号都「首现」在章首页 → 各节 sec_pages 全等于章首页，条目按页
-    # 就近归节时全部错挂到最后一个真实节。判据：同一页上「首现」≥_OPENER_K 个
-    # 不同节号 → 该页是章首目录页，其上的 SEC 命中不计入 sec_pages（取其后首个
-    # 正文命中；若某节只有目录命中则退回原值——与旧行为一致，不比旧差）。
-    _OPENER_K = 3
-    _first_hit = {}
-    for row in dedup_sec:
-        _first_hit.setdefault(row[2], row)
-    _page_first_cnt = {}
-    for _num, _row in _first_hit.items():
-        _p = _row[0]
-        _page_first_cnt[_p] = _page_first_cnt.get(_p, 0) + 1
-    _opener_pages = {p for p, c in _page_first_cnt.items() if c >= _OPENER_K}
-    # 🔴 目录跨页续排（2026-08-26 Ross ch9 实测）：章首目录主体在扉页（≥3 个
-    # 节号首现），末尾条目（9.4）续排到次页页顶（y≈103）——该首现命中不在
-    # 扉页上，逃过上面的判据。补则：紧随某目录页之后的一页，若其全部首现
-    # 命中都贴顶（y < 350），同样视为目录污染页（回扫 min_y 会自动跳过续排
-    # 行本身；真节头唯一时退回原值，不比旧差）。
-    if _opener_pages:
-        for _op in list(_opener_pages):
-            _ys = [float(_r[4]) for _r in _first_hit.values()
-                   if _r[0] == _op + 1 and _r[4] is not None]
-            if _ys and all(y < 350.0 for y in _ys):
-                _opener_pages.add(_op + 1)
-    if not getattr(book, "sections_unnumbered", False):
-        # 无序号标书（section_types 含 0，如 Silverman）：scan_skeleton 对无数字
-        # 标题完全失明且易编造假小节（违反保真），故跳过 skeleton SEC，仅用下方
-        # 「agent 校验识别」产物 _recognized_sections.json 的权威小节清单注入。
-        for row in dedup_sec:
-            p, num, title, y = row[0], row[2], row[3], row[4]
-            _poisoned = p in _opener_pages
-            if num in sec_pages:
-                if title and not sec_titles.get(num):
-                    sec_titles[num] = title
-                continue
-            if _poisoned:
-                # 章首目录命中：回扫正文节头；扫不到退回原值。min_y = 污染行
-                # （目录命中）块顶——真节头与目录同页时（ch5 扉页即 §5.1 起始），
-                # 只接受目录行下方的匹配。
-                pg = _find_numbered_heading_page(ext, num, p, end, min_y=y,
-                                                 page_dir=page_dir) or p
-                y = None
-            elif getattr(book, 'chapter_local_sections', False):
-                # chapter-local 节来自 md，无源扫描页码；用源 "N. Title"
-                # 首现页作为真实页码，供条目按页就近归节。
-                pg = _find_chapter_local_section_page(ext, ch, int(num), start, end, page_dir=page_dir)
-                y = None
-            else:
-                pg = p
-            sec_pages[num] = pg
-            # 节头 (page, y) 进 sec_pos：同页「条目在上、节头在下」的 y 感知归并
-            # （谷超豪《数学物理方程》实测：ch6 性质4 与 §5 节头同页）。
-            sec_pos.setdefault(num, (pg, float(y) if y is not None else 0.0))
-            if title and not sec_titles.get(num):
-                sec_titles[num] = title
+    # 4) 章节骨架派生：sec_pages / sec_titles / sec_pos 已在 3) 之前预计算
+    #    （单级按节重置书需要节窗口先于条目抽取，见上）。
+    # 派生章节号收集（用于补齐 skeleton 缺失的章节）
 
     # 无序号标层（section_types 含 0）：注入「agent 校验识别」步骤产出的权威
     # 小节清单（key 用 "U{n}" 区分于编号小节）。OCR 无数字段，scan_skeleton

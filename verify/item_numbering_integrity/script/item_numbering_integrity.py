@@ -101,9 +101,17 @@ def _numpath_regexes(levels):
 _ENTRY_LABELS = (
     r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习题|练习|习题|引例|附注'
     r'|算法|性质|构造|应用|变式|警告|记号|术语'
-    r'|Theorem|Definition|Lemma|Corollary|Proposition|Example|Examples|Remark|Remarks'
-    r'|Exercise|Problem|Note|Axiom|Warning|Construction|Notation|Terminology|Application|Variation|Porism'
-    r'|Calculation'
+    # 🔴 Plurals MUST precede their singular ('Remarks|Remark'): the alternation
+    # is first-match, so with the singular first a header '8. Remarks' matched
+    # 'Remark' and left 's' behind — which _after_label_boundary reads as a
+    # word boundary violation, so the real entry was dropped and the B-layer
+    # manufactured 缺号 for it (Gelfand–Manin ch1-ch5, EN md only).
+    r'|Theorems|Theorem|Definitions|Definition|Lemmas|Lemma|Corollaries|Corollary'
+    r'|Propositions|Proposition|Examples|Example|Remarks|Remark'
+    r'|Exercises|Exercise|Problems|Problem|Notes|Note|Axioms|Axiom|Warnings|Warning'
+    r'|Constructions|Construction|Notations|Notation|Terminology'
+    r'|Applications|Application|Variations|Variation|Porisms|Porism'
+    r'|Calculations|Calculation'
 )
 # 🔴 Weibel「Calculation 6.2.1」这类以计算命名的条目：缺该类型词时条头解析
 # 不出编号 → 假「缺号」（实测 ch6 §6.2 报缺 1）。
@@ -150,8 +158,25 @@ def _split_numpath(s, levels):
     s = s.strip()
     exact, _cap, _lf, _nf = _numpath_regexes(levels)
     if exact.match(s):
-        return [int(x) for x in SEP_SPLIT_RE.split(s)]
+        return _comps_of(s)
     return None
+
+
+def _comps_of(numpath):
+    """Integer components of a captured numpath, or None when it is not all
+    digits.
+
+    🔴 `_numpath_regexes` deliberately allows a leading letter (appendix-style
+    "A3"), so a captured path can be alphanumeric — e.g. Gelfand–Manin ch2
+    `**2.5-2 2. Axiom A1**`, where the "label + numpath" fallback captures
+    "A1" out of the axiom's own NAME.  Every consumer of a parsed entry wants
+    ints, so a non-numeric component must mean "this span is not an item path"
+    rather than raising ValueError and killing the whole verify run.
+    """
+    parts = SEP_SPLIT_RE.split(numpath.strip())
+    if not all(p.isdigit() for p in parts):
+        return None
+    return [int(p) for p in parts]
 
 
 def _is_header_boundary(tail):
@@ -197,6 +222,26 @@ def _after_label_boundary(after):
 _PARTICLES = set('的 和 与 及 以 由 见 据 按 因 若 当 但 且 或 等 也 仍 可 不 在 '
                 '对 从 把 被 让 设 则 故 即 如 其 该 此 这 那 中 上 下 后 前 内 '
                 '外 之 而 并 将 已 为 使 给 向 到 自 经 比 较 证 推 应'.split())
+
+
+# A printed enumerator that precedes an item's own type word inside a bold
+# header: '8. Remarks', 'b) Define …'.  Only after such a prefix (or at the very
+# head of the tail) is a matched type word the HEADER's label, as opposed to a
+# word quoted inside a cross-reference sentence.
+_ENUM_HEAD_RE = re.compile(r'^\s*(?:\d+|[ivxlcdm]+|[a-zA-Z])[.)、]\s*$')
+
+
+def _han_glued_word(raw_after):
+    """True when the text glued (no space) straight onto a matched type word
+    continues it as a Han WORD rather than describing it: '系' in 系数系统, '注记' in
+    注记与例子.  Such a match is a stem inside a compound, not the item's label."""
+    return bool(raw_after) and '一' <= raw_after[0] <= '鿿'
+
+
+def _label_heads_tail(tail, start):
+    """True when the type word found at `tail[start:]` is the header's own label
+    (it opens the tail or only the printed enumerator stands before it)."""
+    return start == 0 or bool(_ENUM_HEAD_RE.match(tail[:start]))
 
 
 def _is_citation_starter(s):
@@ -278,14 +323,18 @@ def _parse_entry(inner, levels, lang=None):
     # numbers non-entries, because a bare "C.S" is ambiguous (section vs item);
     # the guard `levels == 3` scopes this fallback to three-level books only.
     if levels == 3 and _exact.match(inner):
-        comps = [int(x) for x in SEP_SPLIT_RE.split(inner)]
+        comps = _comps_of(inner)
+        if comps is None:
+            return None
         return comps, 'uncat'
     m = re_label_first.match(inner)
     if m:
         numpath = m.group(1)
         if not _is_header_boundary(inner[m.end():]):
             return None
-        comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+        comps = _comps_of(numpath)
+        if comps is None:
+            return None
         # MUST use re.IGNORECASE here too: line 68's re_label_first matches
         # UPPERCASE EN headings (LEMMA 11.1. / THEOREM 8.16.) via IGNORECASE,
         # so this label re-extract must agree or it returns None and crashes.
@@ -306,16 +355,42 @@ def _parse_entry(inner, levels, lang=None):
             if lm.start() > 0 and _w.strip().lower() in _EXERCISE_LABELS:
                 # 🔴 专名内嵌习题词（「6.6.2 扩张问题 (Extension Problem)」）：
                 # 不是习题环境标记，降级候选 '~Word'，由窗算术两步法最终裁决。
-                comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+                comps = _comps_of(numpath)
+                if comps is None:
+                    return None
                 return comps, '~' + _w
-            if not _after_label_boundary(tail[lm.end():]):
+            if _after_label_boundary(tail[lm.end():]):
+                comps = _comps_of(numpath)
+                if comps is None:
+                    return None
+                return comps, _w
+            _after = tail[lm.end():].lstrip()
+            # A further number path after the type word ('定理 4.1 的应用') is a
+            # cross-reference — the old verdict, unchanged.
+            if not _after or _after[0].isdigit():
                 return None
-            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
-            return comps, _w
+            if _label_heads_tail(tail, lm.start()) and not _han_glued_word(tail[lm.end():]):
+                # The type word opens the title and runs straight on into its own
+                # name: '4. Examples of Categories from Chapter I' (EN), or
+                # '3. 注记 与例子'-style spacing.  Real header, real label.
+                comps = _comps_of(numpath)
+                if comps is None:
+                    return None
+                return comps, _w
+            # 🔴 The type word is only QUOTED inside a descriptive title — either
+            # mid-title ('2. About Notations', '9. More Examples of Functors') or
+            # as the stem of a compound ('7. 系数系统 …', '9. 注记与例子', where '系'
+            # would otherwise be read as 系/Porism).  It is still the item's own
+            # header: fall through to the label-free descriptive branch below,
+            # which re-applies _is_reference_tail (so citations stay dropped).
+            # Dropping it instead manufactured 缺号 for every such item (Gelfand–
+            # Manin ch1 §1.4: 7/9/10 present in the md, absent from the window).
         # 无标准类型词：描述性标题（「4.11-2 必要条件」）→ 归 uncat，
         # combined 下并入节序列一起计连续性（仍是真实条目，不应漏计）。
         if tail and not _is_reference_tail(tail, lang):
-            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+            comps = _comps_of(numpath)
+            if comps is None:
+                return None
             return comps, 'uncat'
         return None
     # Fallback: number-first with a header-boundary open paren directly after
@@ -328,7 +403,9 @@ def _parse_entry(inner, levels, lang=None):
         numpath = m2.group(1)
         tail = inner[m2.end():].strip()
         if tail and not _is_reference_tail(tail, lang):
-            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+            comps = _comps_of(numpath)
+            if comps is None:
+                return None
             return comps, 'uncat'
     # Fallback: label preceded by a name/attribution (e.g.
     # "黎斯 (Riesz) 引理2.5-4（Riesz's lemma）").  Search for LABEL numpath
@@ -338,7 +415,9 @@ def _parse_entry(inner, levels, lang=None):
     if m3:
         numpath = m3.group(1)
         if _is_header_boundary(inner[m3.end():]):
-            comps = [int(x) for x in SEP_SPLIT_RE.split(numpath)]
+            comps = _comps_of(numpath)
+            if comps is None:
+                return None
             label = re.match(r'^(?:' + _ENTRY_LABELS + r')', inner[m3.start():], re.IGNORECASE).group(0)
             # 🔴 专名内嵌的 exercise/Problem 词不是习题环境标记（Weibel 条目
             # 「Extension Problem 6.6.2」被误路由进习题窗 → 条目窗假「缺号 2」）。
@@ -406,9 +485,10 @@ def _source_item_comps_label(it, cfg):
     _exact, _cap, re_label_first, _nf = _numpath_regexes(g.depth)
     m = re_label_first.match(key)
     if m:
-        comps = [int(x) for x in SEP_SPLIT_RE.split(m.group(1))]
-        label = re.match(r'^(?:' + _ENTRY_LABELS + r')', key).group(0)
-        return comps, label, g
+        comps = _comps_of(m.group(1))
+        if comps is not None:
+            label = re.match(r'^(?:' + _ENTRY_LABELS + r')', key).group(0)
+            return comps, label, g
     comps = _split_numpath(key, g.depth)
     if comps is not None and lab and lab != 'uncat':
         return comps, lab, g
@@ -538,6 +618,66 @@ def _ignored_num(gk, prefix_str, n, label_candidates, known, ignore):
 
 
 
+def _section_anchors(txt):
+    """扫描 md 的 `##..#### §` 标题，返回 (offsets, anchors) 平行列表。
+
+    Section anchors for prefix-less entries: single-level books (ordinal
+    type 1, e.g. do Carmo "Example 4") print NO numeric prefix on items and
+    reset their counters PER SECTION (scope==3).  A whole-file window would
+    fabricate false 缺号/顺序错乱 (§2-2 Example 6 followed by §2-3 Example 1
+    looks like a restart).  When the md carries `## §` headings, use the
+    current section as the true window prefix for prefix-less entries of
+    scope-3 groups; entries carrying a numeric prefix and non-section-scoped
+    groups are untouched (zero regression).  The anchor id is the first token
+    after § (numbered "2-2" / appendix-style "2-A" / descriptive word for
+    unnumbered sections) so every distinct `## §` heading resets the window.
+    🔴 锚点层级感知（Arnold《数学方法》体例回归）：裸字母子块标题 `### §A`
+    的首 token 是 "A"，若直接作锚点，则不同节下的同名块 A/B/C 全部并窗
+    （§24.B 的定理3、4 与 §25.B 的定理1 混成 seq=[3,4,1] 假错序）。故对
+    `##`（数字节）与 `###`+（字母子块）分层维护锚点路径：子块锚 =
+    "<最近节数字>.<字母>"，节锚 = 自身 token。纯 `## § <标题>` 无 token 时
+    维持旧行为（不注册新窗口）。
+    """
+    _sec_pos = []   # sorted heading start offsets
+    _sec_str = []   # parallel section ids
+    _cur_num = None  # 最近一个两级（数字）节的 token，供字母子块拼路径
+    for _m in re.finditer(r'^(#{2,4})[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
+        _toks = (_m.group(2) or '').strip().split()
+        if not _toks:
+            continue
+        _tok = _toks[0].strip(':.，,；;')[:24]
+        if _cur_num and _tok.startswith(_cur_num + '.'):
+            # 🔴 标题包含性（Rosen《Discrete Mathematics》8e 实测 2026-09-25）：
+            # token "1.1.3" 以当前节号 "1.1" 为前缀 → 这是**节内印刷子小节头**
+            # （type1/scope3 书计数器在 §1.1 级重置、不在 1.1.x 级重起），
+            # 例10..13 挂在 "## §1.1.3" 下若另开窗口会假报「缺号 1..9」（ch1
+            # 实测 141 条 blocking 全由此出）。不注册锚点，父节窗口继续有效。
+            # Gu 超豪式「### §2」（token 不以父节号开头）与 Arnold 字母子块
+            # 均不受影响——它们是真重启边界。
+            continue
+        if len(_m.group(1)) == 2:
+            # 两级节（或任何非单大写字母 token 的标题）：锚 = 自身 token
+            _anchor = _tok
+            if re.match(r'^\d', _tok):
+                _cur_num = _tok
+        elif not re.match(r'^[A-Z]$', _tok):
+            # 深层（###/####）非单字母 token。数字 token 是「节内计数器重起」
+            # 分窗标记（write-source 在印刷小节头/计数器重起处输出 "### §2"；
+            # 谷超豪《数学物理方程》ch6 §4 实测：一节内两套 性质1–4 计数器）：
+            # 锚 = 父节 + 子 token（"4-2"），避免跨节同号子块并窗成假乱序。
+            if re.match(r'^\d', _tok) and _cur_num:
+                _anchor = f"{_cur_num}-{_tok}"
+                # 父节游标不变：后续同级 ### 锚继续挂在同一 ## § 下
+            else:
+                _anchor = _tok
+        else:
+            # 单大写字母子块：锚 = 父节数字 + 字母（父未知时退化为裸字母）
+            _anchor = f"{_cur_num}.{_tok}" if _cur_num else _tok
+        _sec_pos.append(_m.start())
+        _sec_str.append(_anchor)
+    return _sec_pos, _sec_str
+
+
 def _md_gap_blocking(ctx):
     """Return (BLOCKING, WARNING, present_md_keys) for item-number gaps found
     in the written .md, grouped by the per-book numbering convention carried on
@@ -566,50 +706,10 @@ def _md_gap_blocking(ctx):
     # depth first means a three-level "4.1-5" is captured fully even when a
     # two-level 练习 group also declares depth 2.
     #
-    # Section anchors for prefix-less entries: single-level books (ordinal
-    # type 1, e.g. do Carmo "Example 4") print NO numeric prefix on items and
-    # reset their counters PER SECTION (scope==3).  A whole-file window would
-    # fabricate false 缺号/顺序错乱 (§2-2 Example 6 followed by §2-3 Example 1
-    # looks like a restart).  When the md carries `## §` headings, use the
-    # current section as the true window prefix for prefix-less entries of
-    # scope-3 groups; entries carrying a numeric prefix and non-section-scoped
-    # groups are untouched (zero regression).  The anchor id is the first token
-    # after § (numbered "2-2" / appendix-style "2-A" / descriptive word for
-    # unnumbered sections) so every distinct `## §` heading resets the window.
-    # 🔴 锚点层级感知（Arnold《数学方法》体例回归）：裸字母子块标题 `### §A`
-    # 的首 token 是 "A"，若直接作锚点，则不同节下的同名块 A/B/C 全部并窗
-    # （§24.B 的定理3、4 与 §25.B 的定理1 混成 seq=[3,4,1] 假错序）。故对
-    # `##`（数字节）与 `###`+（字母子块）分层维护锚点路径：子块锚 =
-    # "<最近节数字>.<字母>"，节锚 = 自身 token。纯 `## § <标题>` 无 token 时
-    # 维持旧行为（不注册新窗口）。
-    _sec_pos = []   # sorted heading start offsets
-    _sec_str = []   # parallel section ids
-    _cur_num = None  # 最近一个两级（数字）节的 token，供字母子块拼路径
-    for _m in re.finditer(r'^(#{2,4})[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
-        _toks = (_m.group(2) or '').strip().split()
-        if not _toks:
-            continue
-        _tok = _toks[0].strip(':.，,；;')[:24]
-        if len(_m.group(1)) == 2:
-            # 两级节（或任何非单大写字母 token 的标题）：锚 = 自身 token
-            _anchor = _tok
-            if re.match(r'^\d', _tok):
-                _cur_num = _tok
-        elif not re.match(r'^[A-Z]$', _tok):
-            # 深层（###/####）非单字母 token。数字 token 是「节内计数器重起」
-            # 分窗标记（write-source 在印刷小节头/计数器重起处输出 "### §2"；
-            # 谷超豪《数学物理方程》ch6 §4 实测：一节内两套 性质1–4 计数器）：
-            # 锚 = 父节 + 子 token（"4-2"），避免跨节同号子块并窗成假乱序。
-            if re.match(r'^\d', _tok) and _cur_num:
-                _anchor = f"{_cur_num}-{_tok}"
-                # 父节游标不变：后续同级 ### 锚继续挂在同一 ## § 下
-            else:
-                _anchor = _tok
-        else:
-            # 单大写字母子块：锚 = 父节数字 + 字母（父未知时退化为裸字母）
-            _anchor = f"{_cur_num}.{_tok}" if _cur_num else _tok
-        _sec_pos.append(_m.start())
-        _sec_str.append(_anchor)
+    # Section anchors for prefix-less entries — see `_section_anchors` above
+    # for the full semantics (scope-3 windows / Arnold letter blocks / Rosen
+    # containment rule).
+    _sec_pos, _sec_str = _section_anchors(txt)
 
     def _cur_sec(pos):
         import bisect as _bisect

@@ -96,14 +96,39 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     ``attach_content._filter_noise`` 对齐——契约侧已正确把页码当噪声丢弃，若此处
     不过滤，源真值会把页码当成"独立成块的公式编号"→ 源/契约不对称 → 假 FAIL
     （数学分析 ch9-18 实测：页脚页码 '37'/'492' 等被误判为公式编号）。
+
+    🔴 **图区排除**：图内坐标标签（如 ``(1,2)``、``(0,1)``）整块恰为“编号形态”，
+    但它们是图内容而非公式编号。契约侧这些文本随图区域内容被 splice 拆碎 /
+    图像化，源真值若不剔除图区块 → 源/契约不对称 → 假 FAIL
+    （微分遍历论 ch1 p13 图1.2 内坐标 ``(1,2)`` 实测：被误报“公式编号丢失”）。
+    判据：文本块 poly 中心落在 ``figure_index.json`` 该页任一图 bbox 内 → 跳过。
     """
     from page_json import PageJson
     from lib.numbering import formula_tag_number, formula_paren_tag_re
     _dir = page_dir or ext
     lo, hi = int(start), int(end)
 
+    # 图 bbox 索引（page -> [(x0,y0,x1,y1)]）：图内文本块不参与公式编号判定
+    _fig_boxes = {}
+    try:
+        with open(os.path.join(ext, "figure_index.json"), encoding="utf-8") as _f:
+            _figs = json.load(_f)
+        if isinstance(_figs, list):
+            for _fg in _figs:
+                try:
+                    _pg = int(_fg.get("page") or 0)
+                    _bb = _fg.get("bbox") or []
+                    if lo <= _pg <= hi and len(_bb) >= 4:
+                        _fig_boxes.setdefault(_pg, []).append(
+                            (float(_bb[0]), float(_bb[1]),
+                             float(_bb[2]), float(_bb[3])))
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+
     # 第一遍：收集原始文本块 + 本区间页高（与 _filter_noise 同口径：max bottom）
-    raw = []                                   # (page, y, bottom, text)
+    raw = []                                   # (page, y, bottom, text, xc, yc)
     for p in range(lo, hi + 1):
         fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
@@ -120,19 +145,29 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
                 continue
             poly = t.get("poly") or []
             y = bottom = 0.0
+            xc = yc = None
             if len(poly) >= 8:
                 try:
+                    _xs = [float(poly[i]) for i in (0, 2, 4, 6)]
                     _ys = [float(poly[i]) for i in (1, 3, 5, 7)]
                     y, bottom = _ys[0], max(_ys)
+                    xc = (min(_xs) + max(_xs)) / 2.0
+                    yc = (min(_ys) + max(_ys)) / 2.0
                 except (TypeError, ValueError):
                     y = bottom = 0.0
-            raw.append((p, y, bottom, s.strip()))
-    page_height = max((b for _p, _y, b, _t in raw), default=0.0)
+                    xc = yc = None
+            # 图区排除：中心落在任一图 bbox 内 → 图内标签，非公式编号
+            if xc is not None and p in _fig_boxes:
+                if any(fx0 <= xc <= fx1 and fy0 <= yc <= fy1
+                       for fx0, fy0, fx1, fy1 in _fig_boxes[p]):
+                    continue
+            raw.append((p, y, bottom, s.strip(), xc, yc))
+    page_height = max((b for _p, _y, b, _t, _xc, _yc in raw), default=0.0)
     n_pages = max(1, hi - lo + 1)
 
     # 页边距家具统计（同 _filter_noise：跨页边缘重复 / 全章过半页重复）
     edge_pages, all_pages = {}, {}
-    for p, y, bottom, s in raw:
+    for p, y, bottom, s, _xc, _yc in raw:
         n = _norm_text(s).replace(" ", "")
         if len(n) < 4:
             continue
@@ -142,7 +177,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
             edge_pages.setdefault(n, set()).add(p)
 
     out = set()
-    for p, y, bottom, s in raw:
+    for p, y, bottom, s, _xc, _yc in raw:
         n = _norm_text(s).replace(" ", "")
         if not n:
             continue

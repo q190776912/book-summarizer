@@ -172,7 +172,7 @@ _OMISSION_CTX = 160
 #      即落地证明；Katok 残渣 "for fows." 句中起头 → 两条均不适用，照旧拦）。
 #      两条豁免都要求正文非空（空正文照常 FAIL，防措辞掩盖）。
 _LABEL_RESIDUE_RE = re.compile(r"^[\s)\],;.0-9*†\-(/]+")
-_FIG_SECTION_RE = re.compile(r"fig(\d+)\.(\d+)", re.I)
+_FIG_CHAPTER_RE = re.compile(r"(?:ch0*|appendix)(\d+|[A-Za-z])[_/]fig", re.I)
 # 子题标号形态：单个/双/三个字母 + `)` 或 `.`（"(a)" 去残留后剩 "a) …"）
 _PART_LABEL_RE = re.compile(r"^[a-z]{1,3}[.)]\s")
 # 词元（字母词，含中日韩），用于判 name 是否「自带题面」而非两三词残渣
@@ -213,8 +213,13 @@ def phantom_exercise_problems(name, content_blocks, expected_tags, expected_imag
     out = []
     has_body = bool(str(body or "").strip())
     residue = _LABEL_RESIDUE_RE.sub("", str(name or "")).strip()
+    # 正文自带与本题 key 一致的 ``**Exercise <key>…**`` 粗体头 = 完整自洽条目，绝非
+    # OCR 续行碎片——即便契约 name 字段带 OCR 噪声前缀（如星标 `⋆`→`*x` 粘在标题前）
+    # 使其看起来「起于句中」。据此豁免误判（真碎片不可能有自洽的 own-key 头）。
+    self_keyed = has_body and _bold_carries_ordinal(str(body), _key_ordinal(key))
     mid_sentence = (residue[:1].islower() and residue[:1].isalpha()
-                    and not (has_body and _PART_LABEL_RE.match(residue)))
+                    and not (has_body and _PART_LABEL_RE.match(residue))
+                    and not self_keyed)
     if mid_sentence:
         out.append(
             "契约习题条目「%s…」标题起于句中——OCR 把跨条目续行错切成独立条目"
@@ -236,15 +241,23 @@ def phantom_exercise_problems(name, content_blocks, expected_tags, expected_imag
                 "该节点吞并了别的小节的正文，须把这些内容块并回所属小节（契约层）"
                 % (key, own, "、§".join(sorted(set(_sec_prefix(t) for t in cross))),
                    "、".join(map(str, cross[:6]))))
+        # 插图跨节判据：多数数学书的图号是「章.序」（章级计数器，ordinal type2
+        # scope2，如 Vakil/Katok/Weibel 的 Figure 5.2 = 第 5 章第 2 图）。此时图号
+        # 第二段是章内序号、与所属小节无关，绝不能据 figA.B 的 B 反推小节——否则
+        # §5.5 里的 Exercise 5.5.G 正常携带的 Figure 5.2 会被误判成「§5.2 的图」。
+        # 权威归属是文件名的 ``ch{NN}`` 前缀（assign_figures 按章命名）。故只在
+        # 插图所属「章」与本条目所属「章」不同（= 跨章吞并后续正文）时判。
         img_cross = []
+        own_ch = re.split(r"[.\-]", str(key))[0].lstrip("0").upper()
         for p in (expected_images or []):
-            m = _FIG_SECTION_RE.search(str(p))
-            if m and "%s.%s" % (m.group(1), m.group(2)) != own:
-                img_cross.append("%s(§%s.%s)" % (str(p).split("/")[-1], m.group(1), m.group(2)))
+            sp = str(p)
+            fm = _FIG_CHAPTER_RE.search(sp)
+            if fm and fm.group(1).lstrip("0").upper() != own_ch:
+                img_cross.append("%s(第%s章)" % (sp.split("/")[-1], fm.group(1)))
         if img_cross:
             out.append(
-                "习题条目 %s（属 §%s）的契约节点携带别的小节的插图 %s——同上，"
-                "吞并了后续正文，须在契约层把图块并回所属小节" % (key, own, "、".join(img_cross[:6])))
+                "习题条目 %s（属第%s章）的契约节点携带别章插图 %s——该节点跨章吞并了"
+                "后续正文，须在契约层把图块并回所属章" % (key, own_ch, "、".join(img_cross[:6])))
     return out
 
 
@@ -780,8 +793,14 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     #   命令（反斜杠）。故：**重复单元含 `\` 一律视为合法数学重复跳过**；仅对非数学
     #   的普通文本/乱码重复报警。本数据集全树 11b 命中仅 6 处，全部是此类合法数学，
     #   该强化后 6 处均放行，真实（无反斜杠的）OCR 乱码仍会被捕获。
+    # 🔴 **标题豁免（2026-09-24）**：行首 `**…**` 粗体 run-in 标签是契约照搬的
+    #   印刷标题，Vakil 等书常见「并列同义词」标题（如 "General fibers, generic
+    #   fibers, generically finite morphisms"）会形成合法的连续重复，非 OCR 抽风。
+    #   故扫描前先剥离开头的粗体标签，仅对标签之后的正文散文查重（同行正文里的
+    #   真·重复仍能捕获）。
     for pl in line_list:
-        m_dup = re.search(r"(.{12,}?)\1+", pl)
+        pl_scan = re.sub(r"^\s*(?:>\s*)?\*\*.*?\*\*", "", pl)
+        m_dup = re.search(r"(.{12,}?)\1+", pl_scan)
         if not m_dup:
             continue
         unit = m_dup.group(1)

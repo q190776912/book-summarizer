@@ -207,6 +207,35 @@ def chapter_md_groups(book_dir, ch):
     return groups
 
 
+def _group_lang(grp):
+    """判定一个 md 组属于哪种语言：cn（中文）/ en（英文）/ None（未知）。
+
+    依据组内首个文件名前缀（与 chapter_md_groups 的命名约定同源）：
+      cn → 第N章_* / 附录*_* / 附录.md / 补篇*_* / 补篇.md
+      en → ChapterN_* / Appendix*_* / Appendix.md / Supplement*_* / Supplement.md
+    """
+    if not grp:
+        return None
+    b = os.path.basename(grp[0])
+    if b[:1] in ('第', '附', '补'):
+        return 'cn'
+    if b.startswith('Chapter') or b.startswith('Appendix') or b.startswith('Supplement'):
+        return 'en'
+    return None
+
+
+def _norm_lang(token):
+    """归一化语言标记：zh/cn → 'cn'，en → 'en'，其余（含 None/空）→ None。"""
+    if not token:
+        return None
+    t = str(token).strip().lower()
+    if t in ('cn', 'zh', 'zh-cn', 'zh_hans', '中文'):
+        return 'cn'
+    if t in ('en', 'english'):
+        return 'en'
+    return None
+
+
 def _merge_section_files(section_files):
     """Merge section files back into one full-chapter content string."""
     merged_lines = []
@@ -367,9 +396,14 @@ def _write_formula_audit(ext, rows):
         print(f"\n[Q] WARNING: failed to write formula_audit.md: {e}")
 
 
-def verify_all(ext, book_dir, extra_ignore=None):
+def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
     """Verify all chapters using chapter_map.json (read by ConfigLoader).
-    Returns True if all pass."""
+    Returns True if all pass.
+
+    only_lang（'cn'/'zh' → 中文；'en' → 英文；None → 全部）：只校验指定语言的 md 组，
+    供 merge_source 步在翻译**之前**只校源版；merge_translation 末步不传（源+译全覆盖）。
+    """
+    only_lang = _norm_lang(only_lang)
     loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
     if not loader.chapters:
         cm_path = os.path.join(ext, 'chapter_map.json')
@@ -377,6 +411,7 @@ def verify_all(ext, book_dir, extra_ignore=None):
         return False
 
     results = []
+    matched_count = 0
     # Q-LAYER audit aggregation (only meaningful when a chapter enabled the `formula` map).
     q_active = False
     all_q_rows = []
@@ -396,8 +431,14 @@ def verify_all(ext, book_dir, extra_ignore=None):
         if not groups:
             print(f"{chapter_label(ch)}: SKIP — no .md file found")
             continue
+        if only_lang:
+            groups = [g for g in groups if _group_lang(g) == only_lang]
+            if not groups:
+                print(f"{chapter_label(ch)}: SKIP — no [{only_lang}] .md file found")
+                continue
 
         for grp in groups:
+            matched_count += 1
             if len(grp) == 1:
                 md = grp[0]
                 md_display = os.path.basename(md)
@@ -475,6 +516,12 @@ def verify_all(ext, book_dir, extra_ignore=None):
     # Q-LAYER formula audit report — only when some chapter enabled the `formula` map.
     if q_active and all_q_rows:
         _write_formula_audit(ext, all_q_rows)
+    # 🔴 语言过滤时空匹配 = 该语种 md 一个都没校验到（尚未拼接 / 语言标记错），
+    # 绝不能当成 PASS 放行（否则 merge_source 证据会在源版根本没拼出来时假绿）。
+    if only_lang and matched_count == 0:
+        print(f"[only-lang={only_lang}] BLOCKED: 没有任何 [{only_lang}] 版 md 被校验到"
+              f"（未拼接或语言不符）——视为未通过。")
+        return False
     return all_pass
 
 
@@ -633,7 +680,7 @@ def _main_impl():
         # NOTE: '--fix' is a no-value flag (handled via `if '--fix' in sys.argv`
         # below), so it must NOT be in this tuple — otherwise _strip_flags would
         # consume the token after it (e.g. '--all') as a "value" and drop it.
-        pos_flags = ('--manual', '--ignore', '--ignore-figure')
+        pos_flags = ('--manual', '--ignore', '--ignore-figure', '--only-lang')
         pos = _strip_flags(sys.argv[1:], pos_flags)
         # Strip the no-value '--fix' flag from positional parsing (it is detected
         # separately via `if '--fix' in sys.argv` below). Keeps '--all' and the
@@ -641,7 +688,7 @@ def _main_impl():
         pos = [a for a in pos if a != '--fix']
         i = pos.index('--all')
         if i + 2 >= len(pos):
-            print("Usage: python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json]")
+            print("Usage: python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--only-lang cn|en]")
             sys.exit(2)
         ext = _norm_win(pos[i + 1])
         book_dir = _norm_win(pos[i + 2])
@@ -686,7 +733,8 @@ def _main_impl():
                         if parts:
                             print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
 
-        ok = verify_all(ext, book_dir, extra_ignore=extra_ignore)
+        only_lang = _flag_value('--only-lang')
+        ok = verify_all(ext, book_dir, extra_ignore=extra_ignore, only_lang=only_lang)
         # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
         suspect = _run_ignore_audit(ext)
         if suspect:
@@ -700,7 +748,7 @@ def _main_impl():
     if len(args) < 5:
         print("Usage: python verify_chapter.py <ch> <start> <end> <md_file> <extract_dir> "
               "[--manual overrides.json] [--ignore noise.json] [--ignore-figure fig_noise.json]")
-        print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json]")
+        print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--only-lang cn|en]")
         print("  <extract_dir> is REQUIRED — the book's _extract folder (e.g. D:\\study\\book\\<书名>\\_extract).")
         print("  --manual: path to manual_overrides_ch{N}.json / manual_overrides_appendix{X}.json / manual_overrides_supplement{S}.json (added to extract_items items)")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")

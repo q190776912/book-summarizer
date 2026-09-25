@@ -3,9 +3,9 @@
 > 统一模板：目的 / 前置 / 步骤 / 本阶段规则 / 出口 / 相关代码 / 子流程
 
 ## 目的
-承接 extract 阶段（MM Repair 完成）之后的**全部写作前置与产出**：依次跑 **config 子流程**（chapter_map + `verify_config.json`）→ **figure_detection 子流程**（图检测 + 分配）→ **structure 子流程**（生成结构契约 + 🔴 完整性闸门）→ **拆分基本总结单元**（内容化分章契约 + 内容完整性闸门 + 拆分为每 item 一单元的 `units/ch{N}/` 目录）→ **agent 逐个按写作要求改好每个单元**（🔴 强制门控确保每个 item 都不漏）→ **（英文书）翻译步：清单初始化 + agent 逐个看一个源单元生成一个翻译单元 + 双重门控** → **脚本拼接**（`merge_units.py` 纯机械执行，无 agent 参与）**一次写出源语言 + 翻译语言两组章 md**（英文书 = 英文 `ChapterN_*.md` + 中文 `第N章_*.md`；中文书 = 只有中文 `第N章_*.md`）→ 批量校验（一次覆盖两版）。
+承接 extract 阶段（MM Repair 完成）之后的**全部写作前置与产出**：依次跑 **config 子流程**（chapter_map + `verify_config.json`）→ **figure_detection 子流程**（图检测 + 分配）→ **structure 子流程**（生成结构契约 + 🔴 完整性闸门）→ **拆分基本总结单元**（内容化分章契约 + 内容完整性闸门 + 拆分为每 item 一单元的 `units/ch{N}/` 目录）→ **agent 逐个按写作要求改好每个单元**（🔴 强制门控确保每个 item 都不漏）→ **合并源语言单元 + 源版校验**（`merge_units.py --all` 拼源版 → `verify --only-lang <源语言>`，🔴 在翻译之前把书级问题暴露并回填修源单元）→ **（英文书）翻译步：清单初始化 + agent 逐个看一个源单元生成一个翻译单元 + 双重门控** → **合并翻译语言单元 + 全量校验**（`merge_units.py --all --units-dir units-translate` 拼译版 → `verify --all` 一次覆盖两版）。
 
-> 🔴 **翻译以单元粒度进行（内置于本流程，仅英文书）**：agent **看一个源单元就生成一个对应翻译单元**（`units-translate/ch{N}/` 与 `units/` 同级、结构一致；与源写作共用同一套强制门控，并增加「1:1 同构」闸门），最后拼接步骤**一次产出源语言与翻译语言两组 md**。收益：翻译阶段获得「一个不漏」的机械保证（漏条目 / 漏公式 / 漏图在同构闸门即被拦，而非等到最终 verify）；翻译蓝本是**已改写的源单元定稿**，不会把步骤 5 的成果退回 OCR 噪声。中文书自动跳过翻译。
+> 🔴 **翻译以单元粒度进行（内置于本流程，仅英文书）**：源版先在步骤 6 拼接 + 校验通过（源单元定稿），随后 agent **看一个源单元就生成一个对应翻译单元**（`units-translate/ch{N}/` 与 `units/` 同级、结构一致；与源写作共用同一套强制门控，并增加「1:1 同构」闸门），翻译版在步骤 8 拼接 + 全量校验。收益：翻译阶段获得「一个不漏」的机械保证（漏条目 / 漏公式 / 漏图在同构闸门即被拦，而非等到最终 verify）；翻译蓝本是**已改写的源单元定稿**，且书级问题（漏图 / 编号错乱 / 公式对账）已在翻译前经源版校验暴露，不会拖到译文完成后才返工。中文书自动跳过翻译。
 
 > 🔴 **单元化写作（内置于本流程）**：写作以「每 item 一单元目录 `units/ch{N}/` → agent 逐个改好（`gate_units.py` 强制门控）→ `merge_units.py` 拼接」进行——每个编号项都必须单独改好，门控机械核对每个单元（存在 + DONE + 内容改写）一个不漏，拼接脚本按 V-F 规则重建 `---` 分隔线。
 
@@ -146,13 +146,13 @@
      - **🔴 序标校验不在本门控内跑（已移除冗余重跑），权威检测点见下**：B 层条目编号
        （`item_numbering_integrity`）的**权威检测在 book structure 完整性校验**（write-source
        步骤 3，`check_structure_completeness.py` 第 3 步：喂 book_structure 派生「合成 md」+
-       源条目集，查条目缺号 / 顺序错乱 / 重要概念遗漏并回填契约），步骤 8 `verify_chapter.py
-       --all` 在最终合并 md 上**复检**；O 层子项编号（`subitem_continuity` 的 `(1)(2)(3)` /
-       `(a)(b)(c)` / `(i)(ii)(iii)` 缺口）**只在步骤 8 完全拼接后的章 md** 由 `verify_chapter.py
-       --all`（O 真层）校验（structure 完整性闸门只覆盖 D + B，不含 O）。本门控看到的合并 md
-       与步骤 8 同源（merge 亲手产出）、等价，故 B/O **不在门控内重复跑**——避免与「拼接后再
-       校验」重复。步骤 8 校验发现的**缺号**缺口必须用 `backfill_ordinals.py` **写回归属单元
-       `.md`**：
+       源条目集，查条目缺号 / 顺序错乱 / 重要概念遗漏并回填契约），拼接后的 `verify_chapter.py
+       --all` 在合并 md 上**复检**（**源版在步骤 6 复检、源 + 译两版在步骤 8 复检**）；O 层子项编号
+       （`subitem_continuity` 的 `(1)(2)(3)` / `(a)(b)(c)` / `(i)(ii)(iii)` 缺口）**只在完全拼接后的
+       章 md** 由 `verify_chapter.py --all`（O 真层）校验（structure 完整性闸门只覆盖 D + B，不含
+       O）——源版步骤 6 即校源版 O 缺口，步骤 8 校两版。本门控看到的合并 md 与拼接校验同源（merge
+       亲手产出）、等价，故 B/O **不在门控内重复跑**——避免与「拼接后再校验」重复。拼接校验
+       （步骤 6 / 步骤 8）发现的**缺号**缺口必须用 `backfill_ordinals.py` **写回归属单元 `.md`**：
          · 回填经 `merge_chapter_map` 的 line→unit 映射定位到归属单元，在该单元内紧邻前序
            条目的正确位置插入**明确标注的占位条目**（不编造内容），后续由你 / agent 补全。
            仅「缺号」回填，「顺序错乱」只报告、不自动改标签（重排风险高）；默认 `--dry-run`
@@ -173,9 +173,39 @@
        步骤 8；渲染工具链缺失（node / katex 未装）= 门控不通过（须先完成 prep.env）
      任一项不过 → 该单元列「质量未达标」，须真正按写作要求改对后再标 DONE。
      🔴 **fail-closed**：质量校验**执行失败**（脚本异常）同样判不通过，绝不让
-     崩溃的校验放行单元。未过 gate 严禁进入步骤 6 翻译 / 步骤 7 拼接。超大章
+     崩溃的校验放行单元。未过 gate 严禁进入步骤 6 合并源版并校验 / 步骤 7 翻译 / 步骤 8 合并翻译版并全量校验。超大章
      （字符 > 60000）按规则 3 拆节后，逐节单元组分别门控。
-6. **agent 逐个翻译单元 + 双重门控（agent 核心步；看一个源单元就产出一个对应翻译单元，不分步预派生；英文书适用，中文书自动跳过）**
+6. **合并源语言总结 + 源版校验 + 回填修源单元（纯脚本拼接 + 校验；🔴 在翻译之前）**
+   - 🔴 本步把**源语言单元**先拼成章 md 并**只对源版跑一次完整校验**——目的：让"漏图 /
+     编号错乱 / 公式对账 / 结构缺项"这类**书级**问题在**翻译之前**暴露。这些问题若等到
+     翻译完成后才在末步 verify 发现，源单元一改译文即作废、要连带返工；先校源版可把返工
+     限制在源单元内，译文尚未生成、零浪费。
+   - **(a) 拼接源语言版（纯机械，无 agent 写作调整）**：
+     ```bash
+     python flows/write-source/script/merge_units.py "<extract_dir>" --all
+     ```
+     默认 `--units-dir units`（源单元）。🔴 **门控强制到脚本层**：拼接前默认先跑源章
+     `gate_units` 门控，任一源单元未改好即直接报错拒绝拼接。按 manifest 顺序读取全部源
+     单元拼接为源语言章 md（英文书 `ChapterN_*.md` / 中文书 `第N章_*.md`，附录
+     `AppendixX_*.md` / `附录X_*.md`），并**按 V-F 规则重建条目级 `---` 分隔线**；复用
+     `_tidy_separators` 合并堆叠 `---`、保证上下空行（幂等）。
+   - **(b) 超大章按节拆分（规则3，拼接后随即执行）**：合并形态章 md > 60000 字符必须
+     随即跑 `python tools/split_chapters.py "<book_dir>"`（幂等，默认删源合并文件），
+     否则源版校验与后续落账均按拆分形态进行。
+   - **(c) 源版完整校验（🔴 只校源语言一组 md）**：
+     ```bash
+     python verify/script/verify_chapter.py --all <extract_dir> <book_dir> --only-lang <源语言>   # 英文书 en / 中文书 cn；exit 0 才算通过
+     ```
+     未过则修复其中可修复层——🔴 **全层 `--fix` 默认禁用**（防止邻接启发式修复在内容未
+     归位时污染正文）：默认走**选择性单层修复 / 手工定点修改**；确需整章自动修复时先跑
+     `--preflight` 确认 `$$` 围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受
+     PREFLIGHT 门约束）。🔴 **B/O 层缺号缺口必须经 `backfill_ordinals.py` 写回归属源单元
+     `.md`**（`--dry-run` 报告、`--apply` 写盘、幂等），改完**重跑 (a) 拼接 → (c) 校验**，
+     直至源版 `exit 0`。源版未过 = 严禁进入步骤 7 翻译（`translate_chapters` 的源章门控
+     + `merge_source` 证据双重把关）。
+7. **agent 逐个翻译单元 + 双重门控（agent 核心步；看一个源单元就产出一个对应翻译单元，不分步预派生；英文书适用，中文书自动跳过）**
+   - 🔴 前置：源版已在步骤 6 拼接 + 校验通过（源单元定稿），本步翻译蓝本是**已改对的源
+     单元定稿**，不会把步骤 5 的成果退回 OCR 噪声。
    - **(a) 🔴 初始化翻译清单（脚本，不复制正文）**：翻译单元**按需生成**，先让脚本建立
      `units-translate/ch{N}/manifest.json`（章元数据 + 每单元 id/file/type/key/name +
      `src_hash` 快照），**不预复制任何正文**：
@@ -202,50 +232,50 @@
      python flows/write-source/script/check_translate_parity.py "<extract_dir>" [ch ...]
      ```
      漏译条目 / 漏公式 / 漏图 / 漏编号在 ② 即被机械拦截（而非等到最终 verify）。
-7. **拼接全部单元成源语言 + 翻译语言两组章 md（纯脚本，无 agent 参与；中文书只拼源版）**
-   - 🔴 本步**只是机械拼接**：源版在步骤 5、翻译版在步骤 6 已逐个改好并门控通过，
-     本步仅运行拼接脚本，**不需要也不允许 agent 再做任何写作调整**。
+8. **合并翻译语言总结 + 全量校验（源 + 译两版；流程末步；中文书只拼源版、全量校验即源版）**
+   - 🔴 本步**只是机械拼接 + 校验**：源版在步骤 5、翻译版在步骤 7 已逐个改好并门控通过，
+     本步仅运行拼接脚本与校验，**不需要也不允许 agent 再做任何写作调整**。
      ```bash
-     python flows/write-source/script/merge_units.py "<extract_dir>" --all                            # 源语言版
      python flows/write-source/script/merge_units.py "<extract_dir>" --all --units-dir units-translate  # 翻译语言版
+     python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过；--all 一次覆盖 ChapterN_*.md 与 第N章_*.md 两组
      ```
-     🔴 **门控强制到脚本层**：拼接前默认先跑对应目录的 `gate_units` 门控，任一单元
-     未改好即直接报错拒绝拼接。按 manifest 顺序读取全部单元拼接为
-     `ChapterN_*.md`（源）+ `第N章_*.md`（译），并**按 V-F 规则重建条目级 `---`
-     分隔线**；复用 `_tidy_separators` 合并堆叠 `---`、保证上下空行（幂等）。
-8. **最后：使用 `verify/verify.md` 完整校验所有总结文件（源 + 译两版）**（🚫 仍须遵守规则 2 的批量纪律，禁止逐章校验）：
-   ```bash
-   python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过；--all 一次覆盖 ChapterN_*.md 与 第N章_*.md 两组
-   ```
-   未过则修复其中可修复层——🔴 **全层 `--fix` 默认禁用**（防止邻接启发式修复在内容未归位时污染正文）：默认走**选择性单层修复 / 手工定点修改**；确需整章自动修复时先跑 `--preflight` 确认 `$$` 围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受 PREFLIGHT 门约束），随后**不带 fix 旗标复验**确认 `exit 0`；至多 2 次仍不过则继续修，**严禁停下来问用户**。校验层语义 / `--fix`（含默认禁用与强制开关）范围 / 字节契约键见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
+     拼接前默认先跑翻译单元 `gate_units` 门控，任一翻译单元未改好即拒绝拼接；按 manifest
+     顺序拼接为 `第N章_*.md`（译），并按 V-F 重建 `---` 分隔线。合并形态译文 md > 60000
+     字符须随即跑 `tools/split_chapters.py` 按节拆分（规则3，同步骤 6(b)）。
+   - 末步 `verify_chapter.py --all`（不带 `--only-lang`）对**源 + 译两组 md** 全量复检——
+     源版已在步骤 6 单独校过，此处再全量跑一遍确保翻译改动 / 拼接 / 拆分未引入回归。未过
+     层的修复纪律同步骤 6(c)（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` +
+     PREFLIGHT；B/O 缺号经 `backfill_ordinals.py` 写回归属单元；至多 2 次仍不过则继续修，
+     **严禁停下来问用户**）。校验层语义 / `--fix`（含默认禁用与强制开关）范围 / 字节契约键
+     见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
 
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动本流程前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
 - **🔴 规则1 — 源语言写作（硬底线）**：本步骤（write-source）只写**源语言**初稿——英文书每章写英文 `ChapterN_*.md`，中文书每章写中文 `第N章_*.md`。
-- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：`verify` 统一在源语言 + 翻译语言全部初稿写完后、由步骤 8 用 `verify_chapter.py --all` 一次性批量进行。🚫 禁止"写完一章 verify 一章"，也禁止"第 1 章 pilot verify 后扇出"。
-- **🔴 规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件，命名 `第{N}章_{M}_{名称}.md` / `Chapter{N}_{M}_{名称}.md`（章号后、节号后各一个下划线）；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。🔴 **机械闸（2026-09-25 根治）**：`merge_all` 证据复核（`flows/_flow_contract.py` 的 `merge_all_ok`）对「合并形态章 md 超 60000 字符未拆」直接 FAIL 拒 mark（判据测试 `flows/write-source/script/tests/test_rule3_split_gate.py`）——拼接后必须随即跑拆分再落账；已按节拆分形态（节文件）不检，单节文件超阈是允许形态。
+- **🔴 规则2 — 写初稿期间禁止任何 per-chapter verify**：写单元（步骤 5）期间**严禁**"写完一章 verify 一章"或"第 1 章 pilot verify 后扇出"。`verify` 只做**两次全书批量**：源语言全部单元改好后、由步骤 6 用 `verify_chapter.py --all ... --only-lang <源语言>` 批量校源版（翻译之前，让书级问题先暴露）；源 + 译两版全部拼接后、由步骤 8 用 `verify_chapter.py --all` 批量全量复检。
+- **🔴 规则3 — 超大章按"节"拆分**（字符 > 60000 触发，中英文配对拆分）：`tools/split_chapters` 按节标题格式（`§N` 节标题式 / `N.M` 编号式）拆成每节一个文件，命名 `第{N}章_{M}_{名称}.md` / `Chapter{N}_{M}_{名称}.md`（章号后、节号后各一个下划线）；只拆到"节"一级，子节留父节内。幂等，拆分后默认删源合并文件（`--keep` 保留）。🔴 **机械闸（2026-09-25 根治）**：拼接证据复核（`flows/_flow_contract.py` 的 `merge_source_ok`（步骤 6）/ `merge_translation_ok`（步骤 8），共用 `_oversized_merged_md`）对「合并形态章 md 超 60000 字符未拆」直接 FAIL 拒 mark（判据测试 `flows/write-source/script/tests/test_rule3_split_gate.py`）——每版拼接后必须随即跑拆分再落账；已按节拆分形态（节文件）不检，单节文件超阈是允许形态。
 - **🔴 规则4 — 写源唯一规则文档 = `writing-rules.md`**：本步骤格式与保真约束**只来自 [`docs/writing-rules.md`](../../docs/writing-rules.md)**（含其末尾「verify 规则 ↔ 写作规则映射表」）。verify 各子文档（`verify/<snake>/<snake>.md`、含 `format_verify.md`）仅承载机器判定 / `--fix` 实现，写源阶段**不必读**；校验失败时再查对应子文档。此举收敛 skill 的 token 开销——写源上下文只注入本规则文档。
 - **🔴 规则5 — 章首序言保全（单元改写不丢章级信息）**：按步骤 5 逐个改好单元时，**章标题单元、章首序言 `desc` 单元、章内全局记号约定等「`# 章标题` 之后、第一个 `## §` 之前的章级内容」必须完整保留在对应单元内**，拼接后位于最终 md 最前。禁止把章首信息并入「第一节」或丢弃——否则会丢失跨节共享的记号定义与章级动机。
-- **🔴 规则6 — 翻译闸 = 单元门控 + 1:1 同构闸**：翻译前的硬闸由机械闸承担：**步骤 6(a) 内置的源单元门控**（init 前 `gate_units` 必须通过）+ **步骤 6(c) 双重门控**（翻译单元 `gate_units --units-dir units-translate` + `check_translate_parity` 同构闸）。整章 `verify --all` 统一在步骤 8 执行，**一次覆盖源语言 + 翻译语言两版**。严禁跳过单元目录直接凭整章 md 翻译——单元粒度是「一个不漏」机械保证的来源。
+- **🔴 规则6 — 翻译闸 = 源版校验 + 单元门控 + 1:1 同构闸**：翻译前的硬闸由机械闸承担：**源版已在步骤 6 拼接 + `--only-lang` 校验通过**（源单元定稿，译文不会基于旧源）+ **步骤 7(a) 内置的源单元门控**（init 前 `gate_units` 必须通过）+ **步骤 7(c) 双重门控**（翻译单元 `gate_units --units-dir units-translate` + `check_translate_parity` 同构闸）。整章 `verify --all`（源 + 译两版）统一在步骤 8 执行。严禁跳过单元目录直接凭整章 md 翻译——单元粒度是「一个不漏」机械保证的来源。
 - **🔴 规则7 — structure 完整性闸门是拆分的硬闸**：步骤 3 的查漏回填闸门（章节缺项 + 定理 / 定义等条目缺项，D 层 + B 层）**必须重跑至 `gate.passed == true`** 才允许进入步骤 4 拆分单元——先拆分再回填会让已拆的单元缺这些条目，返工成本远高于闸门前补齐。
-- **🔴 规则8 — 落账证据 = 「逐单元改好 + 门控通过」的机械核对（死规则）**：`write_source.write_chapters` 的证据复核（`flow_runner verify / mark`）**不只看章数**——对每个有单元的章机械核对：**单元门控通过**（`units/ch{N}/manifest.json` 中每个单元文件存在、首行 `DONE`、单元级质量校验通过 = 每个 item 都被 agent 改好，一个不漏）。**`merge_all` 步的证据**另含：源 + 译两组最终 md 存在，且**结构契约全部 section 名 + 编号项 name 在两组 md 中在位**（merge 拼接兜底，防单元内标题被改没导致漏项）。任何一项不过 → mark 被硬拒，必须回归对应单元目录补齐改好、重跑 `gate_units` 通过后再 merge。**严禁跳过单元目录直接凭 `page_*.json` / 印象写作**——脱离单元导致的漏项、自创层级与格式漂移在落账前即被拦截，而不是堆积到步骤 8 verify 后全盘返工（证据实现见 `flows/_flow_contract.py` 的 `write_chapters_ok` / `merge_all_ok` / `translate_chapters_ok`）。
+- **🔴 规则8 — 落账证据 = 「逐单元改好 + 门控通过」的机械核对（死规则）**：`write_source.write_chapters` 的证据复核（`flow_runner verify / mark`）**不只看章数**——对每个有单元的章机械核对：**单元门控通过**（`units/ch{N}/manifest.json` 中每个单元文件存在、首行 `DONE`、单元级质量校验通过 = 每个 item 都被 agent 改好，一个不漏）。**`merge_source`（步骤 6）的证据**：源语言 md 存在且未超阈未拆，且**结构契约全部 section 名 + 编号项 name 在源版 md 中在位**，再叠加**源版 `verify --only-lang` 全通过**。**`merge_translation`（步骤 8）的证据**：源 + 译两组最终 md 均存在且未超阈未拆，两组 md 契约项均在位，再叠加**源 + 译全量 `verify --all` 通过**（merge 拼接兜底，防单元内标题被改没导致漏项）。任何一项不过 → mark 被硬拒，必须回归对应单元目录补齐改好、重跑 `gate_units` 通过后再 merge。**严禁跳过单元目录直接凭 `page_*.json` / 印象写作**——脱离单元导致的漏项、自创层级与格式漂移在落账前即被拦截，而不是堆积到末步 verify 后全盘返工（证据实现见 `flows/_flow_contract.py` 的 `write_chapters_ok` / `merge_source_ok` / `translate_chapters_ok` / `merge_translation_ok`）。
 - **核心原则（保真底线）**：OCR 噪声可修、表述可精简但**不得省略编号项 / 描述性内容中的公式概念**；**不编造**内容、**不编造结构**（不得新建原书没有的标题层级、不得重排条目顺序）；**严禁照抄 OCR 文本流**（页眉 / 页脚 / 版权行属噪声须剔除）；非核心内容须"摘要"而非整段照抄（Tier 1/2/3 分级见 `docs/writing-rules.md`）。
 - **双源铁律（结构 ≠ 内容）**：单元 = 结构契约（骨架）+ `page_*.json`（内容）的**预合并视图**，只是调整底稿而**非免检成品**——正文**必须忠于单元所载原文并回归 `page_*.json` 核对存疑处**，禁止脱离契约自创结构或重排顺序（单元骨架即契约骨架）；单元中的公式是 OCR 原样，**严禁照抄**（步骤 5 重写校正）。
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
 
 ## 出口条件
-- 出口：源语言 + 翻译语言全部章节初稿写完（图片由内容化分章契约随单元继承），且 `verify/script/verify_chapter.py --all` 对全书（源 + 译两组 md）`exit 0`（`verify PASS + KaTeX OK`）；格式修复在步骤 8 校验失败时按 [`verify/verify.md`](../../verify/verify.md) 修复纪律进行（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。
+- 出口：**源语言**全部单元改好、源版 md 在步骤 6 拼接并经 `verify --only-lang <源语言>` 通过（进入翻译的前置），且翻译语言（英文书）全部单元改好、源 + 译两组 md 在步骤 8 拼接后经 `verify/script/verify_chapter.py --all` 全量 `exit 0`（`verify PASS + KaTeX OK`；中文书无翻译阶段，步骤 6 源版 `verify --only-lang cn` 通过即为全书完成）。图片由内容化分章契约随单元继承；格式修复在校验失败时按 [`verify/verify.md`](../../verify/verify.md) 修复纪律进行（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT；B/O 缺号经 `backfill_ordinals.py` 写回归属单元）。
 
 ## 相关代码（路径相对 skill 根目录）
 - `flows/write-source/structure/script/build_structure`：统一结构 + 内容契约生成器（步骤 3，按章产出含内容的完整 `ch{N}.json`，内部调用 `scan_skeleton` / `extract_items` 系列并即时挂载内容）。
 - `flows/write-source/structure/script/attach_content`：structure 第 5 步正文内容化 + 按章拆分（步骤 4 单元数据源；见 `flows/write-source/structure/structure.md`）。
 - `flows/write-source/script/render_draft.py`：单元渲染库（拆分 / 拼接脚本复用其纯渲染函数，如 `_chapter_heading` / `_render_item` / `_walk_mixed` / `_tidy_separators`）。
 - `flows/write-source/script/split_draft_units.py`：步骤 4 单元拆分（`ch{N}.json` → `units/ch{N}/` 每 item 一 md + `manifest.json`，首行 DRAFT 标记）。
-- `flows/write-source/script/gate_units.py`：步骤 5 / 6(c) 强制门控（每个单元 DONE + 质量校验通过才 exit 0；`--units-dir units-translate` 用于翻译单元，同一套校验；未过严禁进入拼接）。
-- `flows/write-source/script/merge_units.py`：步骤 7 拼接（纯脚本；`--all` 批量 + `--units-dir` 选目录；源版 → `ChapterN_*.md`，翻译版 → `第N章_*.md`；按 V-F 重建 `---` 分隔线）。
-- `flows/write-source/script/backfill_ordinals.py`：步骤 8 复检的回填落点——把 verify 的 B 层（条目缺号，权威检测在步骤 3 structure 完整性闸门、步骤 8 复检）/ O 层（子项缺号，仅步骤 8 校验）缺口**写回归属单元 `.md`**（门控不冗余重跑 B/O，统一在拼接后校验 + 回填）。`--dry-run` 只报告、`--apply` 写盘、幂等；归属由 `merge_chapter_map` 的 line→unit 映射保证，不跨单元串味。
-- `flows/write-source/script/init_translate_units.py`：步骤 6(a) 翻译清单初始化（仅生成 `units-translate/ch{N}/manifest.json` 元数据 + `src_hash`，**不复制正文**；`--scaffold` 可选补源文骨架；内置源章门控硬闸；中文书自动跳过）。
-- `flows/write-source/script/check_translate_parity.py`：步骤 6(c) 同构闸（单元序列 / `\tag` 集合 / 图片集合 / 编号项标签编号与源单元 1:1 相等；漂移检测基于清单初始化时快照的 `src_hash`）。
+- `flows/write-source/script/gate_units.py`：步骤 5 / 7(c) 强制门控（每个单元 DONE + 质量校验通过才 exit 0；`--units-dir units-translate` 用于翻译单元，同一套校验；未过严禁进入拼接）。
+- `flows/write-source/script/merge_units.py`：步骤 6（源版）/ 步骤 8（翻译版）拼接（纯脚本；`--all` 批量 + `--units-dir` 选目录（默认 `units` = 源，`units-translate` = 译）；源版 → `ChapterN_*.md`，翻译版 → `第N章_*.md`；按 V-F 重建 `---` 分隔线）。
+- `flows/write-source/script/backfill_ordinals.py`：校验复检的回填落点——把 verify 的 B 层（条目缺号，权威检测在步骤 3 structure 完整性闸门、步骤 6 源版 / 步骤 8 全量复检）/ O 层（子项缺号，仅拼接后章 md 校验）缺口**写回归属单元 `.md`**（门控不冗余重跑 B/O，统一在拼接后校验 + 回填；源版问题在步骤 6 回填修源单元、译文生成前）。`--dry-run` 只报告、`--apply` 写盘、幂等；归属由 `merge_chapter_map` 的 line→unit 映射保证，不跨单元串味。
+- `flows/write-source/script/init_translate_units.py`：步骤 7(a) 翻译清单初始化（仅生成 `units-translate/ch{N}/manifest.json` 元数据 + `src_hash`，**不复制正文**；`--scaffold` 可选补源文骨架；内置源章门控硬闸；中文书自动跳过）。
+- `flows/write-source/script/check_translate_parity.py`：步骤 7(c) 同构闸（单元序列 / `\tag` 集合 / 图片集合 / 编号项标签编号与源单元 1:1 相等；漂移检测基于清单初始化时快照的 `src_hash`）。
 - `flows/write-source/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `config/verify_config/make_config.py`：步骤 1 书级配置生成（`verify_config.json`）。

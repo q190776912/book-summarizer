@@ -41,14 +41,14 @@ GATE_FILE = ".flow_gate.json"
 # 每个 flow 的有序步骤（权威副本见 flows/_flow_contract.py；两者必须对齐）。
 FLOW_ORDER = {
     "prep": ["env"],
-    # extract 终于 MM Repair；config / figure_detection / structure / 单元拆分
-    # 等写作前置属于 write_source。
-    # 翻译内置于 write_source：translate_chapters / merge_all 均为其步骤，
-    # 翻译单元按需生成，verify_source 末步一次覆盖源+译两版。
+    # 🔴 源先校验、再翻译：write_chapters 改好源单元后，merge_source 步**只拼源语言 +
+    # 只校验源版**（源书层面的图 / 编号 / 公式问题在翻译**之前**暴露，回填修源单元）；
+    # 随后 translate_chapters 逐单元翻译；末步 merge_translation 拼翻译语言 + **全量校验
+    # 源 + 译两版**（吸收原独立 verify 步，一次收尾，不再单列第 9 步）。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
-                     "draft", "write_chapters", "translate_chapters",
-                     "merge_all", "verify_source"],
+                     "draft", "write_chapters", "merge_source", "translate_chapters",
+                     "merge_translation"],
 }
 
 # 主干先后：进入某 flow 前必须完成的其它 flow（取其末步判断）。
@@ -241,7 +241,7 @@ def bootstrap(book_dir, extract_dir):
             except Exception:
                 pass
     # write_source（config / figure_detection / structure /
-    # draft 归入此 flow）：只增不改——账本已 done 的步骤保持原样（verify_source
+    # draft 归入此 flow）：只增不改——账本已 done 的步骤保持原样（merge_translation
     # 等重跑型证据不在此重跑，避免历史书误清账）；仅对未 done 的步骤依物理证据
     # 回填，遇缺口即停（依赖链：config → figure → structure → draft → …）。
     flow2 = "write_source"

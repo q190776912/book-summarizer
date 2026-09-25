@@ -30,13 +30,14 @@ FLOW_ORDER = {
     "prep": ["env"],
     # 🔴 extract 终于 MM Repair；config / figure_detection / structure / 单元拆分
     # 等写作前置全部属于 write_source（草稿前须过 structure 完整性闸门）。
-    # 🔴 翻译内置于 write_source：翻译 = 单步 translate_chapters
-    #（清单初始化 + agent 逐个翻译生成翻译单元 + 门控 + 1:1 同构闸）/ merge_all
-    #（一次拼接源语言 + 翻译语言两版）；verify_source 为末步、一次覆盖两版。
     "extract": ["place_pdf", "extract_text", "mm_repair"],
+    # 🔴 源先校验、再翻译（与 lib/flow_gate.py 对齐）：write_chapters 改好源单元 →
+    # merge_source（只拼源语言 + 只校验源版，源书层面图/编号/公式问题在翻译前暴露并
+    # 回填修源单元）→ translate_chapters（逐单元翻译 + 双重门控）→ merge_translation
+    # （末步：拼翻译语言 + 全量校验源+译两版，吸收原独立 verify 步，不再单列第 9 步）。
     "write_source": ["config", "build_chapter_map", "figure_detection", "structure",
-                     "draft", "write_chapters", "translate_chapters",
-                     "merge_all", "verify_source"],
+                     "draft", "write_chapters", "merge_source", "translate_chapters",
+                     "merge_translation"],
 }
 
 FLOW_PREREQS = {
@@ -99,10 +100,11 @@ RUN_COMMANDS = {
         "struct_labels（结构标签）/ format_verify.check_example_blockquote_lines"
         "（example blockquote）/ OCR 残留薄封装）才 exit 0——判断标准"
         "是「写对」而非「重写」，拦模型瞎改就标 DONE（每个 item 都不漏）。"
-        "🔴 拼接在 merge_all 步：本步不含拼接，证据 = 每章单元门控通过。"),
+        "🔴 源版拼接 + 源版校验在 merge_source 步（翻译之前）：本步不含拼接，"
+        "证据 = 每章单元门控通过。"),
     "write_source.translate_chapters": ("agent",
-        "🔴 对应文档步骤 6（agent 逐个翻译单元 + 双重门控；翻译单元按需生成、"
-        "不分步预派生）：① 先跑 "
+        "🔴 对应文档步骤 7（源版已在 merge_source 步合并 + 校验通过后，agent 逐个翻译"
+        "单元 + 双重门控；翻译单元按需生成、不分步预派生）：① 先跑 "
         "python flows/write-source/script/init_translate_units.py \"{extract_dir}\" "
         "（初始化 units-translate/ch{N}/manifest.json 清单 + src_hash 快照，不复制正文；"
         "--scaffold 可选补齐源文骨架；内置翻译硬闸：源章 gate_units 未过即拒；中文书跳过）；"
@@ -115,19 +117,22 @@ RUN_COMMANDS = {
         "python flows/write-source/script/check_translate_parity.py \"{extract_dir}\" "
         "[ch ...]（🔴 1:1 同构闸：单元序列 / \\tag 集合 / 图片集合 / 编号项标签集合"
         "与源单元逐一相等，漏译 / 漏公式 / 漏图 / 漏编号在此被拦）。"),
-    "write_source.merge_all": ("cmd",
-        # 文档步骤 7：一次拼接源语言 + 翻译语言两组 md。
-        # merge_units 自带强制门控（拼接前先 gate_units，--units-dir 同步生效）。
-        # 🔴 规则3：拼接后任一合并形态章 md > MERGED_MD_CHAR_LIMIT 字符必须跑
-        # tools/split_chapters.py 按节拆分（merge_all 证据复核硬拦，见 merge_all_ok）。
+    "write_source.merge_source": ("cmd",
+        # 文档步骤 6：先拼**源语言**单元（--all 默认 units = 源），再校验源版；
+        # merge_units 自带强制门控（拼接前先 gate_units）。
+        # 🔴 源书层面的图 / 编号 / 公式问题在**翻译之前**暴露，回填修源单元。
+        # 🔴 规则3：源版合并 md > MERGED_MD_CHAR_LIMIT 字符必须随即跑
+        # tools/split_chapters.py 按节拆分（merge_source 证据复核硬拦，见 merge_source_ok）。
         "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all && "
-        "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all "
-        "--units-dir units-translate"),
+        "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
     "write_source.embed_figures": ("cmd",
         "python flows/script/embed_figures.py \"{book_dir}\""),
-    "write_source.verify_source": ("cmd",
-        # exit 0 才算 PASS；--all 覆盖源语言 + 翻译语言两组 .md（两版
-        # 均已由 merge_all 写出，一次校验覆盖两版）。
+    "write_source.merge_translation": ("cmd",
+        # 文档步骤 8（末步）：拼**翻译语言**单元（--units-dir units-translate），
+        # 再全量校验源 + 译两版（--all 一次覆盖两组），exit 0 才算流程完成。
+        # 中文书无 units-translate → merge 自动跳过、verify 只校验唯一中文版，语义一致。
+        "python flows/write-source/script/merge_units.py \"{extract_dir}\" --all "
+        "--units-dir units-translate && "
         "python verify/script/verify_chapter.py --all \"{extract_dir}\" \"{book_dir}\""),
 }
 
@@ -724,8 +729,8 @@ class physical_evidence:
         目录 units/ch{N}/（split_draft_units 拆出）。agent 必须**逐个把单元按
         writing-rules 改好**（首行 DRAFT→DONE + 质量校验通过），由 gate_units.py
         强制门控。
-        🔴 拼接在 merge_all 步——本步证据不要求最终 md 存在与契约名在位
-        （该核对在 merge_all_ok，对源 + 译两版生效）。
+        🔴 拼接与合并 md 的契约名在位核对移至 merge_source 步（源版，翻译之前）
+        与 merge_translation 步（源 + 译两版，末步）——本步证据不要求最终 md 存在。
         确保前置：draft 步未跑（缺 units/manifest.json）→ 硬拒，防 bootstrap 误回填。
         """
         ex = physical_evidence._extract_dir(book_dir, extract_dir)
@@ -935,17 +940,11 @@ class physical_evidence:
             contract, physical_evidence._norm_text(text), ignore_set)
 
     @staticmethod
-    def merge_all_ok(book_dir, extract_dir):
-        """拼接证据：每个外语章有
-        源语言 + 翻译语言两组最终 md，且两组的契约骨架节 + 编号项全部在位
-        （merge 拼接兜底，防单元内漏项；翻译版的同名漏项由同构闸 + 此处双拦）。
-
-        中文源书只要求源语言（即中文）一组 md。
-        """
-        ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        keys = _chapter_map_keys(ex)
-        if not keys:
-            return False, "缺 chapter_map.json（config 步未完成）"
+    def _merge_present_ok(book_dir, ex, keys, want_tgt):
+        """拼接「产物在位」机械核对（merge_source / merge_translation 共用）：
+        每章**源语言**组必须存在；``want_tgt=True`` 时该书若有翻译版则**翻译语言**组
+        也须存在。各组核对 oversized（规则3）+ 契约骨架节 / 编号项在位。
+        返回 (bool, detail)。"""
         missing, missing_names, degraded, oversized = [], [], [], []
         for k in keys:
             src = physical_evidence._src_manifest(ex, k)
@@ -955,7 +954,7 @@ class physical_evidence:
             src_lang = (src.get("language") or "cn").lower()
             tgt_lang = physical_evidence._tgt_language(src_lang)
             groups = [(src_lang, physical_evidence._md_group_lang(book_dir, k, src_lang))]
-            if tgt_lang:
+            if want_tgt and tgt_lang:
                 groups.append((tgt_lang, physical_evidence._md_group_lang(book_dir, k, tgt_lang)))
             for lang, md_files in groups:
                 if not md_files:
@@ -969,7 +968,7 @@ class physical_evidence:
                     missing_names.append((k, lang, miss))
         if missing:
             (k, lang) = missing[0]
-            return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_all 拼接）: "
+            return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_units 拼接）: "
                            f"{chapter_label(k)} [{lang}]" + (f" 等 {len(missing)} 组" if len(missing) > 1 else ""))
         if oversized:
             k, lang, ov = oversized[0]
@@ -984,10 +983,67 @@ class physical_evidence:
                            f"{chapter_label(k)} [{lang}] 缺 {len(miss)} 项（如 {miss[:4]}）；"
                            f"须回归对应单元目录（units / units-translate）补齐后重拼"
                            f"（若条目为 OCR 噪声误收，走 manage_ignore 机制，勿编造）")
-        if degraded:
-            return True, (f"已拼 {len(keys)} 章（{len(degraded)} 章缺源 manifest，"
-                          f"跳过核对: {degraded[:4]}）")
-        return True, (f"{len(keys)} 章源语言 + 翻译语言 md 均已拼接且契约项在位")
+        return True, (f"{len(keys)} 章拼接产物在位"
+                      + (f"（{len(degraded)} 章缺源 manifest 跳过核对: {degraded[:4]}）"
+                         if degraded else ""))
+
+    @staticmethod
+    def _source_langs(ex, keys):
+        """收集各章源 manifest 的 language（源版校验 --only-lang 依据）。"""
+        langs = set()
+        for k in keys:
+            src = physical_evidence._src_manifest(ex, k)
+            if src:
+                langs.add((src.get("language") or "cn").lower())
+        return langs
+
+    @staticmethod
+    def merge_source_ok(book_dir, extract_dir):
+        """文档步骤 6 证据（**翻译之前**先把源版校验收口）：
+        ① 源语言章 md 已拼、契约骨架节 / 编号项在位（不含翻译版——翻译尚未开始）；
+        ② 源版 verify 通过（``--only-lang 源语言``）——源书层面的图 / 编号 / 公式问题
+        在此暴露，须回填修**源单元**后才放行翻译。"""
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        ok, detail = physical_evidence._merge_present_ok(book_dir, ex, keys, want_tgt=False)
+        if not ok:
+            return False, detail
+        langs = physical_evidence._source_langs(ex, keys)
+        only = langs.pop() if len(langs) == 1 else None
+        rc, err = physical_evidence._run_verify_all(ex, book_dir, only_lang=only)
+        if rc == 0:
+            return True, (f"{detail}；源版 verify --all"
+                          + (f" --only-lang {only}" if only else "") + " exit 0")
+        if rc is None:
+            return False, f"源版 verify 执行异常: {err}"
+        return False, (f"源版 verify 未通过（exit {rc}）——🔴 翻译前须先把源书层面的图 /"
+                       f" 编号 / 公式问题修好（缺号经 backfill_ordinals 回填归属源单元），"
+                       f"--fix 默认禁用须 --fix --fix-force + PREFLIGHT，复验至 exit 0。")
+
+    @staticmethod
+    def merge_translation_ok(book_dir, extract_dir):
+        """文档步骤 8（末步）证据：
+        ① 源语言 + 翻译语言两组章 md 均已拼、契约项在位；
+        ② 全量 verify --all（源 + 译两版）exit 0（verify PASS + KaTeX OK）。
+        中文源书只有一组中文 md，语义一致。"""
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        ok, detail = physical_evidence._merge_present_ok(book_dir, ex, keys, want_tgt=True)
+        if not ok:
+            return False, detail
+        rc, err = physical_evidence._run_verify_all(ex, book_dir)
+        if rc == 0:
+            return True, (f"{detail}；全量 verify_chapter.py --all exit 0"
+                          f"（源语言 + 翻译语言全部 verify PASS + KaTeX OK）")
+        if rc is None:
+            return False, f"verify 执行异常: {err}"
+        return False, (f"全量 verify 未通过（exit {rc}）。禁止 mark，须修复"
+                       f"（🔴 --fix 默认禁用，须 --fix --fix-force + PREFLIGHT）"
+                       f"或手工定点修改后复验至 exit 0。")
 
     @staticmethod
     def embed_figures_ok(book_dir, extract_dir):
@@ -1005,9 +1061,11 @@ class physical_evidence:
         return True, "嵌图为可选步骤（图少书可视为完成）"
 
     @staticmethod
-    def _run_verify_all(ex, book_dir):
-        """真实复验：跑 verify_chapter.py --all（中英两组 .md 都覆盖）。
+    def _run_verify_all(ex, book_dir, only_lang=None):
+        """真实复验：跑 verify_chapter.py --all。
 
+        ``only_lang``（'cn' / 'en'）：只校验该语种版本的 md（供 merge_source 步在
+        翻译前只校验源版）；为 None 时源 + 译两组都覆盖。
         list-form + sys.executable：不依赖 PATH 里的 `python`（conda 环境外
         可能缺依赖），也不经 shell 规避含空格路径的引号问题。
         返回 (rc, errmsg)；rc=None 表示执行异常。
@@ -1016,26 +1074,14 @@ class physical_evidence:
         root = os.path.abspath(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         script = os.path.join(root, "verify", "script", "verify_chapter.py")
+        args = [sys.executable, script, "--all", ex, book_dir]
+        if only_lang:
+            args += ["--only-lang", str(only_lang)]
         try:
-            rc = subprocess.call([sys.executable, script, "--all", ex, book_dir])
+            rc = subprocess.call(args)
             return rc, None
         except Exception as e:
             return None, str(e)
-
-    @staticmethod
-    def verify_source_ok(book_dir, extract_dir):
-        # 流程末步：--all 一次覆盖源语言 + 翻译语言
-        # 两版（merge_all 已把两组 md 写出）。中文源书只有一组中文 md，语义一致。
-        ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        rc, err = physical_evidence._run_verify_all(ex, book_dir)
-        if rc == 0:
-            return True, ("verify_chapter.py --all exit 0"
-                          "（源语言 + 翻译语言全部 verify PASS + KaTeX OK）")
-        if rc is None:
-            return False, f"verify 执行异常: {err}"
-        return False, (f"verify 未通过（exit {rc}）。禁止 mark，"
-                       f"须修复（🔴 --fix 默认禁用，须 --fix --fix-force + PREFLIGHT）"
-                       f"或手工定点修改后复验至 exit 0。")
 
 
 # 步 -> 证据函数（与 FLOW_ORDER 对齐）
@@ -1095,9 +1141,9 @@ EVIDENCE = {
     "write_source.structure": physical_evidence.structure_ok,
     "write_source.draft": physical_evidence.draft_ok,
     "write_source.write_chapters": physical_evidence.write_chapters_ok,
+    "write_source.merge_source": physical_evidence.merge_source_ok,
     "write_source.translate_chapters": physical_evidence.translate_chapters_ok,
-    "write_source.merge_all": physical_evidence.merge_all_ok,
-    "write_source.verify_source": physical_evidence.verify_source_ok,
+    "write_source.merge_translation": physical_evidence.merge_translation_ok,
 }
 
 

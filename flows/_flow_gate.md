@@ -61,8 +61,8 @@ assert 上游完成，照样被挡：
 prep:            [env]
 extract:         [place_pdf, extract_text, mm_repair]
 write_source:    [config, build_chapter_map, figure_detection, structure,
-                  draft, write_chapters, translate_chapters,
-                  merge_all, verify_source]
+                  draft, write_chapters, merge_source, translate_chapters,
+                  merge_translation]
 ```
 
 > `config` 步骤包含两件事（见 config_setting.md）：① 建章节映射
@@ -91,11 +91,11 @@ write_source:    [config, build_chapter_map, figure_detection, structure,
 - `figure_detection`：`figure_index.json` 存在。
 - `structure`：`chapter_map` 全部章节均有分章骨架 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）**且** 每章完整性报告 `completeness_reports/ch{N}_*.json`（附录 `appendix{X}_*.json`）的 `gate.passed == true`（🔴 structure.md 第 2–4 步闸门）。
 - `draft`：每章 `book_structure/ch{N}.json`（附录 `appendix{X}.json`）+ `units/ch{N}/manifest.json`（附录 `units/appendix{X}/manifest.json`，本条 `ch{N}` 处附录皆同理）齐备且 manifest 不早于契约（内容化分章契约 + 每 item 一单元拆分；内容完整性闸门 `check_content_completeness.py` PASS）。
-- `write_chapters`：每章「逐单元改好 + 门控通过」机械核对（🔴 脱离单元 / 门控未过 = 硬拒）——每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；判断标准是「写对」而非「重写」，check_unit_quality.py 全部引用 verify 已有检测：`check_katex.check_display_math_closure`（$$ 闭合）/ `katex_heuristics`（裸命令·裸 Unicode 字符·裸箭头）/ `verbose_gates.check_verbose_proofs`（证明过长）/ `struct_labels`（结构标签）/ `format_verify.check_example_blockquote_lines`（example blockquote）/ OCR 残留薄封装）。最终 md 存在 + 契约骨架节 / 编号项在位核对移至 `merge_all` 步。
-- `translate_chapters`：① 翻译清单已初始化（`units-translate/ch{N}/manifest.json`，翻译步内 `init_translate_units.py` 生成——元数据 + src_hash，不复制正文；中文源书自动跳过）；② 翻译单元门控通过（`gate_units --units-dir units-translate`，缺文件/未译/质量差即拒）；③ `check_translate_parity.py` 1:1 同构闸通过（单元序列 / \tag / 图片 / 编号项标签与源单元逐一相等）。
-- `merge_all`：每章源语言 + 翻译语言两组最终 md 存在（`merge_units.py --all` 产物），且结构契约全部 section 名 + 编号项 `name` 在两组 md 中在位（漏项当场拦截）。中文源书只要求源语言（中文）一组。
+- `write_chapters`：每章「逐单元改好 + 门控通过」机械核对（🔴 脱离单元 / 门控未过 = 硬拒）——每章单元门控通过：`units/ch{N}/` 中每个单元文件存在、首行 DONE、**单元级质量校验通过**（= 每个编号项都改对、一个不漏，`gate_units.py` 判定；判断标准是「写对」而非「重写」，check_unit_quality.py 全部引用 verify 已有检测：`check_katex.check_display_math_closure`（$$ 闭合）/ `katex_heuristics`（裸命令·裸 Unicode 字符·裸箭头）/ `verbose_gates.check_verbose_proofs`（证明过长）/ `struct_labels`（结构标签）/ `format_verify.check_example_blockquote_lines`（example blockquote）/ OCR 残留薄封装）。最终 md 存在 + 契约骨架节 / 编号项在位核对移至 `merge_source` 步（源版）与 `merge_translation` 步（源 + 译两版）。
+- `merge_source`（**翻译之前**先收口源版）：① 每章**源语言**最终 md 存在（`merge_units.py --all` 默认 units = 源）、契约骨架节 + 编号项在位、合并形态未超 60000 字符（超限须 `tools/split_chapters.py` 按节拆分，规则3）；② `verify_chapter.py --all --only-lang <源语言>` `exit 0`——源书层面的图 / 编号 / 公式问题在翻译前暴露，缺号经 `backfill_ordinals.py` 回填**源单元**、修复后才放行翻译。
+- `translate_chapters`（在 `merge_source` 源版校验通过之后）：① 翻译清单已初始化（`units-translate/ch{N}/manifest.json`，翻译步内 `init_translate_units.py` 生成——元数据 + src_hash，不复制正文；中文源书自动跳过）；② 翻译单元门控通过（`gate_units --units-dir units-translate`，缺文件/未译/质量差即拒）；③ `check_translate_parity.py` 1:1 同构闸通过（单元序列 / \tag / 图片 / 编号项标签与源单元逐一相等）。
 - `draft` 证据补充：内容完整性闸门（`verify/script/check_content_completeness.py`）PASS——描述信息 / 证明 / 图片 / 文字公式块齐备。
-- `verify_source`：流程末步，`verify_chapter.py --all` 对**源语言 + 翻译语言两组 md** 确认 `exit 0`（`verify PASS + KaTeX OK`；中文源书只有一组中文 md）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**。
+- `merge_translation`（流程末步）：① 每章源语言 + 翻译语言两组最终 md 均存在（`merge_units.py --all --units-dir units-translate` 产物）、契约项在两版都在位、合并形态超阈已拆；② `verify_chapter.py --all`（**不带** --only-lang，源 + 译两版全覆盖）`exit 0`（`verify PASS + KaTeX OK`；中文源书只有一组中文 md，语义一致）。🔴 **仅按章数自报或仅跑过 `write_chapters` 不算通过**；原独立 `verify_source` 步已并入本末步。
 
 > **适用范围**：翻译步骤（`translate_chapters`）**仅适用于英文书**（源=英文 `ChapterN_*.md` → 翻译中文）。**中文书无翻译阶段**：翻译证据自动跳过，`write_source` 全部步骤完成即为全书完成（中文书源=`第N章_*.md`，无独立翻译版）。
 

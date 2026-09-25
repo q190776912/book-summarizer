@@ -173,8 +173,16 @@ _OMISSION_CTX = 160
 #      两条豁免都要求正文非空（空正文照常 FAIL，防措辞掩盖）。
 _LABEL_RESIDUE_RE = re.compile(r"^[\s)\],;.0-9*†\-(/]+")
 _FIG_CHAPTER_RE = re.compile(r"(?:ch0*|appendix)(\d+|[A-Za-z])[_/]fig", re.I)
+# 图号「章.节.序」形态（≥3 段数字）才携带小节信息，可据图号反推所属小节；
+# 「章.序」（2 段，Vakil/Katok/Weibel 章级计数器 Figure 5.2）不含小节信息，绝不反推。
+_FIG_NUM_RE = re.compile(r"fig(\d+(?:[.\-]\d+){2,})", re.I)
 # 子题标号形态：单个/双/三个字母 + `)` 或 `.`（"(a)" 去残留后剩 "a) …"）
 _PART_LABEL_RE = re.compile(r"^[a-z]{1,3}[.)]\s")
+# 结构性条目标签关键词：正文 own-key 粗体头含之 = 真·自洽条目（非裸序标残渣）。
+_LABEL_KEYWORD_RE = re.compile(
+    r"(Exercise|Example|Theorem|Definition|Lemma|Corollary|Proposition|Problem|"
+    r"Solution|Remark|Note|Algorithm|Proof|"
+    r"习题|练习|例题|例|定理|定义|引理|推论|命题|问题|注|算法|证明|证)")
 # 词元（字母词，含中日韩），用于判 name 是否「自带题面」而非两三词残渣
 _WORD_TOKEN_RE = re.compile(r"[^\W\d_]+")
 _NAME_STATEMENT_MIN_WORDS = 6
@@ -213,10 +221,15 @@ def phantom_exercise_problems(name, content_blocks, expected_tags, expected_imag
     out = []
     has_body = bool(str(body or "").strip())
     residue = _LABEL_RESIDUE_RE.sub("", str(name or "")).strip()
-    # 正文自带与本题 key 一致的 ``**Exercise <key>…**`` 粗体头 = 完整自洽条目，绝非
-    # OCR 续行碎片——即便契约 name 字段带 OCR 噪声前缀（如星标 `⋆`→`*x` 粘在标题前）
-    # 使其看起来「起于句中」。据此豁免误判（真碎片不可能有自洽的 own-key 头）。
-    self_keyed = has_body and _bold_carries_ordinal(str(body), _key_ordinal(key))
+    # 正文自带与本题 key 一致、且**含结构性关键词**（Exercise/定理/例…）的粗体头 =
+    # 完整自洽条目，绝非 OCR 续行碎片——即便契约 name 字段带 OCR 噪声前缀（如星标
+    # `⋆`→`*x` 粘在标题前）使其看起来「起于句中」，仍据此豁免误判。豁免条件收紧为
+    # 「own-key 粗体头里同时有关键词」：真条目形如 `**Exercise 11.1.K …**`；Katok 残渣
+    # 的正文粗体头只是**裸序标** `**20.1.5.**`（无关键词），据以判句中的豁免不成立，照旧拦。
+    own_ord = _key_ordinal(key)
+    self_keyed = (has_body and bool(own_ord)
+                  and any(own_ord in seg and _LABEL_KEYWORD_RE.search(seg)
+                          for seg in re.findall(r"\*\*([^*]+)\*\*", str(body))))
     mid_sentence = (residue[:1].islower() and residue[:1].isalpha()
                     and not (has_body and _PART_LABEL_RE.match(residue))
                     and not self_keyed)
@@ -241,23 +254,41 @@ def phantom_exercise_problems(name, content_blocks, expected_tags, expected_imag
                 "该节点吞并了别的小节的正文，须把这些内容块并回所属小节（契约层）"
                 % (key, own, "、§".join(sorted(set(_sec_prefix(t) for t in cross))),
                    "、".join(map(str, cross[:6]))))
-        # 插图跨节判据：多数数学书的图号是「章.序」（章级计数器，ordinal type2
-        # scope2，如 Vakil/Katok/Weibel 的 Figure 5.2 = 第 5 章第 2 图）。此时图号
-        # 第二段是章内序号、与所属小节无关，绝不能据 figA.B 的 B 反推小节——否则
-        # §5.5 里的 Exercise 5.5.G 正常携带的 Figure 5.2 会被误判成「§5.2 的图」。
-        # 权威归属是文件名的 ``ch{NN}`` 前缀（assign_figures 按章命名）。故只在
-        # 插图所属「章」与本条目所属「章」不同（= 跨章吞并后续正文）时判。
+        # 插图归属判据（两级）：
+        #   ① 跨章：文件名 ``ch{NN}`` 前缀（assign_figures 按章命名 = 权威）≠ 本条目章
+        #      → 吞并别章正文；
+        #   ② 跨小节：**仅当**图号是「章.节.序」≥3 段（携带小节信息）时，取其前两段的
+        #      小节号与本条目小节号比对；「章.序」2 段（Vakil/Katok/Weibel 章级计数器
+        #      Figure 5.2）不含小节信息，绝不据第二段反推小节——否则 §5.5 的 Exercise
+        #      5.5.G 正常携带的 Figure 5.2 会被误判成「§5.2 的图」。
         img_cross = []
-        own_ch = re.split(r"[.\-]", str(key))[0].lstrip("0").upper()
+        own_segs = [s for s in re.split(r"[.\-]", str(key)) if s != ""]
+        own_ch = own_segs[0].lstrip("0").upper() if own_segs else ""
+
+        def _num_prefix2(segs):
+            try:
+                return ".".join(str(int(x)) for x in segs[:2])
+            except (ValueError, TypeError):
+                return ".".join(segs[:2])
+
+        own_sec = _num_prefix2(own_segs) if len(own_segs) >= 2 else None
         for p in (expected_images or []):
             sp = str(p)
             fm = _FIG_CHAPTER_RE.search(sp)
             if fm and fm.group(1).lstrip("0").upper() != own_ch:
                 img_cross.append("%s(第%s章)" % (sp.split("/")[-1], fm.group(1)))
+                continue
+            nm = _FIG_NUM_RE.search(sp)
+            if nm and own_sec:
+                fsegs = [s for s in re.split(r"[.\-]", nm.group(1)) if s != ""]
+                if len(fsegs) >= 3 and _num_prefix2(fsegs) != own_sec:
+                    img_cross.append("%s(§%s)" % (sp.split("/")[-1], _num_prefix2(fsegs)))
         if img_cross:
             out.append(
-                "习题条目 %s（属第%s章）的契约节点携带别章插图 %s——该节点跨章吞并了"
-                "后续正文，须在契约层把图块并回所属章" % (key, own_ch, "、".join(img_cross[:6])))
+                "习题条目 %s（属第%s章%s）的契约节点携带别的小节 / 别章插图 %s——该节点"
+                "吞并了后续正文，须在契约层把图块并回所属小节 / 章"
+                % (key, own_ch, ("§" + own_sec if own_sec else ""),
+                   "、".join(img_cross[:6])))
     return out
 
 

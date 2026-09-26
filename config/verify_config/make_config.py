@@ -341,6 +341,59 @@ def _detect_section_hierarchy(extract_dir, max_depth=4, pages=None,
     return [1]
 
 
+def _numeric_local_chapter_ranges(extract_dir):
+    """Numeric-chapter page ranges ``[(ch, start, end), ...]`` from chapter_map.json.
+
+    Only chapters whose key is a plain number are returned — appendix/supplement
+    letters never carry the global-§ numeric-subsection shape and would only add
+    noise to the probe.  Missing file / malformed entries degrade to ``[]``.
+    """
+    cm_p = os.path.join(extract_dir, 'chapter_map.json')
+    if not os.path.exists(cm_p):
+        return []
+    try:
+        cm = json.load(open(cm_p, encoding='utf-8-sig'))
+    except Exception:
+        return []
+    nodes = cm.get('chapters') if isinstance(cm, dict) else cm
+    if not isinstance(nodes, list):
+        return []
+    out = []
+    for e in nodes:
+        if not isinstance(e, dict):
+            continue
+        ch = e.get('ch', e.get('num', e.get('chapter')))
+        if str(ch)[:1].isdigit():
+            out.append((ch, e.get('start'), e.get('end')))
+    return out
+
+
+def _detect_numeric_local_sections(extract_dir, ordinal, language, chapter_first):
+    """(fire, info): does this book print single-number global § heads whose
+    bodies hold bare ``N. Title`` sub-heads restarting per § (Arnold ODE shape)?
+
+    Delegates to ``scan_skeleton.numeric_local_subsection_probe`` (the SAME
+    production scanner used by build_structure) so detection can never drift
+    from what the contract will actually contain.  Any import/probe failure
+    degrades to ``(False, {})`` — a conservative no-op that leaves every other
+    book on its existing 2-level path (zero regression).
+    """
+    if ordinal is None:
+        return False, {}
+    try:
+        import scan_skeleton as _S
+        mode = _S._mode_for_ordinal(ordinal, language)
+        ranges = _numeric_local_chapter_ranges(extract_dir)
+        if not ranges:
+            return False, {}
+        return _S.numeric_local_subsection_probe(
+            ranges, mode=mode, default_dir=extract_dir,
+            chapter_first=bool(chapter_first))
+    except Exception as e:                      # pragma: no cover - defensive
+        print(f"[make_config] numeric_local_sections 探测异常（保守 False）：{e}")
+        return False, {}
+
+
 def _unnumbered_levels_from_recognized(extract_dir, letter_chapter=False):
     """无编号小节的**层级数**：取 `_recognized_sections.json` 中本段体例
     （正文=数字章 / 附录=字母章）所有章的 level 最大值。
@@ -1780,6 +1833,29 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
                                   letter_chapter=letter_chapter)
     if ordinal == ORDINAL_HUM:
         sd = [1, 1]
+    # 🔴 Arnold ODE 型三级结构（通用探测，非逐书硬编码）：全书用**单号全局 §**
+    # 作节头（原书印 "§ 1. Title"），而每个 § 内又有**逐 § 从 1 重启的裸单号
+    # 二级小节**（原书印 "1. Title"）。这是可被 production 扫描器稳定复现的
+    # 结构指纹（见 scan_skeleton.numeric_local_subsection_probe），因此把它
+    # 提升为契约的第三层：sections_global=true + numeric_local_sections=true
+    # + section_types 三位 [1,1,1]（章 / 全局 § / 逐 § 数值子块，皆单分量 role 1）。
+    # 🔴 探测本身即权威且自限（要求真实单号 § 字形头 + 逐 § 干净 1..k 子块跑），
+    # 点分层级书（Koopman「20.5」无单号 §）根本不会命中，故不再用 sd 深度做前置
+    # 闸门——_detect_section_hierarchy 对 Arnold 的单号 § 会误检成 [1,2]，用它当
+    # 门反而把真结构挡掉。只要 probe 命中即整树改写为三位 [1,1,1]（章/全局 §/
+    # 逐 § 数值子块，皆单分量 role 1）并强制 sections_global=true。
+    if not is_appendix:
+        _nl_fire, _nl_info = _detect_numeric_local_sections(
+            extract_dir, ordinal, language, cm_chapter_first)
+        if _nl_fire:
+            config["sections_global"] = True
+            config["numeric_local_sections"] = True
+            sd = [1, 1, 1]
+            print("[make_config] 检出 Arnold-ODE 型三级结构：全局单号 § + 逐 § "
+                  "裸单号子块 → section_types=%s sections_global=true "
+                  "numeric_local_sections=true（§父节=%d，子块总数=%d）"
+                  % (sd, len(_nl_info.get("good_parents", [])),
+                     _nl_info.get("total_children", 0)))
     config["section_types"] = sd
     if ordinal == ORDINAL_HUM:
         config["sections_global"] = True

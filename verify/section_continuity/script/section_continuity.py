@@ -379,6 +379,11 @@ _D_MD_GLOBAL_LETTER_RE = re.compile(r'^#{2,6}\s*§\s*(?:(\d{1,2})[.\u00b7]\s*)?(
 # md section heading for LETTER-SECTION chapters (appendices: `## §A`).
 _D_MD_LETTER_SEC_RE = re.compile(r'^#{2,6}\s*§\s*([A-Z])(?![A-Za-z])')
 
+# md heading for BARE numeric local sub-sections (Arnold ODE shape): the render
+# emits `### 3. Title` (no `§`), the numeric cousin of the letter `### §12.A`.
+# Deliberately §-free so it cannot collide with D_MD_SEC_RE (which requires `§`).
+_D_MD_GLOBAL_NUMSUB_RE = re.compile(r'^#{2,6}\s*(\d{1,2})[.\u00b7\u3001]\s+\S')
+
 
 def _gkey(k):
     """Sort/compare key for a global section id: digits before letters, both
@@ -439,10 +444,26 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
     # Appendix chapters: every contract section key is alphabetic.
     letter_sections = bool(contract_secs) and all(not k.isdigit() for k in contract_secs)
 
+    # 🔴 Numeric local sub-sections (Arnold ODE third tier): expected pairs come
+    # straight from the contract's dotted `<§>.<local>` section keys (the SAME
+    # source-scanner output that build_structure used to build the tree), so this
+    # check can never drift from the contract.  A dotted key whose parent is not a
+    # plain number (nested/deeper artifacts) is ignored — the shape is exactly one
+    # § + one restarting local number.
+    has_num_local = bool(getattr(cfg, 'numeric_local_sections', False)) \
+        and not letter_sections
+    numlocal_expected = set()
+    if has_num_local:
+        for _k in contract_secs:
+            _mm = re.fullmatch(r'(\d{1,2})\.(\d{1,2})', str(_k))
+            if _mm:
+                numlocal_expected.add((int(_mm.group(1)), int(_mm.group(2))))
+
     with open(md_file, encoding='utf-8') as f:
         md_text = f.read()
     md_secs = set()       # written section ids ('12' / 'A')
     md_letters = set()    # (parent_int, 'A') numeric mode only
+    md_numlocal = set()   # (parent_int, local_int) written bare numeric subs
     cur_md = None
     for line in md_text.split('\n'):
         s = line.strip()
@@ -460,6 +481,16 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
                 parent = int(lm.group(1)) if lm.group(1) else cur_md
                 if parent is not None:
                     md_letters.add((parent, lm.group(2)))
+                continue
+        # Bare numeric local sub-section (`### 3. Title`, Arnold ODE). §-free, so
+        # it never collides with the §-heading match below; parent = last `## §N`.
+        if has_num_local and cur_md is not None:
+            nm = _D_MD_GLOBAL_NUMSUB_RE.match(s)
+            if nm:
+                try:
+                    md_numlocal.add((int(cur_md), int(nm.group(1))))
+                except (TypeError, ValueError):
+                    pass
                 continue
         m = D_MD_SEC_RE.match(s)
         if m:
@@ -591,14 +622,34 @@ def _check_d_layer_global(ch, start, end, md_file, ext, cfg):
             return f"{pair[0]}.{pair[1]}"
         let_cont, let_tail = _partition(md_norm, src_pairs, _rend)
 
+    num_cont, num_tail = ([], [])
+    if has_num_local and numlocal_expected:
+        exp_by_parent = {}
+        wrt_by_parent = {}
+        for (p, k) in numlocal_expected:
+            exp_by_parent.setdefault(p, set()).add(k)
+        for (p, k) in md_numlocal:
+            wrt_by_parent.setdefault(p, set()).add(k)
+        for p, exp in exp_by_parent.items():
+            wrt = wrt_by_parent.get(p, set())
+            miss = exp - wrt
+            if not miss:
+                continue
+            wmax = max(wrt) if wrt else 0
+            for k in sorted(miss):
+                lab = f"\u00a7{p}.{k}"          # '§P.K'
+                (num_cont if k < wmax else num_tail).append(lab)
+
     levels = {}
     if sec_cont or sec_tail:
         levels[2] = {'continuity': sec_cont, 'missing': sec_tail}
-    if let_cont or let_tail:
-        levels[3] = {'continuity': let_cont, 'missing': let_tail}
+    _l3_cont = let_cont + num_cont
+    _l3_tail = let_tail + num_tail
+    if _l3_cont or _l3_tail:
+        levels[3] = {'continuity': _l3_cont, 'missing': _l3_tail}
     return {
-        'continuity_sections': sec_cont + let_cont,
-        'missing_sections': sec_tail + let_tail,
+        'continuity_sections': sec_cont + _l3_cont,
+        'missing_sections': sec_tail + _l3_tail,
         'levels': levels,
     }
 

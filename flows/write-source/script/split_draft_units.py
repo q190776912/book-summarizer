@@ -121,13 +121,25 @@ def _render_section(node, lang):
     """仅标题行：`#` 数 = level + 1（chapter 为 level 0 → `#`；小节 level=1 →
     `## §`、level=2 → `### §` …），忠实保留原书小节层级。无序号标小节 ``## § name``，
     有编号小节 ``§N.M`` → ``##``、``§N.M.K`` → ``###``（level 由序标段数推导，
-    见 render_draft.section_heading_level；显式 level 字段优先）。"""
+    见 render_draft.section_heading_level；显式 level 字段优先）。
+    🔴 数值本地子块（``bare_head``，Arnold《ODE》逐 § 重启的裸单号二级小节）：
+    与 render_draft._render_node 同一渲染——只印裸局部号 + 标题（``### {local}. {title}``），
+    不带 §、不投影父 § 号，令拆分 DRAFT 头与最终 render、D 层校验口径完全一致。"""
     key = str(node.get("key") or "")
     name = (node.get("name") or "").strip()
     lvl = _rd.section_heading_level(key, name, node)
     prefix = "#" * (lvl + 1)
     if re.fullmatch(r"U\d+", key):
         return [prefix + " § " + name, ""]
+    if node.get("bare_head"):
+        _k = re.findall(r"\d+", key)
+        _local = _k[-1] if _k else ""
+        _title = name
+        if _local and name.startswith(key + " "):
+            _title = name[len(key) + 1:]
+        elif name.startswith(key):
+            _title = name[len(key):].strip()
+        return [prefix + " " + (f"{_local}. {_title}".strip()), ""]
     return [prefix + " §" + name, ""]
 
 

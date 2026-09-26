@@ -387,11 +387,17 @@ def process_file(path, fix):
     # --- Pass 2b: 结构性条目被吞进块引用（> **定义/定理/...） ---
     # 结构性条目（定义/定理/引理/推论/命题/断言/公理）必须独立成行（顶层），
     # 绝不能被 > 包裹。若出现在块引用内，自动 unwrap（去掉 > 前缀）。
+    # 🔴 豁免（Vakil CN 实测）：「> **定理 29.2.6 的证明。**」（含（续）/（完））
+    # 是**证明标题**（对应印刷 "Proof of Theorem 29.2.6."），不是被吞进引用的
+    # 结构性条目——它本就应与证明正文一起待在 > 块里。以「…的证明[（尾缀）]。**」
+    # 收尾的行不计。
     _struct_in_bq_re = re.compile(
         r'^>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理'
         r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)\b')
+    _proof_title_in_bq_re = re.compile(
+        r'(?:的证明|的证明|之证明|证明)\s*(?:[（(][^）)]*[)）])?\s*[。.．]?\s*\*\*\s*$')
     for i, line in enumerate(lines):
-        if _struct_in_bq_re.match(line):
+        if _struct_in_bq_re.match(line) and not _proof_title_in_bq_re.search(line):
             errors.append(
                 f'line {i + 1}: 结构性条目不应进入块引用（>），应独立成行顶层')
             fix_struct.append(('strip_bq', i))

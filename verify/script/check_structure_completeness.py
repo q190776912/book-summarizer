@@ -475,6 +475,18 @@ def load_contract(tree):
                 m = re.match(r'^([A-Za-z\u4e00-\u9fff]+)', str(n.key).strip())
                 if m:
                     label = m.group(1)
+            if label == "uncat":
+                # 🔴 数字前置三级键（Kreyszig 实测 2026-09-26）：键为裸号
+                # "C.S-N" 无前缀可恢复，而正文印刷条头可能整行丢失类型词
+                # （p226 "4.1-5 Positive integers."——「Example (」被 OCR 吞），
+                # 契约成 ('uncat',(4,1,5))、源侧真身候选却带标签（练习题
+                # "In Example 4.1-5…" p227 → ('example',…)），两键永不相交 →
+                # 假 readable-missing、闸门死锁，盲目 --backfill 还会从引用句
+                # 造出重复条目。同 canon 的 uncat 节点即该条目的存在性证据
+                # （B 层按裸号分组、跨类型同号并存书不受影响：那些书键自带
+                # 前缀，走上方恢复分支）。登记 ('uncat', canon) 影子键，
+                # 仅补「存在性」，不改节点类型。
+                items.setdefault(("uncat", canon), n)
             items[_composite_key(_PRIMARY, label, canon)] = n
     walk(tree)
     return tree, items, sections
@@ -966,6 +978,20 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
         if ck in contract_items:
             continue
         c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
+        # 🔴 uncat 影子匹配（Kreyszig 4.1-5 实测 2026-09-26）：契约侧该 canon
+        # 以无类型 uncat 节点存在（印刷类型词被 OCR 吞），源侧带标签候选来自
+        # 交叉引用句。条目本体在契约中，不缺、不可回填（会重复）——记
+        # type_shadow 留痕，不进 readable/reference、不拦闸。
+        # （load_contract 对无标签前缀可恢复的裸号 uncat 节点登记 ("uncat", canon)。）
+        if ("uncat", c) in contract_items:
+            missing_items.append({
+                "key": it["key"], "label": it["label"], "page": it["page"],
+                "snippet": it["snippet"], "canon": list(c),
+                "has_label": it.get("has_label", False),
+                "status": "type_shadow",
+                "note": "contract holds this canon as type=uncat",
+            })
+            continue
         # 🔴 跨章引用降级（节级编号英文两级书，Tu 实测）：该扫描项的首段（节号）归属
         # 其他章 → 是「指向他章」的交叉引用，非本章缺项。判 reference：不回填、不阻断，
         # 仅在报告留痕供复核（其真实条目已由归属章契约承载）。

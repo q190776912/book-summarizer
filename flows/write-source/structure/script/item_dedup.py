@@ -86,7 +86,15 @@ def _is_genuine(it):
     mstart = it.get('mstart', 0)
     at_head = mstart <= 1
     after = _after_of(it).lstrip()
-    if _REF_AFTER_NEG.search(after):
+    # 🔴 否决词只作用于「编号后紧邻」的一小段（Kreyszig 实测 2026-09-26）：
+    # 引用续句的否决词（"we have" / "as in" / "states that"…）必紧贴编号
+    # （"2.7-9 we have shown…"）；而真条头的标题句里合法含这些词——
+    # "6.2-4 Lemma (Strict convexity).  We have:"、
+    # "7.3-3 Representation Theorem (Resolvent). For X and T as in…"——
+    # 旧实现对整个 80 字符预览 search，把真头误判为引用并丢弃、留下同键
+    # 引用幻影（6.2-4 锚到 p342 引用页、B 层乱序的根因）。
+    # 窗口 32 与抽取器 _add_match 的 _after_ref（txt[m.end():m.end()+30]）同构。
+    if _REF_AFTER_NEG.search(after[:32]):
         return False
     positive = (at_head
                 or it.get('glued_label')
@@ -153,7 +161,17 @@ def dedup_items(raw_matches, unique_keys=False):
             # 标题签名者优先），其余丢弃。真条目头在本书每号只出现一次。
             genuines = [x for x in grp if _is_genuine(x)]
             if not genuines:
-                grp.append(it)          # 首个真头到达：追加为该组真头
+                # 组内目前全是幻影引用：真头「顶替」首个非真成员而非追加
+                # （Kreyszig 实测 2026-09-26：4.12-2 在 p224 有正文引用、p301
+                # 才是真头，旧追加逻辑让同一 key 输出两条（引用页+真页），
+                # 下游按 key 收敛时引用页条目占位 → 条目锚错页）。组非空且
+                # 无真头 ⇒ 必存在非真成员，else 分支仅是保险。
+                for _i, _x in enumerate(grp):
+                    if not _is_genuine(_x):
+                        grp[_i] = it
+                        break
+                else:
+                    grp.append(it)
             elif g and not _name_sig(genuines[0]) and _name_sig(it):
                 grp[grp.index(genuines[0])] = it   # 裸者让位给带标题者
             continue

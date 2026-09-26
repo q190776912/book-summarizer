@@ -171,7 +171,7 @@ def _nat_key_digits(k):
 
 
 def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
-                    chapter_scoped=False):
+                    chapter_scoped=False, sections_global=False):
     """从带类型的条目 key 推导其所属『章节号』（用于挂到 section 节点）。
 
     ``chapter_scoped``：章内计数器编号书（编著集如 Springer《Koopman Operator》，
@@ -225,6 +225,15 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
         # 节基两级（如 Fraleigh）：首数是节，段号取 "S"
         return nums[0]
     if len(nums) == 1:
+        # 🔴 全局单号节书（sections_global，如 Arnold《常微分方程》：§N 全书连续
+        # 单序标，条目 Theorem/Corollary/Example 用**章级全局**计数器）：条目裸号
+        # "8" 是「第 8 个推论」这一条目序标，绝非节号——只是恰好撞上真实存在的
+        # §8（§7 的 Corollary 8..12 会被错挂进 §8..§12，再经 min(child_start) 把
+        # 各节页区间拖成 105/106/107 乱桩，B/Q/E 三层连带崩）。故此类书单分量
+        # key 一律返回 None，交由 `_place` 的 (页码, y) 就近归节；多分量 key
+        # （len>=2）走原逻辑，其余书零回归。
+        if sections_global:
+            return None
         return nums[0]
     return None
 
@@ -949,6 +958,65 @@ def _three_level_en_number_first(_dir, start=None, end=None):
     return verdict
 
 
+# 数字前置书的抽取会同时抓到「真条头」和「同编号交叉引用」（OCR 断行使
+# "(see 1.2-" + "3 in the next section" 之类引用落在行首）。真条头判据：
+# 编号几乎在块首、其后不接 ". , ; )"（引用尾）、首词不是介/连/代词
+# （"and|in|below…" 引用续句；真标题可小写如 "n-tuples"，故只列功能词）。
+# 仅用于**同键去重**择优——唯一键一律保留（判据错了也不丢内容，B 层缺号
+# 闸与步骤 5 人工审阅兜底）。Kreyszig 全书实测：head 键集与 2026-08 审计
+# 过的旧契约键集逐章相等。
+_NF_NUM_RE = re.compile(r'\d{1,2}[.\-–]\d{1,2}[.\-–]\d{1,3}')
+_NF_FUNC_WORDS = {
+    'and', 'or', 'the', 'of', 'to', 'in', 'is', 'as', 'by', 'we', 'it', 'so',
+    'for', 'be', 'see', 'say', 'says', 'shown', 'shows', 'imply', 'implies',
+    'that', 'this', 'these', 'those', 'with', 'follows', 'hold', 'holds',
+    'below', 'above', 'used', 'use', 'using', 'given', 'where', 'when',
+    'which', 'from', 'can', 'could', 'may', 'must', 'are', 'was', 'were',
+    'has', 'have', 'if', 'then', 'but', 'not', 'its', 'their', 'there',
+}
+
+
+def _nf_heading_like(it):
+    t = (it.get('text') or '')
+    m = _NF_NUM_RE.search(t)
+    if not m or m.start() > 2:
+        return False
+    after = t[m.end():]
+    if after[:1] in ('.', ',', ';', ')', '）'):
+        return False
+    # lettered/numbered reference tail "(a)"/"(c)"/"(2)"（"8.1-4(a) and a sum
+    # of compact operators…" 实测）；真条头的括号是标题 "(Title)"，首字符大写。
+    if re.match(r'\(\s*[a-z0-9]', after):
+        return False
+    rest = after.lstrip()
+    if not rest:
+        return False
+    # bare punctuation-tail references ("2.6-4?" / "1.2-3.)") — a printed
+    # heading always carries a title sentence after the number.
+    if len(re.findall(r'[A-Za-z]{2,}', rest)) < 2:
+        return False
+    w = re.match(r'[A-Za-z][A-Za-z-]*', rest)
+    if w and rest[:1].islower():
+        if w.group(0).lower().split('-')[0] in _NF_FUNC_WORDS:
+            return False
+    return True
+
+
+def _nf_dedup_items(items):
+    """Same-key collisions: keep the most heading-like occurrence (ties →
+    longest text).  Unique keys are never dropped.  Output order follows the
+    CHOSEN occurrence's position, not the first-seen slot（Kreyszig 实测：
+    4.6-8 的引用早于真头出现，若保留首槽会把真条目排到 4.6-7 之前）."""
+    def rank(x):
+        return (1 if _nf_heading_like(x) else 0, len(x.get('text') or ''))
+    best = {}
+    for idx, it in enumerate(items):
+        k = it['key']
+        if k not in best or rank(it) > rank(best[k][1]):
+            best[k] = (idx, it)
+    return [it for _, it in sorted(best.values(), key=lambda t: t[0])]
+
+
 def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
                    sec_windows=None):
     primary = book.primary_type
@@ -1022,10 +1090,11 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         # Kreyszig 式「数字前置」三级英文书（探针判定，见上）：en3 标签前置
         # 抽取器整章漏抽，改走通用三级抽取器（其交叉引用守卫明确按
         # "N.S-N Lemma" 英文形态设计）。键为裸号 "C.S-N"，与 en3 分支的
-        # normkey 输出同形，下游 B/D/Q 无感。
+        # normkey 输出同形，下游 B/D/Q 无感。同键的真条头/交叉引用碰撞由
+        # _nf_dedup_items 择一（唯一键不丢）。
         items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual,
                                     cfg=book)
-        return items
+        return _nf_dedup_items(items)
 
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
             or primary in (ORDINAL_APP, ORDINAL_APP2):
@@ -1128,6 +1197,37 @@ def _toc_band_bottom(ys, gap=_TOC_LINE_GAP):
             break
         bottom = y
     return bottom
+
+
+def _opener_continuation_pages(first_hit, opener_pages, top_y=350.0):
+    """返回应追加进 opener_pages 的「目录续排页」（扉页次页页顶）。
+
+    成因（2026-08-26 Ross ch9 实测）：章扉页目录条目多，末尾一条（`9.4`）续排到
+    次页页顶（y≈103），该页本身首现不足 _OPENER_K，逃过扉页判据 → 必须一并免疫。
+
+    🔴 但只有**序标深度与扉页目录带一致**的续排行才认（2026-09-26 Rosen 8e ch1
+    §1.1.2 实测缺陷）：扉页目录只列 §N.M（深度 2），次页页顶的 `1.1.2 Propositions`
+    是深度 3 的**正文小节头**（Rosen p25 y=175，其下就是命题定义散文）。旧判据只看
+    「全部首现贴顶 y<350」，把 p25 误判成目录页 → 回扫的 min_y 严格大于把该节头自己
+    排除 → §1.1.2 锚到 p61（§1.3 习题区）；又因 1.1.1 < 1.1.2 序上不倒挂，
+    `subsection_order_problems` 检测闸看不见这一形态。
+    深度众数取扉页上全部首现命中（Ross：9.1/9.2/9.3 → 2；Rosen ch1 p24：
+    1.1..1.8 八个 + 正文 1.1.1 → 众数仍是 2）。
+    """
+    extra = set()
+    for op in list(opener_pages):
+        rows = [r for r in first_hit.values()
+                if r[0] == op + 1 and r[4] is not None]
+        if not rows or not all(float(r[4]) < top_y for r in rows):
+            continue
+        op_depths = [len(str(r[2]).split(".")) for r in first_hit.values()
+                     if r[0] == op]
+        if not op_depths:
+            continue
+        dom = max(set(op_depths), key=op_depths.count)
+        if {len(str(r[2]).split(".")) for r in rows} <= {dom}:
+            extra.add(op + 1)
+    return extra
 
 
 def _hit_below_toc_band(y, band_bottom):
@@ -1345,7 +1445,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                   chapter_first=book.chapter_first,
                                   exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
                                   plain_sec_heads=(ordinal == ORDINAL_HUM),
-                                  sections_global=getattr(book, 'sections_global', False))
+                                  sections_global=getattr(book, 'sections_global', False),
+                                  local_num_sec=getattr(book, 'numeric_local_sections', False))
     ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。
@@ -1477,11 +1578,13 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 命中都贴顶（y < 350），同样视为目录污染页（回扫 min_y 会自动跳过续排
     # 行本身；真节头唯一时退回原值，不比旧差）。
     if _opener_pages:
-        for _op in list(_opener_pages):
-            _ys = [float(_r[4]) for _r in _first_hit.values()
-                   if _r[0] == _op + 1 and _r[4] is not None]
-            if _ys and all(y < 350.0 for y in _ys):
-                _opener_pages.add(_op + 1)
+        # 🔴 序标深度一致才认「目录续排」（2026-09-26 Rosen 8e ch1 §1.1.2 实测）：
+        # 章扉页目录只列 §N.M（深度 2），而 §N.M.K 的正文节头常常**正好落在扉页
+        # 次页的页顶**（Rosen p25 y=175 `1.1.2 Propositions`）。旧规则只看
+        # 「全部首现贴顶 y<350」，把该页也判成目录页 → 回扫用 min_y 严格大于
+        # 把自己排除 → §1.1.2 锚到 p61（别的小节的习题区），且因为 1.1.1<1.1.2
+        # 序上不倒挂，节序检测闸看不见。判据见 _opener_continuation_pages。
+        _opener_pages |= _opener_continuation_pages(_first_hit, _opener_pages)
     # 🔴 目录带下界（Rosen 8e ch2 §2.1.1 实测）：章目录通常只列 §N.M，于是
     # §N.M.K 的首现命中**本身就是正文节头**（Rosen p144 目录带 y=385..693，
     # 真节头 "2.1.1 Introduction" 在 y=1635）。旧代码一律按「目录污染行」处理
@@ -1681,7 +1784,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for it in items:
         _note_sec(_section_of_key(it["key"], ordinal, book.chapter_first,
                                   chapter_local=getattr(book, 'chapter_local_sections', False),
-                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False)),
+                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False),
+                                  sections_global=getattr(book, 'sections_global', False)),
                   it["page"])
     for row in ex_rows:
         _note_sec(_section_of_exer(row[2]), row[0])
@@ -1757,6 +1861,21 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node["sub_sec"] = []
         sec_nodes[n] = node
 
+    # 4a-nums) 数值本地子块（Arnold《ODE》逐 § 重启的裸单号二级小节）：把形如
+    #   "<§>.<local>" 的两段号节节点（其单号父 § 存在）标记为**真实 level-2 小节**
+    #   —— node["level"]=2（渲染 `###`）+ node["bare_head"]=True（渲染只印裸局部号
+    #   "<local>. <标题>"，不带 § 、不投影父号），复用 recognize_sections 的层级
+    #   嵌套/渲染/校验管线。仅 numeric_local_sections 书启用，其余书零回归。
+    if getattr(book, 'numeric_local_sections', False):
+        for _n, _snode in sec_nodes.items():
+            _parts = re.findall(r"\d+", str(_n))
+            if len(_parts) != 2:
+                continue
+            _parent = ".".join(_parts[:-1])   # 单号父 §（"1.3" -> "1"）
+            if _parent in sec_nodes:
+                _snode["level"] = 2
+                _snode["bare_head"] = True
+
     # 4b) 字母子块挂到节节点（letter_subs 元数据；仅正文章的 SUB 聚合结果）。
     # 父节不存在（幽灵）则丢弃；按 (page, letter) 排序保持书中出现顺序。
     if letter_sub_blocks:
@@ -1826,7 +1945,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for it in items:
         sec_key = _section_of_key(it["key"], ordinal, book.chapter_first,
                                   chapter_local=getattr(book, 'chapter_local_sections', False),
-                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False))
+                                  chapter_scoped=getattr(book, 'chapter_scoped_items', False),
+                                  sections_global=getattr(book, 'sections_global', False))
         title = _clean_title(it.get("text", ""), it["key"])
         name = (f"{it['key']} {title}".strip()) if title else it["key"]
         node = _node(it["key"], _type_of(it.get("label")), name, it["page"])
@@ -1845,12 +1965,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node = _node(num, "problem" if row[1] == "PROB" else "exercise", name, p)
         _place(node, sec_key, p)
 
-    # 6) 章节内子节点按（页码, 页内 y, 自然序）稳定排序（2026-08-29 升级为
-    # y 感知：同页上「条目 vs 嵌套子节头」的先后只看 key 自然序会颠倒——
-    # Koopman ch5 实测 Remark 5.5(y=864) 在 §5.4.1 节头(y=1112) 之前，自然序
-    # 却把节头排前 → B 层乱序。y 取自源页锚定：条目用 _item_pos，编号节头用
-    # _numbered_heading_y；取不到 y 时回退 0（保持旧行为）。
-    def _doc_sort_key(child):
+    # 6) 章节内子节点排序（2026-08-29 y 感知版 → 2026-09-26 Kreyszig 根治）：
+    #    「条目 vs 节头/习题块」仍按源页锚定 y 交错（Koopman Remark 5.5 语义
+    #    保留），但「条目 vs 条目」改按编号自然序。旧逻辑条目两两也取 y：
+    #    ① manual/OCR 丢头条目锚不到（y 回退 0）整页抢跑（2.1-4@67 排到
+    #       2.1-2 之前、4.9-3@280 排到 4.9-2 之前）；② 同页交叉引用块误锚
+    #       压过小编号真头（4.7-1 误锚 y729 排到 4.7-2(y575) 之后）。
+    #    印刷书节内编号单调，同页条目对的真实顺序天然= 自然序，与 y 无关。
+    def _doc_y_of(child):
         nid = id(child)
         if nid not in _doc_y_cache:
             page = int(child.get("page_start") or 0)
@@ -1868,13 +1990,50 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 pos = _item_pos(ext, {"key": ckey, "page": page,
                                        "text": child.get("name") or ""}, page_dir=page_dir)
                 y = pos[1] if pos and pos[1] is not None and pos[1] >= 0 else None
-            _doc_y_cache[nid] = float(y) if y is not None else 0.0
-        return (int(child.get("page_start") or 0), _doc_y_cache[nid],
+            _doc_y_cache[nid] = float(y) if y is not None else None
+        return _doc_y_cache[nid]
+
+    def _doc_sort_key(child):
+        y = _doc_y_of(child)
+        return (int(child.get("page_start") or 0),
+                y if y is not None else 0.0,
                 _nat_key_digits(child["key"]))
+
+    _ANCHOR_TYPES = ("section", "exercise", "problem")
+
+    def _sort_doc_order(children):
+        anchors = sorted((c for c in children
+                          if c.get("type") in _ANCHOR_TYPES), key=_doc_sort_key)
+        its = sorted((c for c in children
+                      if c.get("type") not in _ANCHOR_TYPES),
+                     key=lambda c: (int(c.get("page_start") or 0),
+                                    _nat_key_digits(str(c.get("key") or "0"))))
+        if not anchors:
+            return its
+        out, si = [], 0
+        for it in its:
+            y = _doc_y_of(it)
+            # 锚不到的条目（manual 回填/OCR 丢块）按「页末」归位，与 _place
+            # 的 inf 约定一致。
+            ipos = (int(it.get("page_start") or 0),
+                    y if y is not None else float("inf"))
+            while si < len(anchors):
+                a = anchors[si]
+                ay = _doc_y_of(a)
+                akey = (int(a.get("page_start") or 0),
+                        ay if ay is not None else 0.0)
+                if akey <= ipos:
+                    out.append(a)
+                    si += 1
+                else:
+                    break
+            out.append(it)
+        out.extend(anchors[si:])
+        return out
 
     _doc_y_cache = {}
     for n in all_sec_nums:
-        sec_nodes[n]["sub_sec"].sort(key=_doc_sort_key)
+        sec_nodes[n]["sub_sec"] = _sort_doc_order(sec_nodes[n]["sub_sec"])
 
     # 6b) 小节按数字层级嵌套（Koopman 书实测，2026-08-29）：契约树必须与原书
     # 标题层级同构——"1.2.1" 是 "1.2" 的子节、挂进其 sub_sec；"1.2.1.1" 再挂进
@@ -1913,7 +2072,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             parent["sub_sec"].append(node)
 
     def _sort_tree(node):
-        node["sub_sec"].sort(key=_doc_sort_key)
+        node["sub_sec"] = _sort_doc_order(node["sub_sec"])
         for k in node["sub_sec"]:
             if k.get("type") == "section":
                 _sort_tree(k)

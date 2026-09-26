@@ -193,6 +193,8 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'o_subitem_gaps': [],
     'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [], 'p_extra_item': [],
     'p_verbose': [], 'p_proof_verbose': [],
+    # U-LAYER: unit structural reading-order (page monotonicity vs contract).
+    'unit_order_problems': [],
     # Q-LAYER: formula sequence-label audit (opt-in via `formula` map; see q_layer.py).
     'q_checked': False,
     'q_fabricated': [], 'q_inconsistent': [], 'q_missing': [],

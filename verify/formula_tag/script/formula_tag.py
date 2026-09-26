@@ -115,7 +115,8 @@ _LETTER_LED_RE = re.compile(
 # source formula set S and force a spurious `\tag` in the summary (false green).
 _ITEM_LABEL_RE = re.compile(
     r'(definition|theorem|remark|example|proposition|corollary|'
-    r'exercise|lemma|defnition|exercse)\b', re.IGNORECASE)
+    r'exercise|lemma|defnition|exercse|figure|fig|problem|section|'
+    r'equation|eq|chapter)\b', re.IGNORECASE)
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -286,11 +287,21 @@ class SourceFormulaIndex:
                  ignore: Optional[Set[str]] = None,
                  ncomp: Optional[int] = None,
                  keep_cross_refs: bool = True,
-                 known_book: Optional[Set[str]] = None) -> None:
+                 known_book: Optional[Set[str]] = None,
+                 sections_global: bool = False) -> None:
         self.extract_dir = extract_dir
         self.patterns = [re.compile(p) for p in (patterns or [])]
         self.chapter_prefix = chapter_prefix
         self.ignore = set(ignore or set())
+        # sections_global (2026-09, Loring Tu): the book numbers formulas by
+        # GLOBAL section (e.g. §18 of ch5 → `(18.x)`), NOT chapter-scoped, and a
+        # chapter spans several consecutive sections.  In that regime the FIRST
+        # component of a formula number is a *section*, not a chapter, so the
+        # chapter-first cross-chapter guard (keep iff first-comp == ch) is wrong:
+        # it strips a chapter's own tags (2.1 in ch1, since 2 is another chapter
+        # key) → mass false FABRICATED.  When True, build_sectioned instead keeps
+        # a number iff its first component is one of THIS chapter's section keys.
+        self._sections_global = sections_global
         # keep_cross_refs (default True, backward-compatible): when True, a
         # parenthesised `(C.N)` is ALWAYS kept in S even in math-free prose
         # (treated as a possible cross-reference the summary might reproduce,
@@ -683,7 +694,25 @@ class SourceFormulaIndex:
         # 只留下与当前章号巧合相等的那一个，导致大面积假 FABRICATED。故 ncomp==1
         # 时整段跳过。
         _is_multi = (ncomp is None or ncomp >= 2)
-        if _is_multi:
+        if self._sections_global and _is_multi:
+            # Global-section numbering: the leading component of a number is a
+            # SECTION, not a chapter. Keep a number iff its leading integer is
+            # one of THIS chapter's section keys (from the summary md_sections);
+            # drop cross-section refs + DOI/footer noise. This is the sections_
+            # global analogue of the chapter-first guard below (which is wrong
+            # here and would mass-false-FABRICATE the chapter's own tags).
+            _seckeys = set()
+            for _s in (md_sections or []):
+                _m = re.match(r'(\d+)', str(_s))
+                if _m:
+                    _seckeys.add(_m.group(1))
+            if _seckeys:
+                for _s in sectioned:
+                    sectioned[_s] = {
+                        n for n in sectioned[_s]
+                        if n.split('.')[0] in _seckeys
+                    }
+        elif _is_multi:
             from collections import Counter as _C
             _cnt = _C(n.split('.')[0] for s in sectioned.values() for n in s)
             _book_chs = {str(k) for k in (getattr(self, '_book_chapter_keys', None)
@@ -708,8 +737,21 @@ class SourceFormulaIndex:
         # is already suppressed per-section via the summary's covered_anywhere.
         if self._known_book:
             _kb_multi = (ncomp is None or ncomp >= 2)
+            # For sections_global books the leading component of a known_book
+            # number is a SECTION, not the chapter number, so matching it
+            # against `str(ch)` would wrongly skip it.  Collect this chapter's
+            # section keys and accept a known_book number whose leading
+            # integer is one of them (Tu: §9.3/§9.4 live in ch3 §8-14).
+            _kb_secs = set()
+            if self._sections_global:
+                for _s in (md_sections or []):
+                    _m = re.match(r'(\d+)', str(_s))
+                    if _m:
+                        _kb_secs.add(_m.group(1))
             for _n in self._known_book:
-                if (not _kb_multi) or _n.split('.')[0] == str(ch):
+                _lead = _n.split('.')[0]
+                if (not _kb_multi) or _lead == str(ch) or (
+                        self._sections_global and _lead in _kb_secs):
                     union.add(_n)
                     self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}
@@ -1467,9 +1509,51 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
     return fab, inc, miss, rows
 
 
-def _extract_summary_tags_sectioned(md_file: str) -> List[tuple]:
+# Summary-side section patterns.  Two-level `## §C.S` is the historical (and
+# still dominant) form that activates Q's per-section comparison.  A subset of
+# books instead reset equation numbering INSIDE a SINGLE-level `## §N` section
+# (Arnold ODE: continuous §1..§27 across the book, each § restarting formulas at
+# (1)).  Their merged chapter carries no `## §C.S` heading, so the sectioned
+# path never activated and the chapter-union duplicate check falsely reported
+# the SAME number recurring in a LATER section as INCONSISTENT — making it
+# impossible to tag each section's equations faithfully.  `_MD_SEC_ONE` lets
+# run() fall back to single-level `## §N` buckets, but ONLY for scope==3 books
+# that have no two-level headings.  This is a pure RELAXATION of the
+# INCONSISTENT duplicate check (dupes become section-local): no currently-
+# passing book gets stricter, so the change is regression-safe.  The
+# negative lookahead `(?![.\d])` guarantees a single-level match can never fire
+# on a two-level `1.2` heading, so the two forms never overlap.
+_MD_SEC_TWO = (re.compile(r'^#{2,4}\s*§?\s*(\d+\.\d+)', re.M),
+               re.compile(r'(^#{2,4}\s*§?\s*\d+\.\d+.*$)', re.M))
+_MD_SEC_ONE = (re.compile(r'^#{2,4}\s*§?\s*(\d+)(?![.\d])', re.M),
+               re.compile(r'(^#{2,4}\s*§?\s*\d+(?![.\d]).*$)', re.M))
+
+
+def _detect_summary_sections(md_text: str):
+    """Return ``(md_sections, find_re, split_re)``.
+
+    Two-level `## §C.S` headings win (preserving every existing book's exact
+    behaviour).  Only when NONE are present do we fall back to single-level
+    `## §N` buckets.  The caller gates this fallback by scope==3, so non-reset
+    (chapter/book-scope) books keep the plain path untouched.
+    """
+    find_re, split_re = _MD_SEC_TWO
+    secs = find_re.findall(md_text)
+    if secs:
+        return secs, find_re, split_re
+    find_re, split_re = _MD_SEC_ONE
+    return find_re.findall(md_text), find_re, split_re
+
+
+def _extract_summary_tags_sectioned(md_file: str, find_re=None, split_re=None) -> List[tuple]:
     """Like `_extract_summary_tags` but also records the section each tagged
-    `$$...$$` block belongs to, by walking `## §C.S` headings in order.
+    `$$...$$` block belongs to, by walking section headings in order.
+
+    `find_re` / `split_re` come from `_detect_summary_sections` so the SAME
+    heading form (two-level, or the single-level `## §N` fallback) drives both
+    bucketing here and source windowing in `run()`.  When omitted they default
+    to the two-level form — preserving the plain-path caller (which computes
+    WARN-only order/misplaced for standard two-level books) unchanged.
 
     Returns a list of ``(section_key, FormulaTag)``.  Blocks appearing before
     the first section heading are attached to the first section (rare; keeps
@@ -1480,15 +1564,16 @@ def _extract_summary_tags_sectioned(md_file: str) -> List[tuple]:
             md = f.read()
     except Exception:
         return []
-    sec_re = re.compile(r'^#{2,4}\s*§?\s*(\d+\.\d+)', re.M)
-    md_sections = sec_re.findall(md)
+    if find_re is None or split_re is None:
+        find_re, split_re = _MD_SEC_TWO
+    md_sections = find_re.findall(md)
     if not md_sections:
         return []
-    parts = re.split(r'(^#{2,4}\s*§?\s*\d+\.\d+.*$)', md, flags=re.M)
+    parts = re.split(split_re, md)
     out: List[tuple] = []
     cur = md_sections[0]
     for part in parts:
-        hm = re.match(r'^#{2,4}\s*§?\s*(\d+\.\d+)', part)
+        hm = find_re.match(part)
         if hm:
             cur = hm.group(1)
             continue
@@ -1918,15 +2003,20 @@ class QLayer(VerifyLayer):
                     md_text = f.read()
             except Exception:
                 md_text = ''
-            md_sections = re.findall(r'^#{2,4}\s*§?\s*(\d+\.\d+)', md_text, re.M)
+            md_sections, _sec_find_re, _sec_split_re = _detect_summary_sections(md_text)
             if not md_sections:
-                # No section headings -> fall back to the plain chapter path.
+                # No section headings (neither two-level `## §C.S` nor the
+                # single-level `## §N` fallback) -> the plain chapter path.
                 section_scoped = False
             else:
-                tags_sec = _extract_summary_tags_sectioned(ctx.md_file)
+                tags_sec = _extract_summary_tags_sectioned(
+                    ctx.md_file, _sec_find_re, _sec_split_re)
                 src = SourceFormulaIndex(ctx.ext_dir, patterns, False, fignore,
                                           keep_cross_refs=fkeep,
-                                          known_book=fknown)
+                                          known_book=fknown,
+                                          sections_global=bool(
+                                              getattr(ctx.config,
+                                                      'sections_global', False)))
                 # 🔴 书章号集（供跨章引用过滤，见 build_sectioned 尾部注记）
                 try:
                     from data.book_structure.book_structure import list_chapter_keys as _lck

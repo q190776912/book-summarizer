@@ -286,8 +286,11 @@ def main():
     except Exception:
         pass
     if merge_all:
-        # 🔴 全章批量拼接（flow_runner merge_all 步模板）：源版 + 翻译版各跑一遍。
-        # 翻译版（units-translate）对缺 manifest 的章自动跳过（中文源书 / 未派生章）。
+        # 🔴 全章批量拼接（flow_runner 的 merge_source / merge_translation 步模板）：
+        # ``--all`` 只拼**所选的这一个** units 组（``--units-dir``，默认 ``units``）；
+        # 英文书要出源 + 译两版，必须按账本两步各调一次（merge_source 用默认组，
+        # merge_translation 用 ``--units-dir units-translate``，见 RUN_COMMANDS）。
+        # 翻译组（units-translate）对缺 manifest 的章自动跳过（中文源书 / 未派生章）。
         from data.book_structure.book_structure import list_chapter_keys
         fails, done, skipped = [], 0, 0
         for k in list_chapter_keys(ext):

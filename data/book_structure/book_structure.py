@@ -222,10 +222,26 @@ def node_tags(node: Dict[str, Any]) -> List[str]:
             continue
         if c.get("tag"):
             # 多行公式组逐行编号：`tags` 为该块携带的全部编号，`tag` 仅首个
-            acc.extend(str(x) for x in (c.get("tags") or [c["tag"]]))
+            acc.extend(t for t in (str(x) for x in (c.get("tags") or [c["tag"]]))
+                       if not _noise_tag(t))
         elif "sub_sec" in c and (c.get("type") == "proof" or "key" not in c):
             acc.extend(node_tags(c))
     return acc
+
+
+def _noise_tag(tag: Any) -> bool:
+    """契约里遗留的 OCR 噪声编号（`0` / `00` / `07` / `002`）不作对账真值。
+
+    抽取侧已由 `lib.numbering.formula_tag_noise` 在收割处拒挂（见其注释），但
+    **既有契约**里已经注册进去的噪声号仍会让 `gate_units` 反过来**要求**单元写出
+    ``\\tag{00}``（Kreyszig 实测 16 处）。消费侧同判据过滤，噪声号既不被要求、
+    单元里真写了也按「编造」报出，数据得以自动清理。
+    """
+    try:
+        from lib.numbering import formula_tag_noise
+    except ImportError:          # 独立加载本模块、无 lib 路径时：退化不筛
+        return False
+    return formula_tag_noise(tag)
 
 
 def node_images(node: Dict[str, Any]) -> List[str]:
@@ -419,7 +435,8 @@ def chapter_tag_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
         acc = []
         for _c in (n.get("sub_sec") or []):
             if isinstance(_c, dict) and _c.get("tag"):
-                acc.extend(str(x) for x in (_c.get("tags") or [_c["tag"]]))
+                acc.extend(t for t in (str(x) for x in (_c.get("tags") or [_c["tag"]]))
+                           if not _noise_tag(t))
         if acc and n.get("key") is not None:
             out.setdefault(str(n["key"]), []).extend(acc)
         for c in n.get("sub_sec") or []:
@@ -450,7 +467,8 @@ class StructureNode:
     """结构树节点（书 / 章 / 节 / 条目 / 派生节点）。避免脚本裸操作 json。"""
 
     __slots__ = ("key", "type", "name", "page_start", "page_end", "sub_sec",
-                 "consolidated", "letter_subs", "level", "page_dir", "raw")
+                 "consolidated", "letter_subs", "level", "page_dir", "raw",
+                 "bare_head")
 
     # 内容块判定：attach_content 挂进 sub_sec 的 {"text"| "formula" | "image"}
     # 裸字典（无 key/type）。from_dict 遇到含内容块的子树时保留整个原始 dict
@@ -465,7 +483,8 @@ class StructureNode:
                   letter_subs: Optional[List[Dict[str, Any]]] = None,
                   level: Optional[int] = None,
                   page_dir: str = "",
-                  raw: Optional[Dict[str, Any]] = None):
+                  raw: Optional[Dict[str, Any]] = None,
+                  bare_head: bool = False):
         self.key = key
         self.type = type
         self.name = name
@@ -498,6 +517,10 @@ class StructureNode:
         # 在两册都存在，下游读页原文前必须据此还原目录，否则静默读错册。
         # to_dict 仅在非空时写出 → 单册书 JSON 零变化。
         self.page_dir: str = page_dir or ""
+        # 数值本地子块（Arnold《ODE》逐 § 重启的裸单号二级小节）标记：True 时
+        # 渲染层只印裸局部号 `### {local}. {title}`（不带 § 前缀、不投影父号）。
+        # 仅 section 节点携带；to_dict 仅在 True 时写出 → 其他书 JSON 零变化。
+        self.bare_head: bool = bool(bare_head)
 
     @classmethod
     def _has_blocks(cls, d: Dict[str, Any]) -> bool:
@@ -531,6 +554,8 @@ class StructureNode:
             d["level"] = int(self.level)
         if self.page_dir:
             d["page_dir"] = self.page_dir
+        if self.bare_head:
+            d["bare_head"] = True
         return d
 
     @classmethod
@@ -551,6 +576,7 @@ class StructureNode:
             letter_subs=list(d.get("letter_subs") or []) or None,
             level=(int(d["level"]) if d.get("level") is not None else None),
             page_dir=(str(d.get("page_dir") or "")),
+            bare_head=bool(d.get("bare_head", False)),
             raw=raw,
         )
         return node

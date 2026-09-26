@@ -57,6 +57,10 @@ _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\
 # 证明标题（"X.Y-Z 的证明" / "X.Y-Z Proof."）是证明小节，不是被定义的条目，
 # 不得计入条目序列（既会污染缺号 present 集合，也会在顺序校验里制造伪回归）。
 _PROOF_RE = re.compile(r'^(证明|的证明|proof|beweis|demonstration|dem\b)', re.IGNORECASE)
+# 证明标题条目的**尾部**证明词（「N.M.K 定理 N.M.J 的证明。」/ '… Proof.'）：
+# 专名/引用号在前、证明词收尾 → 该条目本身是印刷的证明项（Vakil 共享计数器
+# 把「X 的证明」列为条目），不得按引用丢弃。
+_PROOF_TAIL_RE = re.compile(r'(?:的证明|之证明|证明|proof)\s*[。.．]?\s*$', re.IGNORECASE)
 
 # The inter-component separator is now SEP_TIGHT, defined ONCE in lib.regexlib
 # and reused everywhere so every book's punctuation variant normalizes the same
@@ -100,7 +104,7 @@ def _numpath_regexes(levels):
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
     r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习题|练习|习题|引例|附注'
-    r'|算法|性质|构造|应用|变式|警告|记号|术语'
+    r'|算法|性质|构造|应用|变式|警告|记号|术语|要求'
     # 🔴 Plurals MUST precede their singular ('Remarks|Remark'): the alternation
     # is first-match, so with the singular first a header '8. Remarks' matched
     # 'Remark' and left 's' behind — which _after_label_boundary reads as a
@@ -108,6 +112,10 @@ _ENTRY_LABELS = (
     # manufactured 缺号 for it (Gelfand–Manin ch1-ch5, EN md only).
     r'|Theorems|Theorem|Definitions|Definition|Lemmas|Lemma|Corollaries|Corollary'
     r'|Propositions|Proposition|Examples|Example|Remarks|Remark'
+    # 🔴 Kreyszig「4.11-2 Requirement / **要求 4.11-2。**」：以「要求」命名的条目。
+    # 缺该词时 CN 条头 label-first 无词可配 → 整条不被计数 → 假「§4.11 缺号 2」
+    # （EN 版因编号在前走 num-first 兜底而侥幸通过，两版判定不一致即是证据）。
+    r'|Requirements|Requirement'
     r'|Exercises|Exercise|Problems|Problem|Notes|Note|Axioms|Axiom|Warnings|Warning'
     r'|Constructions|Construction|Notations|Notation|Terminology'
     r'|Applications|Application|Variations|Variation|Porisms|Porism'
@@ -129,6 +137,7 @@ _LABEL_NORM = {
     '附注': 'Remark', '算法': 'Algorithm', '性质': 'Property',
     '应用': 'Application', '变式': 'Variation', 'Application': 'Application',
     '系': 'Porism', '警告': 'Warning', '记号': 'Notation', '术语': 'Terminology',
+    '要求': 'Requirement', 'Requirement': 'Requirement',
     'Variation': 'Variation', 'Porism': 'Porism',
 }
 
@@ -189,7 +198,15 @@ def _is_header_boundary(tail):
         return True
     c = s[0]
     if c in ':.。():（）)，,；;*':
+        # 🔴 FIX ⑧（Vakil ch25 实测幽灵窗）：'.'/'。' 之后紧跟数字 = **更深层
+        # 编号被浅级 cap 截断**的残段（2 级回退把「定理 25.2.2 的证明」啃成
+        # [25,2]），不是条头终止符。真正的结尾句号后不会直接再跟数字。
+        if c in '.。．' and s[1:2].isdigit():
+            return False
         return True
+    if c in '-–—·/~〜' and s[1:2].isdigit():
+        # 分隔符型 SEP_TIGHT 成员（dash 系）后接数字同理 = 截断残段
+        return False
     if c.isalpha():          # latin letter -> 'Theorem 4.1 and ...' prose
         return False
     if '一' <= c <= '鿿':     # Han char -> '定理 4.1 的证明' prose
@@ -312,6 +329,30 @@ def _parse_entry(inner, levels, lang=None):
     # 于是去重后 8 落到 12 后面 → 假性「顺序错乱」BLOCKING。凡以证明词开头
     # 的 span 都是证明标题而非条目，任何语言一律在此直接拒绝。
     if _PROOF_RE.match(inner):
+        # 🔴 例外（Vakil CN 实测，FIX ⑤）：译文中「**证明 11.2.7（定理 11.2.1：…）。**」
+        # 是共享计数器里的**真实条目**（印刷的 X 的证明 = 条目 11.2.7），只把证明词
+        # 挪到了条头开头。判据 = 证明词（+可选 of/的 连接词）之后**紧跟完整 levels
+        # 段自身编号**；「证明 定理 3.8」「Proof of Theorem 3.8」（类型词挡在号前）
+        # 与裸「证明。」块头仍一律排除。
+        _rest = inner[_PROOF_RE.match(inner).end():].lstrip(' 　')
+        # 🔴 FIX ⑤b（Vakil ch20「证明（Hodge 指标定理 20.2.11），步骤 20.2.12。」/
+        # EN「Proof (of the Hodge Index Theorem 20.2.11), step 20.2.12.」实测）：
+        # 印刷书把多步证明的各步列为共享计数器条目——证明词先跟一个**括号引用**
+        # （被证明的定理），再用「步骤 N / step N」给出本条自身号。依次跳过可选
+        # 前置介词、括号引用、逗号+「步骤/step」连接词后才匹配自身号；无自身号
+        # （裸「证明（定理 X）。」）仍按证明块排除。
+        _rest = re.sub(r'^(?:of|的|pour|de)\s+', '', _rest, count=1,
+                       flags=re.IGNORECASE)
+        _rest = re.sub(r'^[（(][^）)]*[)）]\s*', '', _rest, count=1)
+        _rest = re.sub(r'^[，,]?\s*(?:步骤|step\.?)?\s*', '', _rest, count=1,
+                       flags=re.IGNORECASE)
+        _own_m = re.match(
+            (r'^(\d+(?:' + SEP_TIGHT + r'\d+){%d})(?!' + SEP_TIGHT + r'\d)(?!\d)')
+            % max(0, int(levels) - 1), _rest)
+        if _own_m:
+            comps = _comps_of(_own_m.group(1))
+            if comps is not None and len(comps) == int(levels):
+                return comps, 'uncat'
         return None
     _exact, _cap, re_label_first, re_num_first = _numpath_regexes(levels)
     # Three-level books: a bare numpath with NO trailing text and NO label
@@ -322,14 +363,24 @@ def _parse_entry(inner, levels, lang=None):
     # §1.5 = [1,2,3,5,6,7,8,9] and report 缺号 4).  Two-level books keep bare
     # numbers non-entries, because a bare "C.S" is ambiguous (section vs item);
     # the guard `levels == 3` scopes this fallback to three-level books only.
-    if levels == 3 and _exact.match(inner):
-        comps = _comps_of(inner)
+    # Vakil prints UNTITLED items as a bare number header ('**3.2.1.** The set
+    # …' → bold span is just '3.2.1.'): the printed trailing period must not
+    # defeat the bare-numpath check, or the item vanishes and the B layer
+    # reports a false 缺号 for it.
+    _bare = inner.rstrip().rstrip('.．。').strip()
+    if levels == 3 and _exact.match(_bare):
+        comps = _comps_of(_bare)
         if comps is None:
             return None
         return comps, 'uncat'
     m = re_label_first.match(inner)
     if m:
         numpath = m.group(1)
+        # 🔴 FIX ⑧b（Vakil 字母习题实测）：「练习 25.2.A」在 lv=2 回退轮被截成
+        # [25,2] 灌进「章」级习题窗（节号冒充条目号，制造假「ex:25 缺号 1」）。
+        # numpath 之后紧跟 SEP+字母 = 字母序标习题位，本层解析必须整体让位。
+        if re.match(r'[' + SEP_TIGHT[1:-1] + r']?[A-Za-z]', inner[m.end():].lstrip()):
+            return None
         if not _is_header_boundary(inner[m.end():]):
             return None
         comps = _comps_of(numpath)
@@ -344,8 +395,26 @@ def _parse_entry(inner, levels, lang=None):
     if m:
         numpath = m.group(1)
         tail = m.group(2).strip()
-        # 证明标题「X.Y-Z 的证明 / Proof.」→ 非定义条头，直接排除
+        # 证明标题「X.Y-Z 的证明 / Proof.」→ 非定义条头，直接排除。
+        # 例外（Vakil 实测）：印刷书把证明本身列为共享计数器条目
+        # 「**3.6.19 Proof of the Hilbert Basis Theorem 3.6.17.**」——条头自带
+        # 编号且证明标题引用**另一个**编号，这就是真实条目（uncat）；
+        # 引用号等于自身号或无引用号（裸「证明」块头）仍按证明块排除。
         if _PROOF_RE.match(tail):
+            own = _comps_of(numpath)
+            mref = _cap.search(tail)
+            if own is not None and mref and _comps_of(mref.group(1)) != own:
+                return own, 'uncat'
+            # 🔴 FIX ②b（Vakil「12.4.3 Proof of Bertini's Theorem, continued」实测）：
+            # 证明词开头但引用的是**有名字、无编号**的定理 → 这是被列进共享计数器
+            # 的证明步骤条目（uncat）。仅当去证明词/介词后仍留有**不含数字**的描述
+            # 才算条目；「Proof of Theorem 3.8」（浅号引用）与裸「证明」块仍排除。
+            if own is not None and not mref:
+                _res = tail[_PROOF_RE.match(tail).end():]
+                _res = re.sub(r'^(?:of|的|pour|de)\s+', '', _res.strip(),
+                              count=1, flags=re.IGNORECASE)
+                if _res and len(_res) > 1 and not re.search(r'\d', _res):
+                    return own, 'uncat'
             return None
         # 类型词可能在专名之后（「2.5-4 黎斯引理」「5.1-2 巴拿赫不动点定理」）；
         # 在余串里搜索首个类型词当 label，边界检查放到类型词之后。
@@ -366,9 +435,47 @@ def _parse_entry(inner, levels, lang=None):
                 return comps, _w
             _after = tail[lm.end():].lstrip()
             # A further number path after the type word ('定理 4.1 的应用') is a
-            # cross-reference — the old verdict, unchanged.
+            # cross-reference — the old verdict, unchanged.  BUT this only holds
+            # when the type word HEADS the tail: Vakil prints descriptive titles
+            # carrying parenthetical cross-refs ('1.2.18 Topological example
+            # (cf. Example 1.2.13; ...)') — there the match sits inside a cited
+            # span and the header is still a real (uncat) entry; dropping it
+            # manufactured a false 缺号 for every such item.
             if not _after or _after[0].isdigit():
-                return None
+                if _label_heads_tail(tail, lm.start()):
+                    # 🔴 FIX ⑨（Vakil「9.1.5 定理 9.1.1 证明背后的想法」/「10.2.3 推论 1。」
+                    # /「23.3.3 练习 23.3.C 的提示」实测）：类型词居余串开头、其后紧跟编号
+                    # ——旧判据一律按交叉引用丢弃，但印刷书常以「被引用条目」为题命名自己
+                    # 的条目（证明梗概 / 提示 / 后续 / 应用），这类条头自带完整段自身号，是
+                    # 真实 uncat 条目。判据：类型词后的编号若构成**完整 levels 段引用**
+                    # （数字满 levels 段，或 levels-1 段数字 + 字母习题位）且 ≠ 自身号 → 条目；
+                    # 引用号 == 自身号 → 回指证明块（None）。**浅号**（段数不足）只有在其后
+                    # 无任何描述文字时（裸「推论 1」题名）才算条目，否则维持「定理 4.1 的应用」
+                    # 式交叉引用 → None。负向锁死见 test_b_layer_descriptive_header。
+                    own = _comps_of(numpath)
+                    if own is None:
+                        return None
+                    refm = re.match(
+                        r'\d+(?:' + SEP_TIGHT + r'\d+)*(?:' + SEP_TIGHT + r'[A-Za-z])?',
+                        _after)
+                    if refm:
+                        tok = refm.group(0)
+                        num_tok = re.match(
+                            r'\d+(?:' + SEP_TIGHT + r'\d+)*', tok).group(0)
+                        cited = _comps_of(num_tok)
+                        nc = len(cited) if cited else 0
+                        has_letter = bool(re.search(SEP_TIGHT + r'[A-Za-z]$', tok))
+                        is_full = ((nc == int(levels))
+                                   or (has_letter and nc == int(levels) - 1))
+                        if is_full:
+                            if cited == own:
+                                return None
+                            return own, 'uncat'
+                        rest2 = _after[refm.end():].strip().strip(
+                            '。.．，,；;）)（( *')
+                        if not rest2:
+                            return own, 'uncat'
+                        return None
             if _label_heads_tail(tail, lm.start()) and not _han_glued_word(tail[lm.end():]):
                 # The type word opens the title and runs straight on into its own
                 # name: '4. Examples of Categories from Chapter I' (EN), or
@@ -411,8 +518,27 @@ def _parse_entry(inner, levels, lang=None):
     # "黎斯 (Riesz) 引理2.5-4（Riesz's lemma）").  Search for LABEL numpath
     # anywhere in the span; the header-boundary check after numpath rejects
     # prose references that happen to contain a label-number pair.
+    # 🔴 FIX ⑦（Vakil lv 回退误捡实测）：span 以**比 levels 更深**的自身编号开头
+    # （如 2 级回退时面对「18.3.2 定理 18.1.3 的证明」）——该 label+numpath 只可能
+    # 是条头内引用的交叉参照，归因搜索回退（m3）不得把它复活成条目。
+    if re.match(r'^\d+(?:' + SEP_TIGHT + r'\d+){%d,}' % max(1, int(levels)), inner):
+        return None
     m3 = re.search(r'(?:' + _ENTRY_LABELS + r')\s*' + _cap.pattern, inner)
     if m3:
+        # 🔴 The label+numpath must not sit INSIDE a parenthetical opened in the
+        # span: Vakil prints exercise headers like 'Exercise 9.5.H (promised in
+        # Remark 3.6.13)' — 'Remark 3.6.13' is a quoted cross-ref, and counting
+        # it manufactured phantom 3.6 items in ch9's window (假「缺号 4..12」+
+        # 「顺序错乱」).  Attribution parens before the label ('黎斯 (Riesz) 引理
+        # 2.5-4') are balanced, so this keeps the documented m3 purpose intact.
+        _depth = 0
+        for _ch in inner[:m3.start()]:
+            if _ch in '(（':
+                _depth += 1
+            elif _ch in ')）':
+                _depth -= 1
+        if _depth > 0:
+            return None
         numpath = m3.group(1)
         if _is_header_boundary(inner[m3.end():]):
             comps = _comps_of(numpath)
@@ -775,8 +901,15 @@ def _md_gap_blocking(ctx):
         # 🔴 '练习' 是 CN 译版对 Exercise 的常用标签（Weibel 2026-09 实战：漏它
         # 则 CN 侧 练习X.Y.n 落进条目窗造成「同号二现」WARN 一片）。
         _shared = bool(getattr(cfg, 'exercise_shared_numbering', False))
+        # 🔴 Vakil（type8 uncat 合并计数器）实测：全书只有一条 C.S.X 共享序列，
+        # 练习/问题/习题条头（「20.1.7 练习」「12.1.3 问题」）本身就是该序列的
+        # 成员，绝不能另开 ex 窗——否则主窗报假「缺号」。判据 = 该 label 解析到
+        # 的组就是 uncat 合并组（g.is_uncat）。真·独立习题计数器（Weibel/Lee 的
+        # 具名 Exercise 组，is_uncat False）不受影响，仍照常开窗。
+        _combined = bool(getattr(g, 'is_uncat', False))
         _routed_ex = False
-        if _lab in _EXERCISE_LABELS and not (_shared and _lab in ('exercise', 'exercse', '习题', '练习')):
+        if (_lab in _EXERCISE_LABELS and not _combined
+                and not (_shared and _lab in ('exercise', 'exercse', '习题', '练习'))):
             if ':' in gk:
                 _gh, _gb = gk.split(':', 1)
                 gk = f"{_gh}:ex:{_gb}"

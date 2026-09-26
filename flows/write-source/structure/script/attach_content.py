@@ -91,7 +91,7 @@ import build_structure as _bs
 from lib.numbering import (ordinal_depth, resolve_ordinal_code,
                            formula_paren_tag_re,
                            formula_tag_number, formula_trailing_tag, formula_tag_re,
-                           formula_tag_shape_ok)
+                           formula_tag_shape_ok, formula_tag_noise)
 from lib.page_dir import node_page_dir as _node_page_dir
 
 OUT_DIR_NAME = "book_structure"
@@ -490,6 +490,12 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
             if tr is not None:
                 num, trailing = tr[0], tr[1]
         if num is not None:
+            # 🔴 全零 / 前导零串（`0` `00` `07` `002`）是「… < ∞」被 OCR 读成编号
+            # 列的噪声（实测 Kreyszig 8.5-2 注册出 tag `00`，而契约 tag 是门控真值，
+            # 反逼写手凭空 `\tag{00}`）。与是否配置 `formula` 无关，一律不挂——
+            # 不挂则该文本块留在散文流里。见 lib.numbering.formula_tag_noise。
+            if formula_tag_noise(num, section_scoped=(scope == 3)):
+                continue
             if _guard_head is not None:
                 head = re.split(r"[.\-–]", str(num).strip(), maxsplit=1)[0]
                 if head.upper() != _guard_head.upper():

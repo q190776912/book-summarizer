@@ -640,6 +640,20 @@ class BookConfig:
     #     nearest preceding §N) become verifiable as role-5 subsections.
     # Default False — standard §C.S books are completely unaffected.
     sections_global: bool = False
+    # NUMERIC local subsections inside each global § (Arnold《Ordinary
+    # Differential Equations》: inside every `§ N. Title` the book prints a run
+    # of BARE single-number subsection heads `1. Title`, `2. Title`, … that
+    # RESTART at 1 for each §).  This is the numeric cousin of the bare-letter
+    # sub-block (role 5) — a one-component ordinal nesting under the `## §N`
+    # level, which the `>=2 dotted components` detector cannot see.  When True:
+    #   * scan_skeleton (local_num_sec) detects them with a per-§ +1 continuity
+    #     latch (decisive disambiguator vs footnotes / running heads / lists);
+    #   * build_structure emits them as REAL level-2 section nodes rendered
+    #     `### {local}. {title}` (bare local number, no § glyph, no parent
+    #     projection).  Item KEYS / formula §-window scoping are unchanged, so
+    #     the validated ncomp==1 Q-layer fix does not regress.
+    # Default False — every other book is completely unaffected.
+    numeric_local_sections: bool = False
     # END-OF-CHAPTER exercise-block headings (Ross《A First Course in
     # Probability》体例: "Problems" / "Theoretical Exercises" / "Self-Test
     # Problems and Exercises").  When declared (non-empty), scan_skeleton treats
@@ -925,6 +939,7 @@ class BookConfig:
             exercise_shared_numbering=bool(data.get('exercise_shared_numbering', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
             sections_global=bool(data.get('sections_global', False)),
+            numeric_local_sections=bool(data.get('numeric_local_sections', False)),
             exercise_region_headings=[
                 str(h) for h in (data.get('exercise_region_headings') or [])
                 if str(h).strip()

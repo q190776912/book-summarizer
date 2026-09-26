@@ -59,7 +59,8 @@
   明确标注的占位条目（不编造内容），便利后续补全。默认 ``--dry-run``（只报告），``--apply`` 写盘。
   🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ③b图片/空正文/章级图片
   覆盖对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对 + ⑨章级习题重号（幻影条目契约痕迹）
-  + ⑩契约→manifest 反向覆盖对账 + 单元标签编号须契约在账（质量校验第 23 项）。
+  + ⑩契约→manifest 反向覆盖对账 + ⑪单元结构阅读顺序（页码单调）+ 单元标签编号须
+  契约在账（质量校验第 23 项）。
 
 完整性核对（防漏项）：
   ⑦ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
@@ -73,6 +74,13 @@
      比较按「习题 / 结果项分桶 + 序标归一」——Katok 实测：结果项与习题共用编号
      空间（不分桶会互相销账），而 manifest 旧键形 ``6.2-5`` 与重建后的契约键
      ``推论6.2.5`` 同号（直比字符串会假报整条丢失）。
+  ⑪ 单元**结构阅读顺序**（合并前）：manifest 顺序 == 拼接顺序，按契约节点 ``page_start``
+     （源书物理页序）断言**页码单调不减**——某单元页码 < 其前已出现的最大页码 = 早页内容
+     排到晚页之后（阅读顺序倒退）。补 B 层（只查同节前缀序标单调）/ ⑩（集合比较，同集合
+     任意排列放行）/ ``subsection_order``（只查契约数字键、跑在拆分前）三者都看不见的**跨节
+     / 跨页错乱**——即「全绿仍读起来次序混乱」的根因。页码相等允许（同页多单元交 B 层），
+     章末 dash 习题 ``N-M``（正文首现页早于章末）豁免，锚点缺失单元跳过。实现见
+     ``lib/unit_order.check_unit_order``（verify 侧 unit_order 层复用同一实现）。
 
 不满足任一 → 输出未处理 / 质量未达标清单并 exit 1（不通过）；全部通过 → exit 0。
 
@@ -128,6 +136,10 @@ from data.book_structure.book_structure import (
     chapter_ordinals, unit_node_entries)
 import split_draft_units as _split
 import check_unit_quality as _quality
+from lib.unit_order import check_unit_order
+from lib.problem_coverage import coverage_problems, page_floor_problems
+from lib.tag_attestation import tag_attestation_problems
+from lib.numbering import formula_tag_noise
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
 
@@ -182,6 +194,27 @@ def _formula_layer_enabled(ext):
         if isinstance(v, dict) and _node_enabled(v):
             return True
     return False
+
+
+def _formula_scope(ext):
+    """verify_config.json 的 ``formula.scope``（取不到 → None）。
+
+    单元级 tag 对账要按**书的体例**剔噪：scope==3（编号节内重置）的书里，纯数字
+    ≥3 位的 tag 必是表格单元 / 页码碎片（Kreyszig 4.11-5 的 ``931`` / ``144``）。
+    """
+    path = os.path.join(ext, "verify_config.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return None
+    node = cfg.get("formula")
+    if isinstance(node, dict):
+        return node.get("scope")
+    for v in cfg.values():
+        if isinstance(v, dict) and isinstance(v.get("formula"), dict):
+            return v["formula"].get("scope")
+    return None
 
 
 def _load_known_book(ext):
@@ -379,6 +412,84 @@ def _read_unit(path):
     return mark, uid, utype, key, body, _hash_text(body.rstrip("\n"))
 
 
+def _unit_body_reader(out_dir):
+    """→ read(unit) = 该单元正文（去掉首行标记；文件缺失给空串，缺失另有闸门报）。"""
+    def read(u):
+        path = os.path.join(out_dir, str(u.get("file") or ""))
+        if not os.path.exists(path):
+            return ""
+        return _read_unit(path)[4]
+    return read
+
+
+_PAGE_CACHE = {}
+
+
+def _page_block_loader(ext):
+    """→ load(pdf_page) = 该页文本块内容的**阅读序**列表；无 page_NNN.json 时给 None。
+
+    闸门只数「行首题号」，OCR 糊掉的数学不影响判据；阅读序按 bbox 顶边排（抽取期
+    ``text`` 块本身的顺序不保证）。整本书的页文件在进程内缓存。
+    """
+    def load(pg):
+        if pg in _PAGE_CACHE:
+            return _PAGE_CACHE[pg]
+        # 🔴 页文件名有零补齐惯例（Kreyszig = page_031.json，部分书 = page_31.json）：
+        # 只试一种命名会让前 99 页**静默**查不到 → 页侧下限对第一章整章失明。
+        path = None
+        for cand in ("page_%03d.json" % pg, "page_%d.json" % pg, "page_%04d.json" % pg):
+            p = os.path.join(ext, cand)
+            if os.path.exists(p):
+                path = p
+                break
+        val = None
+        if path:
+            try:
+                with io.open(path, encoding="utf-8") as f:
+                    d = json.load(f)
+                blocks = sorted(d.get("text") or [],
+                                key=lambda b: (b.get("bbox") or [0, 0])[1])
+                val = [str(b.get("text") or "") for b in blocks]
+            except Exception:
+                val = None
+        _PAGE_CACHE[pg] = val
+        return val
+    return load
+
+
+_PAGE_LABEL_CACHE = {}
+
+
+def _page_label_loader(ext):
+    """→ load(pdf_page) = 该页**可能承载印刷编号**的全部块文本（正文 + MFD 公式 latex）。
+
+    ⑭ 用：左缘印刷编号常被 MFD 当公式检测出来（`( 7 \\mathbf { c } ^ { \\prime } )`），
+    只看 ``text`` 流会把真实编号判成「查无锚点」。公式块只有 ``bbox``/``latex`` 两个
+    字段可用，按 y 排序即可。
+    """
+    def load(pg):
+        if pg in _PAGE_LABEL_CACHE:
+            return _PAGE_LABEL_CACHE[pg]
+        path = None
+        for cand in ("page_%03d.json" % pg, "page_%d.json" % pg, "page_%04d.json" % pg):
+            p = os.path.join(ext, cand)
+            if os.path.exists(p):
+                path = p
+                break
+        val = None
+        if path:
+            try:
+                with io.open(path, encoding="utf-8") as f:
+                    d = json.load(f)
+                val = [str(b.get("text") or "") for b in (d.get("text") or [])]
+                val += [str(b.get("latex") or "") for b in (d.get("formulas") or [])]
+            except Exception:
+                val = None
+        _PAGE_LABEL_CACHE[pg] = val
+        return val
+    return load
+
+
 def _render_check_chapter(ext, out_dir, units):
     """按章批量真实 KaTeX 渲染：把全部 item/desc/exercise 单元正文拼进一个
     临时 md（每个单元前有 ``<!-- gate-render unit: <file> -->`` 边界标记），
@@ -489,6 +600,7 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     ord_keys = chapter_ordinals(contract) if contract is not None else set()
     problems = []
     known_book = _load_known_book(ext)
+    _sec_scoped = _formula_scope(ext) == 3
     # 🔴 `\tag` 对账与章级 verify 的 Q 层同开关：未声明公式层时，单元级跳过 `\tag`
     # 缺失/编造对账（含 phantom 的跨节编号判定），不把 build_structure 过度挂上的
     # 裸数字/交叉引用 tag 当作硬真值。图片/结构/渲染等其余质量校验不受影响。
@@ -537,6 +649,13 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         exp = u.get("tags")
         if not isinstance(exp, list):
             exp = tag_map.get(str(u["key"])) if tag_map else None
+        if exp:
+            # 契约/manifest 里遗留的 OCR 噪声编号（`0`/`00`/`07`，来自「< ∞」被读成
+            # 编号列）不作真值：既不再**要求**单元写 `\tag{00}`，单元里真写了就按
+            # 「编造」报出，脏数据自动暴露（判据见 lib.numbering.formula_tag_noise，
+            # 抽取侧同用，新契约不会再产生）。
+            exp = [str(t) for t in exp
+                   if not formula_tag_noise(t, section_scoped=_sec_scoped)]
         if not formula_on:
             exp = None
         # 图片 / 内容块真值（同 tags 语义）：主真值 = manifest.images / manifest.content
@@ -613,6 +732,40 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     problems.extend(_check_exercise_key_uniqueness(units))
     # 🔴 章级闸 ⑩：契约 → manifest 反向对账（契约条目没有单元记录 = merge 后整条消失）
     problems.extend(_check_contract_unit_coverage(contract, units, ch_key))
+    # 🔴 章级闸 ⑪：单元**结构阅读顺序**（合并前，页码单调真值）——manifest 顺序即拼接
+    # 顺序，若某单元的契约页码 < 其前已出现的最大页码 = 早页内容排到晚页之后（读者视角
+    # 阅读顺序倒退）。B 层只查同节前缀内序标单调、反向覆盖闸只做集合比较（同集合任意
+    # 排列放行）、subsection_order 只查契约数字键且跑在拆分前——**都看不见跨节/跨页错乱**，
+    # 这正是「全绿仍读起来次序混乱」的根因。真值取契约节点 page_start（源书物理页序，
+    # 比契约列表序更可靠，列表序可能被陈旧拆分排乱）。章末 dash 习题（N-M）豁免。
+    problems.extend(check_unit_order(contract, units))
+    # 🔴 章级闸 ⑫：节末**编号内容**（典型形态＝节末 Problems 题面）覆盖对账。抽取期把
+    # 习题块灌进前一编号项 / 证明节点的子树时，该节根本不出习题单元，写手看不见「该写
+    # 12 道题」这件事，既有闸门也全看不见（tag / 图片 / 正文非空 / ⑩ 反向覆盖都是按
+    # **节点**比较，题面挂在别的节点子树里照样绿灯）——Kreyszig 实测：11 章 572 单元
+    # 门控全绿，却有约 51 节 / 500+ 道习题整块没进笔记。两侧用**同一**判据（该节子树
+    # 里「从 1 起连续」的最长编号链 vs 本章单元按 manifest 序拼接后的最长链），短了即
+    # 整块漏写；契约侧 OCR 断号只会让真值偏小 = 保守；契约标 consolidated 的成堆习题
+    # 是流水线认可的省略，跳过。实现与负向测试见 lib/problem_coverage.py。
+    problems.extend(coverage_problems(contract, units, _unit_body_reader(out_dir)))
+    # 🔴 章级闸 ⑬：习题数的**页侧**下限对账（``_extract/page_NNN.json``）。⑫ 拿契约当
+    # 真值，可契约自己会瞎：有的节末整页习题在抽取期根本没进契约（跨页题块被丢、或被
+    # 灌进**另一节**的子树），于是「印刷 10 题 / 契约 4 题 / 单元写了 5 题」在 ⑫ 里是
+    # 绿灯。本闸直接从该节页窗里「Problems」标题之后出现过的最大题号取下限（只作下限、
+    # 遇下一条节标题即停、>30 视为噪声 = 永不低于印刷真值之上），单元侧短了就报。
+    # 没有页 JSON 的书（纯知识库输入）自然取不到下限 = 不报，不影响其它项目。
+    problems.extend(page_floor_problems(
+        contract, units, _unit_body_reader(out_dir), _page_block_loader(ext),
+        (int(contract.get("page_start") or 0), int(contract.get("page_end") or 0))))
+    # 🔴 章级闸 ⑭：契约 tag 的**印刷锚点**对账。tag 是本门控「契约 ↔ 单元」的真值来源，
+    # 契约里多一个原书没印过的编号，写手就被逼凭空 `\tag{}`（多出=编造），删了又报漏写，
+    # 两头堵、且到步骤 8 Q 层才暴露。Kreyszig 实测 5 个毒 tag：`22`（display 里 ε/2 的
+    # 两个分母被 OCR 成独立数字块）、`50`/`25`（`= 0.50` 小数尾巴）、`18751A`/`12818A`
+    # （波长 `18 751 Å`）。判据保守（漏报可接受）：页窗内既无 `(N)` 又无独立裸块 → 判毒；
+    # 本章编号以 `(N)` 为主时，只有裸锚点的 tag 也判毒。缺页文件不判。
+    # 修法在**收割处**（attach_content / lib.numbering 的形态与几何闸），不是写手台。
+    problems.extend(tag_attestation_problems(contract, _page_label_loader(ext),
+                                             chapter_label(ch_key)))
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py

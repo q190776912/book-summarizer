@@ -30,6 +30,7 @@
 | O | subitem-continuity | subitem_continuity | 15 | 否 | — | [subitem_continuity](subitem_continuity/subitem_continuity.md) |
 | P | verbose-gates | verbose_gates | 16 | 否 | — | [verbose_gates](verbose_gates/verbose_gates.md) |
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](formula_tag/formula_tag.md) |
+| U | unit-order（合并后单元结构阅读顺序 = 契约 page_start 页码单调；补 B/⑩/subsection 看不见的跨节跨页错乱） | unit_order | 18 | 否 | — | [unit_order](unit_order/unit_order.md) |
 
 ## 步骤（有序）
 0. **🔒 前置检查表 PREFLIGHT（凡要跑 `--fix` 前必做）**：先跑只读检查表确认 `$$` 围栏配对（fences 为偶）且无 `\\tag` 落在配对块外，才允许进入任何块作用域修复：

@@ -142,15 +142,22 @@ def check_figure_attribution(md_file):
             want = am.group(1) if am else None
             # nearest owning item block (blockquote or item_top with a ref)
             owner_ref = owner_kind = None
+            owner_end = -1
             for bj in range(bi, -1, -1):
-                k2, _s2, _e2, r2 = blocks[bj]
+                k2, _s2, e2, r2 = blocks[bj]
                 if k2 in ('blockquote', 'item_top') and r2:
-                    owner_ref, owner_kind = r2, k2
+                    owner_ref, owner_kind, owner_end = r2, k2, e2
                     break
             if kind == 'floating':
                 # floating figure: only a problem when the owning item is a
                 # blockquote (figure should be inside its `>` block).
-                if owner_kind == 'blockquote':
+                # 🔴 但**只在该图块紧贴着那个 `>` 块**时才算「本该在块内」——中间还夹着
+                # 散文/公式行时，图属于那段散文（节末 Problem Set 里的图尤其如此：往前
+                # 找到的「最近带号块」常常是**上一个单元**的定理块，Kreyszig 实测 ch4
+                # Fig. 41/42 夹在公式 (11)/(17) 之后、ch3 Fig. 24 在习题 2 的题面之后，
+                # 全是被这条盲区误伤）。
+                attached = all(not lines[k].strip() for k in range(owner_end + 1, s))
+                if owner_kind == 'blockquote' and attached:
                     problems.append(
                         f"  ? FIG MISATTRIBUTED: {os.path.basename(src)} (alt={alt!r}) — "
                         f"floating outside its blockquote item {owner_ref}; "

@@ -526,6 +526,20 @@ def print_result(r):
               f"/ {q_om_n} q-om / {q_mp_n} q-mp / {q_ll_n} q-ll "
               if q_checked else "")
 
+    # U-LAYER: unit structural reading order (contract page monotonicity). BLOCKING.
+    # 补各层盲区：B 层只查同节前缀序标单调、反向覆盖只比集合（同集合任意排列放行），
+    # 都看不见跨节/跨页错位——「全绿仍读起来次序混乱」的根因。与 gate_units 章级闸 ⑪
+    # 同源（lib/unit_order.check_unit_order）。
+    u_order = r.get('unit_order_problems', []) or []
+    if u_order:
+        problems += 1
+        print(f"\nU-LAYER UNIT ORDER ({len(u_order)}): 合并后的总结单元**不符合原书结构阅读顺序**"
+              f"——某单元的源书页码**早于**排在其前面的单元（阅读顺序倒退，即使各层全绿读起来仍乱）。"
+              f"请在该章 manifest（units/<章>/manifest.json）把错位单元移动到正确位置，使拼接顺序 "
+              f"遵循契约 page_start 单调（与 gate_units 章级闸 ⑪ 同一判据）：")
+        for g in u_order:
+            print(f"  ! {g}")
+
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。
@@ -548,6 +562,7 @@ def print_result(r):
               f"/ {len(p_bare)} p-layer-bare-item / {len(p_miss)} p-layer-missing-sec "
               f"/ {len(p_extra)} p-layer-fabricated-item "
               f"/ {len(p_verbose)} p-layer-verbose-prose / {len(p_proof_verbose)} p-layer-verbose-proof "
+              f"/ {len(u_order)} u-layer-order "
               f"{q_part}— {os.path.basename(md)}")
         return 'FAIL'
     else:

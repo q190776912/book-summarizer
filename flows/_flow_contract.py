@@ -643,13 +643,53 @@ class physical_evidence:
         # "units/book_structure/appendixch6.json" 式假路径，契约恒缺位 →
         # src_text=None，gate-15 对书源原句「omitted here」假阳。
         cpath = None
+        _ext = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(units_dir))))
         if ch_key is not None:
             try:
                 from data.book_structure.book_structure import chapter_json_path
-                cpath = chapter_json_path(os.path.dirname(os.path.dirname(
-                    os.path.dirname(os.path.abspath(units_dir)))), ch_key)
+                cpath = chapter_json_path(_ext, ch_key)
             except Exception:
                 cpath = None
+        # 🔴 `\tag` 对账与权威门控 gate_units 同开同关：Q 公式层是 opt-in，本书
+        # 未声明 `formula` 块时（如 Vakil，make_config 判定不追踪编号公式、build_structure
+        # 在 ncomp=None 下把 diagram/交叉引用裸数字过度挂成 tag），单元级必须**跳过**
+        # 「缺/编造编号公式」对账——否则本 shadow 会把那些并非以 `\tag` 呈现的编号
+        # 当成硬真值，误判「漏写编号公式」而阻断落账（gate_units.py 第 549-550 行有
+        # 同一判据，本内联版曾遗漏 → 29 章假失败）。真值源单一化：直接复用 gate_units
+        # 的判定函数，导入不可用时退回「读 verify_config.json 是否含 formula 块」的兜底。
+        try:
+            from gate_units import _formula_layer_enabled
+            _formula_on = bool(_formula_layer_enabled(_ext))
+        except Exception:
+            # 兜底：直接读 verify_config.json 是否含 formula 块（gate_units 导入不可用时）。
+            _formula_on = False
+            try:
+                with open(os.path.join(_ext, "verify_config.json"),
+                          encoding="utf-8") as _vf:
+                    _vc = json.load(_vf)
+
+                def _has_formula_map(nd):
+                    if not isinstance(nd, dict):
+                        return False
+                    if any(k in nd for k in ("known_book", "ignore", "letter_ch",
+                                             "bare_number", "enabled")):
+                        return True
+                    # 仅 ``type`` 且无 ``scope`` 才算 formula map（``scope`` = 分组配置，
+                    # 非公式层；与 gate_units._is_formula_map 的兜底一致）。
+                    return "type" in nd and "scope" not in nd
+                _nodes = [_vc, _vc.get("ch"), _vc.get("appendix"),
+                          _vc.get("supplement")]
+                if isinstance(_vc.get("data"), dict):
+                    _nodes.extend(_vc["data"].values())
+                for _nd in _nodes:
+                    if isinstance(_nd, dict) and (
+                            _has_formula_map(_nd.get("formula"))
+                            or _has_formula_map(_nd)):
+                        _formula_on = True
+                        break
+            except Exception:
+                _formula_on = False
         mark_re = re.compile(
             r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
         for u in manifest.get("units") or []:
@@ -690,6 +730,9 @@ class physical_evidence:
                                     str(u["key"]))
                         except Exception:
                             expected = None  # 契约不可得 = 跳过 tag 对账（其余检查照常）
+                    # 🔴 与 gate_units 同开关：未声明公式层 → 不做 `\tag` 对账。
+                    if not _formula_on:
+                        expected = None
                     # 图片 / 内容块真值随 manifest 透传（与 gate_units 同一套对账；
                     # 老 manifest 缺字段 = None 跳过，缺图由 gate_units 章级闸兜底）
                     exp_imgs = u.get("images")

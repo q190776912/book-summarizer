@@ -275,6 +275,60 @@ def _sub_global_title_ok(title):
     if re.search(r'[，。；？！、]', t):
         return False
     return True
+
+# --- NUMERIC local sub-block heads inside a global §N ----------------------
+# Arnold《Ordinary Differential Equations》(2e) prints, INSIDE every global
+# section `§ N. Title`, a run of **bare single-number** subsection heads that
+# RESTART at 1 for each §:
+#   `1. Examples of Evolutionary Processes`, `2. Phase Spaces`,
+#   `3.The Integral Curves of a Direction Field` (no space after the dot!),
+#   `6.Example:The Equation of Normal Reproduction` (colon, no space!), …
+# These are the book's genuine level-2 subsections.  They are NOT a two-dotted-
+# component `C.S` header (so `_detect_section_hierarchy`, which needs >=2
+# components, cannot see them) and NOT a letter sub-block (SUB_GLOBAL only
+# matches `[A-Z]`).  Structurally they are the NUMERIC cousin of the letter
+# sub-block: a one-component ordinal that nests under the enclosing `## §N`.
+# Detection is enabled ONLY when the caller passes `local_num_sec=True`
+# (build_structure, from the config flag `numeric_local_sections`), so every
+# other book is byte-for-byte unchanged.
+#
+# Guards (all fail-closed — a rejected candidate just falls through, it can
+# never fabricate a subsection):
+#   * number MUST be immediately followed by a separator (`.`/`．`/`:`/`：`/
+#     `、`/`。`): kills footnote markers (`1 Isac Barrow…`, `2 Example: Such is…`
+#     — number + SPACE, no separator) and running heads (`16  Chapter 1. Basic
+#     Concepts` — page number + spaces + "Chapter", no separator after digits).
+#   * space after the separator is OPTIONAL (`\s*`): catches `3.The…` / `6.Example:`.
+#   * title must start with an UPPER-CASE Latin letter and be 2..61 chars: real
+#     Arnold subsection titles are Title-Case English.  Kills prose/numbered-list
+#     fragments starting lowercase and math residue.
+#   * title must NOT contain math-operator chars (`= <> → …`): kills formula
+#     fragments (`1 = 2, 2 = 0,` — though the leading `1 =` already fails the
+#     separator test, this guards mixed lines).
+#   * title must NOT look like a running head (contains "Chapter"/"§"/"Appendix"/
+#     "Index"): second belt against page headers.
+#   * per-§ CONTINUITY LATCH (enforced in scan(), not here): a match is accepted
+#     ONLY if its number == (previous accepted local number within THIS §) + 1,
+#     seeded at 1.  This is the decisive disambiguator: a stray `1.` prose line
+#     inside body text cannot masquerade as subsection 1 unless it is literally
+#     the first numbered head of the §, and any mid-paragraph list restart at a
+#     non-next number is rejected.
+SEC_LOCAL_NUM = re.compile(
+    r'^(\d{1,2})[.．:：、。]\s*([A-Z][^\n]{1,60})$')
+
+
+def _local_num_title_ok(title):
+    """Validate a bare-numeric local sub-block candidate title (guards above)."""
+    t = (title or '').strip()
+    if not t:
+        return False
+    if _SUB_MATH_OP_RE.search(t):
+        return False
+    if re.search(r'\b(Chapter|CHAPTER|Appendix|APPENDIX|Index|§)', t):
+        return False
+    return True
+
+
 ITEM_CN = re.compile(
     r'^(?:定理|定义|引理|推论|命题|性质|例|注|表|图)\s*[（(]?(\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)]?(?!\d)\s*(.{0,90})')
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
@@ -539,7 +593,29 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
             return None
         # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
         # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。
+        # 🔴 收紧为「散文标记才拦」（Kreyszig 2e 实测 2026-09-26）：本书节题
+        # 体例是「两个名词短语用句号并置」——"1.5 Examples. Completeness
+        # Proofs" / "2.2 Normed Space. Banach Space" / "11.2 Momentum
+        # Operator. Heisenberg Uncertainty Principle"，旧一刀切把 5 个真节头
+        # （1.5/2.2/2.10/3.1/11.2）整批否决、章节骨架漏节。现只在句界形态
+        # 叠加散文证据（小写虚词连跑 ≥3 词、或超长 >56）时拒；真节头
+        # （Title-Case 名词短语、长度 ≤56）放行。负例 "The UIT built up the
+        # kernel of LRT. This" 含 3 连小写词仍拦。
         if re.search(r'[.;；]\s+[A-Z一-鿿]', _rest_stripped):
+            _lc_run = re.search(
+                r"\b[a-z][A-Za-z'\-]*(?:\s+[a-z][A-Za-z'\-]*){2,}\b",
+                _rest_stripped)
+            if _lc_run or len(_rest_stripped) > 56:
+                return None
+        # 🔴 小写连词动词闸（Kreyszig 章首导语实测 2026-09-26）：p17
+        # "1.6. Another concept of theoretical and practical interest **is**
+        # separability"、p420 "8.4. The Riesz-Schauder theory **is** based on
+        # Secs. 8.3 and 8.4"——章首编号导语与节号同形，OCR 断块后整行命中
+        # universal 检测 → 幻影节头抢先把 §N.M 锚到导语页（节序 BLOCKING +
+        # 真节头被首现去重压掉）。Title-Case 真节标题从不含**小写**连词动词
+        # （系词/完成助动词），散文句恒有；大小写敏感匹配，"What Is…" 类
+        # 大写标题不受影响。
+        if re.search(r'\b(?:is|are|was|were|been|being)\b', _rest_stripped):
             return None
         # CJK 粘连句读守卫：真中文节标题是**无句读**的短名词短语（"无穷小与无穷大"
         # /"函数的上极限和下极限"）；若标题内部出现「句点/逗号/分号（半角或全角）
@@ -712,7 +788,8 @@ def _merge_bare_num_head(ln, bi, blocks):
 
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
-         exercise_headings=None, plain_sec_heads=False, sections_global=None):
+         exercise_headings=None, plain_sec_heads=False, sections_global=None,
+         local_num_sec=False):
     rows = []
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
@@ -764,6 +841,19 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             isinstance(d, int) and d == 1 for d in section_depths[1:])
     # Current global §N while scanning (for SUB letter-head parentship).
     cur_global_sec = None
+    # Numeric local sub-block latch (only used when local_num_sec): track which
+    # § the current 1..N restart run belongs to and the last accepted number so
+    # a candidate is only promoted when it is exactly prev+1 (seeded at 1).  The
+    # run RESETS automatically when cur_global_sec changes (new § → parent≠
+    # cur_local_parent → restart expecting 1).
+    cur_local_parent = None
+    cur_local_sub = None
+    # Exact SEC keys emitted via the local_num_sec path.  The global_sec
+    # dotted-SEC post-filter below drops "C.S" SEC rows as prose false
+    # positives, but legitimate numeric-local subsections are also "C.S";
+    # record them here so the filter can exempt only the ones we intentionally
+    # emitted (key-set membership, not a loose pattern → no FP leakage).
+    local_sec_keys = set()
     # 🔴 Only enable the universal (depth-agnostic) detector when there is at
     # least one depth>=2 section to find.  A book whose sections are single
     # numbers (`## §N`, e.g. do Carmo) has `depths_set == set()` (empty) — the
@@ -977,6 +1067,27 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if cur_global_sec is not None and re.match(r'^习\s*题\s*$', ln):
                     rows.append((p, 'EXER', str(cur_global_sec), '习题'))
                     continue
+                # Numeric local sub-block head ("1. Examples of Evolutionary
+                # Processes" restarting per §) — the bare-numeric cousin of the
+                # letter SUB_GLOBAL below, gated behind local_num_sec (Arnold
+                # ODE).  Emitted as a SEC row keyed "<§>.<local>" so build_structure
+                # turns it into a REAL level-2 section node (it nests under the
+                # single-number § parent via the dotted-depth machinery).  The
+                # per-§ +1 continuity latch is the decisive disambiguator.
+                if local_num_sec and cur_global_sec is not None:
+                    if cur_local_parent != cur_global_sec:
+                        cur_local_parent = cur_global_sec
+                        cur_local_sub = None
+                    _mn = SEC_LOCAL_NUM.match(ln)
+                    if (_mn and _local_num_title_ok(_mn.group(2))
+                            and int(_mn.group(1)) <= SEC_MAX_NUMBER
+                            and int(_mn.group(1)) == (cur_local_sub or 0) + 1):
+                        cur_local_sub = int(_mn.group(1))
+                        _lkey = f"{cur_global_sec}.{cur_local_sub}"
+                        local_sec_keys.add(_lkey)
+                        rows.append((p, 'SEC', _lkey,
+                                     _mn.group(2).strip(), ln_y))
+                        continue
                 # Bare-letter sub-block head ("A.变分"): parented under the
                 # current global §N when one is active ("<N>.<L>"), parentless
                 # (".<L>") otherwise — appendix chapters have no numeric §
@@ -1110,7 +1221,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # 捕获的 "C.S" 形态在此类书里只可能是图号/页码粘连等散文误报（谷超豪
     # 《数学物理方程》ch7 实测 "7.7 所示"），一律剔除。
     if global_sec:
-        rows = [r for r in rows if r[1] != 'SEC' or '.' not in str(r[2])]
+        rows = [r for r in rows
+                if r[1] != 'SEC' or '.' not in str(r[2])
+                or str(r[2]) in local_sec_keys]
     # 🔴 C.S.1 二现冲突破解（Rising Sea 实测 35+ 节）：印刷字母习题 I 被
     # OCR 读成数字 1（"10.1.I. EXERCISE." p285 → "10.1.1. ExERCISE. …"），
     # 与该节真条目 "10.1.1. Motivation…" 撞键。数字条目在同节内不可能
@@ -1171,6 +1284,70 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # glue 变体与同页 y 感知归都依赖它）；EXER/ITEM/SUB 行 y=None。
     rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None) for r in rows]
     return rows
+
+
+def numeric_local_subsection_probe(ranges, *, mode, default_dir=None,
+                                   chapter_first=False,
+                                   plain_sec_heads=False,
+                                   min_parents=2, min_sections=6):
+    """Detect the Arnold-ODE shape: single-number global § heads whose bodies
+    contain bare ``N. Title`` sub-heads restarting at 1 inside every §.
+
+    ``ranges`` is a list of ``(ch, start, end[, page_dir])`` tuples where
+    ``start``/``end`` are PAGE NUMBERS (ints) and ``page_dir`` is the directory
+    holding that chapter's ``page_*.json`` (falls back to ``default_dir``).  We
+    run the PRODUCTION scanner (``scan``) with ``sections_global=True`` +
+    ``local_num_sec=True`` on each chapter so the detector sees EXACTLY what
+    ``build_structure`` will later build (no second regex → no drift).  The §
+    heads require a literal ``§`` glyph (SEC_GLOBAL_SPACED), so a dotted-heading
+    book (which prints ``20.5 Title``) yields ZERO single-number § here and
+    cannot false-fire; a global-§ book without numeric sub-blocks yields § but no
+    dotted children.  Both fall below the thresholds and return ``False``.
+
+    Returns ``(fire, info)`` where ``fire`` is the boolean verdict and ``info``
+    is a diagnostic dict (``parents`` / ``children``).  ``fire`` is True only
+    when there are >= ``min_parents`` § that EACH carry a clean ``1..k`` run and
+    the total number of subsections >= ``min_sections`` — the conservative
+    fingerprint of a genuine third structural level, not stray OCR.
+    """
+    sec_parents = set()
+    children = {}                      # parent § -> set(local number str)
+    for tup in ranges:
+        if len(tup) >= 4:
+            ch, start, end, page_dir = tup[0], tup[1], tup[2], tup[3]
+        else:
+            ch, start, end = tup[0], tup[1], tup[2]
+            page_dir = None
+        if start is None or end is None:
+            continue
+        scan_dir = page_dir or default_dir
+        if not scan_dir:
+            continue
+        rows = scan(scan_dir, ch, start, end, mode,
+                    chapter_first=chapter_first,
+                    plain_sec_heads=plain_sec_heads,
+                    sections_global=True, local_num_sec=True)
+        for r in rows:
+            if r[1] != 'SEC':
+                continue
+            k = str(r[2])
+            if '.' in k:
+                parent = k.split('.', 1)[0]
+                children.setdefault(parent, set()).add(k.split('.', 1)[1])
+            else:
+                sec_parents.add(k)
+    # A parent counts only if its children form a contiguous run starting at 1.
+    good_parents = {p for p, s in children.items()
+                    if s and s == {str(i) for i in range(1, len(s) + 1)}}
+    total_children = sum(len(children[p]) for p in good_parents)
+    fire = (len(good_parents) >= min_parents
+            and len(good_parents & sec_parents) >= min_parents
+            and total_children >= min_sections)
+    return fire, {
+        "sec_parents": sorted(sec_parents, key=lambda x: int(x) if x.isdigit() else x),
+        "good_parents": sorted(good_parents, key=lambda x: int(x) if x.isdigit() else x),
+        "total_children": total_children,
+    }
 
 
 def main():

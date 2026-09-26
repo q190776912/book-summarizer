@@ -418,9 +418,21 @@ def _render_node(node, out, lang="cn"):
             # 忠实保留原书小节层级结构（Lee ISM 实测「Coordinate Charts」为 level-2）。
             out.append(("#" * (lvl + 1)) + " § " + name)
         else:
-            # 有编号小节：`#` 数 = 序标段数（§N.M → ##、§N.M.K → ###、§N.M.K.L → ####），
-            # 见 section_heading_level；显式 level 字段仍优先。
-            out.append(("#" * (lvl + 1)) + " §" + name)
+            if node.get("bare_head"):
+                # 数值本地子块（Arnold《ODE》逐 § 重启的裸单号二级小节）：只印
+                # 裸局部号 + 标题，不带 § 、不投影父 § 号（原书就印 "3. Title"）。
+                _k = re.findall(r"\d+", key)
+                _local = _k[-1] if _k else ""
+                _title = name
+                if _local and name.startswith(key + " "):
+                    _title = name[len(key) + 1:]
+                elif name.startswith(key):
+                    _title = name[len(key):].strip()
+                out.append(("#" * (lvl + 1)) + " " + (f"{_local}. {_title}".strip()))
+            else:
+                # 有编号小节：`#` 数 = 序标段数（§N.M → ##、§N.M.K → ###、§N.M.K.L → ####），
+                # 见 section_heading_level；显式 level 字段仍优先。
+                out.append(("#" * (lvl + 1)) + " §" + name)
         out.append("")
         _CTX["prev"] = "heading"
         _walk_mixed(node, out, False, lang, top=True)

@@ -48,6 +48,9 @@
         + 单元同步修（并回碎片、按书源复原题面），改措辞无效
     17. 行内公式边界粘连闸（`math_glue_problems`）：散文（EN 字母/数字/`)`、CN
         汉字）紧贴 `$...$` 任一侧 = OCR 粘连未清理；标点/引号紧贴豁免
+    18. 控制字符闸：正文出现 C0 控制字符（`\t\n\r` 除外）即不通过——写手用
+        shell/python 内嵌字符串写正文时 `\alpha`/`\beta` 的 `\a`/`\b` 会被转义吞成
+        BEL/BS 并**吃掉字母**；损坏落在数学模式内，F 层散文启发式与 tag 对账都看不见
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -943,5 +946,18 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     # 17) 行内公式边界粘连（Weibel ch8 2026-09-24：OCR 原样「maps$C_n\to C_{n-1}$are」
     #     式粘连逃过全部既有检测流入合并 md；纯行形态判据，exercise 单元同样执行）
     all_problems.extend(math_glue_problems(body_clean))
+
+    # 18) 控制字符闸（Kreyszig ch9 9.1-2 2026-09-26：写手代理经 shell/python 内嵌
+    #     字符串写正文时，`$\\alpha$`/`$\\beta$` 里的 `\a`/`\b` 被转义吞成 BEL(0x07)
+    #     /BS(0x08)，单元里留下 `($lpha$)` 这种**丢字**内容。它在数学模式内，F1-F6
+    #     启发式（只看散文视图）与契约 tag 对账都看不见，只有真实 KaTeX 渲染报
+    #     「Unexpected character」，报错信息还把控制字符本身吞进转义提示里，难定位。
+    #     C0 控制字符（除 \t\n\r）在单元正文里**绝无合法用途**，故一律拦。）
+    ctrl = sorted({ord(c) for c in body_clean if ord(c) < 32 and c not in "\t\n\r"})
+    if ctrl:
+        all_problems.append(
+            "正文含控制字符 %s——通常是 `\\alpha`/`\\beta` 等反斜杠命令被写成转义序列"
+            "（\\a→U+0007、\\b→U+0008）后**丢了字母**，须回契约/书页原文重写该处 KaTeX"
+            % " ".join("U+%04X" % c for c in ctrl))
 
     return (len(all_problems) == 0, all_problems)

@@ -277,6 +277,37 @@ def formula_tag_shape_ok(num):
     return bool(_TAG_SHAPE_RE.match(str(num or '').strip()))
 
 
+_TAG_NOISE_RE = re.compile(r'^(?:0+|0\d+)$')
+_SECTION_LONG_RE = re.compile(r'^\d{3,}$')
+
+
+def formula_tag_noise(num, section_scoped=False):
+    r"""OCR 噪声「编号」判定：全零 / 前导零形态（以及**节内重置**书里的三位以上
+    纯数字）不是任何书的公式序标，一律不认。
+
+    没有任何书给公式印 ``(0)`` / ``(00)`` / ``(07)`` / ``(002)``。这些串来自
+    「不等式尾部的 $\infty$ / $\theta$ 被读成 0」——实测 Kreyszig 8.5-2：
+    ``c = sup ‖x̃‖/‖y‖ < ∞`` 的 ``< 00`` 被收成独立编号块，注册成 tag ``00``，
+    而契约 tag 是 `gate_units` 的**对账真值**，反过来逼写手在单元里凭空写出
+    ``\tag{00}``（合并稿里就多出一个不存在的公式编号 (00)）。同类噪声：``0`` /
+    ``07``（Kreyszig 全书 16 处，含 1.4-2、6.4-2、7.4-3、8.4-1、11.3-1）。
+
+    ``section_scoped=True``（config `formula.scope == 3`，编号**节内重置**）时另拒
+    「纯数字且 ≥3 位」：节内计数器到不了一百，这类串是表格单元 / 页码 / 小数被截断
+    的碎片（实测 Kreyszig 4.11-5：数值积分题的数表单元 ``0.931 476`` 与 ``0.144``
+    收成 tag ``931`` / ``144``，逼写手给 $\int_0^1 e^{-t^2}\,dt$ 挂 ``\tag{931}``）。
+    全书 / 跨章编号（scope 1/2）**不用**此条——那种体例下三位号可能是真的。
+
+    与 `formula_tag_shape_ok` 的分工：后者只管**未配置** `formula` 的书（段数、
+    小数、坐标形态），本判据管**所有**书（含已配置的书，它们绕过形态闸）。
+    多段编号里的中段 0（``1.5.0.1``）不受影响——本判据只认整串「首字符为 0」。
+    """
+    s = str(num or '').strip()
+    if _TAG_NOISE_RE.match(s):
+        return True
+    return bool(section_scoped and _SECTION_LONG_RE.match(s))
+
+
 @functools.lru_cache(maxsize=None)
 def formula_tag_re(ncomp=None, bare=True, letter=False):
     """匹配「**整块**恰为一个公式编号」的锚定正则。

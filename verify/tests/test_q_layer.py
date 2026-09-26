@@ -296,6 +296,39 @@ class RunTest(unittest.TestCase):
                              ['3.2', '3.5'])
 
 
+class SectionedTocPageGateTest(unittest.TestCase):
+    """`build_sectioned`'s TOC-page signature (Bug #23) must not fire on a
+    Fraleigh-style CONTENT page, where every numbered *item* prints as a short
+    heading ("3.8 Figure").  A false positive skipped the whole page, so a
+    genuine standalone `(5)` label never entered S and the summary's faithful
+    `\\tag{5}` was reported FABRICATED."""
+
+    def _build(self, heads, extra):
+        with tempfile.TemporaryDirectory() as d:
+            blocks = [{'text': t} for t in heads + extra]
+            with open(os.path.join(d, 'page_001.json'), 'w',
+                      encoding='utf-8') as f:
+                json.dump({'text': blocks}, f, ensure_ascii=False)
+            src = SourceFormulaIndex(d, build_formula_patterns(1), False,
+                                     set(), ncomp=1)
+            return src.build_sectioned(3, 1, 1, ['3.6'], ncomp=1)
+
+    def test_item_word_heads_keep_page_scanned(self):
+        built = self._build(['3.8 Figure', '3.9 Figure', '3.10 Figure',
+                             '3.11 Example Find all solutions in C of the'],
+                            ['(5)'])
+        self.assertIn('5', built['_union'])
+
+    def test_prose_titled_heads_still_skip_page(self):
+        # a real contents page: >=4 prose-titled section headings + a stray
+        # number that must NOT be harvested
+        built = self._build(['2.1 Introduction to Series',
+                             '2.2 Power Series', '2.3 Radius of Convergence',
+                             '2.4 Convergence Tests'],
+                            ['(7)'])
+        self.assertNotIn('7', built['_union'])
+
+
 class RegistryTest(unittest.TestCase):
     def test_q_registered_after_p(self):
         reg = LAYER_REGISTRY

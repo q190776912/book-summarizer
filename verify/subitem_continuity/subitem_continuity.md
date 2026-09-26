@@ -29,7 +29,39 @@
   - 🔴 **行内集合只喂 HEAD 抑制集**（`head_inline_ords` 窗口 → `_head_prev`），
     **绝不进块内序列本身**参与 INTERNAL/TAIL 计算：行内标记是「这一行开头有编号」的证据，
     不是「该子项独立成项」的证据，喂进序列会造出新的假缺口。
+- **重启切段（🔴 2026-09-26 修复，专治「多清单并块 → 幽灵缺号」）**：
+  `_o_split_restarts(ordinal_items)` 按**阅读顺序**在数值下降处（`v < 前一个值`）把块内序列
+  切成若干段，**INTERNAL 只在段内求缺**。
+  - 背景（Rosen《Discrete Mathematics》8e ch9 章末实测）：`Supplementary Exercises 42–50` 之后
+    紧跟 `Computer Projects 1–15` + `Computations and Explorations 1–9` + `Writing Projects 1–12`
+    ——**四条各自从 1 重启的独立清单**；标题行只把相邻题距撑开 2 行（≤4），于是全部并进同一块。
+    旧实现按整块 min–max 求缺 → 凭空报 `missing: (16, …, 41)` 共 26 个**幽灵号**
+    （那些号本就属于另一条清单，不该出现在这一条里）。
+  - 判据：「数值下降」是换清单的证据；真缺号是「同一条清单中间少几个」，不会下降。
+  - 配套把 INTERNAL 抑制集放宽为 `prev_ords | block_union`（同块其他段的号也算已见）——
+    与切段配合后本次改动**只减少告警、绝不新增**（乱序块 `[1,2,4,3,5]` 切段也不新报）。
+  - 🔴 **HEAD 判定口径不变**（仍按整块 `min_ord` 与既有宽抑制），切段只作用于 INTERNAL。
+- **难度星号条目（🔴 2026-09-26 修复，Rosen 8e ch10 实测）**：Rosen 在习题号**前**印
+  `*` / `**` 标难度（`**27. Find the crossing number…`），三条行首锚定正则都不认这个前缀
+  → 整条题面从序列里消失 → 凭空 HEAD/INTERNAL 缺号。
+  - `_O_STAR_NUM_RE`（Pattern D）：`^\s{0,3}\*{1,2}([0-9]+)[.)]\s+\S` 只吃**最多两个**前导星号 +
+    数字号，且要求点后跟空格与非空正文。
+  - 负例必须仍然**不匹配**：`**3.1.4.**`（三级序标粗体头）、`**Note 3. …`（带标签粗体头）
+    都不是条目；`*` 单独成行也不匹配。
+- **组题声明行（🔴 2026-09-26 修复，Rosen 8e ch10 实测）**：每个 Exercise Set 常以
+  `**Exercises 13-15.**` / `For Exercises 3-9, …` / `In Exercises 5-11` 声明「这几题共用下面
+  那张图」——被声明的题**只有图、没有编号题面行**，因此序列里永远不会出现这些号 →
+  旧版报整段幽灵缺号（`missing: (13, 14, 15)`）。
+  - `_o_group_decl_ordinals(line)` 解析声明覆盖的号集合（`_O_GROUP_DECL_RE`，先剥行内公式）；
+    区间跨度 > `_O_DECL_MAX_SPAN`(60) 视为误匹配（返回空集），`See Exercises 3-5 for …` 这类
+    纯交叉引用不以 `For/In/Exercises` 起头，天然不匹配。
+  - 声明行本身不是条目，故只作**抑制证据**：按阅读序附到**后序**最近的块（退路=前序块，
+    窗口 `_O_DECL_ATTACH_WINDOW`=120 行），并进该块 `decl` 与 `ords`。
+  - 🔴 抑制集因此扩为 HEAD `… | decl_here`、INTERNAL `prev_ords | block_union | decl_here`；
+    与既往一致，**只减少告警、绝不新增**（负例：删掉声明行后同一份 md 必须照报该组号）。
 - **HEAD/INTERNAL gap（阻断 FAIL）**：序列起始 >1 或 min–max 间缺号 → 视为真实遗漏，须补回（`x` 行，`problems += 1`）。
+  HEAD 的 `missing (...)` **只列未被抑制集合吃掉的号**（旧版把 `1..min-1` 整段列出，读者分不清
+  哪些真缺；判定口径不变，仅收窄显示）。
 - **TAIL gap（仅告警）**：OCR 交叉引用显示更大编号（如 md 最大 `(3)`、OCR 出现 `(5)`）→ 打印 `~` 行提示复核，不阻断。
 - 与 J 层互补：O 管「编号子项是否连续」，J 管「块内分隔线」。
 
@@ -44,6 +76,9 @@
 - `code = 'O'`，`order = 15`，`auto_fixable = False`。
 - 负向测试：`verify/tests/test_subitem_continuity_inline_head.py`（行内标记版式三例 +
   粘连交叉引用负例 + `_label_ordinals` 语义 + 「真缺口仍须报」两类，防修复过度）。
+- 负向测试：`verify/tests/test_subitem_continuity_star_decl.py`（难度星号条目 + 组题声明
+  共九例：两种假阳消除各配一条「删掉星号行/声明行后必须照报」的负例，外加粗体序标头、
+  `**Note 3.` 标签头、`See Exercises 3-5` 交叉引用、跨度过大声明四种「不得误认条目」负例）。
 
 ## 子流程
 无独立子脚本。

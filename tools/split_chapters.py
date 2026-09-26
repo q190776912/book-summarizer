@@ -23,11 +23,12 @@ r"""将一个过大的章总结文件，按「节」拆分成每节一个独立�
   2) `N.M` 编号式（Vakil 风格）：标题首部编号为 N.M（恰好一个小数点），
      不论其 markdown 级数（## / ### 都算）也不论是否带 § 前缀。
      子节 N.M.P（两个小数点）留在父节文件内，不单独成文件。
-两种格式可共存于同一文件，按各自匹配到的顺序拆分。
+  3) dash 节号式（do Carmo 风格）：标题编号为 `§N-M`（§ 必须存在），N 须等于章号。
+三种格式可共存于同一文件，按各自匹配到的顺序拆分。
   - 阈值与配对：中文总结或英文总结「只要有一个」字符数超过 60000，就把**两者都**拆分
     （即使另一个未超阈值也要拆，保证同一章的中英文保持一致的分拆状态）。
   - 命名：中文 `第{N}章_{M}_{名称}.md`；英文 `Chapter{N}_{M}_{名称}.md`
-    （{M} = 节号——§N 式即 N，N.M 式即 N.M；名称取自标题编号之后的文本，
+    （{M} = 节号——§N 式即 N，N.M 式即 N.M，§N-M 式即 N-M；名称取自标题编号之后的文本，
     剔除 Windows 非法字符与空白。节号与名称之间也有一个下划线）。
   - 章开头的引言/导语（第一个节标题之前的内容）并入第 1 节文件。
   - 幂等：重复运行会跳过已拆分的节文件（第N章_M_... / ChapterN_M_...），不会二次拆分；对已合并源文件则确定性覆盖已生成的节文件。
@@ -47,14 +48,17 @@ import argparse
 
 DEFAULT_THRESHOLD = 60000
 
-# 节拆分标题，两种书中实际格式（二选一）：
+# 节拆分标题，三种书中实际格式（三选一）：
 #   1) `§N` 章内节标题风格：§ 必须存在（避免把节内条目 `### N. 标题` 误判为节），
 #      节号后允许一个可选句点（`## §1. 标题`），其后必须是空白或行尾。
 #   2) Vakil 风格：`N.M`（恰好一个小数点），§ 前缀可选；
 #      lookahead 防止把 N.M.P 的 "N.M" 误判为节。
+#   3) do Carmo 风格：`§N-M`（dash 节号），§ 必须存在；首数字须等于章号，
+#      lookahead 防止把子节 `§N-M.P` 误判。
 SPLIT_RE = re.compile(
     r'^(#{1,6})\s*'
     r'(?:§\s*(\d+)\s*\.?(?=\s|$)'
+    r'|§\s*(\d+)-(\d+)(?=\s|$)'
     r'|§?\s*(\d+)\.(\d+)(?=\s|$))'
 )
 H1_RE = re.compile(r'^#\s+')
@@ -126,8 +130,10 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
             sec = m.group(2)                     # `§N` 章内节标题（节内从 1 起号，无需核对章号）
             if sec is not None:
                 key = sec
-            elif m.group(3) and int(m.group(3)) == num:
-                key = f"{m.group(3)}.{m.group(4)}"
+            elif m.group(3) is not None:         # `§N-M` dash 式（do Carmo）
+                key = f"{m.group(3)}-{m.group(4)}" if int(m.group(3)) == num else None
+            elif m.group(5) and int(m.group(5)) == num:
+                key = f"{m.group(5)}.{m.group(6)}"
             else:
                 key = None                       # N.M 式但首数字≠章号：属于其它章的标题，跳过
             if key is not None:
@@ -156,6 +162,12 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
         content = []
         if title is not None:
             content.append(title)
+        body = intro + buckets[k] if k == first_key else buckets[k]
+        # H1 与首个内容行（通常是 `## §` 节标题）之间必须有一个空行，
+        # 否则 verify F 层 heading-blank-above 报警（且按节重拼的合并视图
+        # 里标题会被并进上一块渲染）。
+        if title is not None and body and body[0].strip() != '':
+            content.append('')
         if k == first_key:
             content.extend(intro)
         content.extend(buckets[k])

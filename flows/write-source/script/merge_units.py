@@ -86,7 +86,24 @@ def _read_body(path):
     return body.lstrip("\r\n").rstrip("\n").split("\n")
 
 
-def _final_md_name(ch_key, language, chapter_name):
+# CJK（含全/半角标点）字符类：文件名语种守卫与正文 clean_cjk 共用同一口径。
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
+
+
+def _map_name_en(ext, ch_key):
+    """chapter_map 里该章的**英文名**（无则空串）。英文版文件名用它，避免中文契约
+    标题被拼进 `ChapterN_*.md`（见 _final_md_name）。取不到一律静默回退，不报错。"""
+    try:
+        from data.chapter_map.chapter_map import load_chapter_records
+        for rec in load_chapter_records(ext):
+            if str(rec.get("num")) == str(ch_key):
+                return str(rec.get("name_en") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _final_md_name(ch_key, language, chapter_name, name_en=""):
     """由章号 + 语种 + 契约章名生成最终文件名。
 
     三类走向（🔴 按 kind 判定，2026-09-08 起 Supplement 不再被称作 Appendix）：
@@ -95,6 +112,14 @@ def _final_md_name(ch_key, language, chapter_name):
       附录无号 kind=2 Appendix.md          / 附录.md         （无印刷序标 → 裸名）
       补篇 kind=3    SupplementS_*.md     / 补篇S_*.md
     无编号附录（键 "appendix"，序标空）不得伪造序标（2026-09-21 用户裁定）。
+
+    🔴 **源语言为英文的书，其英文版文件名不得带中文**（`name_en` 参数，2026-09-26
+    Kreyszig 实测）：契约 `ch{N}.json` 的 `name` 常按中文标题登记（本书 `name` =
+    「5 进一步应用：巴拿赫不动点定理」），旧实现不分语种直接拿它拼名，于是英文版
+    产出 `Chapter5_进一步应用：巴拿赫不动点定理.md`——**同书其余 82 个英文文件都是
+    拆节时按文内英文标题生成的 ASCII 名**，只有未被拆分的章露出中文，形同一本书
+    两套语言规则。故 `language == "en"` 时优先用 chapter_map 的 `name_en`，并在
+    兜底处剥掉残留 CJK（宁可短名，也不要跨语种文件名）。
     """
     ordinal = ""
     rest = ""
@@ -105,6 +130,12 @@ def _final_md_name(ch_key, language, chapter_name):
         ordinal = "" if chapter_ordinal(tok) == "" else tok
     else:
         ordinal = chapter_ordinal(ch_key)     # 无编号附录 → ""
+    if language == "en" and (_CJK_RE.search(rest or "")
+                             or _CJK_RE.search(chapter_name or "")):
+        # 契约名带中文（标题整体或 CJK 前缀形如「附录 A 提示」）→ 英文版改用 chapter_map
+        # 的英文名；**契约名本就 ASCII 时一律不动**（旧形态逐字保持，含 "Appendix A
+        # Hints" 把字母留在标题里的情况）。无英文名可退时剥掉中文，宁可短名。
+        rest = (name_en or "").strip() or _CJK_RE.sub(" ", rest or "").strip()
     rest = re.sub(r'[\\/:*?"<>|\r\n\s]+', "_", rest).strip(" _")
     kind = 2
     try:
@@ -229,7 +260,8 @@ def merge_chapter(ext, ch_key, out_md=None, clean_cjk=None, require_gate=True,
                 chapter_name = (json.load(f).get("name") or "")
         except Exception:
             chapter_name = ""
-        out_md = os.path.join(book_dir, _final_md_name(ch_key, language, chapter_name))
+        out_md = os.path.join(book_dir, _final_md_name(ch_key, language, chapter_name,
+                                                       _map_name_en(ext, ch_key)))
 
     lines, _owners = _assemble(ext, ch_key, units_sub, clean_cjk, require_gate)
     with open(out_md, "w", encoding="utf-8") as f:

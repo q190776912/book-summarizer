@@ -1262,45 +1262,93 @@ def _detect_exercise_counter(extract_dir, pages=None):
         definitions/theorems with NO such header. Kept in the summary AND
         SHOULD be verified.
 
-    This returns True ONLY when it finds a run of >=3 consecutive bare
+    This returns True ONLY when it finds a run of >= MIN_RUN consecutive bare
     first-level ordinals that is NOT inside a consolidated-exercise zone (i.e.
-    not on
-ear a page that carries an "Exercises/练习" header).  That
+    not near a page that carries an "Exercises/练习" header).  That
     correctly returns False for Fraleigh (every exercise ordinal there lives on
     a consolidated-block page) while still letting books with genuine preserved
     exercises get a type:1 group.
 
     It deliberately does NOT scan "Exercise N" / "N Exercise" surface forms,
     because those are overwhelmingly body cross-references, not headings.
+
+    🔴 Two blind spots fixed on Fraleigh (2026-09-26, 161 false B-layer 「缺号」):
+      * the old zone test used a word-boundary regex only, but OCR glues the
+        printed heads (``EXERCISESO`` / ``InExercises21through6,determine…``), so
+        whole exercise sections were never marked;
+      * ``header page +/- 2`` cannot cover an exercise block that runs 3+ pages.
+    Both are fixed below: the block-head judge is shared with the writing gate
+    (`lib.problem_coverage.is_consolidated_head`), and a zone is EXTENDED forward
+    while the following pages stay ordinal-dominant. Counting also requires the
+    ordinal to OPEN its text block, so in-body enumerations ("1. closure 2. identity")
+    buried inside a definition block no longer build a run.
     """
+    from lib.problem_coverage import is_consolidated_head
+
     EXER_HEAD_RE = re.compile(
         r'\b(?:Exercises?|Problems?|习题|练习|问题)\b', re.IGNORECASE)
     # bare "N. <text>" — a number, a dot, then an alphabetic / Han start.
     BARE_RE = re.compile(r'(?:^|(?<=[)\]}\s])|[\s])(\d+)\.\s*[A-Za-z一-鿿]')
+    # ordinal that OPENS its block (an exercise item, not a sentence-internal list)
+    BARE_OPEN_RE = re.compile(r'^\s*(?:>\s*)?(?:[-*+]\s*)?(\d{1,3})[.)]\s*[A-Za-z一-鿿]')
     pages = pages if pages is not None else sorted(
         glob.glob(os.path.join(extract_dir, 'page_*.json')))
-    # Pass 1: mark consolidated-exercise zone pages (header page +/- 2).
+
+    def _load(pg):
+        try:
+            with open(pg, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _pno(pg):
+        return int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
+
+    loaded = [(pg, _pno(pg), _load(pg)) for pg in pages]
+    loaded = [(p, n, d) for p, n, d in loaded if d is not None]
+    loaded.sort(key=lambda x: x[1])
+
+    def _head(text):
+        return bool(EXER_HEAD_RE.search(text)) or is_consolidated_head(text)
+
+    def _opens(texts):
+        return [int(m.group(1)) for t in texts
+                for m in [BARE_OPEN_RE.match(t)] if m]
+
+    # Pass 1: consolidated-exercise header pages.
+    head_pages = set()
+    for _p, pno, data in loaded:
+        if any(_head(t) for t in map(blk_text, data.get('text', []) or []) if t):
+            head_pages.add(pno)
+    # Pass 2: mark the zone = header page +/-1, EXTENDED forward while the page
+    # still carries an ordinal run (>=3 block-opening items, continuing locally).
     zone = set()
-    for pg in pages:
-        try:
-            with open(pg, encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
+    for pno in head_pages:
+        zone.update(range(pno - 2, pno + 2))
+    active = 0
+    for _p, pno, data in loaded:
+        texts = [blk_text(b) for b in (data.get('text', []) or [])]
+        texts = [t for t in texts if t]
+        nums = _opens(texts)
+        if pno in head_pages:
+            active = max(2, 0)
+            zone.add(pno)
             continue
-        pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
-        for b in data.get('text', []):
-            if isinstance(b, dict) and blk_text(b) and EXER_HEAD_RE.search(blk_text(b)):
-                zone.update(range(pno - 2, pno + 3))
-                break
-    # Pass 2: look for bare consecutive ordinal runs on NON-zone pages.
+        if active > 0:
+            zone.add(pno)
+            active -= 1
+            if len(nums) >= 3:
+                active = 2
+    # Pass 3: look for bare consecutive ordinal runs on NON-zone pages.
+    # 🔴 判据（Fraleigh 2026-09-26 实测）：修好习题区标记后，区外只剩 5 条 run，
+    # 最长 4，全部是正文里的枚举（定义内「1. closure 2. associativity …」／判断题
+    # 分项）。两条放行规则据此分开真/假：**单条长链**（≥ MIN_RUN，一节列 5 题以上）
+    # 或**多处短链**（≥ MIN_SPOTS 个不同页各有一链——每节 3~4 题的小计数器）。
+    MIN_RUN = 5
+    MIN_SPOTS = 6
     run = [1, None]   # [当前连续长度, 上一序号]（跨页/跨块延续）
-    for pg in pages:
-        try:
-            with open(pg, encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            continue
-        pno = int(re.search(r'(\d+)', os.path.basename(pg)).group(1))
+    spots = set()     # 出现过 ≥3 链的页（短链计数器证据）
+    for _p, pno, data in loaded:
         if pno in zone:
             run[0], run[1] = 1, None   # 进入练习区页：run 重置
             continue
@@ -1313,7 +1361,11 @@ ear a page that carries an "Exercises/练习" header).  That
             # 连续序号 run 跨块累计（每条练习通常独占一个块，按块重置会让
             # run 永远到不了 3）：prev_num/run 为函数级状态，块间延续。
             nums = [int(x) for x in BARE_RE.findall(text)]
+            head = BARE_OPEN_RE.match(text)
             for i, nnum in enumerate(nums):
+                if i == 0 and not head:
+                    run[0], run[1] = 1, None
+                    break
                 if i > 0 and nnum == nums[i - 1] + 1:
                     run[0] += 1
                 elif i == 0 and run[1] is not None and nnum == run[1] + 1:
@@ -1321,8 +1373,12 @@ ear a page that carries an "Exercises/练习" header).  That
                 else:
                     run[0] = 1
                 run[1] = nnum
-                if run[0] >= 3:
+                if run[0] >= MIN_RUN:
                     return True
+                if run[0] >= 3:
+                    spots.add(pno)
+                    if len(spots) >= MIN_SPOTS:
+                        return True
     return False
 
 

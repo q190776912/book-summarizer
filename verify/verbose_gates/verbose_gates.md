@@ -23,10 +23,30 @@
        三级序标，dash 键 '6.1-5' 亦归一），单元门控第 23 项共用同一套判断。
      - 标签式形态额外要求首分量 == 本章章号，避免把正文里的跨章引用
        （`**Definition 3.2.1**（见第 3 章）`）误报成编造。
-  6. `p_verbose`：顶层纯散文段（不含 `**` 标签条目/例/练习/注记的忠实内容、且**不含公式**）在 >450 字/段（`VERBOSE_PARA_CHARS`）**且与源书 8-gram 重合率 ≥60%** 时违规；**>1200 字无条件违规**（硬顶）。`≥6 段`（`VERBOSE_PARA_GATE`）只是报告打印的聚合阈值，非判定条件（与 docs/writing-rules.md V-P 一致）。
+  6. `p_verbose`：顶层纯散文段在 >450 字/段（`VERBOSE_PARA_CHARS`）**且与源书 8-gram 重合率 ≥60%** 时违规；**>1200 字无条件违规**（硬顶）。`≥6 段`（`VERBOSE_PARA_GATE`）只是报告打印的聚合阈值，非判定条件（与 docs/writing-rules.md V-P 一致）。
   7. `p_proof_verbose`：单个 `> **证明/解答**` 块 >700 字且未分条枚举，且此类块 ≥2（`VERBOSE_PROOF_GATE`）即 FAIL。
 - **关键豁免**：已用 `1. 2. 3. …` 分条枚举的证明【步数不限】不计入 `p_proof_verbose`；例（Example）题面与注记（Remark/Aside）按 Tier 1 忠实保留，不参与 verbose 判定。
-- **🔴 含公式段落豁免 `p_verbose`（对应 SKILL.md Tier 2）**：凡承载数学（`$...$` / `$$` / `\begin{}` / `\(`）的顶层段落，视为「忠实保留公式的描述性内容」（Tier 2 要求保留公式与概念），**不计入**长散文闸门。仅「纯散文（无公式）且 >450 字/段」仍受约束。此豁免确保忠实描述不会因段落较长被误杀，但仍拦得住真正整段照抄的纯散文 padding。
+- **🔴 段界（什么算「一段散文」）**：`>` 块引用、`#` 标题、`$$`、`---`、表格行 `|`、
+  `<div>/<img>` 图块、``` 围栏代码块、以及 **`<!-- … -->` 机器注释行**（如单元首行
+  `<!-- book-summarizer DONE unit: … -->`）都**不是**散文——它们只断开段落，不参与计量
+  （2026-09-26 Rosen 实测：注释行曾被并进正文，虚增段长并把命中行号错报到 L1）。
+  **列表项标号**（`- ` / `* ` / `1. ` / `(a) `）同样断段：一条条目 ≠ 一整段散文，否则术语表 /
+  编号说明这类合法长列表会被合成一面「散文墙」误报（实测 Rosen ch3 §3.3 术语表 1913 字）。
+- **🔴 Tier 1 题面标号豁免（`PROSE_GATE_STEM_RE`，两种模式都生效）**：段首是
+  `58.` / `**5.** ` / `Exercise 62.` / `习题 6.` / `(a) ` 这类**条目号 / 题号**时放行——
+  Rosen 每节末的集中习题块常被 OCR 灌进相邻 desc 节点（V-I 认可的归属），那里的题面是
+  Tier 1 忠实内容，照抄是**正确**的；收紧 desc 决不能逼写手改写题面。
+  `**Remark.**` / `**Historical Note.**` / `**A3.2 Assignments…**` 这类**印刷小标题**
+  （run-in heading）不在豁免之列——它们就是被照抄的 Tier 2 散文。
+- **🔴 两条 Tier-1 豁免由调用方按单元类型收紧（`label_exempt` / `math_exempt`）**：
+  默认（合并 md 层、`item` / `exercise` 单元）仍豁免 ① `**粗体标签**` 起始的条目区域、
+  ② 含公式（`$…$` / `$$` / `\begin{}` / `\(`）的段落——Tier 1 定理陈述与题面按原书忠实
+  保留是**应该**的。但 **`desc` 单元按定义就是 Tier 2 散文**，写手只要在整段照抄前加一个
+  段首粗体小标题、或让段内出现一个 `$x$`，就能拿到免检——Rosen 8e 附录 C 单元实测
+  9286 B / 8 个粗体段全部照抄（重合率 0.88–1.00），单元门控与合并 md 两层全绿。
+  故 `check_unit_quality` 第 19 项对 `utype == "desc"` 传
+  `label_exempt=False, math_exempt=False`（旧豁免下 desc 全书命中 = **0 单元**，收紧后
+  = **124 单元 / 195 段**，即整层此前完全失明）。
 - **不可 `--fix`**（故意不让绕过），须回到写作阶段修正。
 
 ## 本阶段规则（阻断性 / 可修复）
@@ -38,7 +58,8 @@
 
 ## 相关代码（`verify/verbose_gates/script/verbose_gates.py`）
 - `code = 'P'`，`order = 16`，`auto_fixable = False`。
-- 阈值 `VERBOSE_PARA_CHARS=450`（纯散文段长阈值，含公式段落豁免）/ `VERBOSE_PARA_GATE=6` / `VERBOSE_PROOF_GATE=2`（须与 `verbose_gates.py` 同步）。
+- 阈值 `VERBOSE_PARA_CHARS=450` / `VERBOSE_PARA_HARD_CHARS=1200`（可读性硬顶，与重合率无关）/ `VERBOSE_OVERLAP_MIN=0.60` / `VERBOSE_PARA_GATE=6` / `VERBOSE_PROOF_GATE=2`（须与 `verbose_gates.py` 同步）。
+- `check_verbose_paragraphs(lines, ext_dir=None, ch=None, label_exempt=True, math_exempt=True)`——**单元门控对 `desc` 单元传 `label_exempt=False, math_exempt=False`**；不传 `ext_dir`+`ch` 时退化为只拦硬顶长度（无源书上下文，不做重合率比对）。
 
 ## 子流程
 无独立子脚本。
@@ -57,7 +78,7 @@
   2. OCR/HEADER NOISE：删掉误入的页眉/页脚/版权符（对照源 PDF 确认是 OCR 噪声）。
   3. BARE ITEM NUMBER：编号在前的条目须补 `**标签**`（如 `**4.2-1 例**`）。
   4. MISSING / FABRICATED SECTION vs CONTRACT：对照分章契约（`book_structure/ch{N}.json`）补回缺失条目，或删掉编造条目。
-  5. VERBOSE TOP-LEVEL PROSE：顶层纯散文段 >450 字且 8-gram 重合率 ≥60%（或 >1200 字硬顶）→ 精简为忠实要点，去掉照抄冗余描写（不丢关键内容）。
+  5. VERBOSE TOP-LEVEL PROSE：顶层散文段 >450 字且 8-gram 重合率 ≥60%（或 >1200 字硬顶）→ **改写表述**（换句法与用词，把连续 8 词与原文相同的片段消掉），全部概念 / 公式 / 变量 / 例子 / 专名一律保留，**不是删内容**；>1200 字的墙式段另需拆成若干较短段落或用 `>` / 列表承载其中的枚举。
   6. VERBOSE PROOF/SOLUTION：单个证明/解答块 >700 字且未分条 → 拆成 numbered 子项。
   7. 修改后重跑 verify，确认 P-LAYER 各闸门为空。
 

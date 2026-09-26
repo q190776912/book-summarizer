@@ -99,3 +99,39 @@ def test_en_word_run_counts_and_breaks():
     assert _en_word_run("First suppose that X and Y are both non negative") >= 8
     assert _en_word_run("由 (21.10) 和 (21.7)，最后一项不超过") == 0
     assert _en_word_run("By the dominated convergence theorem we let") == 7
+
+
+# ── 代码围栏不豁免（Rosen 8e ch3 伪码实测，2026-09-26）────────────────────
+
+def test_pseudocode_english_comment_flagged():
+    """```text 围栏里的英文大括号注释 = 未翻译散文，**不**因在围栏内而豁免。
+
+    派单简报若写「围栏逐字不动」会与本闸冲突。正确口径 = 伪码**语句**
+    （procedure/while/return/赋值/标识符）保留原文，注释/参数说明/指令行是散文必须译。
+    """
+    body = (
+        "**算法 2（线性搜索算法）**\n\n"
+        "```text\n"
+        "procedure linear_search(x: integer, a_1, a_2, ..., a_n: distinct integers)\n"
+        "   i := 1\n"
+        "   while (i <= n and x != a_i)\n"
+        "      i := i + 1\n"
+        "   return location {location is the subscript of the term that equals x}\n"
+        "```\n"
+    )
+    assert any("未翻译英文散文" in p for p in english_residues(body)), body
+
+
+def test_pseudocode_translated_comment_passes():
+    """同一段伪码，注释译成中文（语句照旧英文）→ 干净：证明本闸不是「见英文就报」。"""
+    body = (
+        "**算法 2（线性搜索算法）**\n\n"
+        "```text\n"
+        "procedure linear_search(x: integer, a_1, a_2, ..., a_n: distinct integers)\n"
+        "   i := 1\n"
+        "   while (i <= n and x != a_i)\n"
+        "      i := i + 1\n"
+        "   return location {location 是等于 x 的项的下标}\n"
+        "```\n"
+    )
+    assert english_residues(body) == []

@@ -15,6 +15,7 @@ import lib.boot as _boot
 _boot.setup()
 from page_json import PageJson
 from lib.page_dir import resolve_page_dir
+from lib.util import norm_secnum
 
 # 本层的语义 / 阈值 / --fix 范围 / 字节契约键 的权威说明见 verify/formula_tag/formula_tag.md（SSOT）；本文件仅含实现，勿在此复述叙事。
 """formula_tag.py — Q-LAYER (order 17): FORMULA SEQUENCE-LABEL audit.
@@ -153,6 +154,44 @@ _HEAD_RE = re.compile(
 def _head_norm(s: str) -> str:
     """Normalize a captured heading number to dot-separated form."""
     return re.sub(r'[.\-\u2013]+', '.', s or '')
+
+
+def _heading_num(s: str) -> Optional[str]:
+    """A short numbered line's section number, or None when it is NOT a heading
+    (cross-reference fragment / prose line).
+
+    Single source of truth for "is this block a section heading?".  Consumed by
+    ``_track_heading`` (advance the running heading) **and** by ``_scan_text``
+    (a heading block must never anchor a formula label's position/section): the
+    heading's own number is not a formula number — ch4 OCR "4.4图变换原理"
+    otherwise became the definition site of ``(4.4)`` and produced ORDER +
+    MISPLACED against the real label on p121.
+
+    Also accepts a BARE section marker carrying only ``§N.N`` (no title tail):
+    OCR routinely splits a heading into a number block and a title block (p49
+    renders "§2.4" alone and puts the title in the following block).  Without
+    this branch the running heading stays on the *previous* section and the
+    next formula is attributed there (ch2 ``\\tag{2.3}`` false MISPLACED).
+    """
+    s = s.strip()
+    hm = _HEAD_RE.match(s)
+    if not hm or len(s) >= 80:
+        return None
+    if re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s):
+        return None
+    # 编号后紧跟闭括号/逗号/分号 = OCR 断行的引用残行，绝非标题。
+    if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
+        return None
+    tail = s[hm.end():]
+    if not tail.strip() and s.startswith('§'):
+        return _head_norm(hm.group(1))
+    tail2 = tail.strip().strip('.').strip()
+    # 小写起头的尾巴（"20.6 and it is stated…"）必为散句，非标题。
+    if tail2[:1].isascii() and tail2[:1].islower():
+        return None
+    if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
+        return _head_norm(hm.group(1))
+    return None
 
 # Figure-caption leader prefixes (Bug #22).  A text block whose stripped content
 # STARTS with one of these keywords is a figure caption, NOT a formula-bearing
@@ -364,6 +403,9 @@ class SourceFormulaIndex:
         self._n_pages: Dict[str, Set[int]] = {}
         self._walk_last_page: int = 0
         self._cur_heading: Optional[str] = None
+        # Section keys of the chapter being scanned (see _load_sec_keys /
+        # _repair_heading): OCR repair of a glitched heading number.
+        self._sec_keys: Optional[Set[str]] = None
 
     # -- public API ---------------------------------------------------------
     def build(self, ch: int, start: int, end: int) -> None:
@@ -377,6 +419,7 @@ class SourceFormulaIndex:
         self._n_pages = {}
         self._walk_last_page = 0
         self._cur_heading = None
+        self._load_sec_keys(ch)
         nums: Set[str] = set()
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
@@ -464,6 +507,7 @@ class SourceFormulaIndex:
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
+        self._load_sec_keys(ch)
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
             fp = os.path.join(_pdir, f'page_{pg:03d}.json')
@@ -482,6 +526,13 @@ class SourceFormulaIndex:
             # TOC signature page (>= 4 titled section-heading-like blocks) and
             # skip both the advance logic and number extraction on it; genuine
             # content pages virtually never start >= 4 sections.
+            # title.  Fraleigh-style books print EVERY numbered item as such a
+            # short heading ("3.8 Figure", "3.11 Example Find all solutions …"),
+            # so a single ordinary content page easily reaches 4 of them and the
+            # whole page — including its standalone `(5)` formula label — used to
+            # be skipped, making a faithful `\tag{5}` read as FABRICATED.  A real
+            # contents entry has a prose title, never an item-type keyword, so
+            # heads whose tail starts with one do not count toward the signature.
             _titled_heads = 0
             for _b0 in data.get('text', []) or []:
                 _txt = _b0.get('text', '') if isinstance(_b0, dict) else ''
@@ -490,6 +541,8 @@ class SourceFormulaIndex:
                 _hm0 = _HEAD_RE.match(_txt.strip())
                 if _hm0:
                     _tail0 = _txt.strip()[_hm0.end():].strip().strip('.').strip()
+                    if _ITEM_LABEL_RE.match(_tail0):
+                        continue
                     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', _tail0):
                         _titled_heads += 1
             _is_toc_page = _titled_heads >= 4
@@ -786,24 +839,61 @@ class SourceFormulaIndex:
     def _track_heading(self, txt: str) -> None:
         """Update the running nearest-preceding-heading from a short numbered
         line (e.g. "2.3.2 Preliminaries").  A formula's enclosing section is the
-        nearest preceding numbered heading line.
+        nearest preceding heading line.
         """
-        s = txt.strip()
-        hm = _HEAD_RE.match(s)
-        if hm and len(s) < 80 and not re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s):
-            # OCR 行拆分的引用残行（"2.1.4)，则对于每个…"——上一行断在 "(2" 处）
-            # 编号后紧跟闭括号/逗号，绝非标题；否则会把 _cur_heading 拖到错误
-            # 小节，制造连锁假 MISPLACED（2026-08 遍历论 ch6 案例）。
-            if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
+        h = _heading_num(txt)
+        if h is None:
+            return
+        self._cur_heading = self._repair_heading(h)
+
+    def _load_sec_keys(self, ch) -> None:
+        """Section keys of THIS chapter from the structure contract.
+
+        Populated per build; ``None`` when the contract is unavailable, which
+        makes ``_repair_heading`` a no-op (identical to the pre-repair
+        behaviour).
+        """
+        self._sec_keys = None
+        try:
+            from data.book_structure.book_structure import chapter_json_path
+            fp = chapter_json_path(self.extract_dir, ch)
+            if not fp or not os.path.exists(fp):
                 return
-            tail2 = s[hm.end():].strip().strip('.').strip()
-            # OCR 断句把「…参见 20.6 节…」之类的行中引用切成以编号开头的独立块
-            # （"20.6 and it is stated without proof."）——真标题的尾巴以大写字母
-            # 或 CJK 起头（"20.4 Performance" / "3.1 预备知识"），小写起头必为散句。
-            if tail2[:1].isascii() and tail2[:1].islower():
-                return
-            if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
-                self._cur_heading = _head_norm(hm.group(1))
+            with open(fp, encoding='utf-8') as f:
+                tree = json.load(f)
+            keys: Set[str] = set()
+            stack = [tree]
+            while stack:
+                node = stack.pop()
+                if not isinstance(node, dict):
+                    continue
+                if node.get('type') == 'section' and node.get('key'):
+                    keys.add(str(node['key']))
+                stack.extend(node.get('sub_sec') or [])
+            self._sec_keys = keys or None
+        except Exception:
+            self._sec_keys = None
+
+    def _repair_heading(self, h: str) -> str:
+        """OCR repair of a heading number against THIS chapter's real section
+        keys.
+
+        A section glyph mis-read as a digit glues onto the number
+        ("56.4周期点" = "§6.4周期点") and would otherwise become the enclosing
+        section of every following formula → false MISPLACED (ch6 ``\\tag{6.1}``).
+        Only rewrites when the FULL number is not a section of this chapter AND
+        a leading-digit-trimmed variant IS: a genuine ``56.4`` (a book that
+        really has §56.4) matches the contract and is kept verbatim.
+        """
+        known = self._sec_keys
+        if not known or h in known:
+            return h
+        cand = h
+        while len(cand) > 1 and cand[0].isdigit():
+            cand = cand[1:]
+            if cand in known:
+                return cand
+        return h
 
     def _record_pos(self, n: str, pg, y) -> None:
         """Record the earliest (page, y) occurrence of `n` (its definition site)."""
@@ -921,8 +1011,21 @@ class SourceFormulaIndex:
                         idx = 0
                     snippet = txt[max(0, idx - 20): idx + len(span) + 20]
                     self._source_text[n] = snippet[:60]
-                if pg is not None and not self._embedded_ref(txt, m.start(), m.end()):
-                    self._update_pos(n, pg, y)
+                if pg is None or self._embedded_ref(txt, m.start(), m.end()):
+                    continue
+                # 定位/定义节证据的两条「非公式标签」守卫（集合 S 成员资格不受
+                # 影响 —— nums.add 已在上方执行）：
+                # ① 节标题块的编号不是公式编号：OCR 常把标题切成纯编号块 +
+                #    纯标题块（ch4 p106 「4.4图变换原理」其上一行是 "§4.4"），
+                #    若让标题块锚定 pos/_book_section，则真标签（p121 的
+                #    `(4.4)`，位于 §4.5 内）被判 ORDER + MISPLACED。
+                if _heading_num(txt) is not None:
+                    continue
+                # ② 逗号派生的「数」是坐标/列表经 norm 的产物，不是标签：
+                #    ch1 p13 坐标块 `(1,2)` 会顶替 p21 的真标签 `(1.2)`。
+                if ',' in raw or '，' in raw:
+                    continue
+                self._update_pos(n, pg, y)
 
     @staticmethod
     def _embedded_ref(txt: str, start: int, end: int) -> bool:
@@ -1523,8 +1626,8 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
 # passing book gets stricter, so the change is regression-safe.  The
 # negative lookahead `(?![.\d])` guarantees a single-level match can never fire
 # on a two-level `1.2` heading, so the two forms never overlap.
-_MD_SEC_TWO = (re.compile(r'^#{2,4}\s*§?\s*(\d+\.\d+)', re.M),
-               re.compile(r'(^#{2,4}\s*§?\s*\d+\.\d+.*$)', re.M))
+_MD_SEC_TWO = (re.compile(r'^#{2,4}\s*§?\s*(\d+[.\-]\d+)(?![\d.\-])', re.M),
+               re.compile(r'(^#{2,4}\s*§?\s*\d+[.\-]\d+(?![\d.\-]).*$)', re.M))
 _MD_SEC_ONE = (re.compile(r'^#{2,4}\s*§?\s*(\d+)(?![.\d])', re.M),
                re.compile(r'(^#{2,4}\s*§?\s*\d+(?![.\d]).*$)', re.M))
 
@@ -1538,11 +1641,11 @@ def _detect_summary_sections(md_text: str):
     (chapter/book-scope) books keep the plain path untouched.
     """
     find_re, split_re = _MD_SEC_TWO
-    secs = find_re.findall(md_text)
+    secs = [norm_secnum(s) for s in find_re.findall(md_text)]
     if secs:
         return secs, find_re, split_re
     find_re, split_re = _MD_SEC_ONE
-    return find_re.findall(md_text), find_re, split_re
+    return [norm_secnum(s) for s in find_re.findall(md_text)], find_re, split_re
 
 
 def _extract_summary_tags_sectioned(md_file: str, find_re=None, split_re=None) -> List[tuple]:
@@ -1566,7 +1669,7 @@ def _extract_summary_tags_sectioned(md_file: str, find_re=None, split_re=None) -
         return []
     if find_re is None or split_re is None:
         find_re, split_re = _MD_SEC_TWO
-    md_sections = find_re.findall(md)
+    md_sections = [norm_secnum(s) for s in find_re.findall(md)]
     if not md_sections:
         return []
     parts = re.split(split_re, md)
@@ -1575,7 +1678,7 @@ def _extract_summary_tags_sectioned(md_file: str, find_re=None, split_re=None) -
     for part in parts:
         hm = find_re.match(part)
         if hm:
-            cur = hm.group(1)
+            cur = norm_secnum(hm.group(1))
             continue
         for block in _BLOCK_RE.finditer(part):
             body = block.group(1)

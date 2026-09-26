@@ -76,6 +76,20 @@ def chapter_kind(key: Any, kind: Any = None) -> int:
     return _resolve_kind(key, kind)
 
 
+def is_numbered_chapter(key: Any, kind: Any = None) -> bool:
+    """该键是否为「数字章」（``ch``）——判据取 **kind**，不取键的形态。
+
+    🔴 背景（Rosen《Discrete Mathematics》8e 实测，2026-09-26）：该书把
+    Appendix A/B/C 登记成**章键 14/15/16**（chapter_map 的 name 含 "Appendix"
+    → ``prime_chapter_kinds`` 灌出 kind=2），产物一律叫 ``appendix14.json`` /
+    ``units/appendix14/`` / ``Appendix14_Appendix_A_….md``。而若干调用点用
+    ``key[:1].isdigit()`` 当作「是数字章」的判据，于是拿着一张**已经拼好**的
+    附录 md 去找 ``Chapter14_*.md``，报「最终 md 缺失」。凡按章型选文件名前缀
+    （``Chapter{N}`` vs ``Appendix{X}``）处一律调用本函数。
+    """
+    return _resolve_kind(key, kind) == KIND_CHAPTER
+
+
 def _resolve_kind(key: Any, kind: Any) -> int:
     """``kind`` 显式优先 > 进程级 kind 注册表（由 chapter_map 灌注）
     > 形态回退（数字 → 章 / 非数字 → 附录）。"""

@@ -117,7 +117,13 @@ DETACHED_2 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,3})\*\*\s+(?!\s*[（(])(\S+)')
 # 否则三级小节号会被截断为两级、或三级 `###`/四级 `####` 标题根本不被扫描，
 # 导致 p-layer-missing-sec 把真实存在的小节误报为缺失（回归：commit 5390e5d
 # 把契约源切到分章契约后未同步放宽此正则）。
-SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*([A-Za-z](?:\.\d+)+|\d+(?:\.\d+)*)')
+# 破折号序标书（do Carmo `## §1-2`，2026-09-26 实测：只认点分把 dash 标题截成
+# `1` → 整章假阳缺节）：数字 token 允许 `-`/`.` 混合分隔，捕获后经
+# `_norm_secnum` 归一点分再与契约键比对。
+SEC_HEADING_RE = re.compile(r'^#{2,4}\s*§?\s*([A-Za-z](?:[-.]\d+)+|\d+(?:[-.]\d+)*(?:[-.][A-Za-z])?)')
+# 章内字母节（契约键 `2-A`…）的印刷标题形态：do Carmo 只印 `## §Appendix: ...`
+# （不带 N-A 序标）。判缺节时按末级字母 'A' 放行。
+APPENDIX_HEAD_RE = re.compile(r'^#{2,4}\s*§?\s*(?:Appendix|附录)\b')
 # 无编号小节（section_types 含 role 0 / depth 0，对应「原书小节无序号标」）专用：
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
@@ -312,7 +318,7 @@ def _norm_secnum(s):
 #   `## §A`       -> 字母节（附录章）
 #   `### §12.A`   -> 投影式字母子节（历史写法，显式父节优先）
 #   `### §A`      -> 纯字母子节（Karlin 体例，父节靠位置）
-_GLOBAL_SEC_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7]\d+)*)')
+_GLOBAL_SEC_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7\-]\d+)*(?:[.\u00b7\-][A-Z])?)')
 _LETTER_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(?:(\d{1,2})[.\u00b7]\s*)?([A-Z])(?![A-Za-z])')
 
 
@@ -322,7 +328,7 @@ def _md_global_section_ids(md_lines):
     for ln in md_lines:
         m = _GLOBAL_SEC_TOKEN_RE.match(ln.strip())
         if m:
-            ids.add(m.group(1).replace('\u00b7', '.'))
+            ids.add(norm_secnum(m.group(1)))
             continue
         m = re.match(r'^#{2,6}\s*§\s*([A-Z])(?![A-Za-z])', ln.strip())
         if m:
@@ -378,6 +384,11 @@ def check_missing_sections(md_lines, ext_dir, ch, cfg=None):
                 # 是 md 的首级分量、也是契约的末级分量）。该匹配为「附加」，
                 # 不破坏标准书，仅对全局编号书放行 contract-last in present_first。
                 present_first.add(num.split('.')[0])
+            elif APPENDIX_HEAD_RE.match(ln):
+                # 章内字母节（do Carmo 契约键 "2-A"）印刷标题常写作
+                # `## §Appendix: ...`（不带 N-A 序标）：按末级字母 'A' 放行，
+                # 与 contract-last 回退同一通道（2026-09-26 do Carmo 实测）。
+                present_first.add('A')
         present |= md_sec_ids
         for s, title in required:
             ns = _norm_secnum(s)
@@ -439,6 +450,21 @@ PROOF_OPEN_RE = re.compile(
 VERBOSE_PARA_CHARS = 450
 VERBOSE_PARA_HARD_CHARS = 1200   # 可读性硬顶：超过即无论重合率都报
 VERBOSE_OVERLAP_MIN = 0.60       # 与源书的 8-gram 字面重合率 ≥ 此值判为照抄
+
+# 🔴 desc 严格模式下**仍须**豁免的 Tier 1 形态（题面/条目号）：Rosen 每节末的集中
+# 习题块常被 OCR 灌进相邻 desc 节点（V-I 认可的归属），那里的题面是 Tier 1 忠实
+# 内容——照抄是**正确**的。若不豁免，收紧 desc 就会逼写手去改写题面（反向劣化）。
+# 只认「行首是条目号/题号」这一形态，`**Remark.**` / `**Historical Note.**` /
+# `**A3.2 Assignments…**` 这类印刷小标题不在其列（它们就是被照抄的 Tier 2 散文）。
+PROSE_GATE_STEM_RE = re.compile(
+    r'^(?:\*\*)?\s*(?:Exercise|习题|Problem)\s*\d'      # **Exercise 62.** / 习题 6.
+    r'|^(?:\*\*)?\d{1,3}[.)]\*{0,2}\s'                  # 58. … / **5.** … / 12) …
+    r'|^[（(][a-h1-9][)）]\s')                          # (a) … 分条题面
+# 列表项标号（`- ` / `* ` / `1. ` / `(a) `）：散文段收集遇到**新的**列表项即断段。
+# 一条条目 ≠ 一整段散文——否则术语表 / 编号说明这类合法长列表会被合成一个
+# 「墙式散文」块而误报（Rosen 8e ch3 §3.3 术语表 1913 字实测）。
+LIST_ITEM_RE = re.compile(
+    r'^[-*+]\s|^\d{1,3}[.)]\s|^[（(][A-Za-z0-9]{1,3}[)）]\s')
 # 单证明块过长的字符阈值
 VERBOSE_PROOF_CHARS = 700
 # 触发 FAIL 的聚合阈值（report.py 读取）
@@ -525,7 +551,8 @@ def _verbatim_overlap(text, src_grams, n=8):
     return hit / len(grams)
 
 
-def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
+def check_verbose_paragraphs(lines, ext_dir=None, ch=None, label_exempt=True,
+                             math_exempt=True):
     """顶层长散文段（非核心内容未摘要 / 整段照抄）。
 
     豁免：块引用(`>`)内、标题(`#`)、`**` 标签条目/例/练习的忠实陈述、$$ 公式、
@@ -535,6 +562,16 @@ def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
     ⚠️ **含公式的段落豁免**：凡承载数学（`$...$`/`$$`/`\\begin{}`/`\\(`）的段落视为
     忠实保留公式的描述性内容（Tier 2 要求保留公式），不计入本闸门，避免「忠实
     描述」被误杀。
+
+    🔴 `label_exempt` / `math_exempt`（Rosen 8e 附录 C 2026-09-26 实测盲区）：
+    上面两条豁免的本意是放行 **Tier 1**（定理/定义/例/习题按原书忠实陈述）。但
+    `desc` 单元**按定义就是 Tier 2 散文**（导语/动机/概览），写手只要在一整段照抄
+    前面加个 `**A3.2 Assignments...**` 这类段首粗体（= 印刷小标题的 run-in 形态），
+    该段即落入「标签区域」豁免而整段隐身；同理段内出现一个 `$x$` 就拿到数学豁免。
+    实测附录 C 单元 9286 B / 8 个粗体标签段全部照抄（重合率 1.00/0.92/0.88），
+    单元门控与合并 md 两层全绿。故**调用方按单元类型收紧**：`desc` 单元传
+    `label_exempt=False, math_exempt=False`；`item`/`exercise` 保持默认（Tier 1
+    忠实陈述不受影响，习题集不会因此洪泛）。合并 md 层拿不到逐段类型，保持默认。
 
     🔴 **判定「照抄」而非「写得长」**（判定原则：优先可读性，不以纯字数
     论处）：纯散文段需同时满足「长度 > VERBOSE_PARA_CHARS」与「与源书 8-gram 字面
@@ -562,35 +599,49 @@ def check_verbose_paragraphs(lines, ext_dir=None, ch=None):
             continue
         if not s or s.startswith('>') or s.startswith('#') or s.startswith('$$') \
            or s.startswith('---') or s.startswith('|') \
-           or s.startswith(('<div', '</div', '<img')):
+           or s.startswith(('<div', '</div', '<img', '<!--')):
             i += 1
             continue
-        if s.startswith('**'):
+        if s.startswith('**') and label_exempt:
             # 跳过一个 `**标签**：` 条目区域（含其续行与夹杂空行），直到结构性标记
+            # （Tier 1 忠实陈述豁免；desc 单元传 label_exempt=False，不走这里）
             j = i + 1
             while j < n:
                 nx = lines[j].strip()
                 if not nx:
                     j += 1
                     continue
-                if nx.startswith(('>', '#', '**', '---', '$$', '|')):
+                if nx.startswith(('>', '#', '**', '---', '$$', '|', '<!--')):
                     break
                 j += 1
             i = j
             continue
-        # 收集一段顶层散文
+        # 收集一段顶层散文（`**` 只在豁免开启时才断开段落）
+        _brk = ('>', '#', '$$', '---', '|', '<div', '</div', '<img', '<!--')
+        if label_exempt:
+            _brk = _brk + ('**',)
         j = i
         buf = []
         while j < n:
             cur = lines[j].strip()
-            if not cur or cur.startswith(('>', '#', '$$', '---', '|', '**', '<div', '</div', '<img')):
+            if not cur or cur.startswith(_brk):
+                break
+            if buf and LIST_ITEM_RE.match(cur):
+                # 列表项 = 一条条独立条目，不是「一整段散文」：逐条计量
+                # （Rosen 8e ch3 §3.3 术语表整表曾被当成 1913 字「墙式散文」）
                 break
             buf.append(cur)
             j += 1
         if buf:
             text = ' '.join(buf)
+            # 严格模式（desc）下仍放行 Tier 1 题面/条目号开头的段（见 STEM 常量注释）
+            if PROSE_GATE_STEM_RE.match(buf[0]):
+                # Tier 1 题面/条目号开头的段落两种模式下都放行（见 STEM 常量注释）
+                i = j
+                continue
             # 含公式的段落 = 内容承载的描述性内容，豁免长散文闸门（Tier 2）
-            if _para_has_math(text):
+            # （desc 单元传 math_exempt=False：段首一个 `$x$` 不该让整段照抄隐身）
+            if math_exempt and _para_has_math(text):
                 i = j
                 continue
             if len(text) > VERBOSE_PARA_CHARS:

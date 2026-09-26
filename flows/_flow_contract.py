@@ -21,7 +21,8 @@ import subprocess
 import sys
 
 from data.book_structure.book_structure import (
-    chapter_label, prime_chapter_kinds, unit_dir_name, chapter_ordinal)
+    chapter_label, prime_chapter_kinds, unit_dir_name, chapter_ordinal,
+    is_numbered_chapter)
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -456,11 +457,13 @@ class physical_evidence:
     def _md_group(book_dir, key):
         """该章最终 md 文件组：合并文件优先，否则按节号排序的节文件组。
 
-        数字章按 第N章_*.md / ChapterN_*.md；附录章（key 为字母）按
-        附录X_*.md / AppendixX_*.md（与 verify_chapter.chapter_md_groups 同规）。
+        数字章按 第N章_*.md / ChapterN_*.md；附录/补篇章按 kind（chapter_map 注册表，
+        见 ``is_numbered_chapter``）取 附录X_*.md / AppendixX_*.md——键本身可以是数字
+        （Rosen 8e 的 Appendix A/B/C 登记成章键 14/15/16），故**不得**用「键首字符是否
+        数字」判章型（与 verify_chapter.chapter_md_groups 同规）。
         """
         _ord = chapter_ordinal(key)
-        if key[:1].isdigit() and _ord:
+        if is_numbered_chapter(key) and _ord:
             pats = [f"第{_ord}章_*.md", f"Chapter{_ord}_*.md"]
         elif _ord:
             pats = [f"附录{_ord}_*.md", f"Appendix{_ord}_*.md"]
@@ -498,6 +501,9 @@ class physical_evidence:
         r"^\s*([A-Za-z\u4e00-\u9fff]+)[.．·。]?\s*(\d+(?:[.．·。]\d+)*)")
 
     # 中英标签互译（英文书源版 md 用 EN 标签而契约 key 可能是中文，反之亦然）
+    # 🔴 词表缺词 = **假报「契约项在 md 不在位」**：Rosen 8e 契约 key `算法1`…（46 个）
+    # 在英文 md 里印作 `**Algorithm 1 (…)**`，缺 `算法` 一词时 8 章 merge_source 证据
+    # 被硬拒（md 明明在位）。新增条目前先按契约键普查（`_iter_nodes` 取 key 词头计数）。
     _LABEL_ZH2EN = {
         "定义": ("definition",), "定理": ("theorem",), "引理": ("lemma",),
         "推论": ("corollary",), "命题": ("proposition",), "公理": ("axiom",),
@@ -505,8 +511,10 @@ class physical_evidence:
         "反例": ("counterexample",), "评注": ("remark", "note", "comment"),
         "注": ("remark", "note"), "注记": ("remark", "note"),
         "性质": ("property",), "习题": ("exercise", "problem"),
+        "练习": ("exercise", "problem"),
         "问题": ("problem", "exercise"), "猜想": ("conjecture",),
         "记号": ("notation",), "约定": ("convention",),
+        "算法": ("algorithm",),
     }
     _LABEL_EN2ZH = {}
     for _zh, _ens in _LABEL_ZH2EN.items():
@@ -522,11 +530,22 @@ class physical_evidence:
         lbl, rest = m.group(1), m.group(2)
         out = {ncand}
         if re.match(r"^[\u4e00-\u9fff]+$", lbl):
-            out.update(en + rest for en in physical_evidence._LABEL_ZH2EN.get(lbl, ()))
+            ens = physical_evidence._LABEL_ZH2EN.get(lbl, ())
+            out.update(en + rest for en in ens)
+            # 中文同胞标签：契约 key 与译版 md 各用不同中文标签（do Carmo 中文版
+            # 契约 `评注N` 在译文里印作 `注N`）。二者英文语义组相交即可互换；
+            # 不做这一步，CN 组会假报「契约项不在位」硬拒 merge 证据。
+            if ens:
+                for zh2, ens2 in physical_evidence._LABEL_ZH2EN.items():
+                    if zh2 != lbl and set(ens2) & set(ens):
+                        out.add(zh2 + rest)
         else:
             zh = physical_evidence._LABEL_EN2ZH.get(lbl)
             if zh:
                 out.add(zh + rest)
+            for zh2, ens2 in physical_evidence._LABEL_ZH2EN.items():
+                if lbl in ens2:
+                    out.add(zh2 + rest)
         return list(out)
 
     @staticmethod
@@ -913,7 +932,7 @@ class physical_evidence:
     def _md_group_lang(book_dir, key, lang):
         """按语种取该章最终 md 组：cn → 第N章_*/附录X_*；en → ChapterN_*/AppendixX_*。"""
         _ord = chapter_ordinal(key)
-        if key[:1].isdigit() and _ord:
+        if is_numbered_chapter(key) and _ord:
             pats = ([f"第{_ord}章_*.md"] if lang == "cn" else [f"Chapter{_ord}_*.md"])
         elif _ord:
             pats = ([f"附录{_ord}_*.md"] if lang == "cn" else [f"Appendix{_ord}_*.md"])

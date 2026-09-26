@@ -51,8 +51,54 @@ _O_BOLD_DOT_RE = re.compile(
 
 _O_PLAIN_DOT_RE = re.compile(
     r'^(\s{0,3})'                 # 0-3 spaces indent (top-level only)
+    r'\*?'                        # optional star: do Carmo 印刷带星习题 `*5. Let …`
+                                   # （2026-09-26 实测：无此容许时 `*5.` 隐身，习题表被
+                                   # 拆成 [1..4]+[6..]，后段假报 HEAD 缺 (5)）；
+                                   # 粗体 `**5.**` 已由 Pattern B 先行接管，不受影响
     r'([0-9]+|[a-z]+)[.)]\s+\S'   # N. or a) followed by space + content
 )
+
+# 🔴 Rosen 式「难度星号」（2026-09-26 ch10 §10.7 例9 单元实测）：印刷在习题号前用
+# `*` / `**` 标注难度，**不是**粗体起始，于是题面长这样：
+#   `**27. Find the crossing numbers of each of these nonplanar graphs. …`
+# Pattern B 要求 `**27.**`（闭合紧贴）、Pattern C 只容许**一个**前导 `*`，
+# 该题面对 O 层完全隐身 → 序列 `…26, (27 隐身), 28…` 凭空 INTERNAL 缺 (27)。
+# 只对**数字**标签放宽到两个前导星号：字母标签仍走既有 B/C，`**i)**` / `**a.**`
+# 一类粗体形态的解释不变 → 不会把 alpha/roman 块改成别的分类（零新增告警）。
+_O_STAR_NUM_RE = re.compile(
+    r'^(\s{0,3})\*{1,2}([0-9]+)[.)]\s+\S'
+)
+
+# 🔴 组题声明行（2026-09-26 ch10 实测，一条声明覆盖 3–9 道**只印图**的习题）：
+#   `**Exercises 13-15.** Determine whether the picture shown can be drawn …`
+#   `For Exercises 3-9, determine whether the graph shown has directed or …`
+#   `In Exercises 5-11 find the chromatic number of the given graph.`
+# 被声明的那些题**没有题面行**（题面就是一张图），于是清单从 12 直接跳到 16 →
+# 假报 HEAD/INTERNAL 缺号。把这些号记为「已覆盖」，**只进抑制集合、绝不进 item
+# 序列**（进序列会改变 min/max 与块划分，可能造出新告警）。
+_O_GROUP_DECL_RE = re.compile(
+    r'^\s*\*{0,2}(?:For|In)?\s*(?:Exercises?|习题|练习)\s*'
+    r'([0-9]{1,3})\s*(?:[-–—]\s*([0-9]{1,3}))?'
+)
+
+# 单个声明的跨度上限：`Exercises 3-9` 合理，`Exercises 1-4000` 必是误匹配。
+_O_DECL_MAX_SPAN = 60
+# 声明行到「它所归属的编号块」的最大行距（题面之间的插图/公式会把两者撑开）。
+_O_DECL_ATTACH_WINDOW = 120
+
+
+def _o_group_decl_ordinals(line):
+    """组题声明行覆盖的序号集合；不是声明行 → 空集。"""
+    s = _INLINE_MATH_RE.sub(' MATH ', line)
+    m = _O_GROUP_DECL_RE.match(s)
+    if not m:
+        return set()
+    lo = int(m.group(1))
+    hi = int(m.group(2)) if m.group(2) else lo
+    if hi < lo or hi - lo > _O_DECL_MAX_SPAN:
+        return set()
+    return set(range(lo, hi + 1))
+
 
 _O_CONTEXT_RE = re.compile(
     r'(注解|注释|注[：:]|备注|说明|Remarks?|Notes?|Comments?)', re.IGNORECASE
@@ -132,6 +178,10 @@ def _o_match_line(line):
     # Pattern C: plain with dot (top-level only, exclude blockquotes)
     if not line.lstrip().startswith('>'):
         m = _O_PLAIN_DOT_RE.match(line)
+        if m:
+            return [m.group(2)]
+        # Pattern D: 难度星号 + 数字号（`**27. Find …`，见 _O_STAR_NUM_RE）
+        m = _O_STAR_NUM_RE.match(line)
         if m:
             return [m.group(2)]
     return []
@@ -223,6 +273,28 @@ def _o_inline_ordinals(line):
 # 真缺号是「中间少几个」（跳幅小）；把另一条序列的头接进来才会「跳到很远」。
 # 20 足够宽松——真子项序列相邻差远小于此，而 (iii)=3 → (c)=100 这类误并远超。
 _MAX_ORDINAL_JUMP = 20
+
+
+def _o_split_restarts(ordinal_items):
+    """按**阅读顺序**在数值下降处把一条块内序列切成若干「重启段」。
+
+    返回 `[[ (line_idx, value), ... ], ...]`（保持原顺序，不重排）。
+
+    教材章末常见版式：`Supplementary Exercises … 42–50` 之后紧跟
+    `Computer Projects 1–15`、`Computations and Explorations 1–9`、
+    `Writing Projects 1–12`——**三条各自从 1 重启的独立清单**，题距 ≤4 被本层并成
+    一个块。整块按 min–max 求缺 → 凭空造出 16..41 一大串幽灵号（Rosen ch9 L3822 实测）。
+    下降点即「换了一条清单」的证据，段内求缺才是同一序列自己的缺号。
+    """
+    runs = []
+    for li, val in ordinal_items:
+        if runs and val < runs[-1][-1][1]:
+            runs.append([(li, val)])
+        elif runs:
+            runs[-1].append((li, val))
+        else:
+            runs.append([(li, val)])
+    return runs
 
 
 def _has_implausible_jump(vals):
@@ -319,6 +391,7 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
     # Phase 1: find all numbered/lettered lines
     item_lines = []  # (line_idx, raw_label)
     inline_ords = {}  # line_idx -> {ordinal, ...}（行内标记，仅用于抑制）
+    decl_lines = []   # [(line_idx, {ordinal, ...})]（组题声明，仅用于抑制）
     in_math = False
     for i, ln in enumerate(lines):
         # Skip display-math ($$) blocks entirely: formula content lines may
@@ -335,6 +408,9 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         iv = _o_inline_ordinals(ln)
         if iv:
             inline_ords[i] = iv
+        dv = _o_group_decl_ordinals(ln)
+        if dv:
+            decl_lines.append((i, dv))
 
     if not item_lines:
         return []
@@ -367,8 +443,28 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         # 这里把块内每个标签的全部合理解读补进抑制集合（只减少告警，见 _label_ordinals）。
         for _, lb in blk:
             ords |= _label_ordinals(lb)
-        block_meta.append({'ords': ords,
+        block_meta.append({'ords': ords, 'decl': set(),
                            'first': blk[0][0], 'last': blk[-1][0]})
+
+    # 🔴 组题声明归属（见 _O_GROUP_DECL_RE）：一条 `**Exercises 13-15.**` 声明的
+    # 那些题只印图、没有题面行，所以号数「不会出现在任何块里」。挂到**它后面最近的
+    # 编号块**（声明总在它所覆盖的题之前）；窗口内没有后块时退回**它前面最近的块**
+    # （声明所在的长清单被图撑碎，后段块行距超窗口的实测形态）。
+    # 结果只写进抑制集合（`decl` / `ords`），不进 item 序列 → 不可能造出新告警。
+    for li, dv in decl_lines:
+        target = None
+        for bj, bm in enumerate(block_meta):
+            if bm['first'] > li:
+                if bm['first'] - li <= _O_DECL_ATTACH_WINDOW:
+                    target = bj
+                break
+            if bm['first'] <= li <= bm['last']:
+                target = bj
+                break
+            target = bj          # 持续记录「最近的前序块」作为退路
+        if target is not None:
+            block_meta[target]['decl'] |= dv
+            block_meta[target]['ords'] |= dv
 
     # Phase 2: check each block for gaps
     for bi, block in enumerate(blocks):
@@ -386,7 +482,6 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         ordinals = sorted(set(val for _, val in ordinal_items))
         first_line = ordinal_items[0][0] + 1  # 1-indexed for display
         min_ord, max_ord = ordinals[0], ordinals[-1]
-        ord_set = set(ordinals)
 
         # Cross-block continuation: gather ordinals from nearby preceding blocks
         # (within 120 lines). If the "missing" numbers already appear there, the
@@ -441,30 +536,49 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
 
         type_tag = {'numeric': 'num', 'roman': 'roman', 'alpha': 'alpha'}[seq_type]
 
+        # 本块名下的组题声明号（只印图的题，见 _O_GROUP_DECL_RE 的归属规则）。
+        decl_here = block_meta[bi]['decl']
+
         # HEAD gap: sequence starts above 1 — suppress if the leading numbers
         # already appear in a nearby preceding block (cross-theorem continuation)
         if min_ord > 1:
-            _head_prev = (prev_ords_wide if seq_type == 'numeric' else prev_ords) | head_inline_ords
+            _head_prev = ((prev_ords_wide if seq_type == 'numeric' else prev_ords)
+                          | head_inline_ords | decl_here)
             if not set(range(1, min_ord)).issubset(_head_prev):
-                head_missing = [_fmt(v) for v in range(1, min_ord)]
+                # 只列**未被抑制**的前导号（旧版把 1..min-1 全列出来，读者无法分辨
+                # 哪些是真缺、哪些只是同清单更早块里已有——判定用的是子集检查，
+                # 这里收窄显示口径不改变判定）。
+                head_missing = [_fmt(v) for v in range(1, min_ord)
+                                if v not in _head_prev]
                 out.append(
                     f"  x L{first_line}: [{ctx_label}] HEAD gap ({type_tag}) — "
                     f"sequence starts at ({_fmt(min_ord)}), "
                     f"missing ({', '.join(head_missing)}) before first item"
                 )
 
-        # INTERNAL gaps: missing ordinals between min and max — suppress if the
-        # missing numbers already appear in a nearby preceding block
-        expected = set(range(min_ord, max_ord + 1))
-        internal_missing = sorted(expected - ord_set)
-        if internal_missing:
-            if not set(internal_missing).issubset(prev_ords):
-                present_str = ', '.join(_fmt(v) for v in ordinals)
-                missing_str = ', '.join(_fmt(v) for v in internal_missing)
-                out.append(
-                    f"  x L{first_line}: [{ctx_label}] INTERNAL gap ({type_tag}) — "
-                    f"present: ({present_str}), missing: ({missing_str})"
-                )
+        # INTERNAL gaps: missing ordinals between min and max — **按重启段分别求缺**
+        # （见 _o_split_restarts：章末多条各自从 1 重启的清单被并成一块时，整块
+        # min–max 会造出幽灵号）。缺号只要已在「前一窗口块」或**同块其他段**出现过
+        # 即抑制——两处都只减少告警，绝不新增。
+        # `decl_here` = 本块名下的组题声明号（只印图的题，见 _O_GROUP_DECL_RE）。
+        block_union = set(ordinals)
+        decl_here = block_meta[bi]['decl']
+        for run in _o_split_restarts(ordinal_items):
+            run_vals = sorted({v for _, v in run})
+            if len(run_vals) < 2:
+                continue
+            expected = set(range(run_vals[0], run_vals[-1] + 1))
+            internal_missing = sorted(expected - set(run_vals))
+            if not internal_missing:
+                continue
+            if set(internal_missing).issubset(prev_ords | block_union | decl_here):
+                continue
+            present_str = ', '.join(_fmt(v) for v in run_vals)
+            missing_str = ', '.join(_fmt(v) for v in internal_missing)
+            out.append(
+                f"  x L{run[0][0] + 1}: [{ctx_label}] INTERNAL gap ({type_tag}) — "
+                f"present: ({present_str}), missing: ({missing_str})"
+            )
 
         # TAIL gap: cross-reference OCR JSON for higher numbers (numeric only)
         if seq_type == 'numeric' and ext_dir and ch is not None and start is not None and end is not None:

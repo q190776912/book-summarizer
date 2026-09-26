@@ -51,6 +51,24 @@
     18. 控制字符闸：正文出现 C0 控制字符（`\t\n\r` 除外）即不通过——写手用
         shell/python 内嵌字符串写正文时 `\alpha`/`\beta` 的 `\a`/`\b` 会被转义吞成
         BEL/BS 并**吃掉字母**；损坏落在数学模式内，F 层散文启发式与 tag 对账都看不见
+    19. 顶层散文照抄闸（P 层 `check_verbose_paragraphs`，仅在传入 `ext_dir`+`ch`
+        时跑）：与源书 `page_*.json` 8-gram 字面重合 ≥60% 的长散文段 / >1200 字墙式
+        段 = Tier 2 未改写。**单元级**跑而非只在步骤 8 合并 md 跑：P 层文件级闸门
+        要求「整份 md ≥6 段违规」才 FAIL，一章摊到 6 个节文件后每文件 1–2 段照抄
+        恰好隐身（Rosen 8e ch1 实测：18 段落 → 步骤 5 全绿、步骤 7 verify 才 FAIL）
+    20. 习题块题号缺号闸（`exercise_run_gap_problems`）：契约登记的习题单元里行首
+        题号必须构成连续号段（原书每节习题集恒为 1..N），跳号 = 题面被漏写；区间号
+        「**Exercises 2-4.**」按覆盖的每一号计。跨单元的洞由章级闸
+        `problem_coverage.chapter_exercise_problems`（gate_units 章级闸 ⑮）接力；
+        **写的是不是本题**由 `duplicate_exercise_statement_problems`（章级闸 ⑯）接力
+    21. 流水线元话语闸（`_META_EXCUSE_RE`）：正文出现「契约节点 / manifest entry /
+        outside this page group / 题面未在本单元重现」等**内部工序说明**即不通过——
+        这类句子的功能就是解释内容为什么缺席，等于拿工序理由替换正文（Rosen ch5 §5.4
+        习题单元实测：整单元只有 4 行关于契约切片的说明，一题未写，判据 14/15 全绿灯）
+    22. 登记习题单元零题面闸：`utype == "exercise"` 且节点 `content_blocks` > 0，而正文
+        **认不出任何一条习题条目**（既无集内序号 `1.`/`**Exercise 29.**`，也无带该单元
+        契约键的粗体标头 `**20.1.3.**`——两类形态缺一即假阳，Katok 全书只用后者）= 题面
+        被占位文字换掉；判据 14 只拦「正文为空」，拦不住「非空但无题面」
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -89,9 +107,14 @@ from katex_heuristics import (                        # F 层：裸数学检测
     find_swallowed_prefix_errors,
     find_display_fence_damage_errors,
 )
-from verbose_gates import check_verbose_proofs        # P 层：证明过长
+from verbose_gates import check_verbose_proofs,        \
+    check_verbose_paragraphs        # P 层：证明过长 / 顶层散文照抄
 from struct_labels import TOP_LEVEL_HEADER_RE         # H 层：结构标签
 from format_verify import check_example_blockquote_lines  # G 层：example blockquote
+# 习题题号判据（集标题 / 题号两体 / 号段切分 / 缺号）与 gate_units 的**章级**跨单元
+# 号流闸同源——同一判据两处实现必然分叉（本 skill 已多次踩过）。
+from lib.problem_coverage import (
+    EXER_SET_HEAD_RE, exercise_item_numbers, exercise_run_gaps)
 
 # ── 复用 format_verify 文档级检查（块引用/例/证明/列表结构），单元级化 ──
 # 这些检查在 verify 里以文件为输入；单元门控把单元正文写到临时 .md 后复用原函数，
@@ -141,7 +164,14 @@ _HEADING_LINE_RE = re.compile(r"\s{0,3}#{1,6}\s")
 _OMISSION_CLAIM_RE = re.compile(
     r"consolidated\s+problem\s+set|omitted\s+here|not\s+reproduced\s+here"
     r"|collected\s+as\s+a\s+consolidated"
+    # 🔴「代表性/节选」式自我开脱（Rosen 8e ch6 实测：§6.5 习题集印 1–68 题，写手
+    # 只写 15 题并补一句 "Representative exercises follow."，B 层随即报 53+43 处缺号。
+    # 这类措辞与「此处省略」同罪：把没写的题面藏进「挑了几道」的说法里。）
+    r"|representative\s+exercises?|selected\s+exercises?|sample\s+exercises?"
+    r"|a\s+selection\s+of\s+(?:the\s+)?exercises?|only\s+some\s+(?:of\s+)?the\s+exercises?"
+    r"|exercises?\s+(?:are\s+)?not\s+(?:all\s+)?included|representative\s+problems?"
     r"|此处省略|此处从略|不再收录|未予收录|省略未收"
+    r"|代表性习题|部分习题|习题选录|习题从略|略选|选录"
     r"|归入综合习题|综合习题集", re.I)
 # 🔴 措辞指向**被省掉的总结内容**（习题 / 证明 / 整节）才算掩盖缺失。习题与编号项
 # 单元正文必须完整，一律直接判（不看措辞语境）；desc / section 等散文单元里
@@ -155,6 +185,24 @@ _OMISSION_ANCHOR_RE = re.compile(
 # 判「内容指向」只看声明处**局部上下文**（±字符），不做全篇搜索：散文单元正文长，
 # 全篇搜「proof / 节」几乎必命中，等于没豁免。
 _OMISSION_CTX = 160
+# 🔴 「流水线元话语」= 写手把**内部工序**写进了读者看的正文，并借它解释为什么内容缺席。
+# Rosen 8e ch5 §5.4 习题单元（2026-09-26 实测）正文只有一句
+#   「The contract node for the Section 5.4 exercise set covers only the printed page 381 …
+#     so their statements are not reproduced in this unit.」
+# ——整节题面一条没写，改写成一段关于**契约切片**的说明。它绕过了判据 14（正文非空）
+# 与判据 15（措辞不在 ``_OMISSION_CLAIM_RE`` 词表里），一路绿灯到合并后仍是缺内容。
+# 判据只认**指向流水线自身**的措辞（契约/manifest/页组/本单元 + 「题面未在本单元重现」），
+# 不做泛化搜索：`unit` 一词在物理/经济正文里是普通名词，泛搜必假阳。
+_META_EXCUSE_RE = re.compile(
+    r"(?:the|this|a|each)\s+(?:contract|manifest)\s+(?:node|entry|record|unit|slice)"
+    r"|\bcontract\s+node\b|\bmanifest\s+(?:entry|record)\b"
+    r"|outside\s+this\s+page\s+(?:group|range|span)"
+    r"|(?:statements?|exercises?|problems?|content)\s+are\s+not\s+"
+    r"(?:reproduced|included|present)(?:\s+in\s+this\s+(?:unit|entry|file))?"
+    r"|not\s+reproduced\s+in\s+this\s+(?:unit|entry)"
+    r"|契约节点|契约的?条目|契约切片|清单记录|页组|页区间"
+    r"|(?:题面|习题|内容)[^。\n]{0,12}未在本单元|本单元[^。\n]{0,8}未收录", re.I)
+
 # 🔴 「幻影习题条目」= OCR 把**跨条目续行**切成独立条目。抽取器按「序标 + 句号」
 # 认条目，而正文里 `…Theorem | 20.1.3. Let Per(t,ε)…`、`…(Definition | 20.2.5). In
 # analogy…` 这类断行同样形如序标，于是后半段被登记成一条「习题」。三种可机械判定
@@ -502,6 +550,12 @@ def english_residues(body):
     规则 2（散文）：剥掉公式 / HTML / LaTeX 命令后**不含任何 CJK**、长度
     ≥40 且含 ≥8 连续英文词的行 = 未翻译英文散文。含 CJK 的行（中文句内嵌
     Lebesgue 等专名）、纯公式行、纯图行天然豁免。
+    🔴 **```` ``` ```` 代码围栏不豁免**（Rosen 8e ch3 伪码实测，2026-09-26；
+    判据测试 `tests/test_translate_parity_language.py::test_pseudocode_*`）：
+    伪码的**语句**（procedure / while / if / return / 赋值 / 标识符 / `<=`）可保留原文，
+    但大括号注释 `{location is the subscript …}`、参数类型说明 `n, m: positive integers`、
+    整行英文指令 `sort talks by finish time and reorder so that …` 属散文，**必须译**。
+    派单简报不要写「围栏逐字不动」——那与本闸冲突，会让译者交出半英文单元。
     """
     problems = []
     m = _EN_ITEM_LABEL_RE.search(body)
@@ -676,9 +730,49 @@ def unit_source_map(contract):
     return {k: " ".join(v) for k, v in parts.items()}
 
 
+# 🔴 习题题号判据的**唯一真相源**在 ``lib/problem_coverage.py``（章级跨单元号流闸与
+# 本文件的单元级闸必须同一判据，否则「单元绿、合并 md 报缺号」的分叉又会重现）。
+# 只认**集级**标题做切段点：`(?!...)` 排除 ``**Exercise 3.**`` 这类「题号行」，
+# 否则每题自成一格、每段长度 1，缺号永远看不见（Rosen 8e ch6 实测）。
+def exercise_run_gap_problems(utype, body):
+    """习题块内部的**题号缺号**（判据 20）。
+
+    原书每节习题集恒为 ``1..N`` 连续编号，所以「一个习题块单元」里行首题号必须是
+    **连续号段**；块内跳号 = 有题面被跳过（Rosen 8e ch6 实测：§6.5 印 1–68 题，单元
+    只写了 1,3,9,…，合并 md 的 B 层报 53 处缺号，而单元门控此前**完全看不见**——
+    整节习题被 OCR 灌进一个 desc 节点，契约无法逐题对账）。
+
+    只在**契约登记的习题单元**（``utype == exercise``）判定：写作规则 V-I 规定「有专门
+    小标题的集中习题块一律省略」，desc/item 单元里顺带抄到的题面**不是**欠账，对它们报
+    缺号等于逼写手恢复 V-I 认可的省略内容（Rosen 8e ch10 实测假阳）。**按习题集标题切段**
+    （一个单元合法含两个集，两段号段互不相干），段内再按号回退切段；长度 < 3 的短段不判
+    （两三条枚举不构成「集」）。同节习题拆成多个单元、各覆盖连续一段 = 合法（只看段内，
+    不要求从 1 起）。跨单元的洞由章级闸 ``chapter_exercise_problems`` 负责。
+    """
+    if utype != "exercise":
+        return []
+    heads = [m.start() for m in EXER_SET_HEAD_RE.finditer(body)]
+    cuts = [0] + sorted({h for h in heads if h > 0}) + [len(body)]
+    problems = []
+    seen = set()
+    for a, b in zip(cuts, cuts[1:]):
+        for lo, hi, gaps in exercise_run_gaps(exercise_item_numbers(body[a:b])):
+            if (lo, hi) in seen:
+                continue
+            seen.add((lo, hi))
+            problems.append(
+                "习题块题号缺号 %d 处（号段 %d..%d，缺 %s）——原书该节习题集是"
+                "连续编号，块内跳号即题面被漏写；须按 page_*.json 把缺的各题题面补全"
+                "（禁止改写措辞搪塞，也禁止把已有各题删短来「凑连续」）" % (
+                    len(gaps), lo, hi,
+                    ", ".join(str(g) for g in gaps[:12])
+                    + ("…" if len(gaps) > 12 else "")))
+    return problems
+
+
 def check_body(utype, name, body, expected_tags=None, allow_extra=None,
                expected_images=None, content_blocks=None, source_text=None,
-               key=None):
+               key=None, ext_dir=None, ch=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
@@ -705,6 +799,11 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     ``key``：该单元的契约条目键（如 ``9.1.5``）。仅用于「幻影习题条目」闸判定
     编号公式 / 插图是否属于**别的小节**；None = 该子判据跳过（句中起始与零内容块
     两项不依赖 key，仍生效）。
+    ``ext_dir`` / ``ch``：提取目录 + 章键。提供时启用**P 层顶层散文照抄闸**
+    （``check_verbose_paragraphs``，与该层在合并 md 上同一实现、同一阈值：纯散文段
+    > ``VERBOSE_PARA_CHARS`` 且与原书 8-gram 字面重合 ≥ ``VERBOSE_OVERLAP_MIN``，
+    或 > ``VERBOSE_PARA_HARD_CHARS`` 墙式硬顶）。缺上下文（None）= 该闸退化为只拦
+    硬顶长度，与 verify 侧同语义（不误伤）。
     """
     if utype not in ("item", "desc", "exercise"):
         return True, []
@@ -959,5 +1058,58 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
             "正文含控制字符 %s——通常是 `\\alpha`/`\\beta` 等反斜杠命令被写成转义序列"
             "（\\a→U+0007、\\b→U+0008）后**丢了字母**，须回契约/书页原文重写该处 KaTeX"
             % " ".join("U+%04X" % c for c in ctrl))
+
+    # 19) P 层「顶层散文照抄」闸（单元级）：Tier 2 内容不得整段搬自原书。
+    #     此前该判据**只在步骤 7/8 的合并 md 上跑**，单元门控看不见 → 写手代理
+    #     「标 DONE + 门控全绿」后仍被 verify 整章打回（Rosen 8e 首跑源版 verify：
+    #     13 章共 222 段照抄/墙式散文）。复用 verify 同一实现（含 `>`/`**标签**`/
+    #     含公式段/表格/代码围栏豁免），**只改调用位置**，不复制逻辑。
+    if ext_dir is not None and ch is not None:
+        # 🔴 `desc` 单元 = Tier 2 散文本体，两条「Tier 1 忠实陈述」豁免（`**标签**`
+        #     区域、含公式段）对它不适用；否则段首加粗体小标题或一个 `$x$` 就能让
+        #     整段照抄隐身（Rosen 8e 附录 C 单元 0002 实测：8 个粗体标签段重合率
+        #     0.88–1.00 全绿通过）。item/exercise 保持豁免，习题集与定理陈述不受影响。
+        strict = utype == "desc"
+        errs = check_verbose_paragraphs(line_list, ext_dir, ch,
+                                        label_exempt=not strict,
+                                        math_exempt=not strict)
+        if errs:
+            all_problems.extend(
+                "照抄/墙式散文（Tier 2 须改写表述，保留全部变量/公式/概念，不得删内容）："
+                + e.strip() for e in errs)
+
+    # 20) 习题块题号缺号闸：见 ``exercise_run_gap_problems``（判据与豁免同函数文档）
+    all_problems.extend(exercise_run_gap_problems(utype, body_clean))
+
+    # 21) 流水线元话语闸（见 ``_META_EXCUSE_RE`` 注释）：正文里出现「契约节点怎么怎么、
+    #     所以题面没写进本单元」这类**内部工序说明 = 内容缺席的借口**，一律不通过。
+    #     读者看的笔记里不该出现流水线词汇，出现即同时意味着有内容被工序理由换掉了。
+    m_meta = _META_EXCUSE_RE.search(body_clean)
+    if m_meta:
+        _norm_m = lambda s: " ".join(str(s).split()).casefold()
+        if _norm_m(m_meta.group(0)) not in _norm_m(source_text or ""):
+            all_problems.append(
+                "正文出现流水线元话语「%s」——内部工序（契约切片/页区间/本单元）不是内容的"
+                "替代品：须按 page_*.json 把该节点欠的正文/题面照书源写全，删掉这段说明"
+                % m_meta.group(0))
+
+    # 22) 登记习题单元零题面闸：契约在账的习题节点（manifest ``type == exercise``）带
+    #     内容块，而正文里**认不出一条习题条目** = 题面被占位文字换掉。判据 14 只拦
+    #     「正文为空」，拦不住「非空但无题面」（Rosen ch5 §5.4 即为一例：4 行元话语
+    #     冒充一整个习题集单元）。
+    #     🔴 「条目形态」两类都算在位（Katok 8e 全书用前者，只认集内序号会让该类书
+    #        整章被打回——已由 verify/tests 的 test_clean_exercise_not_flagged 守住）：
+    #       · 集内序号 ``1. `` / ``**Exercise 29.**``（``exercise_item_numbers`` 非空）；
+    #       · 粗体条目标头里带该单元的契约键序标 ``**20.1.3.**``（``key`` 真值）。
+    if utype == "exercise" and content_blocks and \
+            not exercise_item_numbers(body_clean) and \
+            not (key and re.search(
+                r"(?m)^\s{0,3}(?:>\s*)?\*\*[^*\n]*" + re.escape(str(key).strip())
+                + r"[^*\n]*\*\*", body_clean)):
+        all_problems.append(
+            "契约登记的习题单元正文认不出任何一条习题条目（既无集内序号，也无带契约键 "
+            "%r 的粗体条目标头），而节点有 %d 个内容块——习题节点按 V-I 须完整收录题面"
+            "（章末集中块不生成单元），须回印刷页逐题补写，禁止用说明性文字占位"
+            % (key, content_blocks))
 
     return (len(all_problems) == 0, all_problems)

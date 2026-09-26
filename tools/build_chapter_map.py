@@ -466,6 +466,12 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
             continue
         # ---- Mode B fallback (bare title) ----
         if not target:
+            # 中文题名经 norm_title 归一后为空 → B 不可能命中；若此处直接
+            # continue，Mode C 兜底会被跳过，全书静默 KEPT_MANUAL 保留印刷页
+            # 码当 PDF 页用（2026-09-26 解析几何 3ed 实测）。目标为空时 B 必败，
+            # 提前走 C 与「A0/A/B 均失败」语义等价。
+            if cn_head_start and ch_int is not None and ch_int in cn_head_start:
+                detected[ch] = (cn_head_start[ch_int], 0.6)
             continue
         best_b = None
         best_b_score = -1.0
@@ -543,6 +549,13 @@ def scan_cn_heads(pages_dir):
         for x in (j.get("text") or []):
             s = x if isinstance(x, str) else (x.get("text") or "")
             for mm in CN_CHAP_RE.finditer(str(s)):
+                # 只认「页眉/标题行」形态：第N章前只允许页码/空格/§ 前缀。
+                # 句中交叉引用（"…根据第一章的命题…"）行中命中会以 1 票
+                # 挤掉真页眉（奇偶页眉交替时把真连续段拦腰打断，ch2 起点
+                # 71→73 实测），一律剔除。
+                pre = str(s)[:mm.start()]
+                if not re.fullmatch(r"[\d\s§]*", pre):
+                    continue
                 t = mm.group(1)
                 n = int(t) if t.isdigit() else CN_NUM.get(t)
                 if n:

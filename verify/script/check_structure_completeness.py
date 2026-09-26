@@ -877,6 +877,29 @@ def step2_sections(ch, start, end, ext, cfg, tree):
 
 
 # === 第 3 步：item_numbering_integrity 校验遗漏重要概念 ======================
+_OCR_SUFFIX_DIGIT = {"b": "8", "o": "0", "i": "1", "l": "1", "s": "5",
+                     "z": "2", "g": "9", "e": "6"}
+
+
+def _contract_item_keys(tree):
+    """契约树中全部条目节点（非 chapter/section/description/proof）的**原始键**小写集。
+
+    供「字母后缀形近」豁免使用：`_canon_key` 不接受尾字母（`定理1b` 无 int 尾号），
+    这类真身在 contract_items 里必然缺席，只能用裸键集合做存在性证据。"""
+    ks = set()
+
+    def walk(n):
+        if getattr(n, "type", None) not in ("chapter", "section",
+                                            "description", "proof"):
+            k = str(getattr(n, "key", "") or "").strip().lower()
+            if k:
+                ks.add(k)
+        for c in getattr(n, "sub_sec", None) or []:
+            walk(c)
+    walk(tree)
+    return ks
+
+
 def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     """第 3 步：用 item_numbering_integrity（B 层）校验遗漏定义/定理/例等重要概念并回填。
 
@@ -974,6 +997,8 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
             canon_labels.setdefault(_canon, set()).add(_lab)
 
     missing_items = []
+    _contract_keys = _contract_item_keys(tree)
+    _exempt_ck = set()   # suffix_confusion 豁免候选的复合键（B 层同样不得喂入）
     for ck, it in best.items():
         if ck in contract_items:
             continue
@@ -992,6 +1017,33 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                 "note": "contract holds this canon as type=uncat",
             })
             continue
+        # 🔴 字母后缀序标 OCR 形近豁免（do Carmo ch5 实测 2026-09-26）：印刷
+        # 「THEOREM 1a / 1b」的尾字母被抽取器按形近折成数字（b→8 → 伪候选
+        # canon=(18,) 键「定理18」），而契约真身「定理1b」因尾字母无 int canon
+        # 必然缺席 contract_items → 假 readable 缺项、闸门死锁；盲目回填会在契约
+        # 里造出幽灵「定理18」。判据（两重，防真 18 与 1b 并存的书被误豁免）：
+        # ① 候选 snippet 本身印着「标签 + 数字 + 单字母」形态；② 候选 canon 末段
+        # 恰等于把该字母按形近表折回数字后的编号；③ 契约裸键里有同号同尾字母项。
+        m_sf = re.match(r"^\s*([A-Za-z][A-Za-z .]*?)\s*(\d+)\s*([A-Za-z])\b",
+                        it.get("snippet", ""))
+        if (m_sf and c and isinstance(c[-1], int)
+                and m_sf.group(3).lower() in _OCR_SUFFIX_DIGIT):
+            _mangled = int(m_sf.group(2) + _OCR_SUFFIX_DIGIT[m_sf.group(3).lower()])
+            _lab_sf = _canon_label(m_sf.group(1).strip().rstrip(". :"))
+            if _mangled == c[-1] and \
+                    f"{_lab_sf}{m_sf.group(2)}{m_sf.group(3)}".lower() \
+                    in _contract_keys:
+                _exempt_ck.add(ck)
+                missing_items.append({
+                    "key": it["key"], "label": it["label"], "page": it["page"],
+                    "snippet": it["snippet"], "canon": list(c),
+                    "has_label": it.get("has_label", False),
+                    "status": "suffix_confusion",
+                    "note": "printed ordinal '%s%s' OCR-mangled to %d; contract "
+                            "holds the suffixed sibling" % (
+                                m_sf.group(2), m_sf.group(3), _mangled),
+                })
+                continue
         # 🔴 跨章引用降级（节级编号英文两级书，Tu 实测）：该扫描项的首段（节号）归属
         # 其他章 → 是「指向他章」的交叉引用，非本章缺项。判 reference：不回填、不阻断，
         # 仅在报告留痕供复核（其真实条目已由归属章契约承载）。
@@ -1051,7 +1103,19 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
         })
 
     # 2) item_numbering_integrity（B 层）：喂合成 md + ctx.items=源条目集
-    bmeta = _run_b_layer(ch, start, end, ext, cfg, tree, raw_items)
+    # 🔴 suffix_confusion 豁免候选（印刷 1b 折成 18 一类）同样**不得喂给 B 层**：
+    # 它们是同一真身的形近替身，留在源集里 B 会报「源最大 18 远大于 md 最大 3」
+    # TAIL BLOCKING 幻影（do Carmo ch5 回归实测），闸门依旧死锁。
+    b_raw = raw_items
+    if _exempt_ck:
+        b_raw = []
+        for it in raw_items:
+            cc = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
+            if cc is not None and _composite_key(
+                    cfg.primary_type, it.get("label", "uncat"), cc) in _exempt_ck:
+                continue
+            b_raw.append(it)
+    bmeta = _run_b_layer(ch, start, end, ext, cfg, tree, b_raw)
 
     return missing_items, bmeta
 

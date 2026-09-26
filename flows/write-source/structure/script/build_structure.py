@@ -72,8 +72,10 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 from lib.util import blk_text
+from lib.unit_order import check_contract_anchors, check_section_key_page_order
 
 import json
+import functools
 import re
 import sys
 
@@ -98,7 +100,8 @@ from key_parse import _canon_label, normkey
 from data.book_structure.book_structure import (BookStructure, StructureNode,
                                                 chapter_json_path,
                                                 norm_chapter_key,
-                                                chapter_label, chapter_ordinal)
+                                                chapter_label, chapter_ordinal,
+                                                is_numbered_chapter)
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +572,7 @@ def _chapter_local_sections_from_markdown(ext, ch):
     # 小结 md 命名随章型：数字章 Chapter{N}_*.md / 第N章_*.md，
     # 附录章 Appendix{X}_*.md / 附录X_*.md（merge_units._final_md_name 同源）。
     _ord = chapter_ordinal(ch)
-    if str(ch)[:1].isdigit() and _ord:
+    if is_numbered_chapter(ch) and _ord:
         pats = (f"Chapter{_ord}_*.md", f"chapter{_ord}_*.md", f"第{_ord}章_*.md")
     elif _ord:
         pats = (f"Appendix{_ord}_*.md", f"appendix{_ord}_*.md", f"附录{_ord}_*.md")
@@ -683,7 +686,7 @@ def _real_subsections_from_markdown(ext, ch):
     cands = []
     for pat in (f"Chapter{ch}_*.md", f"chapter{ch}_*.md"):
         cands.extend(glob.glob(os.path.join(book_dir, pat)))
-    if str(ch)[:1].isdigit():
+    if is_numbered_chapter(ch):
         cands.extend(glob.glob(os.path.join(book_dir, f"第{ch}章_*.md")))
     else:
         # 附录/补篇章小结 md 命名同 merge_units._final_md_name
@@ -2004,10 +2007,39 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     def _sort_doc_order(children):
         anchors = sorted((c for c in children
                           if c.get("type") in _ANCHOR_TYPES), key=_doc_sort_key)
+        def _item_order_cmp(a, b):
+            # 🔴 跨计数器比较禁用数字序（do Carmo ch5 实测 2026-09-26）：
+            # 节内**每个计数器各自重启**（Definition 1 / Theorem 1 / Example 1
+            # 并存），旧键把 key 数字段作为跨条目主序，把 定理1(p401 页中)
+            # 排到 例2(p401 页上) 之前 → 前序页码 401→403→401 回退，锚点闸
+            # 整章拒绝落盘。数字单调只在**同标签**（同计数器）内成立；
+            # 异标签对的真实阅读序 = 源页锚定 y（锚不到取 +inf 排末）。
+            # Kreyszig 语义保留：同标签同页交叉引用误锚仍按号序，不看 y。
+            pa, pb = int(a.get("page_start") or 0), int(b.get("page_start") or 0)
+            if pa != pb:
+                return -1 if pa < pb else 1
+            ka, kb = str(a.get("key") or "0"), str(b.get("key") or "0")
+            la = re.match(r'^([^\d]*)', ka).group(1)
+            lb = re.match(r'^([^\d]*)', kb).group(1)
+            if la != lb:
+                ya = _doc_y_of(a)
+                yb = _doc_y_of(b)
+                fa = ya if ya is not None else float("inf")
+                fb = yb if yb is not None else float("inf")
+                if fa != fb:
+                    return -1 if fa < fb else 1
+                return -1 if _nat_key(ka) < _nat_key(kb) else (
+                    0 if ka == kb else 1)
+            na = tuple(int(x) for x in re.findall(r"\d+", ka))
+            nb = tuple(int(x) for x in re.findall(r"\d+", kb))
+            if na != nb:
+                return -1 if na < nb else 1
+            return -1 if _nat_key(ka) < _nat_key(kb) else (
+                0 if ka == kb else 1)
+
         its = sorted((c for c in children
                       if c.get("type") not in _ANCHOR_TYPES),
-                     key=lambda c: (int(c.get("page_start") or 0),
-                                    _nat_key_digits(str(c.get("key") or "0"))))
+                     key=functools.cmp_to_key(_item_order_cmp))
         if not anchors:
             return its
         out, si = [], 0
@@ -2196,6 +2228,7 @@ def main():
     out_sub = os.path.join(ext, "book_structure")
     os.makedirs(out_sub, exist_ok=True)
     built = 0
+    _anchor_bad = 0
     for ch in (want or sorted(rng, key=_chapter_sort_key)):
         if ch not in rng:
             print("%-9s SKIP (not in chapter_map)" % chapter_label(ch))
@@ -2215,6 +2248,20 @@ def main():
         # 定位到本册目录，否则下册章会挂成上册页的内容（静默错乱）。
         page_dir = _resolve_page_dir(ext, ch)
         full, stats = build_chapter_contract(ext, node.to_dict(), page_dir=page_dir)
+        # 🔴 锚点-树序自相矛盾的契约**不落盘**：这类节点（实测：由抽取器 Exercise
+        # 标签条目派生的「节习题块」，页码取自命中的页眉/散文行）会把整节内容
+        # 挤到错误的阅读位置上，且只在下游门控 ⑪ 以几十条「单元跨节/跨页错位」
+        # 暴露，反推代价高。契约不落盘 = 步骤 3 出口不成立，强制在此修正。
+        # 两道闸：① 前序页码单调；② 印刷小节号顺序 ↔ 页码顺序一致（补前序闸盲区：
+        # 错锚节点恰在前序末尾时不倒退可看，Rosen 8e ch9 §9.1.1 实测）。
+        anchor_problems = (check_contract_anchors(full)
+                           + check_section_key_page_order(full))
+        for _ap in anchor_problems:
+            print("%-9s ANCHOR-SANITY FAIL | %s" % (chapter_label(ch), _ap))
+        _anchor_bad += len(anchor_problems)
+        if anchor_problems:
+            print("%-9s 拒绝落盘（锚点问题 %d 处）" % (chapter_label(ch), len(anchor_problems)))
+            continue
         with open(out, "w", encoding="utf-8") as f:
             json.dump(full, f, ensure_ascii=False, indent=2)
         built += 1
@@ -2230,6 +2277,15 @@ def main():
                  stats["proof"], stats["description"], stats["noise_dropped"],
                  os.path.basename(out)))
     print("BOOK -> %s | chapters built=%d" % (out_sub, built))
+    if _anchor_bad:
+        print("[build_structure] BLOCKED: %d 处契约锚点与树序矛盾（ANCHOR-SANITY FAIL）。"
+              % _anchor_bad)
+        print("  修法：把该节点移到父节点 sub_sec **末尾**，并把 page_start/page_end")
+        print("  改成它在原书里的真实页（节习题块 = 本节末印刷标题 ``Exercises`` 所在页）；")
+        print("  已拆过单元的书**不得重建契约**（会作废 DONE 单元），改为定点修补契约 +")
+        print("  同步 manifest 记录次序（只重排记录，不动 id/文件名），参考实现见")
+        print("  书目录 _extract/_fix_exer_anchor.py 与门控 ⑪（lib/unit_order.py）。")
+        return 2
     return 0
 
 

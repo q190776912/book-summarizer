@@ -582,6 +582,17 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
                 # section-dependency diagrams like "5-6.A") — real titles have words
         if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
             return None
+        # 🔴 纯节号串否决（do Carmo ch5 实测 2026-09-26）：章首目录/图示依赖
+        # 行把一串裸节号印成「标题」（"5-2 5-3 5-4 5-5 5-6,A5-6,B 5-7 …"），
+        # OCR 合并成一行后命中检测 → §5-2 被锚到目录行、真条头被首现去重压掉。
+        # 判据：首词本身就是节号形态且全行 ≥3 个这样的裸节号 token——真节标题
+        # 从不以「自身编号 + 另一编号」开头（跨节引用句 "Secs. 8.3 and 8.4"
+        # 同理被拦，且其 token 无分隔符粘连形态亦不满足真标题特征）。
+        _num_tok = re.findall(r'\b\d{1,2}[.\-–]\d{1,3}[.,]?[A-Za-z]?\b',
+                              _rest_stripped)
+        if (len(_num_tok) >= 3
+                and re.match(r'^\d{1,2}[.\-–]\d{1,3}', _rest_stripped)):
+            return None
         # 句读尾守卫（Casella & Berger 实测）：真节标题从不以逗号/分号/冒号收尾；
         # 以句读收尾的「编号+短词」行是散文碎片（OCR 掉括号的公式引用行
         # "1.5.3. First,"——原书 "(1.5.3). First, ..."）不是节头。句号收尾
@@ -589,7 +600,24 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 🔴 只拦短碎片（Rising Sea §5.5 实测）：真节标题可以是长名词短语且
         # 合法地以冒号收尾——"5.5 The crucial points of a scheme that control
         # everything:"（印刷原样）；散文残粒恒为短行，长度 >= 40 放行。
-        if _rest_stripped[-1:] in (',', ';', ':', '，', '；', '：') and len(_rest_stripped) < 40:
+        # 🔴 分号尾 Title-Case 多词豁免（do Carmo《Differential Geometry of
+        # Curves and Surfaces》实测 2026-09-26）：本书节题跨行印刷、首行以
+        # 分号收尾——"2-2. Regular Surfaces;"（续行 "and Differentiable
+        # Structures"），6 个真节头（2-2/2-3/2-4/4-7/5-6/5-10）被旧守卫整批
+        # 否决 → 契约漏节、条目跨节错挂。判据保守：仅分号、>=2 词、每词首
+        # 字符非小写才豁免；散文粘连行（含小写虚词/单短词）不受豁免影响。
+        _semi_tc = False
+        if _rest_stripped[-1:] == ';':
+            _sw = _rest_stripped[:-1].split()
+            _stop = {"of", "and", "the", "or", "a", "an", "in", "on", "to",
+                     "for", "with", "by", "at", "as", "from", "per", "via",
+                     "vs", "etc", "nor", "but", "ets"}
+            _semi_tc = (len(_sw) >= 2
+                        and all((not w[0].isalpha()) or w[0].isupper()
+                                or w.lower().strip(".,:;()-") in _stop
+                                for w in _sw))
+        if (_rest_stripped[-1:] in (',', ';', ':', '，', '；', '：')
+                and len(_rest_stripped) < 40 and not _semi_tc):
             return None
         # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
         # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。

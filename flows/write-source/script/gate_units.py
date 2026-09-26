@@ -137,7 +137,8 @@ from data.book_structure.book_structure import (
 import split_draft_units as _split
 import check_unit_quality as _quality
 from lib.unit_order import check_unit_order
-from lib.problem_coverage import coverage_problems, page_floor_problems
+from lib.problem_coverage import coverage_problems, page_floor_problems, \
+    chapter_exercise_problems, duplicate_exercise_statement_problems
 from lib.tag_attestation import tag_attestation_problems
 from lib.numbering import formula_tag_noise
 
@@ -679,7 +680,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
                     utype, u.get("name") or "", body,
                     expected_tags=exp, allow_extra=known_book,
                     expected_images=exp_imgs, content_blocks=exp_content,
-                    source_text=src_map.get(str(u["key"])), key=str(u["key"]))
+                    source_text=src_map.get(str(u["key"])), key=str(u["key"]),
+                    # 🔴 P 层散文照抄闸**只对源语言单元**跑：译文是中文，与原书
+                    # 8-gram 恒不重合，而「墙式硬顶」按字符数计，长中文段会被误伤。
+                    ext_dir=(ext if units_sub == "units" else None),
+                    ch=(str(ch_key) if units_sub == "units" else None))
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]
@@ -766,6 +771,23 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # 修法在**收割处**（attach_content / lib.numbering 的形态与几何闸），不是写手台。
     problems.extend(tag_attestation_problems(contract, _page_label_loader(ext),
                                              chapter_label(ch_key)))
+    # 🔴 章级闸 ⑮：习题集题号**跨单元连续**对账（体例真值，不依赖契约）。⑫/⑬ 拿契约或
+    # 页窗当「该节应有几题」的下限，可 Rosen 这类书整节习题被灌进一个 desc 节点后，
+    # 契约侧只有 1 个内容块、页侧下限又被题号 OCR 粘连压低，于是「§10.1 抄了 1,2 就跳到
+    # 10–38」（缺 3..9，缺的题分散在不同单元）在 ⑫/⑬ 与**单元级**判据 20 里全是绿灯——
+    # 单元级只看单文件内部的号段，跨单元的洞看不见。本闸按合并顺序把全章正文串成号流，
+    # 在习题集标题处切段，段内题号必须连续（原书每节习题集恒为 1..N）。判据与单元级
+    # 同源（lib/problem_coverage），豁免边界见该函数文档。
+    _read_body_ch = _unit_body_reader(out_dir)
+    _ordered_units_ch = [(str(u.get("file") or ""), _read_body_ch(u),
+                          u.get("type") == "exercise") for u in units]
+    problems.extend(chapter_exercise_problems(_ordered_units_ch))
+    # 🔴 章级闸 ⑯：**同一题面重复出现在两个单元** = OCR 把相邻小节习题集的条目灌进
+    # 本单元（Rosen 8e ch8 实测：§8.4 的习题单元里抄的是 §8.3 的 29–37 题，号段自身
+    # 连续 → ⑮ 与单元级判据 20 全绿，而 §8.4 自己印的 1–60 一题未写）。号流对账只比
+    # 号不比文，**看不见「写的是不是本题」**；文本指纹（归一化掉 LaTeX 空格/花括号差异）
+    # 是唯一能揭穿的判据。与 ⑮ 同一份 ordered 视图，同样只对契约登记的习题单元取指纹。
+    problems.extend(duplicate_exercise_statement_problems(_ordered_units_ch))
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py

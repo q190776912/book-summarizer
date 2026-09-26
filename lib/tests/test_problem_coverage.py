@@ -20,7 +20,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from problem_coverage import (coverage_problems, longest_run_from_one,
+from problem_coverage import (consolidated_cut, coverage_problems,
+                              longest_run_from_one,
                               page_floor_problems, page_problem_floors,
                               unit_run_length)
 
@@ -215,6 +216,54 @@ class TestPageFloors(unittest.TestCase):
         blocks = ["Problems", "1. a", "2. b", "1906 was the year", "3. c"]
         self.assertEqual(page_problem_floors(root, lambda pg: blocks, (50, 60)),
                          {"4.2": 3})
+
+
+class TestConsolidatedCut(unittest.TestCase):
+    """V-I 成堆习题块的契约侧切断点（Fraleigh 实测：块被灌进 description 文本流）。
+
+    正向 = 印刷块标题 / 引言行（含 OCR 粘连与项目符号残渣）必须开切；
+    负向 = 正文里的散文引用不得开切（否则把该写的编号内容判成不必写）。
+    """
+
+    def cut(self, *blocks):
+        return consolidated_cut(list(blocks))
+
+    def test_printed_title_forms(self):
+        for head in ("EXERCISES 23", "■EXERCISES23", "Exercises 4", "习题 3",
+                     "Exercises for Section 12", "Section 5 Exercises"):
+            self.assertEqual(self.cut("1. body list", head, "1. a"), 1, head)
+
+    def test_glued_ocr_intro(self):
+        # ch2 D1 实测：OCR 把引言行粘成无空格整句，题号从 21 起
+        self.assertEqual(self.cut("18", "InExercises21through6,determine", "21.On"), 1)
+
+    def test_ocr_digit_read_as_letter(self):
+        # ch0 §0.20 实测：EXERCISES 0 → 「EXERCISESO」，In Exercises 1 → 「InExercisesI」
+        self.assertEqual(self.cut("body prose", "EXERCISESO",
+                                  "InExercisesI through4,describe", "1.(x∈R"), 1)
+
+    def test_spaced_intro_line(self):
+        self.assertEqual(self.cut("Some body prose.",
+                                  "In Exercises 1 through 9, determine whether",
+                                  "1. Let $*$ be"), 1)
+        self.assertEqual(self.cut("Exercises 14 through 19 deal with uniqueness.",
+                                  "1. Suppose $T$ is"), 0)
+
+    def test_prose_reference_does_not_cut(self):
+        for line in ("We have demonstrated the toughest part (see Exercises 14 through 22).",
+                     "A series of exercises shows that every $G$-set is isomorphic",
+                     "Exercises reveal where the axiom is used.",
+                     "Many exercises in this section ask for a counterexample."):
+            self.assertIsNone(self.cut("body", line, "1. a"), line)
+
+    def test_body_list_alone_is_not_a_block_head(self):
+        # 正文列举（公理/情形清单）里没有 Exercises 字样 → 不得开切，
+        # 否则「该写的编号内容」被误判成可省略的习题块。
+        self.assertIsNone(self.cut("axioms are satisfied:", "1. closure",
+                                   "2. identity", "3. inverses"))
+
+    def test_no_header_returns_none(self):
+        self.assertIsNone(self.cut("axioms are satisfied:", "1. closure", "2. identity"))
 
 
 if __name__ == "__main__":

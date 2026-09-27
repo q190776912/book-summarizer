@@ -39,7 +39,8 @@ _boot.setup()
 from verify.script.base import LayerFixResult, register_fixer
 from lib.regexlib import G_HEAD
 from format_verify import G_TERM
-from verify.script.struct_labels import G_PF_RE, G_ITEM_BQ_HEAD_RE
+from verify.script.struct_labels import G_PF_RE, G_ITEM_BQ_HEAD_RE, \
+    G_BQ_BOLD_HEAD_BOUNDARY_RE
 
 # Reuse the canonical example-wrapper so `verify --fix` can also RECOVER from
 # half-wrapped examples (example head already carries `>` but its body is left
@@ -135,7 +136,11 @@ def _fix_quote_gaps(lines):
                 changes += 1          # trailing blank at EOF -> drop
                 continue
             nx = lines[j]
-            is_newblock = bool(G_HEAD.match(nx) or G_ITEM_BQ_HEAD_RE.match(nx))
+            # 🔴 与 check_g_quote_continuity 同一宽判据：任意 `> **粗体标签**` 起头
+            #   的行是新块开头，不是被劈开的续行（否则 fixer 会把合法的
+            #   `> **Remark**` 并进上面那个证明块，把结构改坏）。
+            is_newblock = bool(G_HEAD.match(nx) or G_ITEM_BQ_HEAD_RE.match(nx)
+                               or G_BQ_BOLD_HEAD_BOUNDARY_RE.match(nx))
             is_term = bool(G_TERM.match(nx) and not nx.lstrip().startswith('>'))
             if is_newblock or is_term:
                 out.append(ln)       # keep as legitimate separator

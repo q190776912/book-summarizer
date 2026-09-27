@@ -371,7 +371,9 @@ def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]
             problems.append(
                 "节 %s 的编号内容有缺失：契约里编号 %s 连成一条（题面/条目通常整块被"
                 "抽进本章节点子树），单元里只写到 %s——缺 %s 项，须按契约把剩余各项补全"
-                "（习题写成 ``**Problem Set %s**`` + 列表项，题面完整，不得以「见原书」搪塞）"
+                "并**逐项分行**（印面把 (1)(2)(3) 排成独立行的列举，写成段内 inline 散文即算"
+                "漏项；习题节写成 ``**Problem Set %s**`` + 列表项，题面完整，"
+                "不得以「见原书」搪塞）"
                 % (sec_key, "1..%d" % n_contract, "%d" % n_unit if n_unit else "没有任何编号项",
                    n_contract - n_unit, sec_key))
     return problems

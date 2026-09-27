@@ -529,7 +529,15 @@ class physical_evidence:
     @staticmethod
     def _label_variants(ncand):
         """把归一化候选串（如 `定义11` / `definition11`）生成中英标签互译变体。"""
-        m = re.match(r"^([\u4e00-\u9fff]+|[a-z]+)(\d.*)$", ncand)
+        # 🔴 序标既可为数字也可为字母：Shafarevich BA1 ch3 §4.2 印 Theorem A/B/C、
+        # §4.4 印 Theorem D，契约键 = 中文标签 + 字母序标（`定理 A` → 归一 `定理a`）。
+        # 旧正则只认数字起头 → `定理a` 生成不出 `theorema` 变体 → 英文源 md（印
+        # `**Theorem A**`）判「编号项不在位」，merge_source 证据被假报硬拒（实测 4 项）。
+        # 字母序标是教材标准形态（附录 Proposition A.1 / 正文 Theorem B），故序标放宽到
+        # 字母起头（含 a1 / a.1），数字分支逐字节不变；反方向（契约键为 EN Theorem A、
+        # 中文版印 定理 A）由同一条正则回溯自然覆盖（theorem + a）。
+        m = re.match(r"^([\u4e00-\u9fff]+|[a-z]+)(\d.*|[a-z]\d*(?:\.\d*[a-z0-9]+)*)$",
+                     ncand)
         if not m:
             return [ncand]
         lbl, rest = m.group(1), m.group(2)
@@ -591,6 +599,36 @@ class physical_evidence:
                 nc = physical_evidence._norm_text(core)
                 if nc and nc != nn:
                     cands.append(nc)
+                # 🔴 译本节标题在位判据（merge_translation 证据，Evans SDE 2026-09-28 实测）。
+                #    source 版 section 的 name 常把「字母/编号 enumerator + 标题」黏在一起
+                #    （`A. MOTIVATION`），中文节头却把原文标题放进括注、并被译文与 enumerator
+                #    隔开（`## § A. 动机 (MOTIVATION)`）。于是整名归一串 `amotivation` 在译文里
+                #    不连续 → 假报「契约骨架节在 md 不在位」。这类书的 section 键又常是非印刷
+                #    占位符（U1/U2…，见无编号小节抽取器），键候选同样落空，两道回退同时失效。
+                #    补一条「剥去前导 enumerator 后的纯标题」候选即可命中括注内的原文标题；
+                #    真正漏写时该标题整词仍不在位，照常报缺（已做负向对照：删去 (MOTIVATION)
+                #    后 U1 复现缺失）。仅对 `section` 节点生效，不改编号项（定义/定理…）判据。
+                if t == "section":
+                    _sm = re.match(r'^[§＃#\s]*[A-Za-z]{1,4}[.\-－．、]\s+(.*)$', name.strip())
+                    if _sm:
+                        _nsm = physical_evidence._norm_text(_sm.group(1))
+                        if len(_nsm) >= 4 and _nsm not in cands:
+                            cands.append(_nsm)
+                    # 🔴 「父号+子号」点分小节标题的**局部号渲染**形态（Arnold ODE
+                    #   2026-09-28 实测，全书 5 章 84 个 section 节点全被误报「不在位」）。
+                    #   契约 section 的 name 写成「全局节号 + 标题」（`1.10 Example:
+                    #   Harvesting…`），而原书小节标题按**本节内局部号**印刷（`### 10.
+                    #   Example: Harvesting…`）——于是整名归一串 `110example…` 在 md 里
+                    #   永远不连续（前导父号 `1.` 在渲染时被剥成局部号 `10.`），
+                    #   merge_source 证据门假报「骨架节不在位」。补一条「剥去前导父号
+                    #   `P.` 后保留 `S <标题>`」的候选即可命中局部渲染；**局部号单独不作
+                    #   候选**（裸数字 `10` 到处乱撞会误命中），必须带完整标题，故真正
+                    #   漏写的小节其 `S+标题` 整串仍不在位，照常报缺。仅对 `section` 生效。
+                    _pm = re.match(r'^\d+\.(\d+[^\d].*)$', name.strip())
+                    if _pm:
+                        _npx = physical_evidence._norm_text(_pm.group(1))
+                        if len(_npx) >= 6 and _npx not in cands:
+                            cands.append(_npx)
             cands = [c for c in cands if c]
             # 🔴 「定位符键」回退（hum 型抽取器，Robinson/Humphreys 式书）：契约键写成
             #   `Corollary §3.3` = 「第 3.3 节里的推论」，**印面条头只有裸标签词、不带任何
@@ -983,7 +1021,9 @@ class physical_evidence:
     def _oversized_merged_md(md_files):
         """🔴 规则3 机械闸：合并形态（无节号）章 md 字符 > MERGED_MD_CHAR_LIMIT
         而未按节拆分 → 返回 [(文件名, 字符数)]。已拆分（节文件形态）不查——
-        规则只拆到「节」一级，单个节文件超阈是允许形态。"""
+        规则只拆到「节」一级，单个节文件超阈是允许形态。
+        🔴 本判据**逐语独立**，看不见「一语已拆 / 另一语仍合并」的跨语不对称，
+        那道盲区由 ``_split_form_pairing_problems`` 兜。"""
         over = []
         for f in md_files:
             if physical_evidence._sec_num(f) is not None:
@@ -996,6 +1036,46 @@ class physical_evidence:
             if n > MERGED_MD_CHAR_LIMIT:
                 over.append((os.path.basename(f), n))
         return over
+
+    @staticmethod
+    def _split_form_pairing_problems(book_dir, key, langs):
+        """🔴 规则3 跨语配对机械闸：一章源 / 译两组最终 md **形态须配对**。
+
+        任一语言已按节拆分（节文件形态）则其余语言不得留合并件；两边都拆时节号
+        集合须一致。既有 ``_oversized_merged_md`` 逐语独立判「本语合并件超阈未拆」，
+        **看不见跨语不对称**：``tools/split_chapters.py`` 的配对逻辑只写在 CLI
+        （``main()`` 的 ``pair`` 分支），一旦绕过 CLI 手工只拆一语，另一语的整章
+        合并件就一路绿灯交付（2026-09-28 Strogatz 实测：EN 六章已拆成 8/9/7/8/7/8
+        个节文件，CN 同名六章仍是单文件 33k–47k 字符，读者两版对不上）。
+        单语书（``langs`` 只一项）无配对可言 → 恒放行。→ 人类可读问题列表。
+        """
+        if len(langs) < 2:
+            return []
+        forms = {}
+        for lang in langs:
+            files = physical_evidence._md_group_lang(book_dir, key, lang)
+            if not files:
+                continue                        # 缺组由 missing 分支判，不在本闸重复报
+            secs = sorted({s for s in (physical_evidence._sec_num(f) for f in files) if s})
+            forms[lang] = secs
+        split = [l for l, s in forms.items() if s]
+        merged = [l for l, s in forms.items() if not s]
+        out = []
+        if split and merged:
+            ref = split[0]
+            mfile = os.path.basename(physical_evidence._md_group_lang(
+                book_dir, key, merged[0])[0])
+            out.append("[%s] 语言 %s 仍是合并件 %s，而 %s 版已按节拆成 %d 个节文件"
+                       "（规则3 要求中英文**配对拆分**，跑 "
+                       "python tools/split_chapters.py \"%s\" 由其 pair 分支补拆）"
+                       % (chapter_label(key), "、".join(merged), mfile,
+                          "、".join(split), len(forms[ref]), book_dir))
+        sets = {l: tuple(s) for l, s in forms.items() if s}
+        if len(set(sets.values())) > 1:
+            out.append("[%s] 各语言均按节拆分但节号集合不一致：%s（须以同一节界重拆）"
+                       % (chapter_label(key),
+                          "；".join("%s=%s" % (l, list(s)) for l, s in sets.items())))
+        return out
 
     @staticmethod
     def _contract_names_missing(ex, k, md_files):
@@ -1035,7 +1115,7 @@ class physical_evidence:
         每章**源语言**组必须存在；``want_tgt=True`` 时该书若有翻译版则**翻译语言**组
         也须存在。各组核对 oversized（规则3）+ 契约骨架节 / 编号项在位。
         返回 (bool, detail)。"""
-        missing, missing_names, degraded, oversized = [], [], [], []
+        missing, missing_names, degraded, oversized, unpaired = [], [], [], [], []
         for k in keys:
             src = physical_evidence._src_manifest(ex, k)
             if src is None:
@@ -1056,6 +1136,8 @@ class physical_evidence:
                 miss = physical_evidence._contract_names_missing(ex, k, md_files)
                 if miss:
                     missing_names.append((k, lang, miss))
+            unpaired.extend(physical_evidence._split_form_pairing_problems(
+                book_dir, k, [lang for lang, _ in groups]))
         if missing:
             (k, lang) = missing[0]
             return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_units 拼接）: "
@@ -1067,6 +1149,10 @@ class physical_evidence:
                            f"{ov[0][0]} = {ov[0][1]} 字符；"
                            f"跑 python tools/split_chapters.py \"{book_dir}\" "
                            f"按节拆分（默认删合并文件）后复核")
+        if unpaired:
+            return False, (f"{len(unpaired)} 处各语言最终 md 形态不配对"
+                           f"（write-source 规则3「中英文配对拆分」）: "
+                           + "；".join(unpaired[:3]))
         if missing_names:
             k, lang, miss = missing_names[0]
             return False, (f"{len(missing_names)} 组 md 相对结构契约漏骨架节/编号项: "

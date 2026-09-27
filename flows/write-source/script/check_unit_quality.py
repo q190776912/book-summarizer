@@ -69,6 +69,11 @@
         **认不出任何一条习题条目**（既无集内序号 `1.`/`**Exercise 29.**`，也无带该单元
         契约键的粗体标头 `**20.1.3.**`——两类形态缺一即假阳，Katok 全书只用后者）= 题面
         被占位文字换掉；判据 14 只拦「正文为空」，拦不住「非空但无题面」
+    24. 源单元语言闸（`source_language_problems`，仅在传入非中文 `source_language`
+        时跑）：EN/DE 等非中文源语言的书，步骤 5 源单元正文**不得出现中文**（中文属
+        步骤 6 译文层）——本库原先只有反方向的 `english_residues`，源侧零拦截，
+        Shafarevich《Basic AG 1》I 实测 119 个源单元被并行写手写成中文。
+        （#23 = `label_key_problems`，由 gate_units 侧调用，故本模块条目跳号对齐全局编号）
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -537,6 +542,9 @@ _EN_ITEM_LABEL_RE = re.compile(
     r"Problem|Solution|Answer|Proof|Notation|Claim)\b[^*\n]*\*\*")
 _EN_PROSE_MIN_RUN = 8     # 连续英文词 ≥8 = 成句散文，不可能是术语/人名豁免情形
 _EN_PROSE_MIN_CHARS = 40  # 行短于此按专名/括注处理，不判散文残留
+# 源单元语言闸（#24）：连续汉字 ≥ 此数才判「中文正文」。低于 5 的命中在已收官
+# EN 书里全是 OCR 单字残迹（□→口、λ→入、≡→三）或双语括注（范式 / 基本概念）。
+_SOURCE_CJK_RUN_MIN = 5
 
 
 def _en_word_run(text):
@@ -551,6 +559,48 @@ def _en_word_run(text):
         else:
             cur = 0
     return best
+
+
+_CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{%d,}"
+                         % _SOURCE_CJK_RUN_MIN)
+
+
+def source_language_problems(body, language):
+    """源单元语言残留检测 → 问题列表（空 = 干净）。`english_residues` 的**对偶**。
+
+    为什么需要：写作规则「源语言优先」规定步骤 5 的源单元必须用**书籍语言**书写，
+    中文只属于步骤 6 的译文层（`units-translate/`）。写手若把源单元写成中文，
+    后续译文层要么没内容可译、要么与源单元同文，双语产物随之失真。本库原来只有
+    反方向闸门（`english_residues` 拦「中文译单元里残留英文」），源侧零拦截，
+    于是并行写手批次各按理解落笔，整批单元语言不一致
+    （Shafarevich《Basic AG 1》I 实测：EN 书 119 个源单元正文含中文，57 个整段中文）。
+
+    判据：`language` 为非中文源语言时，正文行（跳过首行标记、HTML 图块行、`#` 标题行）
+    出现 **≥ _SOURCE_CJK_RUN_MIN 个连续汉字** = 中文短语/句子 → 报。🔴 为什么不认「任意
+    一个 CJK 字符」（8 本已收官 EN 书标定，2026-09-28）：单字命中几乎全是**别的缺陷**
+    或**故意的双语括注**——OCR 把 QED 框 □ 读成 `口`、λ 读成 `入`、≡ 读成 `三`、`+` 读成
+    `十`（Weibel / Serre / Robinson 各书实测数十处，自有 OCR 残留闸管），而
+    `**Definition A.1-2 (Paradigm 范式)**`、`# Chapter 1: 基本概念` 是写手为读者加的
+    术语对照，不是中文正文。整段中文必然含 ≥5 连续汉字，跑不掉。
+    🔴 只对**明确传入非中文语言**的调用生效：调用方拿不到语言（None）= 该闸不跑，
+    绝不误伤中文书（CN 书源正文本就中文）。
+    """
+    if not language or str(language).lower() in ("zh", "cn", "chinese", "中文"):
+        return []
+    probs = []
+    for i, ln in enumerate(body.splitlines(), start=1):
+        t = ln.strip()
+        # 🔴 `#` 标题行豁免（2026-09-28 全库标定）：收官书里存在**双语章/节标题**
+        #   （`# Chapter 4: 主要定理的证明`、`# Chapter 5: 流形上的微分方程`）——写手给
+        #   标题加的读者向括注，不是中文正文；本闸要拦的是**承载内容的散文**。
+        if not t or t.startswith(("<div", "</div", "<img", "<!--", "#")):
+            continue
+        hit = _CJK_RUN_RE.search(t)
+        if hit:
+            probs.append("  x L%d: 源单元（书籍语言 %s）正文出现中文短语 %r——"
+                         "步骤 5 源单元须用书籍语言书写，中文属步骤 6 译文层："
+                         "%s" % (i, language, hit.group(0), t[:60]))
+    return probs
 
 
 def english_residues(body):
@@ -784,7 +834,7 @@ def exercise_run_gap_problems(utype, body):
 
 def check_body(utype, name, body, expected_tags=None, allow_extra=None,
                expected_images=None, content_blocks=None, source_text=None,
-               key=None, ext_dir=None, ch=None):
+               key=None, ext_dir=None, ch=None, source_language=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
@@ -816,6 +866,9 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     > ``VERBOSE_PARA_CHARS`` 且与原书 8-gram 字面重合 ≥ ``VERBOSE_OVERLAP_MIN``，
     或 > ``VERBOSE_PARA_HARD_CHARS`` 墙式硬顶）。缺上下文（None）= 该闸退化为只拦
     硬顶长度，与 verify 侧同语义（不误伤）。
+    ``source_language``：本书**源语言**（manifest 的 `language`，如 `en`）。非中文时
+    启用**源单元语言闸**（见 #24 / `source_language_problems`）：源单元正文不得出现
+    中文；None / 中文 = 不跑（CN 书源正文本就是中文）。
     """
     if utype not in ("item", "desc", "exercise"):
         return True, []
@@ -1134,5 +1187,13 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
             "%r 的粗体条目标头），而节点有 %d 个内容块——习题节点按 V-I 须完整收录题面"
             "（章末集中块不生成单元），须回印刷页逐题补写，禁止用说明性文字占位"
             % (key, content_blocks))
+
+    # 24) 源单元语言闸（`source_language_problems`，`english_residues` 的对偶）：
+    #     非中文源语言的书（EN/DE/FR…）步骤 5 单元必须用书籍语言写，中文只属于
+    #     步骤 6 译文层。Shafarevich《Basic AG 1》I 实测 119 个源单元正文写成中文
+    #     （并行写手批次各自理解「压缩散文」所致），而本库此前只有反方向闸门，
+    #     源侧零拦截 → 双语产物从源头失真。language=None / 中文 → 不跑。
+    for p in source_language_problems(body_clean, source_language):
+        all_problems.append(p)
 
     return (len(all_problems) == 0, all_problems)

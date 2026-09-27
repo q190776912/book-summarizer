@@ -316,11 +316,24 @@ def scan_headings(pages_dir: str):
 # 二者靠「首行是否独占」区分；开页全书唯一，是最强的起点证据。
 OPENER_RE = re.compile(r"(?i)^\s*(chapter|chap\.?)(\s*[.:]?\s*([0-9]+|[IVXLC]+))?\s*[.:]?\s*$")
 
+# 形态证据（Apostol《Introduction to Analytic Number Theory》2026-09-28 实测）：
+#   开页 —— 顶部带里**独占一行**的大号章号数字（"7"），标题词在同行带内
+#           （数字可能被 OCR 排到第 0/1/2 行，如 p169 "Periodic Arithmetical
+#           Functions / 8 / and Gauss Sums"）；
+#   页眉 —— "7: Dirichlet's theorem on primes in arithmetic progressions"
+#           （章号与标题同行、全小写），从该章**第二页**起重复出现。
+# 二者同标题 → Mode B 打平后按页序取先见者，起点被误锚到页眉页，整章开头
+# （§7.1/§7.2 与 Theorem 7.1）被切进上一章。故把「独占章号数字」补成 A0 证据。
+BARE_NUM_RE = re.compile(r"^\s*([0-9]{1,3})\s*\.?\s*$")
+
 
 def scan_openers(pages_dir: str):
     """收集「章首开页」候选，返回 ``[{page, label_norm, title_cands}]``。
 
-    ``title_cands`` 是 line1..line3 的**渐进拼接**（跳过空行与纯页码行），
+    两种开页形态：(a) 首行独占 ``Chapter [N]``；(b) 顶部三行内**独占一行**的
+    章号数字 + 同带内的标题行（GTM/ Springer 体例，见 OPENER_RE 下方注释）。
+
+    ``title_cands`` 是数字/标签行之余各行的**渐进拼接**（跳过空行与纯页码行），
     使跨行标题（如 ``L^p`` / ``spaces`` 被拆成两行）也能拼出完整标题命中。
     """
     openers = []
@@ -338,12 +351,28 @@ def scan_openers(pages_dir: str):
         lines = [_line_text(x) for x in data.get("text", [])]
         if not lines:
             continue
-        om = OPENER_RE.match(lines[0].strip())
-        if not om:
-            continue
+        head = [l.strip() for l in lines[:4]]
+        label_norm = None
+        title_src = None
+        om = OPENER_RE.match(head[0]) if head else None
+        if om:
+            label_norm = parse_number(om.group(3))
+            title_src = head[1:]
+        else:
+            # 形态 (b)：顶部三行内独占一行的章号数字。
+            bar = next(((i, BARE_NUM_RE.match(t))
+                        for i, t in enumerate(head[:3]) if BARE_NUM_RE.match(t)),
+                       None)
+            if bar is None:
+                continue
+            label_norm = int(bar[1].group(1))
+            title_src = [t for j, t in enumerate(head)
+                         if j != bar[0] and t and not NUM_LINE_RE.match(t)]
+            # 标题行必须真有内容（≥4 字母），否则表格页/数字页会被误认开页。
+            if not any(len(re.sub(r"[^A-Za-z]", "", t)) >= 4 for t in title_src):
+                continue
         raw_cands, acc = [], ""
-        for l in lines[1:4]:
-            t = l.strip()
+        for t in title_src:
             if not t or NUM_LINE_RE.match(t):
                 continue
             acc = (acc + " " + t).strip() if acc else t
@@ -352,7 +381,7 @@ def scan_openers(pages_dir: str):
             continue
         openers.append({
             "page": page,
-            "label_norm": parse_number(om.group(3)),
+            "label_norm": label_norm,
             "title_cands": [clean_title_for_sim(c) for c in raw_cands],
         })
     return openers
@@ -370,17 +399,22 @@ def _in_window(page, claimed_start, claimed_end, max_dev):
 
 
 def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
-                  cn_head_start=None):
+                  cn_head_start=None, candidates=None):
     """Return {ch: (pdf_page, confidence)} for confidently detected chapters.
 
     Mode A0 — **章首开页**（最高置信）：页面首行是独占的 ``Chapter [N]``、其后紧跟
-    标题行。开页全书唯一，且章号（若 OCR 给出）必须与本章号一致，因此不会像
+    标题行。开页全书唯一，且章号（若 OCR 得到）必须与本章号一致，因此不会像
     页眉那样被别章的短标题蹭中。命中即定，不再走后续模式。
 
     Mode A — "Chapter N" 页眉，其捕获标题与本章 ``name_en``/``name`` 相似。TOC
     条目、正文提及（"Chapter N discusses ..."）与窗口外的页均被排除。
 
     Mode B（回退）— 对 A0/A 都定不了的章，在窗口内找裸标题作为近顶部行。
+
+    🔴 `candidates`（可选，调用方传入空 dict）会被填成 ``{ch: [(page, score, mode), ...]}``
+    ——本章**全部**过阈候选，不只是当选者。章序单调修复（:func:`repair_monotonic_starts`）
+    靠它在「目录页命中压过真开页」时改次优候选，而不是把自相矛盾的页码交给下游
+    （Apostol IANT 实测：ch1/ch2 双双锚到 p7 目录页，起点非递增 → SUSPECT）。
     """
     detected = {}
     for c in chapters:
@@ -389,6 +423,7 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
         target = norm_title(c.get("name_en") or c.get("name") or "")
         claimed_start = c.get("start")
         claimed_end = c.get("end")
+        pool = []
         # ---- Mode A0：章首开页（最强证据，命中即定）----
         best_op = None
         for op in (openers or []):
@@ -411,10 +446,13 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
                     best_o = s
             if best_o < TITLE_THRESHOLD:
                 continue
+            pool.append((op["page"], round(best_o, 3), "A0"))
             if best_op is None or best_o > best_op[1] + 1e-9:
                 best_op = (op["page"], best_o)
         if best_op is not None:
             detected[ch] = (best_op[0], round(best_op[1], 3))
+            if candidates is not None:
+                candidates[ch] = pool
             continue
         # ---- Mode A ----
         best = None
@@ -458,21 +496,30 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
                 score = min(1.0, score + 0.05)
             if h["near_top"]:
                 score += 0.02
+            pool.append((h["page"], round(score, 3), "A"))
             if score > best_score:
                 best = h
                 best_score = score
+        chosen = None
         if best is not None:
-            detected[ch] = (best["page"], round(best_score, 3))
-            continue
+            chosen = (best["page"], round(best_score, 3))
         # ---- Mode B fallback (bare title) ----
+        # 🔴 B 池**总是**参与收集（即便 A 已命中）：目录页被 Mode A 蹭中时，
+        # 真开页往往只出现在 B 池里（Apostol IANT p25/p36）。当选仍守 A0>A>B
+        # 的优先级，池只供章序修复取次优候选，历史行为逐字节不变。
         if not target:
             # 中文题名经 norm_title 归一后为空 → B 不可能命中；若此处直接
             # continue，Mode C 兜底会被跳过，全书静默 KEPT_MANUAL 保留印刷页
             # 码当 PDF 页用（2026-09-26 解析几何 3ed 实测）。目标为空时 B 必败，
             # 提前走 C 与「A0/A/B 均失败」语义等价。
-            if cn_head_start and ch_int is not None and ch_int in cn_head_start:
-                detected[ch] = (cn_head_start[ch_int], 0.6)
+            if candidates is not None:
+                candidates[ch] = list(pool)
+            if chosen is None and cn_head_start and ch_int is not None and ch_int in cn_head_start:
+                chosen = (cn_head_start[ch_int], 0.6)
+            if chosen is not None:
+                detected[ch] = chosen
             continue
+        pool_b = []
         best_b = None
         best_b_score = -1.0
         for tl in title_lines:
@@ -501,6 +548,7 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
             # followed by the chapter's own first section / prose.
             if NUM_LINE_RE.match(tl["next_raw"] or ""):
                 score -= 0.5
+            pool_b.append((tl["page"], round(min(1.0, score), 3), "B"))
             better = False
             if score > best_b_score + 1e-9:
                 better = True
@@ -509,15 +557,48 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
             if better:
                 best_b = tl
                 best_b_score = score
-        if best_b is not None:
-            detected[ch] = (best_b["page"], round(min(1.0, best_b_score), 3))
-            continue
+        if chosen is None and best_b is not None:
+            chosen = (best_b["page"], round(min(1.0, best_b_score), 3))
         # ---- Mode C：中文页眉「第N章」真值序列（不依赖申报窗口）----
         # 中文教材页码漂移可达数十页（TOC 印刷页号 ≠ PDF 页序），窗口内检测必然
         # 失败并静默保留错值（KEPT_MANUAL）。页眉序列是独立于申报值的真值锚点。
-        if cn_head_start and ch_int is not None and ch_int in cn_head_start:
-            detected[ch] = (cn_head_start[ch_int], 0.6)
+        if chosen is None and cn_head_start and ch_int is not None and ch_int in cn_head_start:
+            chosen = (cn_head_start[ch_int], 0.6)
+        if candidates is not None:
+            candidates[ch] = list(pool) + pool_b
+        if chosen is not None:
+            detected[ch] = chosen
     return detected
+
+
+def repair_monotonic_starts(starts, candidates, order):
+    """章序单调修复：起点必须随章序严格递增。
+
+    目录页的 ``Chapter N`` 条目与真开页同形（甚至标题完全一致 = 满分），Mode A
+    因此可能把某章锚到全书靠前的目录页上，产出自相矛盾的页码（Apostol IANT：
+    ch1、ch2 双双检到 p7）。这里按章序走一遍，起点不递增的章改取**本章候选池里
+    上一页 > 前章起点的最优候选**（分高优先，同分取更早页 = 与 Mode A/B 同口径）；
+    池中无候选能满足则保留原值，交由自检标 SUSPECT 逼 agent 人工介入——
+    🔴 绝不为了「看起来单调」而伪造页码。
+
+    返回 ``(starts, repairs)``，``repairs`` 为 ``{ch: (old, new, mode)}`` 供报告审阅。
+    """
+    repairs = {}
+    starts = dict(starts)
+    prev = None
+    for ch in order:
+        s = starts.get(ch)
+        if s is None:
+            continue
+        if prev is not None and s <= prev:
+            alts = [(p, sc, md) for (p, sc, md) in (candidates.get(ch) or [])
+                    if p > prev]
+            if alts:
+                best = max(alts, key=lambda t: (t[1], -t[0]))
+                repairs[ch] = (s, best[0], best[2])
+                s = starts[ch] = best[0]
+        prev = s
+    return starts, repairs
 
 
 # ── 中文页眉真值序列（Mode C）─────────────────────────────────────────────
@@ -620,8 +701,9 @@ def _max_page(pages_dir):
     return int(m.group(1)) if m else 0
 
 
-def build_report(recs, starts, ends, statuses, detected, max_page):
+def build_report(recs, starts, ends, statuses, detected, max_page, repairs=None):
     """生成 agent 判断用的起飞前报告（Markdown 表格）。"""
+    repairs = repairs or {}
     lines = []
     lines.append("# chapter_map 生成报告（build_chapter_map）")
     lines.append("")
@@ -654,6 +736,16 @@ def build_report(recs, starts, ends, statuses, detected, max_page):
             st,
         ))
     lines.append("")
+    n_repaired = len(repairs)
+    if n_repaired:
+        lines.append("- 章序修复 REPAIRED: %d 章（原命中与「起点随章序递增」矛盾，"
+                     "多为目录页的 ``Chapter N`` 条目压过真开页；已在本章候选池内改取"
+                     "前一章起点之后的最优候选，**逐章核对新页是否确为该章开页**）："
+                     % n_repaired)
+        for ch in sorted(repairs, key=_ch_sort_key):
+            old, new, mode = repairs[ch]
+            lines.append("  - ch%s: %s → %s（模式 %s）" % (ch, old, new, mode))
+        lines.append("")
     lines.append("- 全书末页（max page）: %d" % max_page)
     lines.append("- 自动校正 CORRECTED: %d 章" % n_corrected)
     lines.append("- 未检出 UNDTECTED: %d 章（须 agent 手动补）" % n_undetected)
@@ -700,9 +792,10 @@ def main():
     if cn_start:
         print("[build_chapter_map] 检出中文页眉序列（第N章）：%d 页命中，%d 章定位"
               % (len(cn_heads), len(cn_start)))
+    cand_pool = {}
     detected = detect_starts(recs, headings, title_lines,
                              max_dev=args.max_deviation, openers=openers,
-                             cn_head_start=cn_start)
+                             cn_head_start=cn_start, candidates=cand_pool)
     max_page = _max_page(ex)
 
     # ── start：检测值优先；未检出则保留 agent 值，仍无则留空 ──
@@ -721,10 +814,18 @@ def main():
             starts[ch] = None
             statuses[ch] = "UNDTECTED"
 
-    # ── end：推断（下一章起点-1；末章保留 agent 值或全书末页）──
-    # 🔴 按**章序**（而非起点数值）推断，避免某一章起点检错就级联污染前后章区间
+    # 🔴 章序单调修复（在推断 end 之前）：目录页条目压过真开页时改用章序约束内的
+    # 次优候选，否则一页命中会级联污染前后章区间（报告与退出码仍会拦 SUSPECT）。
     order = sorted([ch for ch in starts if starts[ch] is not None],
                    key=_ch_sort_key)
+    starts, repairs = repair_monotonic_starts(starts, cand_pool, order)
+    for ch, (old, new, mode) in repairs.items():
+        statuses[ch] = "REPAIRED"
+        detected[ch] = (new, next(sc for p, sc, m in cand_pool[ch]
+                                  if p == new and m == mode))
+
+    # ── end：推断（下一章起点-1；末章保留 agent 值或全书末页）──
+    # 🔴 按**章序**（而非起点数值）推断，避免某一章起点检错就级联污染前后章区间
     ends = {}
     for i, ch in enumerate(order):
         nxt = order[i + 1] if i + 1 < len(order) else None
@@ -751,7 +852,8 @@ def main():
         prev = s
 
     # ── 报告 ──
-    report = build_report(recs, starts, ends, statuses, detected, max_page)
+    report = build_report(recs, starts, ends, statuses, detected, max_page,
+                          repairs=repairs)
     print(report)
 
     n_undetected = sum(1 for s in statuses.values() if s == "UNDTECTED")

@@ -26,6 +26,29 @@
    一变即逃逸。本项不看哈希只看语言（复用 `check_unit_quality.english_residues`）：
    译文单元含英文条目/证明粗体标签（`**Theorem 21.10**` / `**Proof**`）或
    无 CJK 且 ≥8 连续英文词的散文行 → FAIL。
+9. **显示公式内容丢失（2026-09-28 Etingof rep-theory ch1/0014 教训）**：翻译代理会
+   「凭记忆」改写公式——第 2/3/5 项都是**集合**对账（tag / 图 / 条目编号），公式**内容**
+   根本不在账上，于是把 `$f(xy) = f(x)f(y)$，并且 $f(1) = 1$` 整条截成 `$f(xy) = $`
+   也能全绿通过。本项把两侧 `$$...$$` 块逐条归一（剥行首 `>` 包裹 + 去全部空白 +
+   删 `\\text{}` 体 + 剥尾部标点：版式与**公式内散文**差异豁免、token 内容差异不豁免）
+   后做**多重集**比对；精确配不上的再允许「整块搬进行内」兜底（源式完整内核作为子串
+   出现在摊平译文里）。两者都失败 = 漏写/被改写 → FAIL。
+   （逐字严格版在已收官的 real-analysis 假报 19 单元、Robinson 1、do Carmo 曲线曲面 2，
+   全属上述豁免类；豁免后四书 2582 单元 0 假报，而截断样本仍被抓。）
+10. **行内公式被截断**：译文行内式以**悬空关系/二元运算符**收尾（如
+    `$f(xy) = $`、`$\\phi \\to$`）即数学内容被砍在半截 → FAIL。两处豁免（本书实测的假报源）：
+    `\\cdots` / `\\ldots` 等省略号收尾是**完整**式，不列进悬空表；**源文自己就这么写**的
+    悬空式（函子 `$V \\otimes$`、「包含关系 `$\\subseteq$`」）属照抄，按源行内式集合配对豁免。
+11. **首行标记 ↔ 本侧 manifest 脱账**（2026-09-28 Etingof 步骤6 教训）：单元首行
+    `<!-- book-summarizer DONE unit: id=… type=… key=… name=… -->` 四个字段必须与**该单元在
+    自己那侧 `manifest.json` 里的记录**逐字相同。第 1 项只比两侧 manifest 的字段，代理改
+    `.md` 首行的 `name=`（补全被拆分截断的标题、顺手多敲字符）两道闸都看不见，而首行正是
+    「代理动没动这一行」的唯一证据（Etingof ch1/0063·0064、ch6/0021 实测被改）。跨书探针另在
+    real-analysis 查出 2 文件（manifest `type=description` vs 全书 285 处 `desc`）、
+    Robinson 动力学 18 文件（含**源侧**首行把 UTF-8 箭头存成 `cat -v` 字面文本、manifest 才是
+    正确箭头）。复位工具 `tools/sync_translate_markers.py`——它按**契约**裁决该修哪一侧
+    （Robinson `ch3/0051` 的 manifest name 是 `3.6 Substitutions2`，契约与首行都对，
+    无脑照 manifest 复位会把对的改成错的）。
 
 用法
 ----
@@ -62,6 +85,7 @@ from data.book_structure.book_structure import (chapter_label, list_chapter_keys
 import split_draft_units as _split
 import gate_units as _gate
 import check_unit_quality as _quality
+from lib.unit_markers import marker_manifest_mismatch
 
 SRC_SUB = "units"
 TGT_SUB = "units-translate"
@@ -75,6 +99,106 @@ _SEC_RE = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)*)")
 # 9.4.1.1` 因英文冗长侥幸躲过，中文译文变短即命中）→ 假 FAIL。
 _BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _NUM_IN_LABEL_RE = re.compile(r"([0-9]+(?:\.[0-9]+)+)")
+
+# ── 公式内容对账（判据 9/10）────────────────────────────────────────────
+_INLINE_RE = re.compile(r"\$[^$\n]*\$")
+_DISPLAY_RE = re.compile(r"\$\$[\s\S]*?\$\$")
+# 悬空收尾 = 公式被截断（`$f(xy) = $`）。只列**关系/二元运算符**，不含 `*` `/` `-`
+# （`$X^*$`、`$n-1$`、`$A/B$` 都是完整式的合法收尾，列进来会假报），也不列
+# `\cdots` / `\ldots` / `\dots`——省略号本身就是「以下省略」的**完整**收尾
+# （`$1 + b_1 t + b_2 t^2 + \cdots$`、`$s_n\alpha, \ldots$` 实测均被误报过）。
+_DANGLING_RE = re.compile(
+    r"(?:[=<>]|\\(?:to|rightarrow|leftarrow|mapsto|Longrightarrow|in|notin"
+    r"|subseteq|supseteq|times|otimes|oplus|cdot|cup|cap|circ|sim"
+    r"|equiv|approx|neq?|leq?|geq?|pm|mp))$")
+# 公式**内**的正文（`\\text{and}` / `\\mathrm{Hom}` 里的 `\\text{偶数}`）：翻译把词译成
+# 中文是**正确**做法，不是内容差异 → 显示式对账时整段删掉（跨书实测：删体前 real-analysis
+# 假报 19 单元，删体后 0）。`\\mathrm` / `\\operatorname` **不**删——它们是算子名，
+# 被改动就是被改动。
+_TEXT_RE = re.compile(
+    r"\\(?:text|textrm|textit|textbf|textsf|texttt|mbox)"
+    r"\s*\{(?:[^{}]|\\[^{}])*\}")
+# 尾部标点：中文用 `。`、英文用 `.`，且 CN 版常在 `$$…$$` 内保留/删去句点 → 归一掉。
+_TAIL_PUNCT_RE = re.compile(r"[.,;:!?。，；：！？]+$")
+
+
+def _norm_inline_spans(body):
+    """行内式清单（`$$…$$` 先剔除，避免把显示式内核当行内式），逐条去空白归一。"""
+    return [re.sub(r"\s+", "", m.group(0))
+            for m in _INLINE_RE.finditer(_DISPLAY_RE.sub(" ", body))]
+
+
+def _norm_display_blocks(body):
+    """显示式清单，逐条归一：剥行首 `>` 包裹与全部空白 + 删 `\\text{}` 体 + 剥尾部标点。
+
+    中英两版的 `$$` 块允许三类**排版/表述**差异（必包 `>` 的标签表是双语对称的，CN
+    版可能比 EN 多一层 `>`；换行位置同理）：块内措辞的版式差异、`\\text{}` 里的散文被
+    正确译成中文、句末标点习惯差异。除此之外剩下的 token 差异一律视为丢失/改写。
+    """
+    out = []
+    for blk in _DISPLAY_RE.findall(body):
+        lines = [re.sub(r"^\s*>?\s*", "", ln) for ln in blk.split("\n")]
+        s = _TEXT_RE.sub("", re.sub(r"\s+", "", "".join(lines)))
+        core = _TAIL_PUNCT_RE.sub("", s[:-2] if s.endswith("$$") else s)
+        out.append(core + "$$" if s.endswith("$$") else core)
+    return out
+
+
+def _flatten_math(body):
+    """整篇正文摊平成「纯公式内容」串：去行首 `>`、去所有 `$` 定界符、去空白、删 `\\text{}
+    体。用于显示式的**搬迁兜底**——EN 版独立成块、CN 版并进展望句子里写成行内式，内容一
+    字未丢时仍应放行（real-analysis 实测 7 单元属此类）。截断/改写无法靠搬迁逃逸：
+    要求源式**完整**内核作为子串出现。
+    """
+    s = "\n".join(re.sub(r"^\s*>?\s*", "", ln) for ln in body.split("\n"))
+    s = _TEXT_RE.sub("", s)
+    return re.sub(r"\$+", "", re.sub(r"\s+", "", s))
+
+
+def _math_content_problems(src_body, tr_body, fname):
+    """判据 9/10：译文**公式内容**相对源文的丢失/截断，返回问题清单（纯函数）。
+
+    动机（2026-09-28 Etingof《Introduction to representation theory》ch1/0014 实测）：
+    翻译代理会凭「自己读到的」内容改写公式，而磁盘上的源其实是完整的——
+    `$f(xy) = f(x)f(y)$ for all $x, y \\in A$` 被写成半截 `$f(xy) = $`，整条定义丢了
+    一半。既有各判据全是**集合**对账（`\\tag` / 图片 / 条目编号 / 节号），公式**内容**
+    不在账上，故此类静默截断一路绿灯到 merge。
+
+    两条机械判据（都只**单向**判：译文多出公式不报，中文把代词显化为公式属正常）：
+    9. 源侧每一条显示式（`_norm_display_blocks` 归一后）都必须在译文里在位——先按**多重集
+       精确配对**，配不上再允许「整块搬进行内」的兜底（源式完整内核作为子串出现在
+       `_flatten_math` 摊平后的译文里）；
+    10. 译文行内 `$...$` 不得以悬空关系/二元运算符收尾（`$f(xy) = $` = 被截断）。
+    """
+    out = []
+
+    # 9) 显示式内容丢失 / 被改写。精确配对失败 → 查摊平子串（块↔行内搬迁豁免），
+    #    两者都失败才算真丢失/被改写。
+    pool = list(_norm_display_blocks(tr_body))
+    flat_tr = _flatten_math(tr_body)
+    lost = []
+    for blk in _norm_display_blocks(src_body):
+        if blk in pool:
+            pool.remove(blk)
+            continue
+        core = blk[2:-2] if (blk.startswith("$$") and blk.endswith("$$")) else blk
+        if core and core in flat_tr:
+            continue
+        lost.append(blk[:60])
+    if lost:
+        out.append("单元 %s 显示公式在译文里丢失/被改写（须逐字节照抄源）：%s"
+                   % (fname, "；".join(lost)))
+
+    # 10) 行内式半截。**仅判译文新造**的悬空式：源书本就那样写的（`$V \otimes$` 指
+    # 「张量函子」、`$\subseteq$` 指「包含关系」，本书实测两处）属印面照抄，不报；
+    # 真正被砍半截的 `$f(xy) = $` 在源的行内式集合里无配对 → 报。
+    attested = set(_norm_inline_spans(src_body))
+    dang = [s[:40] for s in _norm_inline_spans(tr_body)
+            if _DANGLING_RE.search(s[1:-1]) and s not in attested]
+    if dang:
+        out.append("单元 %s 行内公式被截断（以悬空运算符收尾且源文无此式）：%s"
+                   % (fname, "；".join(dang[:4])))
+    return out
 
 
 def _labels(body):
@@ -157,6 +281,13 @@ def check_chapter_parity(ext, ch_key):
         sb, tb = _read_body(sp), _read_body(tp)
         utype = a.get("type")
 
+        # 12) 首行标记 ↔ 本侧 manifest 记录（两侧各判一次；判据理由见 marker_manifest_mismatch）
+        for _rec, _p, _side in ((a, sp, "源"), (b, tp, "译")):
+            _mm = marker_manifest_mismatch(_p, _rec, _side)
+            if _mm:
+                problems.append("单元 %s %s（可用 tools/sync_translate_markers.py 复位）"
+                                % (a["file"], _mm))
+
         # 7) 未翻译残留（仅对该翻译的散文：纯公式 / 纯图单元译文与源文一致是正确的）
         if utype in ("item", "desc") and sb.strip() and tb.strip() \
                 and _has_prose(sb) \
@@ -167,6 +298,9 @@ def check_chapter_parity(ext, ch_key):
         if utype in ("item", "desc", "exercise") and tb.strip():
             for p in _quality.english_residues(tb):
                 problems.append("单元 %s 未翻译：%s" % (a["file"], p))
+
+        # 9) / 10) 公式内容对账（纯函数，判据与负向测试见 _math_content_problems）
+        problems.extend(_math_content_problems(sb, tb, a["file"]))
 
         # 2) \tag 一致
         st, tt = _collect(sb, _TAG_RE), _collect(tb, _TAG_RE)

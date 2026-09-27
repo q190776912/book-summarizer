@@ -248,5 +248,43 @@ class FigureTableLabelTest(_Primed):
         self.assertEqual(miss, ["Figure9.9"])
 
 
+class SectionLocalNumberRenderingTest(_Primed):
+    """「全局节号 + 局部号」小节标题的在位判定（Arnold ODE 2026-09-28 实测）。
+
+    契约 section 的 name 写成全局点分号（`1.10 Example: Harvesting…`），而原书小节按
+    本节内**局部号**印刷（`### 10. Example: Harvesting…`）——整名归一串 `110example…`
+    在 md 永不连续，全书 5 章 84 个 section 全被 merge_source 假报「骨架节不在位」。
+    修向 = section 节点补一条「剥前导父号后保留局部号 + 完整标题」候选。
+    负向：真正漏写的小节其 `局部号 + 标题` 整串仍不在位时**必须**照报缺。
+    """
+
+    def _contract(self, key, name):
+        return {"key": "1", "type": "chapter", "name": "Basic Concepts",
+                "sub_sec": [{"key": key, "type": "section", "name": name,
+                             "page_start": 9, "page_end": 10, "sub_sec": []}]}
+
+    def test_global_key_found_via_local_number_heading(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("1.10", "1.10 Example: Harvesting with a Relative Quota"),
+            physical_evidence._norm_text(
+                "## §1 Phase Spaces\n\n### 10. Example: Harvesting with a Relative Quota\n\nbody"))
+        self.assertEqual(miss, [])
+
+    def test_local_number_rendering_for_deep_key(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("33.7", "33.7 The Tangent Bundle"),
+            physical_evidence._norm_text(
+                "## §33 Manifolds\n\n### 7. The Tangent Bundle\n\ncontent"))
+        self.assertEqual(miss, [])
+
+    def test_absent_subsection_still_reported(self):
+        # 局部号 12 的标题整串确实缺席（只出现 12 号别的裸数字不足以命中，须带完整标题）。
+        miss = physical_evidence._missing_contract_names(
+            self._contract("1.12", "1.12 Example: The Predator-Prey Equation"),
+            physical_evidence._norm_text(
+                "### 10. Example: Harvesting with a Relative Quota\n\n12 只在正文里当数字出现"))
+        self.assertEqual(miss, ["1.12"])
+
+
 if __name__ == "__main__":
     unittest.main()

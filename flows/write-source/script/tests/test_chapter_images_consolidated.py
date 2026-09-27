@@ -28,7 +28,8 @@ sys.path.insert(0, _root)
 import lib.boot  # noqa: E402
 lib.boot.setup()
 
-from data.book_structure.book_structure import chapter_images  # noqa: E402
+from data.book_structure.book_structure import (chapter_image_counts,
+                                                chapter_images)
 
 
 def _contract():
@@ -89,6 +90,65 @@ class TestChapterImagesSkipConsolidated(unittest.TestCase):
         }
         self.assertEqual(chapter_images(c), [])
         self.assertEqual(len(chapter_images(c, skip_consolidated=False)), 2)
+
+
+class TestChapterImageCountsDetectsMergedCrop(unittest.TestCase):
+    """并图缺陷真值集：`chapter_image_counts`（**不去重**计数）须看见「两块同 file」。
+
+    Shafarevich《Basic Algebraic Geometry 1》ch2 实测：Figure 8 与 Figure 9 两张
+    上下相邻的图被框成一个区域，回填时把同一 `bbox`+`file` 复制给两个标号 ⇒
+    契约 `推论2.4` 的两个 image 块都指向 `figure/ch02_fig9.png`，而
+    `figure/ch02_fig8.png` 根本不存在。章级覆盖闸按**集合**比较，两块同 file
+    在集合里只剩一个元素 ⇒ 该缺陷对既有闸门完全隐形，成品 md 里同一张「两图
+    叠在一起」的长条出现两次、Figure 8 丢失。语料标定：624 份分章契约命中 0 处，
+    故计数闸无跨书面误报。
+    """
+
+    def test_same_file_twice_is_counted(self):
+        c = {
+            "key": "2", "type": "chapter", "consolidated": False,
+            "sub_sec": [{
+                "key": "2.1", "type": "section", "consolidated": False,
+                "sub_sec": [{
+                    "key": "推论2.4", "type": "corollary", "consolidated": False,
+                    "sub_sec": [
+                        {"image": "figure/ch02_fig9.png"},
+                        {"image": "figure/ch02_fig9.png"},
+                    ],
+                }],
+            }],
+        }
+        self.assertEqual(chapter_image_counts(c), {"figure/ch02_fig9.png": 2})
+        # 覆盖闸（集合并集）看不见它——这正是需要计数闸的理由
+        self.assertEqual(chapter_images(c), ["figure/ch02_fig9.png"])
+
+    def test_distinct_files_not_flagged(self):
+        c = {
+            "key": "2", "type": "chapter", "consolidated": False,
+            "sub_sec": [{
+                "key": "2.1", "type": "section", "consolidated": False,
+                "sub_sec": [
+                    {"key": "A", "type": "item", "consolidated": False,
+                     "sub_sec": [{"image": "figure/ch02_fig8.png"}]},
+                    {"key": "B", "type": "item", "consolidated": False,
+                     "sub_sec": [{"image": "figure/ch02_fig9.png"}]},
+                ],
+            }],
+        }
+        self.assertEqual(set(chapter_image_counts(c).values()), {1})
+
+    def test_consolidated_subtree_exempt_as_well(self):
+        c = {
+            "key": "3", "type": "chapter", "consolidated": False,
+            "sub_sec": [{
+                "key": "3.5", "type": "exercise", "consolidated": True,
+                "sub_sec": [{"image": "figure/ch03_unnamed_01.png"},
+                            {"image": "figure/ch03_unnamed_01.png"}],
+            }],
+        }
+        self.assertEqual(chapter_image_counts(c), {})
+        self.assertEqual(chapter_image_counts(c, skip_consolidated=False),
+                         {"figure/ch03_unnamed_01.png": 2})
 
 
 if __name__ == "__main__":

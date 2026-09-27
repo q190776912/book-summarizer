@@ -179,6 +179,34 @@ def chapter_json_path(ext_dir: str, key: Any) -> str:
     return os.path.join(ext_dir, OUT_SUBDIR, chapter_json_name(key))
 
 
+def resolve_chapter_json_path(ext_dir: str, key: Any) -> Optional[str]:
+    """按**磁盘物理证据**解析该章的契约文件路径；都不存在时返回 ``chapter_json_path``
+    的 SSOT 候选（调用方自判 ``isfile``，行为与旧代码一致）。
+
+    🔴 为什么不能只信 :func:`chapter_json_path`：它的前缀取进程级 kind 注册表
+    （:data:`_PRIMED_KINDS`，由别处的 ``prime_chapter_kinds`` 灌注，同一进程里可被
+    另一本书/另一份 chapter_map 污染，甚至因同一源文件被以两个模块名
+    （``book_structure`` 与 ``data.book_structure.book_structure``）导入而各持一份）。
+    注册表一旦与当前 ``ext_dir`` 的真实章型不符，``ch{N}.json`` 会被算成
+    ``appendix{N}.json`` → 契约「读不到」→ 依赖契约真值的**豁免/对账闸静默失效**
+    （实测：P 层习题节名豁免假阳，且任何章级契约闸都可被同样方式失明）。
+    本函数把判据交还给唯一可靠源——目录里实际存在的文件，且**只在 SSOT 候选缺失时**
+    才回退其余章型候选，绝不凭空造契约。
+    """
+    primary = chapter_json_path(ext_dir, key)
+    if os.path.isfile(primary):
+        return primary
+    ordinal = chapter_ordinal(key)
+    for prefix in _KIND_PREFIX.values():
+        if prefix == chapter_prefix(chapter_kind(key)):
+            continue
+        cand = os.path.join(ext_dir, OUT_SUBDIR,
+                           f"{prefix}{ordinal}.json")
+        if os.path.isfile(cand):
+            return cand
+    return primary
+
+
 def norm_chapter_key(key: Any) -> Any:
     """CLI / 字典键归一：数字章号（含 ``"11"``）→ ``int``；字母章号（附录 ``A/B…``）
     → 原串。与 :func:`_build_rng` 的键型对齐（数字章 ``int``、附录 ``str``），使
@@ -343,6 +371,36 @@ def chapter_images(root: Dict[str, Any],
 
     _w(root)
     return out
+
+
+def chapter_image_counts(root: Dict[str, Any],
+                         skip_consolidated: bool = True) -> Dict[str, int]:
+    """契约树内 image 块的**出现次数**（不去重）：``{图片路径: 块数}``。
+
+    与 ``chapter_images``（并集，供「一个不漏」覆盖闸）互补：覆盖闸按集合比较，
+    看不见「同一文件被两个块引用」——而那是**并图**缺陷的形状：图检测/人工回填
+    时把两张相邻图框成了一个区域，再把同一 bbox+file 复制给两个标号
+    （Shafarevich《Basic Algebraic Geometry 1》ch2 实测：Figure 8 与 Figure 9 都
+    指向 ``figure/ch02_fig9.png``，于是 ``ch02_fig8.png`` 根本不存在，成品 md 里
+    同一张「两图叠在一起」的长条出现两次，Figure 8 彻底丢失）。
+    """
+    cnt: Dict[str, int] = {}
+
+    def _w(n: Any) -> None:
+        if isinstance(n, dict):
+            if skip_consolidated and n.get("consolidated") is True:
+                return
+            img = n.get("image")
+            if img:
+                cnt[str(img)] = cnt.get(str(img), 0) + 1
+            for v in n.values():
+                _w(v)
+        elif isinstance(n, list):
+            for x in n:
+                _w(x)
+
+    _w(root)
+    return cnt
 
 
 def node_content_count(node: Dict[str, Any]) -> int:
@@ -727,7 +785,16 @@ class BookStructure:
     # ---- 加载 / 保存 -----------------------------------------------------
     @classmethod
     def load(cls, ext_dir: str, book_dir: Optional[str] = None) -> Optional["BookStructure"]:
-        """聚合加载分章契约（唯一格式，2026-08-29 起不再回退旧单文件）。"""
+        """聚合加载分章契约（唯一格式，2026-08-29 起不再回退旧单文件）。
+
+        🔴 先灌注 kind 注册表：``list_chapter_keys`` 从**文件名**反推章键
+        （``appendix5.json`` → ``'5'``），而 ``chapter_json_path`` 由章键**正推**
+        文件名，判据是 chapter_map 的 kind。不 priming 时按默认「数字章=ch」回退，
+        以数字序标登记的附录（Shafarevich《Basic Algebraic Geometry 1》的
+        「5 Algebraic Appendix」kind=2）会去读不存在的 ``ch5.json`` 而崩溃
+        （``FileNotFoundError``；被上层 except 吞掉后表现为「无契约证据」静默降级）。
+        """
+        prime_chapter_kinds(ext_dir)
         keys = list_chapter_keys(ext_dir)
         if not keys:
             return None

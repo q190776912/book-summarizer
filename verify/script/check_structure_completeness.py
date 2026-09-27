@@ -37,6 +37,8 @@ _boot.setup()
 
 from data.book_structure.book_structure import (BookStructure, StructureNode,
                                                 chapter_label)
+# 类型词 OCR 形近补救的单一真源（抽取器 extract_items_en 与本校验共用）
+from lib import label_typo as _label_typo_lib
 
 import page_json
 # 公共校验层（verify/*/script 由 boot 注入 sys.path，可直接裸 import）：
@@ -48,7 +50,7 @@ from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2, ORDINAL_VAKIL,
     LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
-    _canon_label, _load_ignore_file,
+    _LABEL_CANON, _canon_label, _load_ignore_file,
 )
 
 # manual_overrides_chN：手写恢复条目（OCR 完全吃掉标题时，agent 凭书补写并登记）。
@@ -173,6 +175,24 @@ def _is_three(scheme):
     return scheme in ('cn3_lf', 'cn3_nf', 'en3_lf', 'en3_nf')
 
 
+def _edit_dist_1(a, b):
+    """兼容旧名：判据已移至公用件 `lib/label_typo.py`（抽取器与本校验共用）。"""
+    return _label_typo_lib.edit_dist_1(a, b)
+
+
+def _label_typo_normalize(txt):
+    """兼容旧名：调用公用件 `lib/label_typo.label_typo_normalize`（词表 = EN_LABELS）。
+
+    根因（Apostol《Introduction to Analytic Number Theory》ch2 实测 2026-09-28）：
+    印刷「Theorem 2.7 …」被 OCR 读成「Theorerm 2.7 …」，抽取器与本校验的类型词
+    正则全部失配 → 该条既不入契约、也不在源侧候选集，闸门只剩 B 层「序列 1..27
+    缺号 7」死锁（差集为空，回填无从下手）。四重判据（块首 ≥5 字母纯字母词、
+    非正字亦非正字复数形、与词表**恰好一个**类型词编辑距离恰为 1、其后紧跟点分
+    序标）与完整说明见 `lib/label_typo.py`。
+    """
+    return _label_typo_lib.label_typo_normalize(txt, EN_LABELS)
+
+
 def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None, groups=None):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
@@ -287,12 +307,11 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
             data = page_json.PageJson.load(fp).data
         except Exception:
             continue
-        for blk in data.get("text", []):
-            txt = blk.get("text", "").strip()
-            if not txt:
-                continue
+        def _match_scheme(text, page_no):
+            """对一个块文本跑一遍方案匹配；命中并产出候选返回 True。
+            原「break」语义（命中即止 / 判为噪声弃块）都终止本轮匹配。"""
             for rgx, scheme in patterns:
-                m = rgx.match(txt)
+                m = rgx.match(text)
                 if not m:
                     continue
                 label, raw_nums = _split(scheme, m.groups())
@@ -313,7 +332,7 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 has_label = label is not None
                 # 两级数字前置且无标签 -> 视为章节号噪声，丢弃
                 if scheme in ('cn2_nf', 'en2_nf') and not has_label:
-                    break
+                    return False
                 # No-label numeric sequences (figure/equation labels like "1.1.1")
                 # are always pure digits in print.  If OCR mapped a letter into a
                 # token (e.g. "i.i.0" -> "1.1.0"), it is a variable/formula
@@ -329,7 +348,7 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                     # "13.3.2 Algorithm"—— 尾词恰为节题、会伪装成标签），不是编号
                     # 条目——丢弃，否则回填出幻影项污染契约（Koopman 书实测）。
                     if primary_type == ORDINAL_TWO_LEVEL:
-                        break
+                        return False
                     key = f"{nums[0]}.{nums[1]}-{nums[2]}"
                     canon = (nums[0], nums[1], nums[2])
                 else:
@@ -339,11 +358,24 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                         key = (label or "") + f"{nums[0]}.{nums[1]}"
                     canon = (nums[0], nums[1])
                 out.append({
-                    "key": key, "label": label or "uncat", "page": p,
-                    "snippet": txt[:120].replace("\n", " "), "scheme": scheme,
+                    "key": key, "label": label or "uncat", "page": page_no,
+                    "snippet": text[:120].replace("\n", " "), "scheme": scheme,
                     "canon": canon, "has_label": has_label,
                 })
-                break
+                return True
+            return False
+
+        for blk in data.get("text", []):
+            txt = blk.get("text", "").strip()
+            if not txt:
+                continue
+            if _match_scheme(txt, p):
+                continue
+            # 🔴 类型词形近补救（见 _label_typo_normalize）：正字匹配一无所获时，
+            # 才用归一后的文本重试一遍——绝不影响已正常命中的块。
+            fixed = _label_typo_normalize(txt)
+            if fixed and _match_scheme(fixed, p):
+                continue
     # 🔴 section-scoped 英文两级书（type 2 + language=="en" + chapter_first=False，
     # 如 Hilton & Stammbach）：编号首段即节号，一章内同 (label, canon) 的真条目头
     # 只出现一次。行尾换行恰好落在 "Theorem 2.4." 的引用残行会被本扫描当成第二个
@@ -383,8 +415,14 @@ def _find_section_page(ext, ch, sec_tuple):
 
 
 # === 契约（分章契约 book_structure/ch{N}.json，经 BookStructure.load 聚合）读取 =====
-_LABEL_RE = re.compile(r'^(定义|定理|引理|推论|命题|例|练习|习题|评注|注'
-                       r'|Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|Remark|Axiom)')
+# 🔴 词表由 _LABEL_CANON 派生（Iwaniec-Kowalski 2026-09-28 实测）：旧硬编码缺
+# 猜想/问题/断言/假设/条件/Conjecture… → `_canon_key('猜想7.32')` 返回 None →
+# insert_item 定位循环把该节点整个跳过 → 回填条目插到它之后（B 层「顺序错乱」），
+# 且契约侧存在性比对同样丢标签。长词在前保证交替匹配取最长。
+_LABEL_RE = re.compile(
+    r'^(?:' + '|'.join(sorted(
+        (l for l in _LABEL_CANON if re.fullmatch(r'[A-Za-z\u4e00-\u9fff]+', l)),
+        key=len, reverse=True)) + r')')
 
 
 def _canon_key(primary_type, key):
@@ -566,11 +604,67 @@ def _node(key, ntype, name, page):
                          page_start=page, page_end=page, sub_sec=[])
 
 
+_CN_LABEL_RE = re.compile(r'^[一-鿿]+')
+
+
+def _match_contract_key_style(tree, key, label):
+    """🔴 回填键式须与**契约自身**的键式同构（Shafarevich ch3 实测）。
+
+    HOM 系抽取器（`extract_items_hom`）把印刷标签归一为**中文标签**键（`命题3.1`），
+    而源侧 `scan_raw_items` 给出的是印刷标签（`Proposition 3.1`）。直接拿后者
+    `insert_item` 会在契约里造出一个「非本章序标形态」的节点：门控 ㉓（单元标签
+    须在契约登记）与 P 层都认不出它，B 层还把同号两条当「双现」。
+
+    判据不看书名、不看词表：取树内**同类型**条目节点键的首字符形态（汉字 / 拉丁）
+    多数决；中文式则把新键渲染为 `_canon_label(label) + 数字尾`（与 scan_raw_items
+    的 en_single 分支同一渲染式，见其注释「键与 build_structure 同构」）。树内无同类
+    条目（首个回填）或键式已一致 → 原样返回，零回归。
+    """
+    if not key:
+        return key
+    k = str(key)
+    cn = en = 0
+    g_cn = g_en = 0
+    stack = [tree]
+    while stack:
+        n = stack.pop()
+        for c in getattr(n, 'sub_sec', None) or []:
+            stack.append(c)
+            _ct = getattr(c, 'type', None)
+            ck = str(getattr(c, 'key', '') or '')
+            if _ct == _type_of(label):
+                if _CN_LABEL_RE.match(ck):
+                    cn += 1
+                elif re.match(r'^[A-Za-z]', ck):
+                    en += 1
+            # 🔴 全局多数（Iwaniec-Kowalski 实测）：回填该章**首个**某类型条目
+            # （如 ch3 无既有 proposition 节点）时同类证据为 0，旧判据原样返回
+            # 印刷键 `3.7`，在中文标签键契约里造出裸键异类节点——合成 md 按
+            # _BARE_THREE 只认三级裸键，两级裸键被 B 层当节号丢弃 → 假缺号照旧。
+            # 同类无证据时退而看全部条目类节点键式的首字符多数。
+            elif _ct in _ITEM_TYPES:
+                if _CN_LABEL_RE.match(ck):
+                    g_cn += 1
+                elif re.match(r'^[A-Za-z]', ck):
+                    g_en += 1
+    if not cn and cn <= en and (g_cn and g_cn > g_en):
+        cn = 1  # 同类无证据、全局压倒性中文键式 → 按全局键式渲染
+    if not cn or cn <= en:
+        return k
+    if _CN_LABEL_RE.match(k):
+        return k
+    num = re.search(r'([0-9][0-9.．\-–]*)\s*$', k)
+    if not num:
+        return k
+    return "%s%s" % (_canon_label(str(label or '')), num.group(1).replace('．', '.').replace('-', '.').replace('–', '.'))
+
+
 def insert_item(tree, key, label, page, canon, snippet=""):
     """把遗漏条目插回结构树（StructureNode）。three_level 优先归到 C.S 节；否则按页码归最近节。
     节点字段（key/type/name/page）与 build_structure 完全一致，回填后 write-source / verify 可直接消费。
     """
     itype = _type_of(label)
+    key = _match_contract_key_style(tree, key, label)
     title = _clean_title(snippet, key)
     name = (f"{key} {title}".strip()) if title else key
     node = _node(key, itype, name, page)
@@ -578,6 +672,34 @@ def insert_item(tree, key, label, page, canon, snippet=""):
     if _PRIMARY in (ORDINAL_THREE_LEVEL, ORDINAL_APP) and len(canon) >= 2:
         sec_key = f"{canon[0]}.{canon[1]}"
     sn = _section_node(tree, sec_key) if sec_key else None
+    # 🔴 邻近锚定回填（Iwaniec-Kowalski ch13 实测 2026-09-28）：无 sec_key 的
+    # 章内共享计数器书里，页码归节在同页多节起始时必错判（§13.4/§13.5 同起
+    # p344，条目 13.4 被挂进 §13.5 → 与 §13.4 里的 13.5 形成阅读序逆序 → B 层
+    # 「顺序错乱」）。条目号与节号无蕴含关系，但 B 层窗口按**条目自身前缀**分窗、
+    # 要求 canon 单调——故直接落在 canon 前驱条目之后（其父节点的子列表内），
+    # 窗口内阅读序恒单调；前驱/后继都找不到才回落页码就近。
+    if sn is None and canon is not None:
+        items_doc = []   # (pos, canon, parent_node, index_in_parent)
+        def _collect(n):
+            for i, c in enumerate(n.sub_sec):
+                if c.type in _ITEM_TYPES:
+                    cc = _canon_key(_PRIMARY, str(c.key))
+                    if cc is not None and len(cc) == len(canon):
+                        items_doc.append((cc, n, i))
+                _collect(c)
+        _collect(tree)
+        prevs = [t for t in items_doc if t[0] < canon]
+        nexts = [t for t in items_doc if t[0] > canon]
+        if prevs:
+            _, par, i = max(prevs, key=lambda t: t[0])
+            par.sub_sec.insert(i + 1, node)
+            _fix_pages(tree)
+            return True, "(canon-adjacency)"
+        if nexts:
+            _, par, i = min(nexts, key=lambda t: t[0])
+            par.sub_sec.insert(i, node)
+            _fix_pages(tree)
+            return True, "(canon-adjacency)"
     if sn is None:
         secs = list(_iter_sections(tree))
         cand = None
@@ -765,8 +887,13 @@ def synthetic_item_md(tree):
 
 
 # === 第 2 步：section_continuity 校验遗漏章节 ===============================
+# 🔴 Iwaniec-Kowalski 2026-09-28 实测：本集合漏 conjecture/assertion 时，
+# insert_item 的定位循环 `if _ct not in _ITEM_TYPES: continue` 会跳过猜想节点，
+# 回填条目越过在位的邻近大号、插错阅读序（定理7.31 落到 猜想7.32 之后 →
+# B 层「顺序错乱」假象）。凡 TYPE_TO_LABEL_CN 里的条目类型都须在列。
 _ITEM_TYPES = {"definition", "theorem", "lemma", "corollary",
-               "proposition", "example", "remark"}
+               "proposition", "example", "remark", "conjecture",
+               "assertion", "assumption", "condition", "axiom", "property"}
 
 
 def _contract_item_num_tuples(tree):
@@ -903,6 +1030,37 @@ def _contract_item_keys(tree):
     return ks
 
 
+def _norm_alnum(s):
+    """只留小写字母与数字，并剥去**开头的数字串**（节序标本身）。
+
+    OCR 文本与契约节题比对时忽略空格/标点/大小写；剥开头数字是因为两形态都要
+    可比——契约 ``name`` 有的带序标（``"5.1 Definition and …"``，Apostol 实测）、
+    有的只带裸标题，而候选 snippet 恒带序标。
+    """
+    return re.sub(r"^\d+", "", re.sub(r"[^a-z0-9]", "", str(s or "").lower()))
+
+
+def _section_title_map(tree):
+    """``{节序标元组: 归一节题文本}``——契约里每个小节节点的印刷标题。
+
+    供「节题伪装」判据使用（见 :func:`step3_items`）：数字前置方案会把
+    「5.1 Definition and basic properties of …」这类**小节标题行**读成条目
+    ``Definition 5.1``，而该行正是契约里 §5.1 的标题本身。"""
+    out = {}
+
+    def walk(n):
+        if getattr(n, "type", None) == "section":
+            parts = [p for p in re.split(r"[.\-·，．]+", str(getattr(n, "key", "") or "").strip()) if p]
+            if parts and all(p.isdigit() for p in parts):
+                title = _norm_alnum(getattr(n, "name", "") or "")
+                if title:
+                    out.setdefault(tuple(int(p) for p in parts), title)
+        for c in getattr(n, "sub_sec", None) or []:
+            walk(c)
+    walk(tree)
+    return out
+
+
 def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     """第 3 步：用 item_numbering_integrity（B 层）校验遗漏定义/定理/例等重要概念并回填。
 
@@ -1001,6 +1159,8 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
 
     missing_items = []
     _contract_keys = _contract_item_keys(tree)
+    _sec_titles = _section_title_map(tree)
+    _phantom_sec_ck = set()   # 节题伪装候选（同样不得喂 B 层）
     _exempt_ck = set()   # suffix_confusion 豁免候选的复合键（B 层同样不得喂入）
     for ck, it in best.items():
         if ck in contract_items:
@@ -1020,6 +1180,28 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                 "note": "contract holds this canon as type=uncat",
             })
             continue
+        # 🔴 节题伪装（Apostol ch5 实测 2026-09-28）：数字前置方案（*_nf）会把小节
+        # 标题「5.1 Definition and basic properties of …」整行扫成条头「Definition 5.1」
+        # ——label 是从标题词里抓来的，不是印刷类型词。契约里同一序标**已是 section
+        # 节点**，回填只会在契约里凭空造出「定义5.1」幽灵条目并带乱 B 层序列。
+        # 判据（两重，防真条目恰与节同号）：候选来自 *_nf 方案且带 label；其 snippet
+        # 归一文本与契约里**同序标小节**的标题互为前缀。命中记 section_title：
+        # 不回填、不拦闸，且不得喂给 B 层。
+        if str(it.get("scheme", "")).endswith("_nf") and it.get("has_label"):
+            st = _sec_titles.get(tuple(c))
+            sn = _norm_alnum(it.get("snippet", ""))
+            if st and len(sn) >= 8 and (st.startswith(sn) or sn.startswith(st)):
+                _phantom_sec_ck.add(ck)
+                missing_items.append({
+                    "key": it["key"], "label": it["label"], "page": it["page"],
+                    "snippet": it["snippet"], "canon": list(c),
+                    "has_label": True,
+                    "status": "section_title",
+                    "note": "contract holds section %s with this title; the "
+                            "'label' is a title word, not an item head" % (
+                                ".".join(str(x) for x in c)),
+                })
+                continue
         # 🔴 字母后缀序标 OCR 形近豁免（do Carmo ch5 实测 2026-09-26）：印刷
         # 「THEOREM 1a / 1b」的尾字母被抽取器按形近折成数字（b→8 → 伪候选
         # canon=(18,) 键「定理18」），而契约真身「定理1b」因尾字母无 int canon
@@ -1110,12 +1292,15 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     # 它们是同一真身的形近替身，留在源集里 B 会报「源最大 18 远大于 md 最大 3」
     # TAIL BLOCKING 幻影（do Carmo ch5 回归实测），闸门依旧死锁。
     b_raw = raw_items
-    if _exempt_ck:
+    if _exempt_ck or _phantom_sec_ck:
         b_raw = []
         for it in raw_items:
             cc = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
-            if cc is not None and _composite_key(
-                    cfg.primary_type, it.get("label", "uncat"), cc) in _exempt_ck:
+            if cc is None:
+                b_raw.append(it)
+                continue
+            _ck2 = _composite_key(cfg.primary_type, it.get("label", "uncat"), cc)
+            if _ck2 in _exempt_ck or _ck2 in _phantom_sec_ck:
                 continue
             b_raw.append(it)
     bmeta = _run_b_layer(ch, start, end, ext, cfg, tree, b_raw)
@@ -1218,6 +1403,58 @@ def subsection_order_problems(node):
     return out
 
 
+def ordinal_occupancy_sets(ch_node, miss_it2):
+    """契约「序标占用表」：(条目 canon 集合, 节号字符串集合, 可读遗漏 canon 集合)。
+
+    见 `step4_gate` 的 🔴 序标被他节点占用豁免注释。判据测试
+    `verify/script/tests/test_ordinal_occupancy_gap.py`。
+    """
+    occ_items, occ_secs = set(), set()
+
+    def walk(n):
+        ck = _canon_key(_PRIMARY, str(n.key)) if n.key is not None else None
+        if ck:
+            if n.type == "section":
+                occ_secs.add(".".join(str(x) for x in ck))
+            else:
+                occ_items.add(tuple(ck))
+        for k in n.sub_sec:
+            walk(k)
+
+    walk(ch_node)
+    gap_left = {tuple(m.get("canon") or ()) for m in (miss_it2 or [])
+                if m.get("status") == "readable"}
+    return occ_items, occ_secs, gap_left
+
+
+_GAP_ORDINAL_RE = re.compile(r"(\d+(?:\.\d+)*)\s*缺号\s*(\d+)")
+
+
+def occupied_ordinal(message, occ_items, occ_secs, gap_left):
+    """B 层「缺号」消息 → 占用形态（``"item"`` / ``"section"``）；真缺号返回 None。
+
+    安全网：该序标在源侧差集里被报成 `readable` 遗漏时**一律不豁免**——真漏抽的
+    条头必先被 `scan_raw_items` 抓到，所以本判据只可能放过「书中本无此条」的
+    印刷体例（共享计数器 / 序标被节标题占用），不会掩盖数据缺陷。
+    """
+    if not isinstance(message, str):
+        return None
+    m = _GAP_ORDINAL_RE.search(message)
+    if not m:
+        return None
+    try:
+        canon = tuple(int(x) for x in m.group(1).split(".")) + (int(m.group(2)),)
+    except ValueError:
+        return None
+    if canon in gap_left:
+        return None
+    if canon in occ_items:
+        return "item"
+    if ".".join(str(x) for x in canon) in occ_secs:
+        return "section"
+    return None
+
+
 def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     """第 4 步：回填后重跑第 2 / 第 3 步，断言遗漏章节 / 可读遗漏项 / B 层 blocking 全部归零，
     保证 book_structure 既完整（无遗漏）又连续（章节序列 / 条目编号无洞）。"""
@@ -1244,6 +1481,17 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     def _collect_ex(n):
         if n.type in ("exercise", "problem"):
             ex_keys.add(str(n.key))
+            # 🔴 带标签的练习/问题键（回填键式渲染出的 `问题7.19`）须同时登记
+            # 裸号变体，否则 _is_exercise_gap 按 `7-19`/`7.19` 查不到、
+            # 合成 md（不含练习）必然呈现的练习缺号无法豁免
+            # （Iwaniec-Kowalski ch7 PROBLEM 7.19/7.25/7.29 实测）。
+            ck = _canon_key(_PRIMARY, str(n.key))
+            if ck:
+                _cs = '.'.join(str(x) for x in ck[:-1])
+                _tail = str(ck[-1])
+                _bare = (_cs + '-' + _tail) if _cs else _tail
+                ex_keys.add(_bare)
+                ex_keys.add(_bare.replace('-', '.'))
         for k in n.sub_sec:
             _collect_ex(k)
 
@@ -1259,11 +1507,35 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         sec, num = m.group(1), m.group(2)
         return f"{sec}-{num}" in ex_keys or f"{sec}.{num}" in ex_keys
 
-    real_b_blocking = [
-        b for b in b_blocking
-        if not (isinstance(b, dict) and b.get("exercise_block_only", False))
-        and not _is_exercise_gap(b)
-    ]
+    # 🔴 序标被他节点占用豁免（共享计数器 / 稀疏编号的**机械可验**形态；
+    # Apostol《Introduction to Analytic Number Theory》ch7 / ch12 实测 2026-09-28）。
+    # 两种印刷体例都会让「按标签分桶」的 B 层报出假缺号：
+    #   ① 同章多个标签**共用一条计数器**——ch7 印 定理7.1/7.2/7.3、引理7.4…7.8、
+    #      定理7.9/7.10，Theorem 桶看似的「缺号 4..8」其实由 Lemma 在账（Lemma 桶
+    #      的「缺号 1..3」同理）；
+    #   ② 序标被**节标题**占用——ch12 印 §12.11「Evaluation of …」，条目序列
+    #      12.10 → 12.12 是真实印刷（源侧全方案扫描在该页找不到任何 12.11 条头）。
+    # 判据：该序标在契约里**确有**另一节点（异标签条目 / section）**且**源侧差集
+    # 在该序标**没有**报出可读遗漏——后者是关键安全网：真漏抽的条头一定先被
+    # `scan_raw_items` 抓到并置 `readable`（→ `readable_left` 非空 → 闸门照拦），
+    # 所以本豁免只可能放过「书中本无此条」的印刷体例，不会掩盖数据缺陷。
+    # 放过的项目**不静默**：全部登记进 gate.b_gap_ordinal_occupancy 供人工复核
+    # （替代 `ignore_chN` 手工账——ignore 是「人说了算」，本判据是「账说了算」）。
+    _occ_items, _occ_secs, _gap_left_canon = ordinal_occupancy_sets(
+        ch_node_after, miss_it2)
+
+    b_gap_occupancy = []
+    real_b_blocking = []
+    for b in b_blocking:
+        if isinstance(b, dict) and b.get("exercise_block_only", False):
+            continue
+        if _is_exercise_gap(b):
+            continue
+        occ = occupied_ordinal(b, _occ_items, _occ_secs, _gap_left_canon)
+        if occ:
+            b_gap_occupancy.append({"message": str(b).strip(), "occupied_by": occ})
+            continue
+        real_b_blocking.append(b)
     # 🔴 同父小节键序闸（见 subsection_order_problems 注释）：D 层对 level 3
     # 结构性失明，锚点回扫扫歪时整节内容会重复挂两个节点，必须在拆单元前阻断。
     order_problems = subsection_order_problems(ch_node_after)
@@ -1274,6 +1546,7 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         "residual_sections": sec_left,
         "residual_readable_items": [m["key"] for m in readable_left],
         "residual_b_blocking": real_b_blocking,
+        "b_gap_ordinal_occupancy": b_gap_occupancy,
         "residual_section_order": order_problems,
     }
 

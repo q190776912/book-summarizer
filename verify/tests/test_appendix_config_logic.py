@@ -68,19 +68,26 @@ def _item(key, typ, name=""):
 
 def test_contract_evidence_dedup_and_letter_skip(tmp_path):
     ext = str(tmp_path)
-    # 同号不同族（Corollary 9.3-3 与 Theorem 9.3-3，来自深层子项展平）→ 去重保留首个
-    # 附录字母章（A）整体跳过。
+    # 去重按 **(form, comps)**：同 form 同 comps 只记一次（Weibel ch9 深层子项展平），
+    # 异 form 同号**照记**——「同章既有 Theorem 9.3-3 又有 Corollary 9.3-3」正是
+    # 平行计数器的决定性证据（Shafarevich I 正文实测：按 comps 去重会销毁它，
+    # 四族被误并成一条计数器 → 条目阅读序与印面相反 → ANCHOR-SANITY 拒绝落盘）。
+    # 附录字母章（A）在非 letter_chapter 通路整体跳过。
     _write_contract(ext, {
         9: [_item("9.3-3", "theorem"), _item("9.3-3", "corollary"),
+            _item("9.3-3", "theorem"),
             _item("9.3-4", "lemma")],
         "A": [_item("A.1-1", "definition")],
     })
     ev = mc._contract_counter_evidence(ext)
     assert ev is not None
-    assert ("Theorem", (9, 3, 3)) in ev
-    assert ("Corollary", (9, 3, 3)) not in ev      # 同号去重
+    # 🔴 分量带章号前置（`_shares_main_counter` 的窗口 = comps[:-1]）：节级编号书
+    #    的键 `9.3-3` 归一化成 (9, 9, 3, 3)，首分量是**所属章**，跨章同号不再相撞。
+    assert ("Theorem", (9, 9, 3, 3)) in ev
+    assert ("Corollary", (9, 9, 3, 3)) in ev       # 异 form 同号 = 拆组证据，保留
+    assert ev.count(("Theorem", (9, 9, 3, 3))) == 1  # 同 form 同 comps 只记一次
     assert all(comps[0] != "A" for _, comps in ev)  # 字母章跳过
-    assert ("Lemma", (9, 3, 4)) in ev
+    assert ("Lemma", (9, 9, 3, 4)) in ev
 
 
 def test_contract_evidence_none_without_contract(tmp_path):

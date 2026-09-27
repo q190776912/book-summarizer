@@ -167,5 +167,65 @@ class TestFigureGroupGuarantee(unittest.TestCase):
             shutil.rmtree(ext, ignore_errors=True)
 
 
+class TestInheritedFigGroupKeepsOwnCounter(unittest.TestCase):
+    """Figure inherits its OWN recorded type/scope, never the body's (2026-09-28).
+
+    Shafarevich BAG1: figures are globally integer-numbered (`Figure 1`…`Figure
+    26` -> type 1 / scope 1) while items are two-segment (`Theorem 1.1` -> type
+    2).  Re-running `--force` re-typed the inherited Figure group with the BODY
+    family (type 2 / scope 2), so `load_fig_components` started expecting `N.M`
+    and every printed `Figure 7` fell out of the ledger.
+    """
+
+    def _regen_with_old(self, page_texts, old_ordinal):
+        ext = _mk_ext([_page(page_texts)])
+        try:
+            with open(os.path.join(ext, "verify_config.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"ordinal": old_ordinal, "language": "en",
+                           "chapter_first": True}, f)
+            rc = subprocess.run([sys.executable, MAKE_CLI, ext, "--force"],
+                                cwd=_ROOT, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=300,
+                                encoding="utf-8", errors="replace")
+            self.assertEqual(rc.returncode, 0,
+                             "make_config failed: %s%s" % ((rc.stdout or "")[-400:],
+                                                           (rc.stderr or "")[-400:]))
+            with open(os.path.join(ext, "verify_config.json"),
+                      encoding="utf-8") as f:
+                cfg = json.load(f)
+            return (cfg.get("ch") or cfg).get("ordinal") or []
+        finally:
+            shutil.rmtree(ext, ignore_errors=True)
+
+    def test_global_integer_figures_not_retyped_by_body_family(self):
+        # Body items two-segment (type 2) + old ledger Figure group type 1/1.
+        ordinal = self._regen_with_old(
+            ["Theorem 1.1 Every variety has a tangent space.",
+             "Proposition 2.3 A second statement here."],
+            [{"type": 2, "name": ["Theorem"], "scope": 2},
+             {"type": 1, "name": ["Figure"], "scope": 1}])
+        figs = [g for g in ordinal
+                if any(figure_io._is_fig_kw(nm) for nm in g.get("name", []))]
+        self.assertEqual(len(figs), 1)
+        self.assertEqual(figs[0]["type"], 1,
+                         "inherited Figure group must keep its own type")
+        self.assertEqual(figs[0]["scope"], 1,
+                         "inherited Figure group must keep its own scope")
+
+    def test_inherited_group_missing_fields_falls_back_to_probe(self):
+        # A残缺 old group (no type/scope) must not crash and must land on an
+        # explicit value: detected caption depth (here 2 from `Figure 1.1/1.2`).
+        ordinal = self._regen_with_old(
+            ["Theorem 1.1 identity.", "Figure 1.1 diagram",
+             "Figure 1.2 another diagram"],
+            [{"name": ["Figure"]}])
+        figs = [g for g in ordinal
+                if any(figure_io._is_fig_kw(nm) for nm in g.get("name", []))]
+        self.assertEqual(len(figs), 1)
+        self.assertIn(figs[0]["type"], (1, 2, 3))
+        self.assertIn("Figure", figs[0]["name"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

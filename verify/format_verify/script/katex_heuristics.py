@@ -265,6 +265,16 @@ BARE_MATH_GLYPHS = (
 # "Exercise ... E (...)" where E is a label, not the expectation operator.
 _PROB_OP_RE = re.compile(r'(?<![.\w])(?:Pr|E|Var|Cov)\s*[\(\[\{]')
 
+# 🔴 …but a paren that opens an English WORD is a bilingual label gloss, not an
+# operator argument: CN labels put the ordinal before the gloss — `**推论 E
+# (Corollary)**` / `**引理 E (Lemma)**` — so the letter `E` sits right in front
+# of `(Corollary)` and the old check demanded it be wrapped in `$…$`. The EN
+# original (`**Corollary E**`) has no paren there ⇒ same document, two verdicts
+# (Robinson 李代数 ch5/0010 + ch6/0047, 2026-09-28). Same "real English phrase ⇒
+# prose" criterion _FUNC_CALL_RE already applies below; a genuine operator
+# argument (`E (X ∪ Y)`, `\Pr{...}`) never starts with a ≥4-letter word.
+_PROB_OP_GLOSS_RE = re.compile(r'\s*[A-Za-z]{4,}')
+
 # (B) single-letter function call: name is ONE letter, arg is math-like.
 # Lookbehind (?<![A-Za-z$0-9.]) excludes citation sub-refs like "1.7.H(c)",
 # "2(a)", "Figure 3(b)" — these are label references, not math calls.
@@ -289,6 +299,29 @@ _LABEL_WORDS = (
     'Haar', 'Bessel', 'Cauchy', 'Borel', 'Cantelli', 'Parseval', 'Optional',
     'Martingale', 'Brownian', 'Scholium',
 )
+
+# 🔴 中文侧同口径豁免（Robinson Lie 代数书 ch6/0054 实测）：中文没有空格分词，
+# 上面 `pre.split()[-1]` 会把「（参见引理」整段读成一个 token，于是译文的交叉引用
+# 「引理 A (10.3)」被报成裸函数调用，而印面原文 "Lemma A (10.3)" 放行 —— 同一结构
+# 两语言判定必须一致。故补一条「紧邻前文以中文标签词收尾」的尾部匹配。
+_LABEL_WORDS_CJK = (
+    '定理与定义', '证明思路', '附录', '附注', '习题', '解答', '说明', '评注',
+    '注记', '推论', '命题', '定理', '引理', '定义', '例题', '提示', '参见',
+    '插图', '图表', '例', '图', '表', '节', '章', '式', '见', '注',
+)
+_CJK_LABEL_TAIL_RE = re.compile(
+    r'(?:' + '|'.join(sorted(_LABEL_WORDS_CJK, key=len, reverse=True)) + r')'
+    r'[（(：:，,、的]?\s*$')
+
+# A bare `f (...)` is a cross-reference, not a math call, when a label word
+# sits right in front of it — English words are space-delimited, Chinese is
+# matched by tail suffix (see _CJK_LABEL_TAIL_RE above for why).
+def _preceded_by_label_word(text, start):
+    pre = text[max(0, start - 16):start]
+    toks = pre.split()
+    if toks and toks[-1].rstrip('(') in _LABEL_WORDS:
+        return True
+    return bool(_CJK_LABEL_TAIL_RE.search(text[:start]))
 
 
 def find_bare_math_errors(lines):
@@ -321,6 +354,8 @@ def find_bare_math_errors(lines):
                 f'KaTeX (writing-rules.md rule #17)')
         # (B) probability / expectation / variance operators
         for m in _PROB_OP_RE.finditer(text):
+            if _PROB_OP_GLOSS_RE.match(text[m.end():m.end() + 28]):
+                continue      # bilingual label gloss `E (Corollary)` — prose
             errs.append(
                 f'line {i}: character-type formula — bare operator '
                 f'"{m.group(0).strip()}" outside math mode — write as '
@@ -333,9 +368,7 @@ def find_bare_math_errors(lines):
             if re.search(r'[a-z]{4,}', arg):
                 continue
             # skip if preceded by a label word (e.g. "Example (X(t)...")
-            pre = text[max(0, m.start() - 16):m.start()]
-            last_tok = pre.split()[-1] if pre.split() else ''
-            if last_tok.rstrip('(') in _LABEL_WORDS:
+            if _preceded_by_label_word(text, m.start()):
                 continue
             # argument must look math-like (digit / _ / , | = < > ; ^ ± or 1-2 letters)
             if (re.search(r'[\d_,|=<>;^±]', arg)

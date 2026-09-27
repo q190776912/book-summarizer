@@ -45,10 +45,13 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 **第 3 步 · 重要概念查漏 + 回填（复用 `item_numbering_integrity` / B 层）**
 - 条目完整性 → 复用公共子流程 `verify/item_numbering_integrity`（语义名 **item-numbering-integrity**，B 层）的编号完整性逻辑。为避免与 verify 端（B 层读「已写好的 .md」）冲突，structure 阶段把契约派生出「合成 md」（非练习条目 → `**key Label**` 粗体头，按 `type` 反推标签，确保 B 层能解析）喂给 B 层，让其分组 / 编号 / ignore 逻辑校验条目连续性。
 - 具体**回填**由「源条目集（`scan_raw_items` 跨校验：标题锚定、全方案 / 全类型，抓抽取器漏检）− 契约」的结构化差集驱动（保留 `scan_raw_items` 作为稳健源侧交叉校验），只回填**重要概念**（排除练习类）：
+  - 🔴 **类型词形近补救**（单一真源 `lib/label_typo.py`，Apostol ch2 实测 2026-09-28）：印刷「Theorem 2.7」被 OCR 读成「Theorerm 2.7」时，按正字构造的类型词正则**整体失配** → 该条既不入契约也不在源侧候选，差集为空，闸门只剩 B 层「序列不连续」死锁，`manual_overrides` 之外无处可解。判据四重（宁缺毋滥）：块首 ≥5 字母纯字母词 / 非正字也非正字复数形 / 与词表**恰好一个**类型词编辑距离恰为 1 / 其后紧跟点分条目序标。**两侧必须共用**：`extract_items_en`（抽取器）与 `check_structure_completeness.scan_raw_items`（源侧查漏）都调 `label_typo_normalize`——只有校验侧有补救时，校验看得见而契约看不见，每轮重建都要重跑一次 `--backfill` 才绿，那是补数据不是根治。只替换块首一个词（偏移量不变），正文内容块仍逐字来自 `page_*.json`。判据测试 `flows/write-source/structure/script/tests/test_label_typo_extractor_rescue.py`（抽取器侧，含复数形/散文近似词/块中引用/无序标四条负向）+ `verify/script/tests/test_label_typo_source_scan.py`（源侧）。
   - `readable`（编号 / 标签 / 页码 / 标题都能从 OCR 干净取出）→ 脚本**自动回填**；
   - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
   - `needs_agent`（OCR 字母↔数字无法干净还原）→ 交 agent 凭读图 / 知识回填（沿用 `config/manual_overrides_chN` + `（OCR无法识别）`，见 `verify/missing_label_policy.md`）。
   - `shared_counter`（共享计数器书专属）：该编号已以**另一标签**落在契约里（契约 `评注4.2`，源侧又扫到 `Corollary 4.2 implies…`）。共享一个升序计数器时同号全书只出现一次，源侧这处必是交叉引用/折行续句 → 不回填、闸门不拦，仅留痕供复核（Han-Lin《Elliptic PDEs》ch4 实测）。
+  - `section_title`（节题伪装）：数字前置方案（`*_nf`）把**小节标题行**读成条头——`5.1 Definition and basic properties of …` 的 label 是从标题首词抓来的伪「Definition 5.1」，而契约里同一序标本来就是 `section` 节点。判据：候选带 label 且 snippet 归一文本（剥开头数字、忽略大小写标点）与契约同序标小节标题互为前缀 → 不回填、闸门不拦，且**不喂给 B 层**（否则留下幻影尾号）（Apostol《Introduction to Analytic Number Theory》ch5 §5.1 实测；判据测试 `verify/script/tests/test_section_title_phantom.py`）。同号但文本不符的真条头仍 `readable`。
+  - `type_shadow`（契约以无类型 `uncat` 节点承载该 canon，印刷类型词被 OCR 吞）、`suffix_confusion`（字母后缀序标被形近折成数字，`1b`→`18`；契约已持真身 `定理1b`）：同类幻影豁免，均不回填、不拦闸、不喂 B 层（Kreyszig ch4 / do Carmo ch5 实测）。
 
 确认 `readable` 项无误后，**先备份再写回**：
 ```powershell
@@ -61,9 +64,11 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 故 write-source / verify 可原样消费。🔴 **回填写回时同步重建该章内容**：树被原地修改后先 `clear_raw_recursive()` 丢过期保真视图，再 `build_chapter_contract` 幂等重挂（新回填条目同样获得 text/formula 内容块），写回单章文件——`ch{N}.json` 恒为完整契约。
 
 **第 4 步 · 完整 + 连续 闸门（收尾保证）**
-回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking`）。只有 `gate.passed == true` 才允许进入 write-source 的单元拆分（步骤 4）。
+回填后**重跑第 2 / 第 3 步**，断言：遗漏章节 / 可读遗漏项 / B 层 `blocking`**全部归零**，保证 `book_structure` 既**完整**（无遗漏章节 / 无遗漏定义定理例）又**连续**（章节序列 / 条目编号无洞）。闸门结果在报告 `gate` 字段（`passed` / `residual_sections` / `residual_readable_items` / `residual_b_blocking` / `b_gap_ordinal_occupancy`）。只有 `gate.passed == true` 才允许进入 write-source 的单元拆分（步骤 4）。
 
-> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**write-source 单元拆分（步骤 4）**之前完成。回填后的编号项会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。B 层报「缺号」但核对源书确认是**稀疏编号**（作者跳号，如 ch5 无 Theorem 5.1、ch20 无 Theorem 20.4/20.5）时，按 verify 规则登记 `ignore_ch{N}.json` 豁免，**不得**为凑连续而编造条目。
+- 🔴 **序标占用豁免**（`ordinal_occupancy_sets` + `occupied_ordinal`，Apostol ch7 / ch12 实测 2026-09-28）：B 层按**标签**分桶校连续，而两种真实印刷体例必然造出**假缺号**——① 同章多标签**共用一条计数器**（ch7 印 定理7.1-7.3、引理7.4-7.8、定理7.9-7.10：Theorem 桶的「缺号 4..8」其实由 Lemma 在账）；② 序标被**节标题**占用（ch12 印 §12.11，条目 12.10 → 12.12 是真印刷）。判据：该序标在契约**确有**另一节点（异标签条目 → `item` / section → `section`）**且**源侧差集在该序标**没有**报出 `readable` 遗漏。后半句是安全网：真漏抽的条头必先被 `scan_raw_items` 抓到 → `residual_readable_items` 非空 → 闸门照拦，所以本豁免只放过「书中本无此条」的体例。放过项**不静默**，全部登记 `gate.b_gap_ordinal_occupancy` 供复核——这是「账说了算」，取代 `ignore_chN` 的「人说了算」。判据测试 `verify/script/tests/test_ordinal_occupancy_gap.py`（含三级书不受影响 + readable 遗漏压过占用的负向）。
+
+> 🔴 **顺序铁律**：第 1 → 2 → 3 → 4 步（含完整性闸门）必须在**write-source 单元拆分（步骤 4）**之前完成。回填后的编号项会作为「必须落地」节点出现在总结 MD；若先写书再回填，已写的 MD 会缺这些条目。B 层报「缺号」时**先查序标占用**（上一条：该号在契约另有账 = 共享计数器/节号占用，机械豁免），确属**作者跳号**（该序标全书无任何账，如 ch5 无 Theorem 5.1、ch20 无 Theorem 20.4/20.5）才按 verify 规则登记 `ignore_ch{N}.json` 豁免，**不得**为凑连续而编造条目。
 
 ## 源侧完整性校验与回填（写书前兜底）
 
@@ -83,6 +88,8 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
 - **多位数章节号**（ch10 / ch11 …）已支持：数字串按 OCR 容错（`A→4, B→8, O→0, S→5 …`）整段归一，避免单字符捕获导致漏扫整章。
 - **两级数字前置无标签**的匹配（大概率是章节号，如 `10.2`）直接丢弃，避免把章节当条目录入。
 - 章节查漏复用 `section_continuity` 公共能力，与 verify 端同源。
+- 🔴 **页眉带复本不得当习题区信号**（`scan_skeleton.is_running_head` / `page_x_extent`，Apostol 实测 2026-09-28）：印刷把当前习题块标题**作为页眉**重复印在每页页首**右侧**（p155 页眉 "Exercises for Chapter 7" x0=721 y=59，而正文左边界 x0≈71、正文起始 y≈155）。判据两条同时成立：块顶 `y < _HEAD_BAND_Y(100)` 且 块首 `x0 > 本页左边界 + 1/4 页宽跨度`。三处消费方共用它——① `scan_skeleton` 习题区闩锁（页眉抢先解锁会吞同页其后正文条目），② `build_structure._exercise_region_start`（ITEM 剔除区界），③ `_exercise_block_pos` / `_chapter_end_exercise_start`（章末集中块锚点）；缺 poly 时一律 fail-open（宁闩不漏）。判据测试 `flows/write-source/structure/script/tests/test_bare_chapter_exercises.py`。
+- **章末集中习题按裸单号印刷**的书（Apostol「1. Prove that…」「2. …」）由 `scan_skeleton.STICKY_EXER_BARE` 收录：仅在闩锁已开时接受**严格 +1 递增**的 `N.` / `N)` 行（首字母大写或 `(` 起头），且与三段题号（`7.1` 形态）共存时**点分形态胜出**（仲裁丢弃裸号行），避免正文公式碎片（"1 = A(k)…"）被当习题。
 
 ### 产物
 `<extract_dir>/completeness_reports/ch<N>_completeness_report.json`（附录章 `appendix<X>_completeness_report.json`，文件名段 = `chapter_label`），含：
@@ -127,6 +134,7 @@ gate{passed,residual_sections,residual_readable_items,residual_b_blocking}`。
 
 ## 构建逻辑（与 `verify/data_provider` 同一套抽取分派）
 1. **章节骨架**优先来自 `scan_skeleton` 的 `SEC` 扫描（含印刷标题）；当某方案 `SEC` 捕获不全（en 两级、vakil）时，用「条目键派生章节号」补齐缺失章节。
+   - 🔴 **印刷节头跨行（悬挂续行）必须并回标题**：扫描件把一行排不下的节头断成两块（`3.2 The big oh notation.` / `Asymptotic equality of` / 后续块回到节头左边界），只取首块 → 契约节名丢尾巴，最终 md 的 `## §N.M` 标题不完整；而**奇数页页眉印的是完整标题**，内容完整性闸门 ②c 会把页眉判成「丢失正文块」双重报错。判据 = `scan_skeleton.heading_continuation`（几何：续行块左移 ≥30 且比节头块窄、行距 8–72、第三块**回到节头左边界**且比续行宽——段落缩进/正文行不会回到左边界，故不会把正文首行误并进标题；文本：≤60 字符、句末无标点、非数字/非 `Word 9` 形、不是另一个节头）。实测 Apostol《Introduction to Analytic Number Theory》6 章（p65/p159/p177 同型）。判据测试 `flows/write-source/structure/script/tests/test_heading_continuation.py`（16 项，含真页几何正例 + 单页/双页端到端 `scan()` + 缩进正文/条目头/裸单号/段落间距等负例）。
 2. **条目节点权威来自抽取器**（`extract_items` / `extract_items_en` / `extract_items_vakil` / `extract_items_ross` / `extract_items_hum` 等，按 `ordinal` 选路，与 data_provider 一致），`label → type`：
    `定义→definition`、`定理→theorem`、`引理→lemma`、`推论→corollary`、`命题→proposition`、`例→example`、`评注/注→remark`、`uncat→uncat`。**抽取器里的 `练习/习题` 类键被排除**（练习只来自下一步的 `EXER`）。
 3. **练习来自 `scan_skeleton` 的 `EXER` 扫描**（统一来源），与条目分开，避免重复计数。

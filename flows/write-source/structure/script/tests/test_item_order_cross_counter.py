@@ -67,6 +67,34 @@ class TestCounterLabelOfBareKey(unittest.TestCase):
                          "theorem")
 
 
+class TestCounterLabelOfLetterSlotKey(unittest.TestCase):
+    """字母章位附录（Shafarevich《BASG 1》Algebraic Appendix，2026-09-28）：
+    键 `A.11` 的非数字前缀是**字母章位**而不是计数器名，必须回退 `type`，
+    否则 Proposition / Corollary 两条独立计数器被当成同一条走数字序，
+    `Corollary A.1` 顶到 `Proposition A.11` 之前（印面 p307 相反）→
+    ANCHOR-SANITY 整章拒绝落盘。"""
+
+    def test_letter_slot_falls_back_to_type(self):
+        self.assertEqual(_item_counter_label({"key": "A.11", "type": "proposition"}),
+                         "proposition")
+        self.assertEqual(_item_counter_label({"key": "A.1", "type": "corollary"}),
+                         "corollary")
+
+    def test_letter_slot_pair_is_cross_counter(self):
+        """两条独立计数器 => 比较走跨标签分支，不按 1<11 的数字序压后推论。"""
+        pairs = []
+        for (typ, key, page) in (("proposition", "A.11", 307),
+                                 ("corollary", "A.1", 307)):
+            pairs.append(node(typ, key, page))
+        # y 锚定：印面上 Corollary A.1 在 Proposition A.11 之后（页下 y 更大）
+        y_of = ymap(**{"proposition-A.11": 300, "corollary-A.1": 520})
+        self.assertEqual(_item_order_cmp(pairs[0], pairs[1], y_of), -1,
+                         "A.11 的 y 在前，必须排在 Corollary A.1 之前")
+        y_of_rev = ymap(**{"proposition-A.11": 700, "corollary-A.1": 200})
+        self.assertEqual(_item_order_cmp(pairs[0], pairs[1], y_of_rev), 1,
+                         "y 在后则必须排后（数字序 11>1 不得越权）")
+
+
 class TestStrogatzCrossCounter(unittest.TestCase):
     """裸号键 + 各自起号（无显式组）→ 异计数器对按锚定 y。"""
 

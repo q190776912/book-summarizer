@@ -158,6 +158,18 @@ ENTRY_RE_HUM = re.compile(
     r'(?:\.?)'            # optional trailing period
     r'(?:\s*\([^)]*\))?'  # optional parenthetical
     r'\s*\*\*')
+# 两级书的**纯字母序标**条头（Shafarevich《Basic Algebraic Geometry 1》I ch3 §3.4
+# Chevalley 定理 A–D 实测）：条目既无点分号也无章内单数字，type 2 分支的
+# ENTRY_RE_2 / ENTRY_RE_EN_C / ENTRY_RE_EN_SINGLE_C 全部扫不到（它们都要求后随数字），
+# 于是契约里已登记的四条定理在 md 侧永不出键 → A 层判 TRULY MISSING（阻断）。
+# 键形与 ORDINAL_HUM 分支逐字一致：规范中文标签 + **一个空格** + 大写字母（`定理 A`），
+# 与契约侧 structure_io 的字母分支（`f"{label} {letter}"`）1:1 相交。
+# 🔴 三道守卫缺一不可：
+#   * `(?![A-Za-z0-9])` 拒 `**Theorem An affine variety…**`（A 后紧跟 n = 散文冠词）；
+#   * `\s*` + 字母必须**独立成项**，`**Theorem 3.14**` 由数字正则负责，不重复收录；
+#   * 不加 IGNORECASE——字母只认大写，小写命中即散文（`**Remark a posteriori…**`）。
+ENTRY_RE_TWO_LETTER_C = re.compile(
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*([A-Z])(?![A-Za-z0-9])')
 PROSE_RE_EN_C = re.compile(
     # Same CJK-aware boundaries as PROSE_RE_EN (see note there): \b fails after
     # CJK chars (「由命题 14.17」) and before digits in no-space form (命题14.17).
@@ -345,6 +357,12 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     entries.add(key); allk.add(key)
                 for m in ENTRY_RE_EN_NF_C.finditer(line):
                     key = f"{_canon_label(m.group(3))}{m.group(1)}.{m.group(2)}"
+                    entries.add(key); allk.add(key)
+                # 纯字母序标条头（`**Theorem A (Chevalley's theorem)**` → `定理 A`）：
+                # 见 ENTRY_RE_TWO_LETTER_C 注释；键形须与契约侧 structure_io 的字母分支
+                # 完全一致（标签 + 空格 + 大写字母）。
+                for m in ENTRY_RE_TWO_LETTER_C.finditer(line):
+                    key = f"{_canon_label(m.group(1))} {m.group(2).upper()}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):

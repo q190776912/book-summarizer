@@ -228,6 +228,73 @@ class TestStripUnattested(unittest.TestCase):
         self.assertEqual([n for _k, n in collect_contract_tags(tree)], ["99"])
 
 
+class TestLetterChapterAnchors(unittest.TestCase):
+    """字母章位编号（附录 `(A.5)` 型）的锚点识别。
+
+    动因 = Shafarevich《Basic Algebraic Geometry 1》附录 5 实测：`_PAREN_LABEL_RE`
+    只认数字开头 → 页窗里 14 个 `(A.N)` 全「查无锚点」→ 收割处把**真实**编号剔光，
+    契约不登记 tag、单元写 `\\tag{A.N}` 反判编造、完整性闸门 ① 复算与磁盘互相缺块。
+    """
+
+    APX_TAGS = ["A.1", "A.3", "A.4", "A.5", "A.7", "A.8"]
+
+    def test_parenthesized_letter_anchor_attests(self):
+        tree = contract(self.APX_TAGS, lo=299, hi=302)
+        pages = {p: ["(A.%d)" % n for n in (1, 3, 4, 5, 7, 8)]
+                 for p in range(299, 303)}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+        self.assertEqual(strip_unattested(tree, loader(pages)), [])
+        self.assertEqual([n for _k, n in collect_contract_tags(tree)], self.APX_TAGS)
+
+    def test_letter_anchor_glued_into_formula_line_attests(self):
+        """编号被 MFD 当**公式**检测出来（`( { \\mathsf { A } } . 5 )`）时同样算锚点——
+        扁平形态分支（去宏名/花括号/空格）对字母章位一样有效。"""
+        tree = contract(["A.5"], lo=299, hi=300)
+        pages = {299: ["( { \\mathsf { A } } . 5 )"], 300: ["prose"]}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_letter_tag_without_printed_anchor_still_condemned(self):
+        """负向：字母章位**不是**免检牌——页窗里没印过的号照旧判毒。"""
+        tree = contract(self.APX_TAGS + ["A.9"], lo=299, hi=302)
+        pages = {p: ["(A.%d)" % n for n in (1, 3, 4, 5, 7, 8)]
+                 for p in range(299, 303)}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("A.9", probs[0])
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["A.9"])
+        self.assertEqual([n for _k, n in collect_contract_tags(tree)], self.APX_TAGS)
+
+    def test_bare_letter_label_does_not_attest(self):
+        """裸排 `A.5` 与 `Fig. A.5` / 小节标题无形态区别 → 不算锚点（与
+        `formula_tag_re(letter=True)` 同一取舍）。"""
+        tree = contract(["A.5"], lo=299, hi=300)
+        pages = {299: ["A.5"], 300: ["Scalar products"]}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertTrue(any("A.5" in p for p in probs), probs)
+
+    def test_letter_led_chapter_not_flagged_by_lettered_rule(self):
+        """判据③（字母尾巴 = OCR 粘连）只在纯整数占多数时生效：全字母章位附录
+        不得被它误伤。"""
+        tree = contract(self.APX_TAGS, lo=299, hi=302)
+        pages = {p: ["(A.%d)" % n for n in (1, 3, 4, 5, 7, 8)]
+                 for p in range(299, 303)}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+
+    def test_comma_forms_are_not_anchors(self):
+        """负向：锚点索引**不认逗号**（SSOT `_FORMULA_SEP` 含 `,`，此处收窄）。
+        `(0, 1)` 是坐标 / 列表而非编号——methods-of-homological-algebra ch1/ch3 实测
+        毒 tag `0,1` / `0,0,1` / `83,3`，跨语料 607 份契约标定要求它们继续判毒。"""
+        tags = [str(n) for n in range(1, 8)] + ["0,1", "83,3"]
+        tree = contract(tags, lo=14, hi=20)
+        pages = {p: ["(%d)" % n for n in range(1, 8)] +
+                     ["(0, 1)", "(83, 3)", "(0, 0, 1)"] for p in range(14, 21)}
+        probs = "\n".join(tag_attestation_problems(tree, loader(pages)))
+        self.assertIn("0,1", probs)
+        self.assertIn("83,3", probs)
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["0,1", "83,3"])
+
+
 class TestUnharvestedAnchors(unittest.TestCase):
     """闸门 ⑭ 的**对偶**：印面 `(N)` 锚点在契约里在档、其展示式却没登记 tag（收割漏号）。
 

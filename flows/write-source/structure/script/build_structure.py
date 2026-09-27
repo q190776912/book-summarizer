@@ -72,6 +72,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 from lib.util import blk_text, norm_secnum
+from lib.section_titles import clean_title
 from lib.unit_order import check_contract_anchors, check_section_key_page_order
 
 import json
@@ -218,9 +219,18 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
     k = _STRIP_LABEL_CN.sub("", k)
     # 🔴 字母前缀附录编号（Weibel "A.1.4" → §A.1）：先判字母首分量，digit-first /
     # CN 书键（"1.2-3" / "定义1.2-1"）首字符非字母，自然落回原逻辑，零回归。
-    _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)', k)
+    # 🔴 但只有**三段**（字母.节.条目）才派生节号 "A.1"（Shafarevich《Basic
+    # Algebraic Geometry 1》附录 + Lee ISM 附录实测）：两段键 "A.1" 的末段是
+    # **条目计数器**（附录节印裸 `1 Linear and Bilinear Algebra` 或干脆无号），
+    # 与节号毫无对应。旧实现按 `字母.首数` 一律派生 → 附录 17 条 Proposition
+    # 造出 17 个幽灵节 A.1…A.17（appendix5 sections 9→26），且同号不同标签的
+    # 条目（Proposition A.1 与 Corollary A.1）解析到**同一**派生节，被同节同号
+    # 幽灵守卫折叠 → 3 条 Corollary 整批从契约消失。两段键交页码就近归节。
+    _lm = re.match(r'^([A-Za-z])\s*[.\-·]\s*(\d+)(?:[.\-·]\s*(\d+))?', k)
     if _lm:
-        return f"{_lm.group(1).upper()}.{_lm.group(2)}"
+        if _lm.group(3) is None:
+            return None
+        return "%s.%s" % (_lm.group(1).upper(), _lm.group(2))
     nums = re.findall(r"\d+", k)
     if len(nums) >= 2:
         if chapter_first:
@@ -252,9 +262,14 @@ def _section_of_exer(num, chapter_local_numbering=False, chapter_scoped=False):
     与 `_section_of_key` 的 `chapter_scoped` 分支同源：一律返回 None，交由页码就近归节。
     """
     # 🔴 字母前缀附录练习（Weibel "Exercise A.4.1" → key "A.4-1" → §A.4）
-    _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)', num or "")
+    # 🔴 与 `_section_of_key` 同源的两段键修正：`Exercise B.4`（Lee ISM 附录）
+    # 的末段是**练习计数器**，字母只是章位，不存在 §B.4 → 派生即造幽灵节。
+    _lm = re.match(r'^([A-Za-z])\s*[.\-·]\s*(\d+)(?:[.\-·]\s*(\d+))?',
+                   num or "")
     if _lm:
-        return f"{_lm.group(1).upper()}.{_lm.group(2)}"
+        if _lm.group(3) is None:
+            return None
+        return "%s.%s" % (_lm.group(1).upper(), _lm.group(2))
     nums = re.findall(r"\d+", num)
     if len(nums) >= 2:
         if chapter_scoped and re.fullmatch(r'\d+\.\d+', (num or "").strip()):
@@ -267,6 +282,19 @@ def _section_of_exer(num, chapter_local_numbering=False, chapter_scoped=False):
             return str(nums[1])
         return f"{nums[0]}.{nums[1]}"
     return None
+
+
+def _cln_dedup_name(it):
+    """章内三层体例（`chapter_local_numbering`）的「同节同号回指幽灵」判别名。
+
+    🔴 必须**标签 + 键**一起比（Shafarevich《Basic Algebraic Geometry 1》附录
+    实测）：附录条目按标签各自起号（`Proposition A.1…A.17` 与
+    `Corollary A.1…A.3` 是两条独立计数器），而 `it["key"]` 是抽取器剥掉标签的
+    **裸号**（"A.1"）。只按裸号判別时，`Corollary A.1` 被当成 `Proposition A.1`
+    的回指幽灵整条删除——3 条推论无声消失，且契约、闸门全无迹象。守卫本体
+    （同节、同标签、同号的散文回指行只留最早页）语义不变。
+    """
+    return "%s|%s" % ((it.get("label") or "").strip().lower(), it["key"])
 
 
 _NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
@@ -840,6 +868,49 @@ def _node(key, ntype, name, page):
 
 
 # ---------------------------------------------------------------------------
+# 同号 SEC 行择优（纯函数，判据测试 tests/test_sec_row_prefer.py）
+# ---------------------------------------------------------------------------
+# 🔴 Hilton & Stammbach ch2 实测：行内公式残行 "8 F0=8 FG8 FεG'" 可先于真节头命中
+#   SEC_2，把 §8 的标题/起始页污染成公式碎片 → 含数学运算符的标题视为碎片，让位给
+#   纯词标题；同级取最早页（真节头先于其页眉复本）。
+# 🔴 Apostol《Introduction to Analytic Number Theory》ch2 §2.7 实测（2026-09-28）：
+#   正文节头跨两行印刷（'2.7 Dirichlet inverses and the Mobius' / 'inversion formula'）
+#   而 `scan_skeleton.heading_continuation` 的「三明治归位」不成立（续行之后紧接的是
+#   定理头 'Theorem 2.8 …'，不是回到节头左边界的正文）→ 入库标题丢尾巴。同号的**页眉
+#   复本**（running head，印刷恒为**单行完整标题** '2.7: Dirichlet inverses and the
+#   Mobius inversion formula'）晚一页到达，旧择优只让位给「碎片/空标题」，残缺标题
+#   永久胜出，契约节名带病 → 顺着拆分灌进单元 H2、首行 name=、两侧 manifest 与最终
+#   md 文件名。新增判据：**新标题的展示形以在库标题的展示形为前缀且更长**（页眉复本
+#   是同一印刷标题的完整复本，不是另一个标题）→ 只换标题文字，**页码/y 一律沿用最早
+#   那行**（节起始页不能被页眉复本推到下一页，否则 sec_pages、条目归节与 U 层页码
+#   单调全被带偏）。
+_SEC_MATH_OP = re.compile(r'[=<>≤≥≠±×÷→←↔⇒∫∑√∂∇∈∋⊂⊃∪∩]')
+_SEC_UPGRADE_MAX_LEN = 120
+
+
+def sec_row_prefer(cur, new):
+    """同号两条 SEC 行的择优：返回应留在骨架里的那一行。
+
+    行 = `(page, 'SEC', num, title, y)`。只在**确定性更优**时才换：
+    ① 在库标题是公式碎片/空而新标题不是；② 新标题是同一印刷标题的**完整前缀加长**
+    形（页眉复本补全跨行残缺节头）——此时保留在库行的页码/y，只换标题文字。
+    其余情形保留在库行（真节头恒先于页眉复本，先到者页码更准）。
+    """
+    cur_mathy = bool(_SEC_MATH_OP.search(str(cur[3] or "")))
+    new_mathy = bool(_SEC_MATH_OP.search(str(new[3] or "")))
+    if (cur_mathy and not new_mathy) or (not cur[3] and new[3]):
+        return new
+    if not cur_mathy and not new_mathy and cur[3] and new[0] >= cur[0]:
+        old_t = clean_title(cur[3], cur[2])
+        new_t = clean_title(new[3], new[2])
+        if (new_t and old_t and len(new_t) > len(old_t)
+                and new_t.startswith(old_t)
+                and len(new_t) <= _SEC_UPGRADE_MAX_LEN):
+            return (cur[0], cur[1], cur[2], new_t, cur[4])
+    return cur
+
+
+# ---------------------------------------------------------------------------
 # 章节图归一（兼容 多套字段名：chapter/start/end 与 num/start_page/end_page）
 # ---------------------------------------------------------------------------
 def _build_rng(cm):
@@ -916,11 +987,14 @@ def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
             d = json.load(open(fp, encoding='utf-8'))
         except Exception:
             continue
-        for b in d.get('text', []):
+        blocks = d.get('text', []) or []
+        left, span = scan_skeleton.page_x_extent(blocks)
+        for b in blocks:
             if not isinstance(b, dict):
                 continue
-            poly = b.get('poly') or []
-            y = float(poly[1]) if len(poly) >= 8 else None
+            x, y = scan_skeleton.block_xy(b.get('poly') or [])
+            if scan_skeleton.is_running_head(x, y, left, span):
+                continue  # 页眉带复本不是块头，见 scan_skeleton._HEAD_BAND_Y
             for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
                 if ln and rx.match(ln):
@@ -928,13 +1002,22 @@ def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
     return None
 
 
-def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=None):
+def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=None,
+                                last_sec_pos=None):
     """章末**集中习题块**的起始页：本章最后一个真节头**之后**首个习题块标题页，无则 None。
 
     判据是**位置**而非措辞（`scan_skeleton.EXER_HEADING` 全行锚定，含
     ``EXERCISES`` / ``EXERCISES FOR CHAPTER N`` / ``Exercises``）：只有出现在全部真节
     之后的块，才在文档序上晚于所有节正文。节末块（do Carmo 每节末 EXERCISES，其后
     还有新节）不属本形态 → 返回 None，行为零回归。
+
+    `last_sec_pos=(page, y)` 是最后一个节头在自身页上的 y：**同页形态**（Serre
+    《Linear Representations of Finite Groups》ch12 实测 2026-09-27——p106 顶部
+    §12.6 的 EXERCISE 块（y206）在 §12.7 节头（y364）**之前**，而 `last_sec_page`
+    恰为 106）下，旧版只比页码 → 把节中练习块误判成章末块、块内习题挂到章级末尾，
+    ANCHOR-SANITY「排在 p108 内容之后」拒绝落盘。现对同页候选再比 y：节头之上
+    的块头不算章末块，继续向后找。`last_sec_pos` 缺失（节头 y 锚不到）时维持旧
+    页码判据，其余书零回归。
 
     消费方（build_chapter step 5）据此把块内练习节点标 ``consolidated: true`` 并挂到
     **章级子列表末尾**而非派生小节下：Strogatz《Nonlinear Dynamics and Chaos》3e 实测
@@ -946,8 +1029,16 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
     if not last_sec_page:
         return None
     _dir = page_dir or ext
+    _last_pg = int(last_sec_page)
+    _last_y = None
+    if last_sec_pos is not None:
+        try:
+            if int(last_sec_pos[0]) == _last_pg:
+                _last_y = float(last_sec_pos[1])
+        except (TypeError, ValueError, IndexError):
+            _last_y = None
     for p in range(int(start), int(end) + 1):
-        if p < int(last_sec_page):
+        if p < _last_pg:
             continue
         fp = os.path.join(_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
@@ -956,13 +1047,22 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
             d = json.load(open(fp, encoding='utf-8'))
         except Exception:
             continue
-        for b in d.get('text', []):
+        blocks = d.get('text', []) or []
+        left, span = scan_skeleton.page_x_extent(blocks)
+        for b in blocks:
             if not isinstance(b, dict):
                 continue
+            x, y = scan_skeleton.block_xy(b.get('poly') or [])
+            if scan_skeleton.is_running_head(x, y, left, span):
+                continue  # 页眉带复本不是块头，见 scan_skeleton._HEAD_BAND_Y
             for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
                 if ln and scan_skeleton.EXER_HEADING.match(ln) \
                         and not ln.rstrip('. ．·').islower():
+                    if _last_y is not None and int(p) == _last_pg:
+                        _y = y if y is not None else 0.0
+                        if _y <= _last_y:
+                            continue  # 节头之上的节末块头 → 继续向后找
                     return p
     return None
 
@@ -978,6 +1078,14 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
     块头上方**的真条目被整页误杀——p213 页底 (y=852) 的 `Example 6.8.6:` 先于
     p213 的 `EXERCISES FOR CHAPTER 6` 标题，被连页丢掉（闸门报缺 1 项）。返回
     (page, y) 后，同页条目按 y 比较，块头之上者保留。
+
+    🔴 页眉带复本不得当锚点（Apostol《Introduction to Analytic Number Theory》实测
+    2026-09-28）：印刷把当前习题块标题**作为页眉**重复印在每页页首**右侧**（p155
+    页眉 "Exercises for Chapter 7" x0=721 y=59，正文左边界 x0≈71、正文起始 y≈155）。
+    旧版取本页**首个**匹配块 → 锚到页眉 y=59，于是同页页眉之下的正文条目
+    （该页真身是 Theorem 7.10）全部落在「习题区」内被 ITEM 剔除。改为按
+    `scan_skeleton.is_running_head` 跳过页眉带候选，落点取区内的真块头；本页只有
+    页眉复本时继续向后页找（返回 (p, 0.0) 会吞掉整页正文）。
     """
     head = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
     pat = str(ch)
@@ -996,14 +1104,19 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
         m = head.search(txt)
         if not (m and m.group(1) == pat):
             continue
+        left, span = scan_skeleton.page_x_extent(blocks)
+        has_dict = False
         for b in blocks:
             if not isinstance(b, dict):
                 continue
+            has_dict = True
             if head.search(blk_text(b) or ''):
-                poly = b.get('poly') or []
-                y = float(poly[1]) if len(poly) >= 8 else 0.0
-                return (p, y)
-        return (p, 0.0)
+                x, y = scan_skeleton.block_xy(b.get('poly') or [])
+                if scan_skeleton.is_running_head(x, y, left, span):
+                    continue  # 页眉复本不作区界
+                return (p, y if y is not None else 0.0)
+        if not has_dict:
+            return (p, 0.0)
     return None
 
 
@@ -1011,7 +1124,7 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
 # 抽取器分派：build_structure 是抽取器的唯一调用方（data_provider 现已只读 JSON）。
 # 生成分章契约后，verify 与 write-source 均消费该契约（BookStructure.load 聚合），不再重跑抽取器。
 # ---------------------------------------------------------------------------
-def _single_en_items(ext, start, end, book, sec_windows=None):
+def _single_en_items(ext, start, end, book, sec_windows=None, manual=None):
     """EN 单级编号书（ORDINAL_SINGLE + language=="en"，如 Evans PDE 2ed /
     Silverman《Friendly Introduction to Number Theory》：`Theorem 1` 单一数字）。
 
@@ -1196,7 +1309,8 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         if getattr(book, "language", "cn") == "cn":
             return extract_items_cn_single(_dir, start, end, groups=book.ordinal,
                                             manual_overrides=manual)
-        return _single_en_items(_dir, start, end, book, sec_windows=sec_windows)
+        return _single_en_items(_dir, start, end, book, sec_windows=sec_windows,
+                                manual=manual)
     if primary == ORDINAL_TWO_LEVEL and getattr(book, "language", None) == "en":
         # EN two-level books (former ORDINAL_EN=4, now folded into type 2): label-first /
         # number-first / chapter-wide single-digit forms, all extracted by extract_items_en.
@@ -1227,7 +1341,13 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         if manual:
             existing = {it["key"]: idx for idx, it in enumerate(kept)}
             for mo in manual:
-                k = f"{_canon_label(mo.get('label', ''))}{mo.get('key', '')}"
+                # 字母序标条目（Shafarevich I §4.2 "Theorem A/B/C/D"，p201 印
+                # "Theorems are labelled with letters (Theorem A, etc.)"）：规范键
+                # 必须是 `定理 A`（标签 + 空格 + 字母）——ORDINAL_HUM 的 md 侧正则
+                # `ENTRY_RE_HUM` 要求标签与字母之间有空白，省了空格就与 md 键永不相交。
+                _mok = str(mo.get("key", ""))
+                k = (f"{_canon_label(mo.get('label', ''))}"
+                     f"{' ' if _mok[:1].isalpha() else ''}{_mok}")
                 item = {"key": k, "page": mo.get("page"),
                         "label": mo.get("label", ""), "text": mo.get("text", ""),
                         "agent_recovered": True}
@@ -1623,11 +1743,19 @@ def _item_counter_label(child):
     （Strogatz 3e 的 `6.8-1`）时跨计数器信息只住在节点 `type` 上——旧实现一律取键
     前缀，两个裸号被当成「同一计数器」而走数字序，把印面上后出现的
     Theorem 6.8.1 排到了 Example 6.8.4 之前（2026-09-27 实测 ch6 §6.8 / ch7 §7.2）。
+
+    🔴 键前缀必须**真的是标签词**才算数：字母章位附录的键 `Proposition A.11` 在
+    契约里存成裸键 `A.11`，其「非数字前缀」= `A.` 是**字母章位**而非计数器名，
+    于是命题与推论两条独立计数器被当成同一条走数字序 → `Corollary A.1` 顶到
+    `Proposition A.11`（印面在其前，p307 实测）之前，ANCHOR-SANITY 拒绝落盘。
+    判据：前缀能落进类型词表（`_LABEL_TO_TYPE_LC`）才用前缀，否则一律回退 `type`
+    （`proposition` / `corollary` 经 `_canon_label` 正名后即为组下标 key）。
     """
     k = str(child.get("key") or "")
-    lab = re.match(r"^([^\d]*)", k).group(1)
-    if lab:
-        return lab
+    raw = re.match(r"^([^\d]*)", k).group(1)
+    probe = raw.strip(r" .\-·—")
+    if probe and probe.lower() in _LABEL_TO_TYPE_LC:
+        return raw
     return str(child.get("type") or "")
 
 
@@ -1667,6 +1795,14 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # Multi-volume: resolve correct page file directory for this chapter
     page_dir = _resolve_page_dir(ext, ch)
 
+    # 目录真值小节白名单（`_section_whitelist.json`）：既在下方剔除幻影节，
+    # 也作为 scan() 的「闩锁内真节头放行」判据（习题号与节号同形的书，见
+    # scan_skeleton 内注释）。文件缺失 → None/空，两侧均零回归。
+    _wl = _load_section_whitelist(ext) or {}
+    _ck = _norm_sec_key(ch)
+    _wl_ch = _wl.get(_ck[0] if _ck else str(ch))
+    _wl_scan = ({".".join(t) for t in _wl_ch} if _wl_ch else None)
+
     # 1) skeleton 原始行
     if getattr(book, 'gm_bare_numbered', False):
         # Gelfand-Manin：节头 "§N. Title" 被 OCR 打成 $/S/8 或丢失，且与节内
@@ -1685,7 +1821,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                   sections_global=getattr(book, 'sections_global', False),
                                   local_num_sec=getattr(book, 'numeric_local_sections', False),
                                   chapter_local_numbering=getattr(
-                                      book, 'chapter_local_numbering', False))
+                                      book, 'chapter_local_numbering', False),
+                                  language=getattr(book, 'language', 'cn'),
+                                  section_whitelist=_wl_scan)
     # 🔴 章边界尾带（判定与裁剪见 `chapter_boundary`，Etingof 表示论实测
     # 2026-09-27）：上一章的收尾常印在本章起始页的**章标题之上**，章图只到「页」
     # 的粒度 ⇒ 整页归本章时，上一章**整节 + 其编号项**从全书消失（实测丢 §2.10
@@ -1722,7 +1860,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                     sections_global=getattr(book, 'sections_global', False),
                     local_num_sec=getattr(book, 'numeric_local_sections', False),
                     chapter_local_numbering=getattr(
-                        book, 'chapter_local_numbering', False))
+                        book, 'chapter_local_numbering', False),
+                    language=getattr(book, 'language', 'cn'),
+                    section_whitelist=_wl_scan)
             rows = list(rows) + list(_tr)
     ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
     # 同键习题行**首现保留**（scan 按页升序 → 首现即真习题条头）。全书通用守卫，
@@ -1813,35 +1953,31 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         if _is_appendix:
             # 附录章的节只可能是字母头（升格 SUB 行）；数字 "§N" 行是公式/
             # 页眉碎片（OCR "$5．…"），不得混入契约。
-            sec_rows = [r for r in sec_rows
-                        if not str(r[2]).isdigit()]
+            # 🔴 例外：`chapter_local_numbering` 书（Shafarevich《Basic
+            # Algebraic Geometry 1》Algebraic Appendix 实测）附录节就印**裸
+            # 数字** `N Title`（§1 Linear and Bilinear Algebra … §9 Length of a
+            # Module，每章重起），由 scan 的局部编号通道发射——本过滤会把 9 节
+            # 全灭（sections=0）。该模式下数字键是合法节，保留；其余书零影响。
+            _cln_app = getattr(book, 'chapter_local_numbering', False)
+            if not _cln_app:
+                sec_rows = [r for r in sec_rows
+                            if not str(r[2]).isdigit()]
     # 附录字母节升格行并入 SEC 去重管线（键=字母，与既有节同型参与后续流程）
     if _appendix_letter_secs:
         sec_rows = list(sec_rows) + _appendix_letter_secs
 
-    # 2) skeleton SEC 去重（优先非空标题，保留最佳标题）。
+    # 2) skeleton SEC 去重（优先非空标题，保留最佳标题；同前缀则取完整页眉形）。
     #    行统一 5 元组 (p,'SEC',num,title,y)：y 为节头块顶（scan 发射），md 派生
     #    /附录字母升格行 y=None。
     sec_rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None)
                 for r in sec_rows]
-    # 🔴 同号择优（Hilton & Stammbach ch2 实测）：行内公式残行 "8 F0=8 FG8 FεG'"
-    # 可先于真节头命中 SEC_2，把 §8 的标题/起始页污染成公式碎片。含数学运算符
-    # 的标题视为碎片，让位给纯词标题；同级取最早页（真节头先于其页眉复本）。
-    _SEC_MATH_OP = re.compile(r'[=<>≤≥≠±×÷→←↔⇒∫∑√∂∇∈∋⊂⊃∪∩]')
-
-    def _sec_title_mathy(t):
-        return bool(_SEC_MATH_OP.search(str(t or '')))
-
     sec_best = {}
     for row in sec_rows:
-        num, title = row[2], row[3]
+        num = row[2]
         if num not in sec_best:
             sec_best[num] = row
             continue
-        cur = sec_best[num]
-        cur_mathy, new_mathy = _sec_title_mathy(cur[3]), _sec_title_mathy(title)
-        if (cur_mathy and not new_mathy) or (cur[3] == "" and title != ""):
-            sec_best[num] = row
+        sec_best[num] = sec_row_prefer(sec_best[num], row)
     seen = set()
     dedup_sec = []
     for row in sec_rows:
@@ -2163,7 +2299,17 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 上面的正则会把**条目号原样派生成 §A.4 / §D.1 伪小节**，与真小节并存
     # （实测 appendixD 产出 `U1, D.1…D.5, U2, U3, D.6`）。Weibel 式附录用的是
     # **有编号** §A.N（section_types 不含 0），不受影响，零回归。
+    # 🔴 前置条件：skeleton **完全没检出**小节时才兜底派生。若 skeleton 已给出
+    # 真小节，字母键就只是**条目号**而非小节——Shafarevich《BASG 1》的 Algebraic
+    # Appendix 印作 §1–§9（chapter_local_numbering，单级），条目号却是全书连续的
+    # `Proposition A.N` / `Corollary A.N`；无条件派生会凭空造出 A.1…A.17 十七个
+    # 幽灵小节插进真小节之间，条目锚点（p307）排到其前序 description（p308）之后，
+    # ANCHOR-SANITY 直接拒绝落盘。此时条目由 `_place` 按页码就近归入真 §N。
+    # 判据对全 corpus 安全：已核对 Weibel / Katok / Leinster / Gelfand-Manin 附录
+    # 的契约小节**只有** A.N（skeleton 检不到），加此闸门不改其行为；跨 corpus 无
+    # 一本书同时含数字小节与字母派生小节（唯一 MIX 即本书的坏契约）。
     if (not getattr(book, "sections_unnumbered", False)
+            and not sec_pages
             and any(re.match(r'^[A-Za-z]', (it.get("key") or "")) for it in items)):
         for it in items:
             _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)',
@@ -2329,13 +2475,36 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             # 行为——视为页末，归入本页已开节的最后一节。
             pos = (pos[0], float("inf"))
         _place(node, sec_key, it["page"], pos=pos,
-               dedup_name=(str(it["key"])
+               dedup_name=(_cln_dedup_name(it)
                            if getattr(book, 'chapter_local_numbering', False)
                            else None))
 
+    _last_sec_page = max([int(v) for v in sec_pages.values()] or [0])
+    _last_sec_pos = None
+    if _last_sec_page:
+        # 最后一个节头在自身页上的真实 y：取自 skeleton SEC 行（已排除偶/奇页眉
+        # 复本 "N.M: Title" 与习题行），供同页「节末块头在节头之上」的甄别
+        # （见 _chapter_end_exercise_start 的 last_sec_pos 参数）。不能用
+        # _numbered_heading_y——它按正则取 min(ys)，会把页眉复本（Serre ch12
+        # p106 y100 `12.7: Proof of theorem 28`）当节头。
+        for _row in dedup_sec:
+            _p, _y = _row[0], _row[4]
+            if _p is None or _y is None or int(_p) != _last_sec_page:
+                continue
+            if _last_sec_pos is None or float(_y) > _last_sec_pos[1]:
+                _last_sec_pos = (int(_p), float(_y))
+        if _last_sec_pos is None:
+            # 边角回退：行页与 sec_pages 不一致（目录污染回扫）时，取全部 SEC 行
+            # 中 (页, y) 最大者——仍晚于所有真节头，甄别语义不变。
+            for _row in dedup_sec:
+                _p, _y = _row[0], _row[4]
+                if _p is None or _y is None:
+                    continue
+                if _last_sec_pos is None or (int(_p), float(_y)) > _last_sec_pos:
+                    _last_sec_pos = (int(_p), float(_y))
     _tail_ex_start = _chapter_end_exercise_start(
-        ext, ch, start, end,
-        max([int(v) for v in sec_pages.values()] or [0]), page_dir=page_dir)
+        ext, ch, start, end, _last_sec_page, page_dir=page_dir,
+        last_sec_pos=_last_sec_pos)
     for row in ex_rows:
         p, num, title = row[0], row[2], row[3]
         name = (title if title else num)

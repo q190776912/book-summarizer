@@ -202,6 +202,24 @@ def read_structure_items(ext_dir, ch, primary_type=None):
                 if not m:
                     m = re.search(r'\d+', raw)
                 num_raw = m.group(0) if m else ''
+                if not num_raw:
+                    # 🔴 纯字母序标条目（Shafarevich《Basic AG 1》I ch3 Chevalley
+                    # 定理 A–D，manual_overrides 登记后契约键即 `定理 A`）：raw 无任何
+                    # 数字，走下面的「首个数字串」分支会得到空号，四条定理塌成同一个
+                    # 裸标签 `定理`，与 md 侧键 `定理 A`…`定理 D` 完全不相交 →
+                    # TRULY MISSING + EXTRA 双向误报。此处按 ORDINAL_HUM 的 `§` 分支
+                    # 同构输出「规范标签 + 空格 + 大写字母」，与
+                    # `lib/key_parse.ENTRY_RE_TWO_LETTER_C` 的 md 侧键 1:1 对齐。
+                    _let_m = re.search(r'(?<![A-Za-z0-9])([A-Z])(?![A-Za-z0-9])', raw)
+                    if _let_m:
+                        _canon = f"{TYPE_TO_LABEL.get(n.type, 'uncat')} {_let_m.group(1).upper()}"
+                        items.append({
+                            'key': _canon,
+                            'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                            'page': n.page_start,
+                            'text': n.name,
+                        })
+                        continue
                 if '-' in num_raw:
                     # Three-level: emit bare dash form ('1.1-1'), no label.
                     _canon = _normalize_threelevel(num_raw)

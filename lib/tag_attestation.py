@@ -21,6 +21,8 @@ tag 全属此类：``22``（display 里两个 ε/2 的分母被 OCR 成独立数
 
 import re
 
+from lib.numbering import _FORMULA_SEP, formula_num_core
+
 __all__ = ["collect_contract_tags", "tag_attestation_problems",
            "unattested_tags", "strip_unattested", "dir_page_loader",
            "unharvested_anchor_tags", "unharvested_anchor_problems",
@@ -62,8 +64,31 @@ def collect_contract_tags(tree):
 
 
 _LABEL_TAIL = r"[A-Za-z]*[\*'’′]*"
-_PAREN_LABEL_RE = re.compile(r"[（(]\s*(\d+(?:[.．]\d+)*%s)\s*[)）]" % _LABEL_TAIL)
-_BARE_LABEL_RE = re.compile(r"\d+(?:[.．]\d+)*%s" % _LABEL_TAIL)
+# 🔴 序标主体取自 `lib.numbering.formula_num_core`（编号形态 SSOT），本模块不得
+# 自写 `\d+(\.\d+)*`。旧写法**只认数字开头**，于是**字母章位编号**（附录 `(A.5)`
+# 型，Shafarevich《Basic Algebraic Geometry 1》附录 5 的 A.1–A.15、Lee ISM 附录
+# B/C/D 实测）在页窗里**查无锚点** → 一整批**真实**印刷编号被判「unattested」并在
+# 收割处（`build_structure` → `strip_unattested`）剔光 → 契约不登记、单元侧写
+# `\tag{A.N}` 判编造、删掉判漏写，且完整性闸门 ① 的复算与磁盘契约互相缺块
+# （假 FAIL，实测本书 appendix5 13 缺 13 多）。
+# `letter=True` 变体**只进括号形态**：裸排 `A.5` 与 `Fig. A.5` / 小节标题 `C.1`
+# 无形态区别（与 `formula_tag_re` 的取舍同源，不得各写一份）。
+# 🔴 锚点索引**不认逗号**（SSOT 的 `_FORMULA_SEP` 含 `,`，此处收窄为 `[.\-·]`）：
+# `(0, 1)` / `(83, 3)` 在页面上几乎总是坐标 / 列表而非编号，认了就把这类毒 tag
+# 放回来（methods-of-homological-algebra ch1/ch3 的 `0,1` / `0,0,1` / `83,3` 实测，
+# 跨语料 607 份契约标定：收窄后旧判毒→新放行只剩字母章位一类，反向 0 处）。
+_NO_COMMA_SEP = r"[.\-·]"
+
+
+def _index_core(letter=False):
+    return formula_num_core(None, letter=letter).replace(_FORMULA_SEP, _NO_COMMA_SEP)
+
+
+_ORD_DIGIT = _index_core()
+_ORD_LETTER = _index_core(letter=True)
+_PAREN_LABEL_RE = re.compile(
+    r"[（(]\s*((?:%s|%s)%s)\s*[)）]" % (_ORD_DIGIT, _ORD_LETTER, _LABEL_TAIL))
+_BARE_LABEL_RE = re.compile(r"(?:%s)%s" % (_ORD_DIGIT, _LABEL_TAIL))
 _LATEX_NOISE_RE = re.compile(r"\\[a-zA-Z]+\s*")
 
 

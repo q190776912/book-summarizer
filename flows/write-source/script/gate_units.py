@@ -132,7 +132,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 import attach_content as _ac
 from data.book_structure.book_structure import (
     chapter_json_path, chapter_label, chapter_tag_map, chapter_image_map,
-    chapter_images, list_chapter_keys, prime_chapter_kinds, unit_dir_name,
+    chapter_image_counts, chapter_images, list_chapter_keys, prime_chapter_kinds, unit_dir_name,
     chapter_ordinals, unit_node_entries)
 import split_draft_units as _split
 import check_unit_quality as _quality
@@ -143,6 +143,7 @@ from lib.tag_attestation import (tag_attestation_problems,
                                  unharvested_anchor_problems)
 from lib.crossref_attestation import dropped_crossref_problems
 from lib.section_titles import title_problems as _section_title_problems
+from lib.unit_markers import marker_manifest_mismatch
 from lib.numbering import formula_tag_noise
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
@@ -650,6 +651,15 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             observed_imgs.update(
                 _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
             continue
+        # 🔴 首行标记 ↔ **本侧** manifest 记录逐字对账（判据与 parity 第 12 项同源，
+        # 见 lib/unit_markers）。此前本门只判「标记在不在 / 是否 DRAFT / 有无泄漏」，
+        # 从不比对本侧记录，于是写源期人工把 `name=` 截断的单元（Shafarevich BAG1
+        # ch1/0073）能一路绿到步骤 7 才由 parity 抓住——那时该章已 merge/verify，
+        # 返工面扩大。落在本步 = 当步即拦；不 continue，其余质量校验照常跑完。
+        _mm = marker_manifest_mismatch(up, u, "源" if units_sub == "units" else "译")
+        if _mm:
+            problems.append("单元 %s（%s %s）%s（可用 tools/sync_translate_markers.py 复位首行）" % (
+                u["file"], u["type"], u["key"], _mm))
         # DONE：item / desc / exercise 单元必须「写对」——质量校验通过（公式闭合 /
         # 无裸数学 / 结构标签 / 无明显 OCR 残留 / 无内容审阅类残留）。
         # 🔴 判断标准是"写对"而非"重写"：不看内容指纹是否变化，而是看单元是否
@@ -694,7 +704,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
                     # 🔴 P 层散文照抄闸**只对源语言单元**跑：译文是中文，与原书
                     # 8-gram 恒不重合，而「墙式硬顶」按字符数计，长中文段会被误伤。
                     ext_dir=(ext if units_sub == "units" else None),
-                    ch=(str(ch_key) if units_sub == "units" else None))
+                    ch=(str(ch_key) if units_sub == "units" else None),
+                    # 🔴 源单元语言闸（#24）：manifest 记的书籍语言非中文时，源单元
+                    # 正文出现中文即打回（Shafarevich I 实测 119 个单元被写成中文）。
+                    source_language=(manifest.get("language")
+                                     if units_sub == "units" else None))
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]
@@ -734,6 +748,19 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             problems.append(
                 "单元嵌入了契约之外的图片 %s（图片文件名须来自契约 image 块；"
                 "书源确有而契约缺图先回填契约再引用）" % "、".join(stray_imgs))
+    # 🔴 章级闸：契约**并图**缺陷（同一文件被 ≥2 个 image 块引用）。覆盖闸按集合
+    # 比较，看不见「两块同 file」；而那是检测/回填把两张相邻图框成一个区域后
+    # 复制 bbox+file 给两个标号的唯一形状（Shafarevich ch2：Figure 8/9 同指
+    # ch02_fig9.png ⇒ ch02_fig8.png 不存在，成品里同一张叠图出现两次、Fig 8 丢失）。
+    # 语料标定：624 份分章契约命中 0 处（本书修复前的 ch2 是唯一已知实例）。
+    if contract is not None:
+        rep = sorted((f, c) for f, c in chapter_image_counts(contract).items() if c > 1)
+        if rep:
+            problems.append(
+                "契约图片重复引用：%s——同一文件被多个 image 块引用 = 两张图被框成"
+                "一个区域（并图）。须按印面分别裁剪出各自的 png，并把契约 image 块、"
+                "figure_index、单元 `<img src>` 逐块归位" % "、".join(
+                    "%s（%d 块）" % (f, c) for f, c in rep))
     # 多余文件检查（manifest 之外的 .md 属误放）
     for fn in sorted(os.listdir(out_dir)):
         if fn == "manifest.json" or not fn.endswith(".md"):

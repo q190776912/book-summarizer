@@ -87,6 +87,8 @@ from page_json import PageJson
 import chapter_boundary
 from data.book_structure.book_structure import (chapter_json_path,
                                                 list_chapter_keys,
+                                                is_numbered_chapter,
+                                                prime_chapter_kinds,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
 from lib.numbering import (ordinal_depth, resolve_ordinal_code,
@@ -388,10 +390,17 @@ def formula_cfg(ext, ch=None):
     矩阵里的裸数字（``0`` / ``153`` / ``166``）当成公式编号挂上 tag，污染
     单元级 tag 对账真值。
 
-    🔴 **分章路由（2026-09-14，Lee ISM 附录 letter-led 实测）**：`ch` 为字母
-    章键（``"A"``/``"B"``…，非纯数字）时读 **`appendix` 段**的 `formula`（缺失
-    回退顶层/`ch` 段——主配置 digit 形态对字母编号抽不到，零污染）。附录段的
+    🔴 **分章路由（2026-09-14，Lee ISM 附录 letter-led 实测；2026-09-28 修正）**：
+    该章是**附录/补篇**时读 **`appendix` 段**的 `formula`（缺失回退顶层/`ch`
+    段——主配置 digit 形态对字母编号抽不到，零污染）。附录段的
     `formula.letter_ch: true` 置 ``letter=True``（`(A.3)` 字母章位形态）。
+    判据是 chapter_map 的 **kind**（`prime_chapter_kinds` 灌注后由
+    `is_numbered_chapter` 给出），**不是「键是不是数字」**：附录完全可以有数字键
+    （Shafarevich BA1 `5 Algebraic Appendix` 实测——章键 5、kind 2，旧判据把它
+    当正文章 → 永远读不到 `appendix` 段 → 附录 14 个印刷编号 (A.1)…(A.15) 一个
+    都没挂上 tag，成书里所有「见 (A.3)」指向无号公式）。未灌注 / chapter_map 缺失
+    时静默退回旧的形态判据（零回归）。
+
 
     `bare` 读 `formula.bare_number`（**书已配置 `formula` 时**默认 True；显式
     false 的书——如 Lee——裸排 `1-11` Problem 标签不可当编号，挂 tag 侧与 Q 层
@@ -405,6 +414,8 @@ def formula_cfg(ext, ch=None):
     ck = _FORMULA_CFG_CACHE
     cache_key = (ext, None if ch is None else str(ch))
     if cache_key not in ck:
+        if ch is not None:
+            prime_chapter_kinds(ext)   # 幂等；kind 真值来自 chapter_map.json
         ncomp = scope = None
         letter, bare = False, False
         try:
@@ -412,7 +423,7 @@ def formula_cfg(ext, ch=None):
                       encoding="utf-8-sig") as f:
                 data = json.load(f) or {}
             sub = ("appendix"
-                   if (ch is not None and not str(ch).isdigit()
+                   if (ch is not None and not is_numbered_chapter(ch)
                        and isinstance(data.get("appendix"), dict))
                    else None)
             fc = data.get("formula")

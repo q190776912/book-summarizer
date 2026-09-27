@@ -179,6 +179,7 @@ ORDINAL_NAME = {
 from lib.numbering import (ORDINAL_DEPTH, ordinal_depth,  # noqa: F401  (re-exported)
                           DEPRECATED_ORDINAL_REMAP, resolve_ordinal_code,
                           is_fig_group)
+from data.chapter_map.chapter_map import normalize_kind  # noqa: E402
 from data.book_structure.book_structure import (  # noqa: E402
     chapter_label, KIND_CHAPTER, KIND_APPENDIX, KIND_SUPPLEMENT, _resolve_kind,
     prime_chapter_kinds)
@@ -522,6 +523,18 @@ class ChapterInfo:
     name_cn: str = ''
     # 🔴 显式 kind（KIND_CHAPTER/APPENDIX/SUPPLEMENT）。
     # 旧书 chapter_map 无此字段时由 _load_chapter_map 按字母/命名字形回退。
+    #
+    # 🔴 kind 是**语义**、num 是**印刷序标**，二者不可互推（Shafarevich《Basic
+    # Algebraic Geometry 1》实测）：该书的附录印成正文章号「5 Algebraic
+    # Appendix」——chapter_map 无 `kind` 字段时，旧实现硬编码 `kind=1`，于是
+    # `config_for_chapter(5)` 把**正文**配置（两段号 type 2）喂给附录章，而
+    # `appendix` 子配置（字母章位 type 14 = `Proposition A.1`）永不生效 →
+    # 附录 items=0，20 条 Proposition/Corollary 整批从契约消失，且契约文件名、
+    # `chapter_label` 侧车命名（走 `prime_chapter_kinds` 的**章名**判据）仍
+    # 正确叫 appendix5 —— 两条 kind 来源相互矛盾、下游毫无察觉。
+    # 现统一走 chapter_map 的 kind SSOT `normalize_kind`（显式 kind > 章名
+    # Appendix/附录·Supplement/补篇 > 形态回退），与 `_canon_record` /
+    # `prime_chapter_kinds` 同源。显式写了 `kind` 的书行为零变化。
     kind: int = 1
 
     @classmethod
@@ -532,14 +545,17 @@ class ChapterInfo:
         except (TypeError, ValueError):
             # 字母章号（附录 A/B… / 补篇 S）：保留字符串，与 build_structure 的既有兼容一致
             ch = str(raw_ch).strip() or 0
+        name = str(d.get('name', '') or '')
+        name_en = str(d.get('name_en', '') or '')
+        name_cn = str(d.get('name_cn', '') or '')
         return cls(
             ch=ch,
             start=int(d.get('start', d.get('start_page', d.get('pdf_start', 0)) or 0)),
             end=int(d.get('end', d.get('end_page', d.get('pdf_end', 0)) or 0)),
-            name=str(d.get('name', '') or ''),
-            name_en=str(d.get('name_en', '') or ''),
-            name_cn=str(d.get('name_cn', '') or ''),
-            kind=int(d.get('kind', 1) or 1),
+            name=name,
+            name_en=name_en,
+            name_cn=name_cn,
+            kind=normalize_kind(d.get('kind'), ch, name, name_en, name_cn),
         )
 
 
@@ -636,6 +652,12 @@ class BookConfig:
     #     通用两段检测器（`ch=None`：两分量都章内，`= ch` 守卫会拒掉真 `4.2`）；
     #   * 放行「标题内含 `，+汉字`」的真中文节题（通用检测器的 CJK 粘连句读守卫
     #     把 `4.2向量的外积的几何意义，平面的定向` 当散文碎片，整节漏检）；
+    #   * 🔴 英文书（language=="en"，Shafarevich《Basic Algebraic Geometry 1》
+    #     2026-09-28 实测）另走 EN 通道 `_cln_en_title_ok`：节头印裸 `N Title`
+    #     （每章从 1 重起，且常位于新页页眉带——y 下限会整节漏掉），判据 =
+    #     Title-Case 名词短语（虚词白名单）+ 禁数字/句点/运算符 + 标题≠章名 +
+    #     「首现=1、此后 cur+1」序列闩锁；中文 GLUE 通道的 ≥2 汉字守卫对英文
+    #     书恒 False → 不开本通道时全书 sections=0（本增量的立项根因）；
     #   * build_structure 把习题 `A.B` 挂到节 `B`（习题号=章.节，页就近会把
     #     习题6.2 挂到页 230 的小节3.1 而非页 222 的节2）。
     # Default False — every other book is completely unaffected.

@@ -146,6 +146,7 @@ EXER_2 = re.compile(r'^(\d{1,2})\.([A-Z])\.\s*(.{0,90})')
 
 # Chinese-scheme section headings — patterns shared from lib/regexlib.py
 from lib.regexlib import SEC_CN, SECBARE_CN, SECGLUE_CN
+from lib.util import blk_text
 
 # Global single-number section heads (Arnold《数学方法》-style "§12．变分法"):
 # sections carry ONE number and are numbered GLOBALLY across the book
@@ -224,7 +225,184 @@ SEC_GLOBAL_GLUE = re.compile(
 SEC_GLOBAL_PLAIN = re.compile(
     r'^(\d{1,2})[．.、。:]\s*([A-Z][^\n]{2,61})$')
 _GLUE_MIN_Y = 170.0
+
+# 🔴 页眉带（running-head band）判据（Apostol《Introduction to Analytic Number
+# Theory》实测 2026-09-28）：印刷把当前习题块标题**作为页眉**重复印在每页页首
+# **右侧**（p155 页眉 "Exercises for Chapter 7" x0=721 y=59，而正文块左边界
+# x0≈71、正文起始 y≈155）。习题区闩锁一旦被页眉复本在页首抢先激活，同页其后的
+# 正文条目（该页真身是 Theorem 7.10）就被 ITEM 抑制整条吞掉——抽取器漏条目、
+# 闸门只能靠源侧回填兜底。判据两条都要：① 块顶落在页首带内（y < 100）；
+# ② 块首 x 明显右移（> 本页左边界 + 1/4 页宽）——真节/习题块标题恒在左边界，
+# 只有页眉跑马行右对齐。缺 poly 时返回 False（fail-open，宁闩不漏）。
+_HEAD_BAND_Y = 100.0
 _GLUE_MAX_WIDTH = 1000.0
+
+
+def page_x_extent(blocks):
+    """本页文本块的 (左边界, 页宽跨度)；无 poly 时返回 (None, None)。"""
+    polys = [b.get('poly') for b in blocks
+             if isinstance(b.get('poly'), (list, tuple)) and len(b.get('poly')) >= 8]
+    if not polys:
+        return None, None
+    left = min(float(q[0]) for q in polys)
+    right = max(float(q[2]) for q in polys)
+    return left, (right - left)
+
+
+def is_running_head(x, y, left, span):
+    """块是否页眉带复本（页首 + 明显右移），见 _HEAD_BAND_Y 注释。
+
+    scan_skeleton 的习题区闩锁与 build_structure 的习题区起点（`_exercise_region_start`）
+    共用本判据：两处都拿「EXERCISES FOR CHAPTER N」标题当信号，页眉每页重印一遍，
+    任一处在页首抢先采纳，同页其后的正文条目就被吞。缺几何信息返回 False（fail-open，
+    宁闩不漏）。
+    """
+    return (x is not None and y is not None and left is not None
+            and span is not None and span > 0
+            and y < _HEAD_BAND_Y and x > left + 0.25 * span)
+
+
+def block_xy(poly):
+    """块首 (x, y)；poly 缺失/畸形时 (None, None)。"""
+    try:
+        if len(poly or []) < 8:
+            return None, None
+        return float(poly[0]), float(poly[1])
+    except Exception:
+        return None, None
+
+
+# ---------------------------------------------------------------------------
+# 节头标题**跨行印刷**的悬挂续行（Apostol《Introduction to Analytic Number
+# Theory》实测 2026-09-28：§3.2 印成两块——
+#   块 i   [66, 899, 719]  '3.2 The big oh notation. Asymptotic equality'
+#   块 i+1 [126, 936, 302] 'of functions'
+#   块 i+2 [68, 992, 597]  'Definition If g(x) > 0 …'（正文栏归位）
+# 同型还有 §4.8/§7.2/§8.5/§8.10/§10.2/§13.3。扫描只取节头块首行 ⇒ 两个后果：
+#   ① 契约节名丢掉标题尾巴，拼进最终 md 的 `## §3.2 …` 少半截（保真缺陷）；
+#   ② 奇偶页页眉印的是**完整**标题，于是 ②c 正文守恒闸把页眉复本判成
+#      「印面收集到、契约里没有」的丢失正文块（假丢失，实为①的下游）。
+# 判据全部是**几何 + 形态**，不点名书、不查词表；续行须同时满足：
+#   · 悬挂缩进——左边界比节头行靠右 ≥ _SEC_CONT_MIN_INDENT（实测 56-78pt）；
+#   · 相邻——行距在 _SEC_CONT_MIN_GAP.._SEC_CONT_MAX_GAP（实测 37-46pt，
+#     新段落的段前空行使间距跳到 ≥80）；
+#   · 短且窄——≤ _SEC_CONT_MAX_LEN 字符，且**比节头行本身窄**（正文首行恒为
+#     整栏宽，这一条就把它挡掉；中文书的首行缩进段同理被此条拦截）；
+#   · 非新头——自身不是节头 / 条目头 / 习题头形态，不以句读收尾；
+#   · **三明治归位**——续行之后的块左边界回到节头行的左边界（容差
+#     _SEC_CONT_RESUME_TOL）且不低于续行宽度，即「两行悬挂标题 + 正文重新起栏」。
+# 判据测试：flows/write-source/structure/script/tests/test_heading_continuation.py
+# （正例 7 条取本书实测几何，反例覆盖正文首行 / 条目头 / 段前空行 / 宽续行）。
+# ---------------------------------------------------------------------------
+_SEC_CONT_MAX_LEN = 60
+_SEC_CONT_MIN_INDENT = 30.0
+_SEC_CONT_MIN_GAP = 8.0
+_SEC_CONT_MAX_GAP = 72.0
+_SEC_CONT_RESUME_TOL = 20.0
+_SEC_CONT_MERGED_MAX = 100
+_SEC_CONT_TAIL_PUNCT = ".,;:，；：、"
+# 🔴 **归位锚点须是可信正文块**（Apostol 2026-09-28 §2.7 实测）：印刷节头
+#   '2.7 Dirichlet inverses and the Mobius' / 'inversion formula' 之后紧接的是
+#   OCR 碎片 '2.8 If f'（score 0.18，宽 94pt），它左边界 253 既不对齐节头左边界
+#   140 也不构成「回栏正文」，旧逻辑把它当唯一锚点 → 三明治判据不成立 → 标题尾巴
+#   丢失。碎片不可信却占据锚点位，是这一类漏判的共性根因。
+#   判据：锚点候选顺延至多 _SEC_CONT_RESUME_PROBE 块，**跳过**低置信（score <
+#   _SEC_CONT_RESUME_MIN_SCORE）或过窄（宽 < 节头宽 × _SEC_CONT_RESUME_MIN_FRAC）
+#   的块；第一个可信块仍不满足归位则照旧不补（保守，宁漏勿误）。
+_SEC_CONT_RESUME_MIN_SCORE = 0.60
+_SEC_CONT_RESUME_MIN_FRAC = 0.45
+_SEC_CONT_RESUME_PROBE = 3
+
+
+def _resume_anchor_trustworthy(blk, head_w):
+    """归位锚点候选是否可信（非低置信 / 非过窄碎片）。"""
+    try:
+        score = float(blk.get("score"))
+    except (TypeError, ValueError):
+        score = 1.0
+    if score < _SEC_CONT_RESUME_MIN_SCORE:
+        return False
+    r = block_rect(blk.get("poly") or [])
+    if not r:
+        return False
+    if head_w and (r[2] - r[0]) < head_w * _SEC_CONT_RESUME_MIN_FRAC:
+        return False
+    return True
+
+
+def block_rect(poly):
+    """块的 (x0, y0, x1)；poly 缺失/畸形时 None。"""
+    try:
+        if len(poly or []) < 4:
+            return None
+        return float(poly[0]), float(poly[1]), float(poly[2])
+    except Exception:
+        return None
+
+
+def heading_continuation(blocks, bi, title):
+    """节头块 `blocks[bi]` 的印刷标题跨行续行文本；无续行时返回 None。
+
+    见上方 `_SEC_CONT_*` 注释的判据。只做**只读几何/形态判定**，不改任何块。
+    """
+    if not title or blocks is None:
+        return None
+    if bi + 2 >= len(blocks):
+        return None
+    cur, nxt = blocks[bi], blocks[bi + 1]
+    if not all(isinstance(b, dict) for b in (cur, nxt)):
+        return None
+    r0 = block_rect(cur.get("poly") or [])
+    if not r0:
+        return None
+    head_w = r0[2] - r0[0]
+    res = None
+    for _j in range(bi + 2, min(bi + 2 + _SEC_CONT_RESUME_PROBE, len(blocks))):
+        cand = blocks[_j]
+        if not isinstance(cand, dict):
+            break
+        if not _resume_anchor_trustworthy(cand, head_w):
+            continue
+        res = cand
+        break
+    if res is None:
+        return None
+    cont = blk_text(nxt).strip()
+    if not cont or "\n" in cont or len(cont) > _SEC_CONT_MAX_LEN:
+        return None
+    if cont[-1] in _SEC_CONT_TAIL_PUNCT:
+        return None
+    if not re.search(r"[A-Za-z\u4e00-\u9fff]", cont):
+        return None
+    # 续行不得自己是条头（'Theorem 7.1 There are…' / 裸号习题 '4. Let …'）
+    if re.match(r"^[0-9]", cont):
+        return None
+    if re.match(r"^[A-Za-z][A-Za-z'.]*[ \t]+[0-9]", cont):
+        return None
+    if _section_header_info(cont, depths=None) is not None:
+        return None
+    if len(title) + 1 + len(cont) > _SEC_CONT_MERGED_MAX:
+        return None
+    r0, r1, r2 = (block_rect(cur.get("poly") or []),
+                  block_rect(nxt.get("poly") or []),
+                  block_rect(res.get("poly") or []))
+    if not (r0 and r1 and r2):
+        return None
+    cx0, cy0, cx1 = r0
+    nx0, ny0, nx1 = r1
+    rx0, ry0, rx1 = r2
+    if nx0 < cx0 + _SEC_CONT_MIN_INDENT:
+        return None
+    gap = ny0 - cy0
+    if not (_SEC_CONT_MIN_GAP <= gap <= _SEC_CONT_MAX_GAP):
+        return None
+    if (nx1 - nx0) >= (cx1 - cx0):
+        return None
+    if abs(rx0 - cx0) > _SEC_CONT_RESUME_TOL:
+        return None
+    if rx1 < nx1 or ry0 <= ny0:
+        return None
+    return cont
 
 
 def _glue_title_ok(title):
@@ -235,6 +413,55 @@ def _glue_title_ok(title):
     if len(re.findall(r'[一-鿿]', t)) < 2:
         return False
     if _SUB_MATH_OP_RE.search(t):
+        return False
+    return True
+
+
+# 英文书「章内局部编号」单分量节头（Shafarevich《Basic Algebraic Geometry 1》
+# 体例，2026-09-28 实测）：每章节头印裸 `N Title`（"1 Definition and Basic
+# Properties"@p249，N 每章从 1 重起），小节印局部 `N.M Title`（"1.1 The Class
+# Group"）。与 GLUE 正则的**空格兼容**（`(\d)[.]?\s*` + 大写起题），但丘维声
+# 通道的 _glue_title_ok 要求 ≥2 汉字 → 英文书整章 sections=0（本分支的立项根
+# 因）。误报由下列判据拦（页眉带 y≤98 复本**不能**压制——真节头就印在新页
+# 页眉位）：
+#   * Title-Case 名词短语：首词大写，其余词大写或虚词白名单——散文/习题行
+#     （"9 If D C C1 x C2 is a divisor, prove…"、"3 Suppose that f : …"）的
+#     功能词（if/that/prove）不在白名单 → 拒；
+#   * 禁句点/数字混排（"1.7 and命题"、"2.1的第4题"型粘连）、禁数学运算符、
+#     禁尾句读、禁条目标题（"3 Theorem 12"）、长度 ≤60；
+#   * 标题归一 == 章名 → 页眉/书名页复本（"4 Intersection Numbers"@页眉）。
+# 终极防线仍是 scan() 里的「首现必须为 1 + 此后 N==当前节+1」序列闩锁。
+_CLN_EN_MAX_LEN = 60
+
+
+def _cln_en_title_ok(title, ch_title_norm=''):
+    t = (title or '').strip()
+    if not t or len(t) > _CLN_EN_MAX_LEN:
+        return False
+    if not re.match(r"^[A-Z][A-Za-z]", t):
+        return False
+    if t[-1] in '.,;:!?':
+        return False
+    if re.search(r'[.]|\d', t):
+        return False
+    if _SUB_MATH_OP_RE.search(t):
+        return False
+    if _SEC_TITLE_LABEL_NUM_RE.match(t):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]*", t)
+    if not words:
+        return False
+    if len(words) == 1:
+        # 单词真节题（Shafarevich ch4 §4 "Singularities"）合法；散文粘连行
+        # 恒为多词，由下方 Title-Case 判据拒。
+        return _norm_title_txt(t) != ch_title_norm
+    for i, w in enumerate(words):
+        if w[0].isupper():
+            continue
+        if i > 0 and w.lower() in _SEC_TITLE_FUNC_WORDS:
+            continue
+        return False
+    if ch_title_norm and _norm_title_txt(t) == ch_title_norm:
         return False
     return True
 # Bare-LETTER sub-block heads (Arnold《数学方法》: inside a §N the book prints
@@ -385,6 +612,11 @@ def _exercise_headings_re(headings):
 # 前瞻零宽：题号后不允许数字/点（防 "1.12" 误切成 1.1、防吃进三级号 "1.1.5"），
 # 大写/小写/空白/行尾均放行（粘连与带空格两种形态统一覆盖）。
 STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?![0-9.])')
+# 章末裸单号习题行："4. Let S be any infinite subset of A(h, k)…"（Apostol 体例，
+# 见下方 `bare_exer_idx` 分支注释）。点号或右括号后**必须**是空白 + 大写字母或
+# 小题括号起头（"3. (a) Find all positive integers…" 实测），因此 C.S / C.S-N 体例
+# 的题号（点后紧跟数字）天然不匹配，公式残行 "1 = A(k) +"、"(20)" 也一律不匹配。
+STICKY_EXER_BARE = re.compile(r'^(\d{1,2})[.)][ \t]+(?=[A-Z(])')
 # (?![0-9]) tail (was \b): OCR/print glues the title onto the number
 # ('2.2.10Let A', '2.3.9State the dual') - \b fails digit->letter, losing
 # whole exercises (Leinster 2014 measured). Inside the exercise-region
@@ -525,7 +757,8 @@ def _expected_next_sec(last_num, ch):
 
 
 def _section_header_info(ln, ch=None, depths=None, max_depth=6,
-                         allow_cjk_comma=False, successor_num=None):
+                         allow_cjk_comma=False, successor_num=None,
+                         section_whitelist=None):
     """Return ``(num_str, depth, title)`` for a genuine section header, else
     None.
 
@@ -540,6 +773,13 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
     `successor_num` 为「本章上一个节号 +1」（`_expected_next_sec`）：命中的
     候选行获得**序位豁免**，绕过两条散文形态守卫（成句散文体例的书，见下方
     注释）。不传即无豁免，行为与历史一致。
+    `section_whitelist` 为本章目录真值小节号集合（agent 依 TOC 写出的
+    `_section_whitelist.json`，见 scan() 的 `section_whitelist` 参数）：非空且
+    命中号在册时，**序位豁免**升级为「序位 + 白名单」双确认豁免（`_waive`），
+    追加绕过三条历史无条件守卫（句读尾、Proof 冠头、小写首词）——Serre《Linear
+    Representations of Finite Groups》实测 2026-09-27，这几类真节题恰被三道守卫
+    批量否决（"5.1 The cyclic group C," / "17.3 Proof of theorem 33" /
+    "10.1 p-regular elements…"）。白名单缺失的书该组合恒 False，零回归。
     """
     def _validate(num_str, m_end):
         # 🔴 星标装饰串否决（Rising Sea 2026-09-24 实测）：真节头打印为
@@ -634,6 +874,14 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
         # 且仍受「首词小写散文」「句首虚词」「Proof 冠头」三道守卫约束。
         # 调用方不传 successor_num 时恒 False，其余书零影响。
         _succ = (successor_num is not None and num_str == successor_num)
+        # 「序位 + 目录白名单」双确认（Serre 实测 2026-09-27）：命中号既是本章
+        # 印刷上应接续的下一节、又在 agent 依 TOC 写出的真节号册内 → 下方三条
+        # 历史无条件守卫（句读尾 / Proof 冠头 / 小写首词）改为有条件放行。
+        # 双条件缺一不可：白名单单用会被「同号练习/散文行」骗过，序位单用则
+        # 对 OCR 掉点的真节题（"16. 1 …"）无能为力；白名单缺失（绝大多数书）
+        # 时 `_wl_ok` 恒 False，全路径零回归。
+        _wl_ok = bool(section_whitelist) and num_str in section_whitelist
+        _waive = _succ and _wl_ok
         # 句读尾守卫（Casella & Berger 实测）：真节标题从不以逗号/分号/冒号收尾；
         # 以句读收尾的「编号+短词」行是散文碎片（OCR 掉括号的公式引用行
         # "1.5.3. First,"——原书 "(1.5.3). First, ..."）不是节头。句号收尾
@@ -658,7 +906,7 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
                                 or w.lower().strip(".,:;()-") in _stop
                                 for w in _sw))
         if (_rest_stripped[-1:] in (',', ';', ':', '，', '；', '：')
-                and len(_rest_stripped) < 40 and not _semi_tc):
+                and len(_rest_stripped) < 40 and not _semi_tc and not _waive):
             return None
         # 句中句界守卫：标题内部出现「句号+空格+大写/汉字」= 多句散文
         # （"8.3.21 The UIT built up … LRT. This"），真节标题是单个名词短语。
@@ -704,8 +952,9 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
             return None
         # Proof 冠头判据（见 _proof_title_is_prose 注释）：只拦无大写实词的
         # 散文证明行，Title-Case 的 "Proof by Contraposition" / "Proof Strategies"
-        # 真节标题放行。
-        if _proof_title_is_prose(_rest_stripped):
+        # 真节标题放行。序位+白名单双确认（"17.3 Proof of theorem 33" 恰是
+        # Serre §17.3/17.4/17.6 节题）时放行。
+        if _proof_title_is_prose(_rest_stripped) and not _waive:
             return None
         # A genuine section title is Title-Case / Han / starts with a digit — reject
         # prose that begins with a lowercase word (e.g. "20.6 and it is stated...",
@@ -716,6 +965,12 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
             # 容忍「小写符号变量 + 连字 + 大写词」型标题：Brin & Stuck §5.3
             # "∈-Orbits" 被 OCR 读成 'e-Orbits'——首字符小写但非散文。
             _accept_lc = bool(re.match(r"[a-z][-–—][A-Z]", rest))
+            if not _accept_lc and _waive:
+                # 序位+白名单双确认：Serre §10.1 节题 "p-regular elements;
+                # p-elementary subgroups" 以小写技术术语起头且全行无大写字母，
+                # 旧「技术术语首词豁免」要求其后必有 Title-Case 延续词 → 整节
+                # 漏发。命中目录真值号且恰为接续节时放行。
+                _accept_lc = True
             if not _accept_lc:
                 # 🔴 技术术语首词豁免（Rosen 8e 实测）：真节标题首词可以是
                 # 小写技术名词（"9.2 n-ary Relations and Their Applications"、
@@ -755,6 +1010,19 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
         v = _validate(m2.group(1), m2.end())
         if v:
             return v
+    # Fallback: OCR 把节号内部打成「16. 1 Title」（数字与小数点间插空格，
+    # Serre §16.1 实测 2026-09-27：`16. 1 Properties of the cde triangle`）。
+    # _SEC_HEAD_RE / m2 都要求分隔符后紧跟数字 → 整节漏发。该形态极窄（真
+    # 书节号印刷无空格），故**双闸**收窄：解析出的号既须 = 序位接续号、又须在
+    # 目录白名单内才走全量校验；白名单缺失的书永不进入（零回归）。
+    m3 = re.match(r'^\s*(\d{1,2})\s*[.\-–·/．]\s*(\d{1,3})\b', ln)
+    if m3:
+        _num = '%s.%s' % (m3.group(1), m3.group(2))
+        if (successor_num is not None and _num == successor_num
+                and section_whitelist and _num in section_whitelist):
+            v = _validate(_num, m3.end())
+            if v:
+                return v
     return None
 
 
@@ -863,8 +1131,13 @@ def _merge_bare_num_head(ln, bi, blocks):
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
          exercise_headings=None, plain_sec_heads=False, sections_global=None,
-         local_num_sec=False, chapter_local_numbering=False):
+         local_num_sec=False, chapter_local_numbering=False, section_whitelist=None,
+         language='cn'):
     rows = []
+    # 目录真值小节号（agent 依 TOC 写出的 `_section_whitelist.json` 本章清单，
+    # 归一为 "N.M" 字符串集合）。仅用于「闩锁内真节头放行」判据（见下方
+    # `_wl_nums` 使用处）；文件缺失 / 本章未登记 → None，走原启发式，零回归。
+    _wl_nums = ({str(x) for x in section_whitelist} if section_whitelist else None)
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
     # two-level mode we also suppress SEC_2 / ITEM_2 so single-number "N. Problem"
@@ -882,6 +1155,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # 本章已发出的全部 SEC 节号（闩锁内「重复节号 = 习题分组头」判据用，见
     # universal 节检测处的 `_sec_emitted` 守卫）。
     _sec_emitted = set()
+    # 裸单号习题行在 `rows` 中的下标（体例仲裁用，见 return 前的 `bare_exer_idx`）。
+    bare_exer_idx = set()
     # 本章最近发出的节号（「序位豁免」的锚点，见 _section_header_info）。
     last_sec_num = None
     # Ross-style STICKY chapter-end exercise region（exercise_region_headings 声明）：
@@ -956,16 +1231,17 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
         with open(fp, encoding='utf-8') as fh:
             d = PageJson.load(os.path.join(extract_dir, 'page_%03d.json' % p)).data
         _blocks = d.get('text', []) or []
+        # 本页文本块的 x 极值（页眉带判据的左边界/页宽，见 _HEAD_BAND_Y 注释）。
+        _m_left, _m_span = page_x_extent(_blocks)
         for _bi, it in enumerate(_blocks):
             poly = it.get('poly') or []
             try:
                 ln_w = (float(poly[2]) - float(poly[0])) if len(poly) >= 3 else None
             except Exception:
                 ln_w = None
-            try:
-                ln_y = float(poly[1]) if len(poly) >= 8 else None
-            except Exception:
-                ln_y = None
+            ln_x, ln_y = block_xy(poly)
+            # 页眉带复本（页首 + 右对齐）：不得激活习题区闩锁，见 _HEAD_BAND_Y。
+            _run_head = is_running_head(ln_x, ln_y, _m_left, _m_span)
             for _raw in (it.get('text') or '').split('\n'):
                 ln = _raw.rstrip('$').strip()
                 if ln:
@@ -977,12 +1253,14 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # is in its exercise block through to the next genuine section
             # header (multi-section books like do Carmo run an EXERCISES block
             # at the END OF EVERY SECTION, so the latch must reset on SEC).
-            if ex_head_re is not None and not in_exercise and ex_head_re.match(ln):
+            if ex_head_re is not None and not in_exercise and ex_head_re.match(ln) \
+                    and not _run_head:
                 # Ross 体例章末习题块头（"Problems" 等）：STICKY 闩锁激活，
                 # 其后直到章末不再有正文/节。
                 in_exercise = True
                 continue
-            if EXER_HEADING.match(ln) and not ln.strip().rstrip('. ．·').islower():
+            if (EXER_HEADING.match(ln) and not ln.strip().rstrip('. ．·').islower()
+                    and not _run_head):
                 # 🔴 全小写散文碎屑不闩（Vakil《Rising Sea》ch10 p293 实测）：OCR 把
                 # 「…prove this as an / exercise.」断成独立一行 "exercise."，IGNORECASE
                 # 锚定正则整行命中 → 错误激活习题区闩锁，其后真条目（10.3.1 Definition
@@ -996,6 +1274,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # 并【错误重置闩锁】，同页其后习题全部泄漏成节。EXER_HEADING 是
                 # 全行锚定的习题区标题形态，重复命中只会重设闩锁 + 补发节头 SEC，
                 # 无副作用 → 无条件重闩。
+                # 🔴 但 `_run_head` 例外（Apostol 实测）：页首**右对齐**的页眉复本
+                # 不是「进入习题区」的信号（同页其后还有正文条目），见 _HEAD_BAND_Y。
                 in_exercise = True
                 # 记录锥点时当前节：同号节的 running-header 复本
                 # （如 Leinster 2014 p48 '1.3Naturaltransformations'）不应解锁
@@ -1020,14 +1300,26 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             if depths_set is not None and not (sticky_exer and in_exercise):
                 # chapter_local_numbering：两分量均章内（`4.2` 首分量≠章号），
                 # 关闭 `== ch` 守卫；并放行标题内全角逗号（见函数 docstring）。
-                # 该模式自带「A==当前节 + B 单调」闩锁，不参与序位豁免。
-                _succn = (None if chapter_local_numbering
-                          else _expected_next_sec(last_sec_num, ch))
+                # 🔴 该模式的「序位豁免」由**闩锁状态**给出（旧版直接设 None ⇒
+                #   `_section_header_info` 的「小写连词动词闸」在 chapter_local_
+                #   numbering 书上**没有任何豁免通道**）。Shafarevich《Basic
+                #   Algebraic Geometry 1》ch1 实测：印面节头 "5.2 The Image of a
+                #   Projective Variety is Closed" 含小写系词 `is` → 整节从骨架与
+                #   内容契约双双消失，而节号恰是闩锁意义上的「下一个子节」
+                #   （A==当前节 5、B==上个子节 1 +1），正是真节头最强的位置证据。
+                #   豁免强度与其余书同源：只放行**恰好接续**的号，且仍受
+                #   「首词小写散文」「句首虚词」「Proof 冠头」三道守卫约束。
+                if chapter_local_numbering:
+                    _succn = ('%d.%d' % (cur_global_sec, (cur_local_sub or 0) + 1)
+                              if cur_global_sec else None)
+                else:
+                    _succn = _expected_next_sec(last_sec_num, ch)
                 sec = _section_header_info(
                     ln, ch=None if chapter_local_numbering else ch,
                     depths=depths_set,
                     allow_cjk_comma=chapter_local_numbering,
-                    successor_num=_succn)
+                    successor_num=_succn,
+                    section_whitelist=_wl_nums)
                 if sec is None:
                     # 数字/标题分块粘连回收（见 _merge_bare_num_head 注释）：
                     # 裸编号行 + 紧邻短标题块 → 合并串重新走全量校验。
@@ -1037,7 +1329,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                             _mg, ch=None if chapter_local_numbering else ch,
                             depths=depths_set,
                             allow_cjk_comma=chapter_local_numbering,
-                            successor_num=_succn)
+                            successor_num=_succn,
+                            section_whitelist=_wl_nums)
                 if sec is not None and chapter_local_numbering:
                     # 「A == 当前节 + B 单调」闩锁：杀章内交叉引用/公式行
                     # （"6.1所示" p216、"2.1的第4题可知" p346——彼时当前节是
@@ -1069,6 +1362,23 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     # 真节号一章内不可能印刷两次，故闩锁内的重复节号必是习题分组
                     # 头（或摘要/页眉复本）：不发节、不解锁。
                     if in_exercise and num_str in _sec_emitted:
+                        # 🔴 同号「习题行」不得连行丢弃（Serre 实测 2026-09-27）：
+                        # 本书习题与节共用号空间（习题 10.1–10.6 ↔ §10.1–§10.5），
+                        # 真节 10.3 发出后，习题行 "10.3. Extend lemma 6 to class
+                        # functions…" 落在本守卫 → 整行丢弃 ⇒ 契约缺习题 10.3。
+                        # 判据：行形态是**成句散文题干**（_sec_like_title False，
+                        # >40 字符或句读尾）才按题号收作 EXER；Strogatz 型习题
+                        # 分组头 / 页眉复本是短 Title-Case 标题 → 照旧整行跳过。
+                        _m3 = STICKY_EXER_RE.match(ln)
+                        if (_m3 and int(_m3.group(1)) == ch
+                                and not _sec_like_title(title)):
+                            try:
+                                _en3 = int(_m3.group(2))
+                            except ValueError:
+                                _en3 = 0
+                            last_exer_num = max(last_exer_num, _en3)
+                            rows.append((p, 'EXER', '%s.%s' % _m3.group(1, 2),
+                                         ln[_m3.end():].strip()[:90], None))
                         continue
                     if in_exercise and num_str == cur_exer_sec:
                         # 同号节 running-header 复本：不发 SEC 行、不解锁
@@ -1086,7 +1396,24 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                         #     计数器为 0（闩锁以来未见习题行，OCR 全吞）时退回
                         #     旧行为放行解锁，防真节被永久闷死。
                         _try_exer = False
-                        if _sec_like_title(title):
+                        # 🔴 目录白名单 + 序位接续的真节头（Serre《Linear
+                        # Representations of Finite Groups》实测 2026-09-27）：
+                        # 本书习题与小节共用同一号空间（习题 2.1–2.10 与
+                        # §2.1–§2.7 同形，习题计数常**低于**其后真节号——§2.4
+                        # 节头之前刚印完习题 2.5/2.6）→ 下方「尾号 ≥ 习题计数
+                        # 器」判据把真节头判成习题、`continue` 吞掉，整节从
+                        # 骨架消失（§2.4/§2.7/§5.4… 全书十余节）。
+                        # 三条件缺一不可：① agent 依目录写出的
+                        # `_section_whitelist.json` 含该号（文件缺失 = 零回归）；
+                        # ② 正是上一节接续的下一节号（习题号永不可能撞上，
+                        # 因为它落后于当前节位）；③ 标题非句首虚词、非句读收尾。
+                        if (_wl_nums and num_str in _wl_nums
+                                and _succn is not None and num_str == _succn
+                                and title
+                                and not _SEC_TITLE_SENTENCE_STARTS.match(title)
+                                and title[-1] not in '.,;:，；：'):
+                            _try_exer = False
+                        elif _sec_like_title(title):
                             try:
                                 _sec_tail = int(num_str.split('.')[-1])
                             except ValueError:
@@ -1108,6 +1435,11 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                                              ln[_m2.end():].strip()[:90], None))
                                 continue
                             # 非 2 段题号形态：维持旧行为（发 SEC 解锁）防兜底死锁。
+                    _cont = heading_continuation(_blocks, _bi, title)
+                    if _cont:
+                        # 印刷节头跨行（悬挂续行）：标题补全，否则契约节名丢尾巴，
+                        # 且页眉里的完整标题被 ②c 判成丢失正文（见 _SEC_CONT_* 注释）。
+                        title = (title + " " + _cont).strip()
                     rows.append((p, 'SEC', num_str, title, ln_y))
                     _sec_emitted.add(num_str)
                     last_sec_num = num_str  # 序位豁免的接续锚点
@@ -1139,6 +1471,22 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'EXER', '%s.%s' % m.group(1, 2),
                                  ln[m.end():].strip()[:90], None))
+                    continue
+            # --- 章末裸单号习题（Apostol《Introduction to Analytic Number Theory》
+            # 体例实测 2026-09-28）：块头 "Exercises for Chapter N" 之后习题印成裸号
+            # "4. Let S be any infinite subset …"，STICKY_EXER_RE（要求 C.S 两段）与
+            # EXER_3N（三段）都收不到 → 整章习题 0 收录、契约无练习节点。
+            # 三重判据：① 习题区闩锁已开（只有真习题块标题能开）；② 行首 `N.`/`N)`
+            # + 空白 + **大写字母**起头（公式残行 "1 = A(k) +"、"(20)" 一律不匹配）；
+            # ③ N 恰等于计数器 +1（章内习题严格连号，断号不收 = 宁缺毋滥，
+            # 也绝不误收 C.S 体例书的题号——那点号后紧跟数字）。
+            if in_exercise:
+                mb = STICKY_EXER_BARE.match(ln)
+                if mb and int(mb.group(1)) == last_exer_num + 1:
+                    last_exer_num = int(mb.group(1))
+                    bare_exer_idx.add(len(rows))
+                    rows.append((p, 'EXER', str(last_exer_num),
+                                 ln[mb.end():].strip()[:90], None))
                     continue
             # --- global single-number section heads (Arnold-style) -----------
             # The § number is book-global, so NO `== ch` guard: scan() already
@@ -1258,6 +1606,29 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                             and not re.search(r'第[一二三四五六七八九十\d]+章',
                                               _t)
                             and not re.search(r'\d+\.\d+', _t)):
+                        rows.append((p, 'SEC', str(_n), _t, ln_y))
+                        cur_global_sec = _n
+                        cur_local_parent = None
+                        cur_local_sub = None
+                        continue
+                # 英文局部编号通道（Shafarevich 体例，见 _cln_en_title_ok）：
+                # 节头印 `N Title`（允许数字后一个句点 + 空格），N 每章从 1
+                # 重起；同款「首现=1 + cur+1 序列」闩锁，但**无 y 下限**（本节
+                # 头常印在新页页眉位）。GLUE 的 `(\d)([A-Z汉字]…)` 要求数字后
+                # 零分隔符，英文带空格形态到不了上面的 CJK 通道。
+                _mce = re.match(r'^(\d{1,2})[.]?\s+([A-Z][^\n]{1,%d})$'
+                                % _CLN_EN_MAX_LEN, ln)
+                if (language == 'en' and _mce and ln_w is not None
+                        and ln_w <= _GLUE_MAX_WIDTH
+                        and _cln_en_title_ok(
+                            _mce.group(2),
+                            _chap_title_norm(extract_dir, ch))):
+                    _n = int(_mce.group(1))
+                    _t = _SEC_SPACED_TRAIL_PAGE.sub('', _mce.group(2)).strip()
+                    _seed = (cur_global_sec is None and _n == 1)
+                    _adv = (cur_global_sec is not None
+                            and _n == cur_global_sec + 1)
+                    if (_seed or _adv) and _n <= SEC_MAX_NUMBER:
                         rows.append((p, 'SEC', str(_n), _t, ln_y))
                         cur_global_sec = _n
                         cur_local_parent = None
@@ -1443,6 +1814,12 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                                 _r[4] if len(_r) > 4 else None)
                     break
                 _seen1 = True
+    # 🔴 裸单号体例仲裁：同一章里「带点题号」习题（C.S / C.S-N，由 STICKY_EXER_RE /
+    # EXER_3N 在闩锁内收录）与「裸单号」习题（Apostol 体例）不可能同真——两种形态
+    # 互斥。只要本章存在带点题号习题，上方按裸号收的行就是别的东西（正文列举、
+    # 公式续行、他章题号），整体退回，保证对既有书零回归。
+    if bare_exer_idx and any(r[1] == 'EXER' and '.' in str(r[2]) for r in rows):
+        rows = [r for i, r in enumerate(rows) if i not in bare_exer_idx]
     # 统一 5 元组 (p, kind, num, title, y)：SEC 行发射处已带块顶 y（页眉压制的
     # glue 变体与同页 y 感知归都依赖它）；EXER/ITEM/SUB 行 y=None。
     rows = [r if len(r) == 5 else (r[0], r[1], r[2], r[3], None) for r in rows]

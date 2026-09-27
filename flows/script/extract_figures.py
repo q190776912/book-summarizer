@@ -174,6 +174,49 @@ def caption_text_for_bbox(ocr_items, bbox):
     return "".join(t for _, t in parts)
 
 
+# 章开页的**大号独占一行章号**（GTM/Springer 体例，如 Apostol p169 的 "8"、
+# p261 的 "12"）会被 DocLayout-YOLO 以中等置信度（实测 0.49/0.53）框成插图，
+# 于是笔记里凭空多出一张「未标号图」其实是章节序号本身。
+_BARE_NUM_LINE_RE = re.compile(r"^\s*[0-9]{1,3}\s*\.?\s*$")
+
+
+def is_display_numeral_box(ocr_items, box, page_h):
+    """True 表示该「图」框其实就是开页章号数字，不是插图。
+
+    判据四条全中才算（缺一即放行，宁可留图不误删）：
+      ① 框内**恰好一个** OCR 文本块；
+      ② 该块文本恰为一个 1-3 位数字（4 位以上如照片里的年份 "2024" 不算）；
+      ③ 该块面积 ≥ 框面积的 50%，即「框就是这个数字本身」。
+         🔴 实测教训：Apostol p70 的 Figure 3.1（qd 点阵图）框内只剩一个孤立坐标
+         数字（其余标签走公式通道），①② 都过而图是真的；加上 ③ 后该块仅占框
+         面积 0.2%，正确放行。
+      ④ 框心位于页面上部（章号在标题带内）。
+    """
+    if not ocr_items or not page_h or not box:
+        return False
+    x0, y0, x1, y1 = box
+    box_area = max(1.0, (x1 - x0) * (y1 - y0))
+    inside = []
+    for it in ocr_items:
+        poly = it.get("poly")
+        if not poly:
+            continue
+        cx, cy = center_of_poly(poly)
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            inside.append(it)
+    if len(inside) != 1:
+        return False
+    txt = (inside[0].get("text") or "").strip()
+    if not _BARE_NUM_LINE_RE.match(txt):
+        return False
+    poly = inside[0]["poly"]
+    blk_area = max(1.0, (max(poly[0::2]) - min(poly[0::2]))
+                   * (max(poly[1::2]) - min(poly[1::2])))
+    if blk_area / box_area < 0.5:
+        return False
+    return (y0 + y1) / 2.0 < 0.25 * page_h
+
+
 # Figure-label prefixes are BOOK-SPECIFIC — each book declares its OWN
 # convention in the `ordinal` Figure group (name = prefix list, type -> depth =
 # component count); see config/verify_config/verify_config.md.  The detection
@@ -306,6 +349,10 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
     entries, md_lines = [], []
     fi = 0
     for (x0, y0, x1, y1, confg) in figs:
+        # 开页大号章号不是插图（见 is_display_numeral_box）
+        if is_display_numeral_box(ocr_items, (x0, y0, x1, y1), H):
+            md_lines.append(f"- 图(判为开页章号数字, 忽略, p{pno}, bbox=({x0},{y0},{x1},{y1}))")
+            continue
         fi += 1
         # pair with nearest caption (by center distance, vertical-weighted) so
         # the captions text can be matched at assignment time

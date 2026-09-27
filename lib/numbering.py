@@ -205,7 +205,9 @@ def is_exercise_head_text(text):
 #   (11.1-1)           ncomp 3  章.节-号：Chaos/Fractals/Noise、高等代数、
 #                               概率论与数理统计…（分隔符是 `-` 不是 `.`）
 #   2,3 / 1-2          分隔符还有 `,` 与 `-`（Ross、遍历论实测）
-#   (8.11a)            字母后缀子式（Evans SDE、PDE、Ross 实测）
+#   (8.11a)            字母后缀子式（Evans SDE、PDE、Ross 实测）——🔴 **只在多段
+#                      体例（ncomp>=2）接受**：单段书里的 `(2s)` 是公式碎片，见
+#                      `formula_num_core` 的注释（Apostol / 数学分析实测）。
 #   裸排 2.17          大量书右缘编号**不带括号**（bare 形态，占实测近一半）
 #   (A.3) / （A.3）    字母章位编号（Lee ISM 附录 B.1-B.15/C.1-C.21/D.1-D.21
 #                      实测）：首段单个大写字母、后续段纯数字——`letter=True`
@@ -242,7 +244,16 @@ def formula_num_core(ncomp=None, letter=False):
         n = max(0, int(ncomp) - 1)
     except (TypeError, ValueError):
         n = 0
-    return r'\d+(?:%s\d+){%d}%s' % (_FORMULA_SEP, n, _FORMULA_SUFFIX)
+    # 🔴 **单段编号（ncomp<=1）不收字母后缀**：子式后缀编号（`(8.11a)`）在实测语料
+    # 里**只出现在多段体例**（Evans SDE/PDE、Koopman、Ross、A First Course in
+    # Numerical Methods、Chaos/Fractals/Noise——均 ncomp>=2）。单段书里孤立的
+    # `(2s)`/`(6s)`/`(9x)` 一律是**公式碎片被截成独立块**：Apostol《Introduction to
+    # Analytic Number Theory》ch11 p243/p253/p259 的 `(2s)`/`(6s)` 与 ζ(2s) 同行
+    # （同类行 `k(n) _ (s)(2s)x(3s)`、`1-p-2s`），《数学分析》type=1 的
+    # `['0x','1D','2M','3w','4m','9x']` 亦如此。契约 tag 是 `gate_units` 的对账真值，
+    # 收下它们等于逼写手凭空造 `\tag{2s}`（漏写 FAIL / 多出判编造），故宁缺勿滥。
+    suffix = _FORMULA_SUFFIX if n >= 1 else ''
+    return r'\d+(?:%s\d+){%d}%s' % (_FORMULA_SEP, n, suffix)
 
 
 _TAG_SHAPE_RE = re.compile(r'^[1-9]\d{0,2}(?:[.\-·](?:[1-9]\d{0,2}|0))+[a-zA-Z]?$')

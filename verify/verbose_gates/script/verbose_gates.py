@@ -100,6 +100,20 @@ _CONTRACT_EXER_HEAD_RE = re.compile(
     r'^\s*(?:\*\*)?\s*(?:练习|习题|exercises?)\s*[：:.]?\s*(?:\*\*)?\s*$',
     re.I)
 
+# 🔴 豁免侧（只放宽豁免、不放宽告警）：**契约节名**本身就是「习题集小节」的标题词。
+# 告警正则 `EXER_HEADING_RE` 只在行尾匹配 练习|习题|exercises?，于是同一版式两版不同判：
+# Etingof《Introduction to representation theory》ch5 实测——契约 §5.1/§5.9 印的是
+# `5.9 Problems`，英文版 md 保留 `## §5.9 Problems`（`problems` 不在告警词表 → 放行），
+# 中文版忠实译成 `## §5.9 习题` 即命中 → 「源过 / 译不过」，译者只能把节题改回英文，
+# 与「章 H1 与正文散文必须译」的写作要求直接冲突。
+# 根治 = 拿契约节名当**语言无关**的在账证据：该节的契约名本身就叫 Problems/Exercises/
+# 习题…，则任何语言的等价译题都不是「无中生有的归拢块」。词表含 problems/questions，
+# 但只用于豁免，不会新增任何违规（Leinster ch4、Weibel ch5 那类「契约无据」的自建块照拦）。
+_CONTRACT_EXER_NAME_RE = re.compile(
+    r'^\s*(?:§?\s*\d+(?:[.．\-]\d+)*\s*)?'
+    r'(?:练习|习题|问题|难题|exercises?|problems?|questions?)\s*$',
+    re.I)
+
 
 def contract_exer_heading_sections(ext_dir, ch):
     """契约中**自己印有**习题集小标题的节号集合（点分归一）。
@@ -112,7 +126,10 @@ def contract_exer_heading_sections(ext_dir, ch):
     两条判据此前直接互相矛盾（CN ch10 §10.7/§10.8 实测：闸 ⑮ 要题、P 层禁题头）。
 
     本函数把「印刷标题在账」这一事实取回来当豁免真值源：只有该节（或其祖先节）的契约子树
-    里确实存在一行习题集标题，md 里对应的标题行才被放过；契约无据的自建块照旧拦截。
+    里确实存在一行习题集标题，**或该节的契约名本身就叫 Exercises/Problems/习题…**
+    （`_CONTRACT_EXER_NAME_RE`，语言无关，专治「EN 保留 `## §5.9 Problems` 放行、
+    CN 译成 `## §5.9 习题` 假阳」的两版不对称），md 里对应的标题行才被放过；
+    契约无据的自建块照旧拦截。
     """
     out = set()
     root = _load_chapter_contract(ext_dir, ch)
@@ -124,6 +141,9 @@ def contract_exer_heading_sections(ext_dir, ch):
             return
         key = str(node.get("key") or "")
         sec = _norm_secnum(key) if (node.get("type") == "section" and key) else cur_sec
+        # 契约节名自己就是习题集标题（任何语言）→ 该节的等价译题在账
+        if sec and _CONTRACT_EXER_NAME_RE.match(str(node.get("name") or "")):
+            out.add(sec)
         for k, v in node.items():
             if k in ("sub_sec", "key", "type", "name", "letter_subs"):
                 continue
@@ -155,12 +175,16 @@ def _load_chapter_contract(ext_dir, ch):
     注册表（``prime_chapter_kinds``）——未灌注时附录章会被算成 ``ch14.json`` 而
     FileNotFoundError（Rosen 实测：本豁免静默失效 → `**习题**` 假阳原样复发）。
     读单章文件既避开该耦合，又拿到未经 ``to_dict`` _round-trip_ 的原始内容块。
+    🔴 路径一律经 ``resolve_chapter_json_path``（按目录里**实际存在**的文件解析），
+    不得直接用 ``chapter_json_path``：后者只信进程级注册表，注册表被同进程另一份
+    chapter_map 污染时 ``ch{N}.json`` 会被算成 ``appendix{N}.json`` → 契约读不到 →
+    豁免静默失效（本文件测试套件全量同进程运行时的实测事故）。
     """
-    from data.book_structure.book_structure import (chapter_json_path,
-                                                    prime_chapter_kinds)
+    from data.book_structure.book_structure import (prime_chapter_kinds,
+                                                   resolve_chapter_json_path)
     try:
         prime_chapter_kinds(ext_dir)
-        path = chapter_json_path(ext_dir, str(ch))
+        path = resolve_chapter_json_path(ext_dir, str(ch))
         if not os.path.isfile(path):
             return None
         with open(path, encoding="utf-8") as fh:

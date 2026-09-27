@@ -129,5 +129,74 @@ class TestTrailingEmptyGtIsNotSeparator(unittest.TestCase):
         self.assertEqual(len(i), 1)
 
 
+class TestCjkSuffixProofHead(unittest.TestCase):
+    """中文定中倒装标签（Robinson Lie 代数书 ch5/0014，2026-09-28 根治）。
+
+    `**PBW 定理的证明**` 关键词在末尾，旧判据只认前缀 → CN 侧把块间合法空行判成
+    「bare blank 断裂」，而英文同位写法 `**Proof of the PBW Theorem**` 以 Proof
+    开头天然放行：同一结构两侧判定再度分叉，译者只能用空 `>` 行/私加 `---` 规避。
+    负向：**无粗体头**的散文续行（`> 被劈开的第二段。`）后的裸空行必须仍被判断裂，
+    否则放宽即失效。
+    """
+
+    def test_cjk_suffix_proof_head_is_a_legit_block_head(self):
+        text = ("> **证明**：设 $t \\in T_m$。\n>\n> 1. a。\n> 2. b。\n\n"
+                "> **PBW 定理的证明**：\n> 1. c。\n")
+        g, i = _run(text)
+        self.assertEqual(g, [], "中文倒装证明头须与英文 Proof of … 同判为块头")
+        self.assertEqual(i, [], "下一块是 `>` 块，不属「散文」边界")
+
+    def test_english_proof_of_head_agrees(self):
+        text = ("> **Proof**: let $t \\in T_m$.\n>\n> 1. a.\n> 2. b.\n\n"
+                "> **Proof of the PBW Theorem**:\n> 1. c.\n")
+        g, i = _run(text)
+        self.assertEqual(g, [])
+        self.assertEqual(i, [])
+
+    def test_non_head_quote_resume_still_flagged(self):
+        # 旧负例写的是 `> **说明**：被劈开的第二段。`，但 2026-09-28 的宽判据
+        # （`G_BQ_BOLD_HEAD_BOUNDARY_RE`，见 `test_g_quote_bold_head_boundary.py`）
+        # 把**任何粗体标签头**认作新块：`说明`/`Note`/`Remark` 本就在 `_H_MISSING_BQ`
+        # 的「必须包成 `>`」标签表里，要求包起来却又判它劈开上一块是自相矛盾。
+        # 守卫意图不变——真续行（无粗体头的散文）必须仍被抓，故改用散文续行做负例。
+        g, _ = _run("> **证明**：陈述。\n> 陈述续行。\n\n> 被劈开的第二段散文。\n")
+        self.assertEqual(len(g), 1, "放宽后真断裂仍须捕获")
+
+
+class TestOrdinalPrefixedHead(unittest.TestCase):
+    """Vakil《Rising Sea》体例：条目头关键词前带三级序标（2026-09-28 根治）。
+
+    `**18.8.3 Proof of Theorem 18.8.1.**` 的序标把关键词挤离 `**`，旧判据 EN 侧
+    整头漏判，CN 同构块（`**18.8.3 定理 18.8.1 的证明。**`，定中倒装支）却命中
+    → I 层只追 CN 侧要 `---`、EN 同位裸奔（本书 ch7/11/18/24/27 五处实测）。
+    负向：序标后**非关键词**（`**18.2.A Exercise**`）仍不得开块。
+    """
+
+    def test_en_and_cn_ordinal_proof_heads_verdict_identical(self):
+        en = ("> **18.8.3 Proof of Theorem 18.8.1.**\n>\n> 1. a.\n\n"
+              "The following result is handy.\n")
+        cn = ("> **18.8.3 定理 18.8.1 的证明。**\n>\n> 1. a。\n\n"
+              "下面这个结论很好用。\n")
+        ge, ie = _run(en)
+        gc, ic = _run(cn)
+        self.assertEqual(ge, [], "EN 序标证明头不再误判断裂")
+        self.assertEqual(gc, [])
+        self.assertEqual(len(ie), 1, "EN 侧须与 CN 同口径报缺 `---`")
+        self.assertEqual(len(ic), 1)
+
+    def test_ordinal_prefixed_example_head(self):
+        en = ("> **7.3.7 Example.** A statement.\n>\n> 1. a.\n\n"
+              "Some descriptive prose.\n")
+        g, i = _run(en)
+        self.assertEqual(g, [])
+        self.assertEqual(len(i), 1)
+
+    def test_non_keyword_ordinal_head_not_opened(self):
+        g, i = _run("> **18.2.A Exercise 18.2.A**: do it.\n>\n> 1. a.\n\n"
+                    "prose after block\n")
+        self.assertEqual(g, [])
+        self.assertEqual(i, [], "Exercise 不在 item 关键词表内，不得开块")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

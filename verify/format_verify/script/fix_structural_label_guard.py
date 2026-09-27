@@ -36,6 +36,7 @@ from verify.script.struct_labels import (
 # Shared regex constants + helpers used by BOTH detection and fix (single source).
 from format_verify import (
     _H_UL_OPENERS, _H_UL_FOOTNOTE, _H_MISSING_BQ, _H_MISSING_BQ_FOOTNOTE,
+    _H_NOTE_HEADING_RE,
     _h_ext_is_legit_bq, _h_ext_is_structural_bq, _h_ext_items,
 )
 
@@ -249,6 +250,8 @@ def fix_labels_missing_blockquote(md_file):
             continue
         if re.match(r'^#{1,6}\s', ln):
             continue
+        if _H_NOTE_HEADING_RE.match(st):
+            continue    # 题式注记标签（章末 Notes/注记）与检测同口径，不包裹
         if _H_MISSING_BQ.match(st) or _H_MISSING_BQ_FOOTNOTE.match(st):
             lines[i] = '> ' + ln
             changes += 1

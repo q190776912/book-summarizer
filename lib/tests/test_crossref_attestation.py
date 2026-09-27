@@ -179,6 +179,7 @@ class TestDroppedCrossrefProblems(unittest.TestCase):
         self.assertEqual(len(probs), 1)
         self.assertIn("(1)", probs[0])
 
+    def test_strogatz_13_5_measured_case(self):
         """本书实测形态：印面 `Equation (3) may look intimidating…`，笔记只留 \\tag。"""
         tree = _chapter([
             _sec("13.5", [_txt("Equation (3) may look intimidating, but it is not."),

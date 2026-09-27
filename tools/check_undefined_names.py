@@ -4,6 +4,10 @@
 找出一类 `py_compile` **查不出**、只在特定代码路径触发时才爆炸的错误：
 函数体里引用了既不是参数、也不是局部量、也不来自外层函数、也不是模块级绑定、
 也不是内置名的标识符 —— 即 ``NameError: name 'X' is not defined``。
+🔴 **模块级与类体的语句同样在检查范围内**（按语句顺序增量累积绑定，先绑定后用才
+合法；`for`/`with`/推导式/`except … as` 的目标名在同一语句内视为已绑定），
+否则「模块级推导式用了没 import 的名字」这种一加载即炸的缺陷会漏网
+（2026-09-28 实测：`check_structure_completeness.py` 的 `_LABEL_CANON`）。
 
 真实事故（2026-09-16）：``build_structure._recognized_sections`` 的函数体用了
 ``page_dir``，但签名没有该参数 → 对**任何**配了 ``_recognized_sections.json``
@@ -135,19 +139,101 @@ def _walk_fn(fn, outer, mod, problems, seen):
         _walk_fn(sub, known, mod, problems, seen)
 
 
+# ── 模块级 / 类体语句的作用域扫描 ──────────────────────────────────────────
+# 旧实现只进 `def` 体查自由名，**模块级语句里的 Name 读取从未检查**，于是
+# 「模块级推导式用了没 import 的名字」这一类必炸缺陷静默通过（2026-09-28
+# Apostol 实测：`check_structure_completeness.py` 在模块级用 `_LABEL_CANON`
+# 派生 `_LABEL_RE` 却没 import，闸门脚本对任何书一加载即 NameError）。
+# 判据：按语句顺序**增量**累积本作用域的绑定（先绑定后使用才合法），
+# 嵌套 def/lambda 的子树交给 `_walk_fn`（其自由名另有一套作用域）。
+def _loads_in_stmt(n):
+    """本语句（不含嵌套 def/lambda 体）里的 Name 读取。"""
+    loads = []
+    stack = [n]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            for d in getattr(x, "decorator_list", []):
+                stack.append(d)          # 装饰器在本作用域求值
+            continue
+        if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load):
+            loads.append((x.id, x.lineno))
+        for c in ast.iter_child_nodes(x):
+            stack.append(c)
+    return loads
+
+
+def _bindings_in_stmt(n):
+    """本语句在本作用域引入的绑定名。"""
+    names = set()
+    for x in ast.walk(n):
+        if isinstance(x, ast.Name) and isinstance(x.ctx, (ast.Store, ast.Del)):
+            names.add(x.id)
+        elif isinstance(x, ast.Import):
+            for a in x.names:
+                names.add((a.asname or a.name).split(".")[0])
+        elif isinstance(x, ast.ImportFrom):
+            for a in x.names:
+                names.add(a.asname or a.name)
+        elif isinstance(x, ast.ExceptHandler) and x.name:
+            names.add(x.name)
+        elif isinstance(x, (ast.Global, ast.Nonlocal)):
+            names.update(x.names)
+    return names
+
+
+def _header_bindings(n):
+    """语句**求值前/体内必先**绑定的名字：循环变量、with 目标、推导式变量、
+    `except E as X` 的 X。它们在同一语句内先绑定后使用，扫描本语句的读取时必须
+    先计入已知集，否则 `for x in y: use(x)`、`except Exception as e: f"{e}"`
+    这类合法写法被误报（register_all / _flow_contract 实测）。
+    """
+    names = set()
+    for x in ast.walk(n):
+        if isinstance(x, (ast.For, ast.AsyncFor)):
+            targets = [x.target]
+        elif isinstance(x, ast.comprehension):
+            targets = [x.target]
+        elif isinstance(x, (ast.With, ast.AsyncWith)):
+            targets = [i.optional_vars for i in x.items if i.optional_vars]
+        elif isinstance(x, ast.ExceptHandler):
+            targets = []
+            if x.name:
+                names.add(x.name)
+        else:
+            continue
+        for t in targets:
+            if t is None:
+                continue
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                    names.add(sub.id)
+    return names
+
+
+def _walk_scope(body, outer, mod, problems, seen, scope_name):
+    known = set(outer)
+    for n in body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _walk_fn(n, known | mod, mod, problems, seen)
+            known.add(n.name)
+        elif isinstance(n, ast.ClassDef):
+            _walk_scope(n.body, known, mod, problems, seen, n.name)
+            known.add(n.name)
+        else:
+            known |= _header_bindings(n)
+            for name, ln in _loads_in_stmt(n):
+                if name not in known | mod | BUILTINS and (name, ln) not in seen:
+                    seen.add((name, ln))
+                    problems.append((name, ln, scope_name))
+            known |= _bindings_in_stmt(n)
+
+
 def check_file(path):
     tree = ast.parse(open(path, encoding="utf-8-sig").read())
     mod = _module_bindings(tree)
     problems, seen = [], set()
-
-    def visit(body, outer):
-        for n in body:
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                _walk_fn(n, outer, mod, problems, seen)
-            elif isinstance(n, ast.ClassDef):
-                visit(n.body, outer)
-
-    visit(tree.body, set())
+    _walk_scope(tree.body, set(), mod, problems, seen, "<module>")
     return problems
 
 

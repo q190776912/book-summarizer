@@ -86,7 +86,8 @@ from lib.numbering import ordinal_depth
 from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_io / primary_group 同源）
 from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
-                           ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM)
+                           ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM,
+                           APPENDIX_NAME_RE, SUPPLEMENT_NAME_RE)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
 
@@ -628,6 +629,54 @@ from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
 # match" rule applies to `formula` exactly as it does to `ordinal`).
 _FORMULA_MIN_COUNT = 30   # need this many right-aligned "(N)" to be a scheme
 _FORMULA_MIN_RUN = 5      # and a consecutive run of at least this length
+# 📐 Letter-led series (appendix `(A.N)`) are judged against the **scanned range**:
+# the appendix generator calls `detect_formula` with ONLY the appendix page window,
+# so a whole-book threshold can never be reachable. Measured on Shafarevich BA1
+# "Algebraic Appendix" (pp.299–312, 14 pages): 17 clean `(A.N)` hits, series
+# A.1…A.15, dotted_count = 0 → with the fixed threshold 30 detection returned
+# None → the appendix sub-config silently had NO `formula` key → `attach_content`
+# harvested zero tags → every printed equation number of the appendix disappeared
+# from the notes (prose references "(A.3)" then point at unnumbered displays).
+_FORMULA_LETTER_MIN = 8       # floor for a letter-led series
+_FORMULA_FULL_SCAN_PAGES = 60  # range size at which the whole-book bar applies
+
+
+def _letter_min_count(n_pages):
+    """Threshold for a letter-led equation series, scaled to the scanned range.
+
+    Ranges of `_FORMULA_FULL_SCAN_PAGES` pages or more keep the historical
+    whole-book bar exactly (`>= 60` pages ⇒ unchanged behaviour for every
+    already-finished book); shorter ranges get `30 * pages / 60` with a floor of
+    `_FORMULA_LETTER_MIN`."""
+    if n_pages >= _FORMULA_FULL_SCAN_PAGES:
+        return _FORMULA_MIN_COUNT
+    return max(_FORMULA_LETTER_MIN,
+               int(_FORMULA_MIN_COUNT * n_pages / _FORMULA_FULL_SCAN_PAGES))
+
+
+def _letter_series_confident(hits):
+    """True iff `(letter, number)` hits contain a genuine ascending series.
+
+    Same discipline as :func:`_formula_single_confident` (formula numbers run
+    1,2,3,…; incidental `(A.12)` mentions are scattered), applied **per letter**
+    and on the *deduplicated* numbers — a 14-page appendix only yields ~15 hits,
+    so the count alone is weak evidence while a run of 5 is not."""
+    by_letter = {}
+    for lt, num in hits:
+        try:
+            by_letter.setdefault(lt.upper(), set()).add(int(num))
+        except (TypeError, ValueError):
+            continue
+    for nums in by_letter.values():
+        uniq = sorted(nums)
+        longest = cur = 1
+        for i in range(1, len(uniq)):
+            cur = cur + 1 if uniq[i] == uniq[i - 1] + 1 else 1
+            longest = max(longest, cur)
+        if longest >= _FORMULA_MIN_RUN:
+            return True
+    return False
+
 
 
 def _formula_single_confident(nums):
@@ -738,7 +787,9 @@ def detect_formula(extract_dir, pages=None):
 
     # Letter-chapter-led candidate (checked FIRST — letter-led pages also score
     # a little on single/dotted noise, and letter-led must win when present).
-    if letter_count >= _FORMULA_MIN_COUNT and letter_count > dotted_count:
+    if (letter_count >= _letter_min_count(len(pages))
+            and letter_count > dotted_count
+            and _letter_series_confident(letter_hits)):
         # Scope: per-letter-chapter reset (B.1..B.15 then C.1.. → scope 2) vs
         # one book-wide letter series (scope 1) — decided by whether the first
         # number of a later letter is smaller than the previous letter's max.
@@ -1024,14 +1075,23 @@ _CONTRACT_TYPE_TO_FORM = {
 }
 
 
-def _contract_counter_evidence(extract_dir, include_chapter=False):
+def _contract_counter_evidence(extract_dir, include_chapter=False,
+                               letter_chapter=False):
     """结构契约（book_structure/ch{N}.json）已存在时，用契约条目本身作为
     计数器分组证据 —— 比 ordinal 探测阶段的 OCR 标题扫描干净得多（OCR 漏识
     / 字符混淆会让 _shares_main_counter 的证据稀疏化，Weibel 实测被误判成
     5 个独立计数组）。
 
-    返回 ``[(form, comps)]``（仅数字章；附录字母章走 letter_chapter 专属
-    生成器，不在此列）或 None（无契约 / 无可用条目）。**练习条目不纳入**
+    `letter_chapter=True`（附录 / 补篇子配置）：只收**字母章位键**的条目
+    （`A.9` → comps=('A',9)，`A.1.3` → ('A',1,3)），窗口分量即字母章（或
+    字母章+节），与 OCR 通路 `_parse_comps(letter_chapter=True)` 同形。
+    Shafarevich《Basic Algebraic Geometry 1》Algebraic Appendix 实测：OCR 标题
+    扫描只捞到 `Proposition A.9-A.14`（漏 A.1-A.8），于是 `Corollary A.1-A.3`
+    的号与它**不重号**，被判成共享计数器并进同一组 → 条目阅读序按数字排，
+    `Corollary A.1` 压到 `Proposition A.11` 之前，ANCHOR-SANITY 整章拒绝落盘。
+    契约里 A.1-A.17 齐全，「同窗重号」判据据此正确拆成两个平行计数器组。
+
+    返回 ``[(form, comps)]``或 None（无契约 / 无可用条目）。**练习条目不纳入**
     证据（exercise 不在 _CONTRACT_TYPE_TO_FORM）：练习计数器由
     `_detect_exercise_counter` / `_detect_appendix_exercise` 专属检测并
     单列组，与 LABEL_FORMS 刻意不含 Exercise 的口径一致。
@@ -1063,6 +1123,15 @@ def _contract_counter_evidence(extract_dir, include_chapter=False):
         form = _CONTRACT_TYPE_TO_FORM.get(str(n.type))
         if not form:
             return
+        if letter_chapter:
+            m = re.match(r'^([A-Za-z])\s*[.\-·]\s*(\d+)'
+                         r'((?:\s*[.\-·]\s*\d+)*)$', str(n.key).strip())
+            if not m:
+                return   # 非字母章位键（正文书同目录混载时）不参与附录证据
+            tail = [int(x) for x in re.findall(r'\d+', m.group(3))]
+            out.append((form, tuple([m.group(1).upper(), int(m.group(2))]
+                                    + tail)))
+            return
         nums = re.findall(r"\d+", str(n.key))
         if include_chapter:
             if not nums:
@@ -1071,25 +1140,38 @@ def _contract_counter_evidence(extract_dir, include_chapter=False):
             return
         if len(nums) < 2:
             return
-        out.append((form, tuple(int(x) for x in nums)))
+        # 🔴 窗口分量**必须带上所属章号**。`_shares_main_counter` 以 comps[:-1]
+        # 为「同窗」，节级编号书（Fraleigh / do Carmo《黎曼几何》：键 = 节.项，
+        # 计数器按节重启）的键里**没有章号**，不加章号时第 5 章的 `2.1` 与第 13
+        # 章的 `2.1` 落在同一个窗口 (2,)，被「同窗重号」判据当成平行计数器的决定
+        # 性证据 → 一套共享计数器被误拆成 7 个独立组（黎曼几何实测 37 个假重号
+        # 窗）。章号前置后窗口 = (章, 节)（章级编号书 = (章, 章)，第二个分量冗余
+        # 但无害），跨章同号不再相撞、同章同号照旧是铁证。
+        out.append((form, tuple([ch_int] + [int(x) for x in nums])))
 
     for c in bs.chapters:
         ck = str(c.key)
+        if letter_chapter:
+            walk(c, None)   # 字母章位证据只看条目键，字母/数字章键一律遍历
+            continue
         if not ck[:1].isdigit():
-            continue  # 附录字母章键的窗口语义不同，交 letter_chapter 生成器
+            continue  # 附录字母章键的窗口语义不同，交 letter_chapter 通路
         ch_int = int(re.match(r"\d+", ck).group(0))
         walk(c, ch_int)
-    # 同号去重：深层书的子项（如 Weibel ch9 的 `Corollary 9.3.3.1`）被抽取器
-    # 展平成三段键后与宿主条目（Theorem 9.3-3）同号不同族——这属书的层级
-    # 深度问题，不是「平行计数器」证据；按窗口首次出现保留，其余丢弃，
-    # 否则重复号会让 _shares_main_counter 把正文族误拆成多组。
-    # 🔴 include_chapter（单级书）相反：同一 (章,号) 上**不同 form 共存正是
-    # 平行计数器的决定性证据**（Theorem 2 与 Corollary 2 同章并存 → 各自独立），
-    # 必须各自保留，只对「同一 form 的重复 (章,号)」去重。
+    # 🔴 证据去重**必须按 (form, comps) 去重，绝不按 comps 去重**：跨标签同号
+    # 共存正是「平行计数器」的决定性证据（同章既有 定理1.3 又有 例1.3 → 两条
+    # 独立计数器）。旧实现按 comps 首见保留，把后到的异族同号项全部丢掉，等于
+    # **专门销毁拆组证据**——Shafarevich《Basic Algebraic Geometry 1》正文实测：
+    # 契约里 定理1.1-1.28 与 例1.1-1.35 各自成串，去重后 Theorem 只剩 (1,1)(1,2)、
+    # Example 从 (1,3) 起，窗内「无重号」→ 四族被误并成一条共享计数器 → 条目阅读
+    # 序按合并号段排（`Theorem 1.8` 排到 `Example 1.23` 之前，印面相反）→
+    # ANCHOR-SANITY 整章拒绝落盘。
+    # 保留的深层书顾虑（Weibel ch9 `Corollary 9.3.3.1` 与宿主 `Theorem 9.3-3`
+    # 展平后同号）由「同 form 同 comps 只记一次」覆盖，异 form 共存照记。
     seen = set()
     deduped = []
     for form, comps in out:
-        sig = (form, comps) if include_chapter else comps
+        sig = (form, comps)
         if sig in seen:
             continue
         seen.add(sig)
@@ -1239,27 +1321,40 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     depth = ordinal_depth(family)
     if depth >= 2:
         headings = [h for h in headings if len(h[2]) >= 2]
-    # 计数器分组的证据优先级：结构契约（若已生成）> OCR 标题扫描。契约条目
-    # 是去噪后的权威样本（键 + 类型俱全），共享/平行计数器的判别不再受 OCR
-    # 漏识干扰；无契约（首次 config，先于 structure）时保持原 OCR 路径零回归。
-    # 仅主配置走此通路；附录 letter_chapter 配置由专属生成器处理。
+    # 🔴 计数器分组的证据 = **结构契约（按标签）∪ OCR 标题扫描**。契约条目是
+    # 去噪后的权威样本（键 + 类型俱全），但**只覆盖它已经抽到的标签**：附录首轮
+    # 实测（Shafarevich《Basic Algebraic Geometry 1》）旧契约里没有 `Corollary`
+    # 节点，纯契约证据会让该标签整个隐形、探测只给一组，bootstrap 死锁。故
+    # **契约没有的标签**沿用其 OCR 标题；同一标签内只用契约一套样本，绝不与
+    # OCR 的交叉引用噪声混用（混用会把共享计数器书按假重号拆散——Lee/Rosen 实测
+    # 回归）。无契约（首次 config 先于 structure）时保持原 OCR 路径零回归。
+    # 正文与附录/补篇（letter_chapter）两条生成都走这条通路——附录键自带字母
+    # 章位窗口（`A.N` → ('A',N)），证据形态与 OCR 的 `_parse_comps` 一致。
     _contract_evidence = None
     _single_level_windowed = False
-    if not letter_chapter and depth >= 2:
-        _contract_evidence = _contract_counter_evidence(extract_dir)
-        if _contract_evidence:
-            headings = [(0, f, comps) for (f, comps) in _contract_evidence]
+    _ev = None
+    if letter_chapter and depth >= 2:
+        _ev = _contract_counter_evidence(extract_dir, letter_chapter=True)
+    elif not letter_chapter and depth >= 2:
+        _ev = _contract_counter_evidence(extract_dir)
     elif not letter_chapter and family == 1:
-        # 🔴 单级书：优先用「结构契约 + 章窗口」证据区分共享 vs 平行计数器，
-        # 取代 `_group_single_level` 的「statement 标签一律合并」硬约定。
-        # 契约条目键是裸序号（'定理1'），把所属章号补成 (chapter, num) 后即拥有
-        # 可比较的窗口分量，`_shares_main_counter` 的「同窗重号」判据便能正确
-        # 把 Arnold 的 Theorem/Corollary/Lemma/Prop 各自拆成独立计数组。
-        _single_evidence = _contract_counter_evidence(extract_dir, include_chapter=True)
-        if _single_evidence:
-            _contract_evidence = _single_evidence
+        # 🔴 单级书：契约条目键只含裸序号（'定理1'），把**所属章号补成窗口分量**
+        # comps=(chapter, num) 后即拥有可比较的窗口，`_shares_main_counter` 的
+        # 「同窗重号」判据得以区分「共享一条计数器」与「章内各自重起的平行计数
+        # 器」，取代 `_group_single_level` 的「statement 标签一律合并」硬约定。
+        # Arnold《ODE》实测：第 2 章同时存在 Theorem 1-3、Corollary 1-12、
+        # Lemma 1-4——三族在窗口 (2,) 内重号 → 各自独立，拆成三个具名组。
+        _ev = _contract_counter_evidence(extract_dir, include_chapter=True)
+        if _ev:
             _single_level_windowed = True
-            headings = [(0, f, comps) for (f, comps) in _single_evidence]
+    if _ev:
+        _contract_evidence = _ev
+        _have = {_FORM_CANON.get(str(f).lower()) for f, _c in _ev}
+        # 契约覆盖的标签：只取契约样本（干净）；契约没覆盖的标签：补该标签的
+        # OCR 标题，避免它在证据里整个隐形。
+        headings = ([(0, f, c) for (f, c) in _ev]
+                    + [h for h in headings
+                       if _FORM_CANON.get(str(h[1]).lower()) not in _have])
     # group by shared counter.  Single-level (type 1) books WITHOUT a structure
     # contract have no chapter window (OCR headings carry only a bare number),
     # so they fall back to the domain convention (_group_single_level).  With a
@@ -1692,7 +1787,10 @@ def _ocr_appendix_chapters(extract_dir):
 
 
 def _chapter_map_special_chapters(extract_dir, kind):
-    """chapter_map.json 中显式登记为指定 kind 的章（kind=2 附录 / kind=3 补篇）。"""
+    """chapter_map.json 中登记为指定 kind 的章（kind=2 附录 / kind=3 补篇）。
+
+    kind 缺失时按章名双信号回退（见下方注释），与 ConfigLoader 的附录判据同源。
+    """
     cm_p = os.path.join(extract_dir, 'chapter_map.json')
     if not os.path.exists(cm_p):
         return []
@@ -1708,13 +1806,30 @@ def _chapter_map_special_chapters(extract_dir, kind):
     for e in nodes:
         if not isinstance(e, dict):
             continue
-        k = int(e.get('kind', 1) or 1)
+        _name = str(e.get('name') or e.get('name_en') or e.get('title') or '')
+        _raw_kind = e.get('kind', None)
+        if _raw_kind is None:
+            # 🔴 双信号回退（Shafarevich《Basic Algebraic Geometry 1》实测）：
+            # chapter_map 未写 kind 时，**章名**就是附录/补篇判据——与
+            # `ConfigLoader.is_appendix_chapter`、`build_structure._is_appendix`
+            # 同源（二者都认「章名含 Appendix/附录」）。只认显式 kind 会让本书
+            # "Algebraic Appendix" 落回主配置：正文 type 2 的两段号（`3.1`）正则
+            # 撞不上附录的字母章位（`Proposition A.1`）→ appendix5 契约 items=0、
+            # 17 条 Proposition + 3 条 Corollary 整批从结构里消失。
+            if kind == KIND_APPENDIX and _APPENDIX_NAME_RE.search(_name):
+                k = KIND_APPENDIX
+            elif kind == KIND_SUPPLEMENT and SUPPLEMENT_NAME_RE.search(_name):
+                k = KIND_SUPPLEMENT
+            else:
+                continue
+        else:
+            k = int(_raw_kind or 1)
         if k != kind:
             continue
         ch = e.get('ch', e.get('num', e.get('chapter')))
         if ch is None:
             continue
-        out.append({'ch': ch, 'name': e.get('name') or e.get('name_en') or '',
+        out.append({'ch': ch, 'name': _name,
                     'start': e.get('start'), 'end': e.get('end')})
     out.sort(key=lambda d: str(d['ch']))
     return out
@@ -1815,27 +1930,32 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     ordinal_arr = []
     if ordinal is not None:
         if is_appendix:
-            all_labels = []
-            for g in groups:
-                for nm in g:
-                    if nm and nm not in all_labels:
-                        all_labels.append(nm)
             if ordinal == ORDINAL_APP2:
                 # 两段附录字母章位（Lee ISM `Label B.N`）：计数器跨全附录连续
                 # （Example A.4-A.8 不分节重置）、每字母章从 1 重开 → 章级
                 # 计数器（scope=2，首分量=字母与章键 'A'/'B'… 比对，跨章
                 # 守卫天然成立）。
                 scope = 2
-                ordinal_arr.append({"type": ORDINAL_APP2,
-                                    "name": all_labels or ["uncat"], "scope": 2})
             else:
                 # 🔴 三级附录字母章位（Weibel `Label A.S.N`）：所有标签共享
                 # 「按节(A.S)重置」的计数器（A.1.1, A.1.2 … 然后 A.2.1 重置），
-                # 合并为单个 group、scope=3，避免字母章位窗口把每个 (A.S)
-                # 拆成独立 group。
+                # scope=3，避免字母章位窗口把每个 (A.S) 拆成独立 group。
                 scope = 3
-                ordinal_arr.append({"type": ORDINAL_APP,
-                                    "name": all_labels or ["uncat"], "scope": 3})
+            # 🔴 **保留探测出的计数器划分**，不得把 groups 压成一个标签列表。
+            # 旧实现一律 flatten（Lee ISM 附录「全部标签共享一条计数器」的经验
+            # 值），代价实测在 Shafarevich《Basic Algebraic Geometry 1》的
+            # Algebraic Appendix：那里 `Proposition A.1-A.17` 与
+            # `Corollary A.1-A.3` 是**平行计数器**（探测已正确拆成两组），压成一组
+            # 后 `label_group` 认为同组 → 同页异标签按数字序裁决 → `Corollary A.1`
+            # 顶到 `Proposition A.11`（印面在其后）之前，ANCHOR-SANITY 拒绝落盘；
+            # 且 O/B 层按合并号段判缺号会双向造假阳。探测只给一组时（Lee 式共享）
+            # 行为与旧实现逐字相同，零回归。
+            for name in (groups or [["uncat"]]):
+                ordinal_arr.append({
+                    "type": ordinal,
+                    "name": [nm for nm in name if nm] or ["uncat"],
+                    "scope": scope,
+                })
         else:
             scope = SCOPE_BY_TYPE.get(ordinal, 2)
             for name in groups:
@@ -1868,14 +1988,22 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
         for g in _load_old_ordinal(cfg_path, section_key):
             if any(_is_fig_kw(nm) for nm in g.get("name", [])):
-                if ordinal is not None:
-                    ordinal_arr.append({
-                        "type": ordinal,
-                        "name": g.get("name") or ["Figure"],
-                        "scope": SCOPE_BY_TYPE.get(ordinal, 2),
-                    })
-                else:
-                    ordinal_arr.append(g)
+                # 🔴 图号计数器与**条目**计数器正交（Figure 单独成组的全部理由）。
+                # 旧实现把继承来的组按正文字段重打 `type=ordinal,
+                # scope=SCOPE_BY_TYPE[ordinal]`——Shafarevich《Basic Algebraic
+                # Geometry 1》实测：图全局整数编号（`Figure 1…26`，旧账
+                # type 1/scope 1），条目两段号（type 2），`--force` 重生成于是
+                # 把 Figure 悄悄改成 type 2/scope 2，此后 `load_fig_components`
+                # 期待 `N.M` 形态 → 全部印面 `Figure 7` 失配（假缺号/顺序噪声）。
+                # 继承即**原样回贴**（账本保真）；只有旧组本身缺 type/scope 时
+                # 才退回正文字段（老配置的残缺记录）。
+                _keep = dict(g)
+                if "type" not in _keep:
+                    _keep["type"] = (ordinal if ordinal is not None else 0)
+                if "scope" not in _keep:
+                    _keep["scope"] = SCOPE_BY_TYPE.get(_keep["type"], 2)
+                _keep["name"] = _keep.get("name") or ["Figure"]
+                ordinal_arr.append(_keep)
                 break
     # 🔴 生成器契约自洽（2026-09-24 AM 实测坑，负向测试
     # config/verify_config/tests/test_fig_group_guarantee.py）：figure_io 的
@@ -1950,7 +2078,60 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     config["section_types"] = sd
     if ordinal == ORDINAL_HUM:
         config["sections_global"] = True
+    # 🔴 人工声明的结构开关回贴（见 _MANUAL_DECLARED_FLAGS 注释）：探测器
+    # 本轮没写这些键 → 从旧账取回，`--force` 不再把书的体例声明洗掉。
+    for _k, _v in _load_old_manual_flags(cfg_path, section_key).items():
+        config.setdefault(_k, _v)
     return config, family, groups, ordinal, depth
+
+
+# --- manual declared flags (ledger fidelity on --force) --------------------
+# 🔴 `make_config --force` 会**整份重扫并覆盖**配置。条目体例（ordinal /
+# formula）有 best-effort 探测器，而下面这些开关是**结构体例的人工声明**
+# ——探测器刻意不产出（判据依赖「每章是否从 1 重起」这类跨页语义，任何启发式
+# 都会在他书上误触发）。旧实现重生成时把它们静默丢掉：Shafarevich《Basic
+# Algebraic Geometry 1》实测 `chapter_local_numbering: true` 一丢，scan_skeleton
+# 立刻退回通用 `§C.S` 通道 → 全书 sections=0、条目落章级桶，而配置看起来
+# 完全正常（假绿）。因此与 `_load_old_ordinal` / `_load_old_formula` 同构：
+# 重生成时**回贴**旧账里声明为 True 的这些字段（只回贴 True，绝不注入 False，
+# 也不覆盖探测器本轮已经写下的同名键）。
+_MANUAL_DECLARED_FLAGS = (
+    'chapter_local_numbering',    # 章内三层（节 §N 每章重起 + 小节 N.M）
+    'chapter_local_sections',     # 节清单以已写出的 md 为权威
+    'chapter_scoped_items',       # 条目按章重启、不带节段
+    'gm_bare_numbered',           # 裸单号条目（GM 型）
+    'exercise_region_headings',   # 练习区标题词（列表，非布尔）
+)
+
+
+def _load_old_manual_flags(cfg_path, section_key="ch"):
+    """旧配置里人工声明的开关（True / 非空列表）→ dict（可能为空）。
+
+    与 `_load_old_ordinal` 同构：外层 map 读 ``data[section_key]``，扁平格式读
+    顶层。只收「声明为真」的字段——False / 空列表等于没声明，不回贴。
+
+    扁平格式的顶层声明在**当年对附录/补篇章同样生效**（旧书无 appendix 子配置
+    时 ConfigLoader 整章回退主配置），所以首次补写 appendix/supplement 子配置
+    时照原样继承它们 = 零回归，而非跨段污染。
+    """
+    try:
+        with open(cfg_path, encoding="utf-8-sig") as f:
+            data = json.load(f) or {}
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if any(k in data for k in ("ch", "appendix", "supplement")):
+        sub = data.get(section_key)
+        cfg = sub if isinstance(sub, dict) else {}
+    else:
+        cfg = data
+    out = {}
+    for k in _MANUAL_DECLARED_FLAGS:
+        v = cfg.get(k)
+        if v is True or (isinstance(v, (list, tuple)) and len(v) > 0):
+            out[k] = list(v) if isinstance(v, (list, tuple)) else True
+    return out
 
 
 def _generate_special_verify_configs(extract_dir):

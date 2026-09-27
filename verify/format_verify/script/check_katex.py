@@ -391,13 +391,30 @@ def process_file(path, fix):
     # 是**证明标题**（对应印刷 "Proof of Theorem 29.2.6."），不是被吞进引用的
     # 结构性条目——它本就应与证明正文一起待在 > 块里。以「…的证明[（尾缀）]。**」
     # 收尾的行不计。
+    # 🔴 尾缀标点须放宽（Shafarevich《BAG 1》CN ch2/ch3/ch4 实测 5 处）：本书译文体例是
+    # 「> **定理 2.11 的证明**：」——闭合 `**` **之后**还跟全/半角冒号（源语言正是
+    # `> **Proof of Theorem 2.11**:` 这种「冒号在粗体外」的形态）。旧正则要求 `**` 后即
+    # 行尾，于是证明标题被判成「被吞进引用的结构性条目」，且 `--fix` 会把它的 `>` 剥掉、
+    # 把标题从证明块里拆出去（gate_units 的「证明须包在 `>` 内」随即反噬）。真正的裸
+    # 结构性条目（「> **定义 13.1.1 转移函数。**」）结尾不是「…的证明」，仍照报。
     _struct_in_bq_re = re.compile(
         r'^>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理'
         r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)\b')
     _proof_title_in_bq_re = re.compile(
-        r'(?:的证明|的证明|之证明|证明)\s*(?:[（(][^）)]*[)）])?\s*[。.．]?\s*\*\*\s*$')
+        r'(?:的证明|的证明|之证明|证明)\s*(?:[（(][^）)]*[)）])?\s*[。.．]?\s*\*\*\s*'
+        r'[：:。.，,]?\s*$')
+    def _struct_in_bq_hit(line):
+        """判据唯一入口：检测趟与修复趟**必须共用**本谓词。
+
+        🔴 修复趟此前只认 `_struct_in_bq_re`、不带证明标题豁免，于是 `--fix` 会把
+        检测已豁免的「> **定理 2.11 的证明**：」照旧剥掉 `>`——标题被拆出证明块，
+        与 gate_units「证明正文须包在 `>` 内」互相打脸（书 md 被静默重排）。
+        """
+        return bool(_struct_in_bq_re.match(line)
+                    and not _proof_title_in_bq_re.search(line))
+
     for i, line in enumerate(lines):
-        if _struct_in_bq_re.match(line) and not _proof_title_in_bq_re.search(line):
+        if _struct_in_bq_hit(line):
             errors.append(
                 f'line {i + 1}: 结构性条目不应进入块引用（>），应独立成行顶层')
             fix_struct.append(('strip_bq', i))
@@ -513,7 +530,7 @@ def process_file(path, fix):
         struct_fixed = 0
         # Pass 2b：去掉结构性条目的 > 前缀（不位移索引）
         for i in range(len(lines) - 1, -1, -1):
-            if _struct_in_bq_re.match(lines[i]):
+            if _struct_in_bq_hit(lines[i]):
                 l = lines[i]
                 if l.startswith('> '):
                     lines[i] = l[2:]

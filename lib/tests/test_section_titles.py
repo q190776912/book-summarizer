@@ -1,4 +1,4 @@
-"""Tests for lib/section_titles.py — 章级闸 ⑰「节标题折行截短」。
+"""Tests for lib/section_titles.py — 章级闸 ⑰「节标题折行截短 / 词间空格丢失」。
 
 Run:  python lib/tests/test_section_titles.py
 
@@ -9,6 +9,11 @@ Run:  python lib/tests/test_section_titles.py
 (b) 契约/单元双双残缺（成品直接是残题，如 `8.5 Inclusion-`）。
 正向用例锁零假阳：单个词的合法节题、并列同义词、粘连页码残渣、撇号异形、
 译文标题（CJK 虚词结尾合法，「……是如何陈述的」）。
+
+第二类缺陷（2026-09-28 Shafarevich《Basic Algebraic Geometry 1》实测）= OCR 把印刷
+词间空格吞掉：契约 §3.1 name=`IrreducibleAlgebraicSubsets`（`page_051.json` 该标题块
+text 本身就是 `'3.1IrreducibleAlgebraicSubsets'`），写手按印面写的 H2 带空格，而
+`norm_title` 比较前剥全部空白 → 两侧判等、门控放行，契约成了唯一带病的 SSOT。
 """
 import os
 import sys
@@ -25,7 +30,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from section_titles import (clean_title, dangling_reason,  # noqa: E402
+from section_titles import (clean_title, dangling_reason, glued_reason,  # noqa: E402
                             norm_title, title_problems)
 
 
@@ -69,6 +74,19 @@ class TestDangling(unittest.TestCase):
         self.assertEqual(clean_title("## §2 Phase Flows 57", "2"), "Phase Flows")
         self.assertEqual(norm_title("Phase Flows 57", ""), norm_title("Phase Flows", ""))
 
+    def test_title_ending_in_single_digit_not_page_glue(self):
+        """Vakil 3e §19.8 实测假阳：'Curves of genus 4 and 5' 是真节题，
+        「 5」不是粘连页码——带空格的剥除只认两位数以上，否则剥出假 and 悬空。"""
+        self.assertEqual(clean_title("## §19.8 Curves of genus 4 and 5", "19.8"),
+                         "Curves of genus 4 and 5")
+        self.assertIsNone(
+            dangling_reason("## §19.8 Curves of genus 4 and 5", "19.8"))
+        for t in ("## §19.5 Curves of genus 0", "## §19.7 Curves of genus 3"):
+            self.assertIsNone(dangling_reason(t, "19.x"), t)
+        # 两位数尾数仍按页码残渣剥（正文页码 ≥10 恒两位数起）
+        self.assertEqual(clean_title("## §19.8 Curves of genus 4 and 157", "19.8"),
+                         "Curves of genus 4 and")
+
 
 class TestContractUnitReconciliation(unittest.TestCase):
     def test_contract_truncated_unit_complete_fails(self):
@@ -101,13 +119,45 @@ class TestContractUnitReconciliation(unittest.TestCase):
                                _read({"7.3.2.md": "### §7.3.2 Bayes' Theorem\n\n正文"}))
         self.assertEqual(probs, [])
 
-    def test_glued_words_normalized(self):
-        """ch1 §1.4.8：契约粘连成 LogicalEquivalencesInvolvingQuantifiers。"""
+    def test_dash_variant_passes(self):
+        """Shafarevich 代数几何 1 ch3 §7 实测假阳：印面排 en dash，契约侧被抽成半角。
+
+        写手照印面写 `Riemann–Roch` 是正确做法，dash 族异形不得算分叉。
+        """
+        c = _contract([("7", "7 The Riemann-Roch Theorem on Curves"),
+                       ("7.2", "7.2 Preliminary Form of the Riemann-Roch Theorem")])
+        units = _units([("7", "The Riemann–Roch Theorem on Curves"),
+                        ("7.2", "Preliminary Form of the Riemann–Roch Theorem")])
+        bodies = {"7.md": "## §7 The Riemann–Roch Theorem on Curves\n\n正文",
+                  "7.2.md": "## §7.2 Preliminary Form of the Riemann–Roch Theorem\n\n正文"}
+        self.assertEqual(title_problems(c, units, _read(bodies)), [])
+        # Minus sign U+2212（数学体排版常见）与 em dash 同样折
+        self.assertEqual(norm_title("Grothendieck−group", ""),
+                         norm_title("Grothendieck-group", ""))
+
+    def test_dash_fold_does_not_mask_real_difference(self):
+        """负向：折 dash 只吞连接符异形，真缺词/改写仍须报。"""
+        c = _contract([("7.2", "7.2 Preliminary Form of the Riemann-Roch Theorem")])
+        probs = title_problems(
+            c, _units([("7.2", "Form of the Riemann–Roch Theorem")]),
+            _read({"7.2.md": "## §7.2 Form of the Riemann–Roch Theorem\n\n正文"}))
+        self.assertTrue(any("不一致" in p for p in probs), probs)
+
+    def test_glued_words_now_reported(self):
+        """Rosen ch1 §1.4.8 实测：契约粘连成 LogicalEquivalencesInvolvingQuantifiers。
+
+        旧断言是 `probs == []`（比对剥空白 → 判等放行），那正是本模块的**盲区**：
+        写手按印面写对、契约带病，重拆即回退成粘连题。自 ⑰ 补 glued 判据后必须报。
+        """
         c = _contract([("1.4.8", "1.4.8 LogicalEquivalencesInvolvingQuantifiers")])
         probs = title_problems(
             c, _units([("1.4.8", "Logical Equivalences Involving Quantifiers")]),
             _read({"1.4.8.md": "### §1.4.8 Logical Equivalences Involving Quantifiers\n\n正文"}))
-        self.assertEqual(probs, [])
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("词间空格丢失", probs[0])
+        # 归一形仍相等（前缀/缺词类判据不得被粘连误伤）
+        self.assertEqual(norm_title("1.4.8 LogicalEquivalencesInvolvingQuantifiers", "1.4.8"),
+                         norm_title("### §1.4.8 Logical Equivalences Involving Quantifiers", "1.4.8"))
 
     def test_unit_shorter_than_contract_fails(self):
         c = _contract([("9.1", "9.1 Relations and Their Properties")])
@@ -135,6 +185,124 @@ class TestContractUnitReconciliation(unittest.TestCase):
         probs = title_problems(c, _units([("6.1", "The Basics of Counting")]),
                                _read({"6.1.md": "没有标题行的正文"}))
         self.assertEqual(probs, [])
+
+
+class TestGluedWords(unittest.TestCase):
+    """OCR 吞词间空格：`norm_title` 剥空白看不见，必须由 ⑰ 独立判。"""
+
+    def test_glued_contract_name_reported_despite_equal_compare(self):
+        """Shafarevich ch1 §3.1 实测形态：契约粘连、单元按印面带空格。"""
+        c = _contract([("3.1", "3.1 IrreducibleAlgebraicSubsets")])
+        probs = title_problems(
+            c, _units([("3.1", "Irreducible Algebraic Subsets")]),
+            _read({"3.1.md": "## §3.1 Irreducible Algebraic Subsets\n\n正文"}))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("词间空格丢失", probs[0])
+        self.assertIn("SSOT", probs[0])
+
+    def test_glued_unit_title_with_clean_contract_reported(self):
+        c = _contract([("5.4", "5.4 Noether Normalisation")])
+        probs = title_problems(
+            c, _units([("5.4", "NoetherNormalisation")]),
+            _read({"5.4.md": "## §5.4 NoetherNormalisation\n\n正文"}))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("补回空格", probs[0])
+
+    def test_translation_dir_never_judged(self):
+        """units-translate 的 H2 是中文译文，粘连判据整条跳过。"""
+        c = _contract([("3.1", "3.1 IrreducibleAlgebraicSubsets")])
+        probs = title_problems(c, _units([("3.1", "不可约代数子集")]),
+                               _read({"3.1.md": "## §3.1 不可约代数子集\n\n正文"}),
+                               compare_names=False)
+        self.assertEqual(probs, [])
+
+    def test_multiword_names_are_not_judged(self):
+        """负向（保守边界）：含空格的形态不判——那是「整句被当节名」另一类，噪声大。"""
+        self.assertIsNone(glued_reason(
+            "ExampleLet G=GL（n,R)andXthesetofall columnvectors"))
+        self.assertIsNone(glued_reason("Rosen DiscreteMath"))
+
+    def test_single_word_and_short_names_pass(self):
+        """负向：合法单词节题 / 短缩写不可能有驼峰接缝，长度 <8 亦不判。"""
+        for t in ("Sets", "Connectivity", "Theorem", "OpenSSL", "SL2R", "p-adic"):
+            self.assertIsNone(glued_reason(t, "x"), t)
+        # 阈值 ≥8：`AppendixA`（9 字）确实该判——印面是 "Appendix A"
+        self.assertTrue(glued_reason("AppendixA"))
+        self.assertIsNone(glued_reason("Fig1a"))
+
+    def test_cjk_names_pass(self):
+        self.assertIsNone(glued_reason("序列与求和", "2.4"))
+        self.assertIsNone(glued_reason("离散数学及其应用", ""))
+
+
+class TestTypesetFold(unittest.TestCase):
+    r"""契约 name（页 OCR 裸字符）↔ 单元 H2（印面 KaTeX）异形不算分叉。
+
+    2026-09-28 Apostol《Introduction to Analytic Number Theory》ch2 实测 6 处假报：
+    契约 `The Mobius function μ(n)` 而写手**按印面**写 `The Möbius function $\mu(n)$`
+    ——写数学模式是写作要求，旧 `norm_title` 却判「两侧互非前缀（其中一侧被 OCR 改写）」
+    并索要「统一五处」，等于逼写手把正确写法降级去迁就 OCR 残骸。
+    """
+
+    def test_mu_markup_matches_bare_greek(self):
+        self.assertEqual(norm_title("The Möbius function $\\mu(n)$", ""),
+                         norm_title("The Mobius function μ(n)", ""))
+
+    def test_varphi_macro_case_fold(self):
+        # OCR 把印面 φ 读成大写 Φ：字母码位大小写经 .lower() 归一
+        self.assertEqual(norm_title("A relation connecting $\\varphi$ and $\\mu$", ""),
+                         norm_title("A relation connecting Φ and μ", ""))
+
+    def test_text_macro_and_braces_fold(self):
+        self.assertEqual(norm_title("$\\operatorname{Li}(x)$ theorem", ""),
+                         norm_title("Li(x) theorem", ""))
+
+    def test_gate_passes_on_typeset_unit_title(self):
+        c = _contract([("2.2", "2.2 The Mobius function μ(n)"),
+                       ("2.8", "2.8 The Mangoldt function Λ(n)")])
+        units = _units([("2.2", "The Möbius function $\\mu(n)$"),
+                        ("2.8", "The Mangoldt function $\\Lambda(n)$")])
+        bodies = {"2.2.md": "## §2.2 The Möbius function $\\mu(n)$\n\n正文",
+                  "2.8.md": "## §2.8 The Mangoldt function $\\Lambda(n)$\n\n正文"}
+        self.assertEqual(title_problems(c, units, _read(bodies)), [])
+
+    def test_fold_does_not_mask_real_ocr_misread(self):
+        """负向：φ(n) 被 OCR 读成 `p(n)` 是真残缺，折形后仍须报。"""
+        c = _contract([("2.3", "2.3 The Euler totient function p(n)")])
+        probs = title_problems(
+            c, _units([("2.3", "The Euler totient function $\\varphi(n)$")]),
+            _read({"2.3.md": "## §2.3 The Euler totient function $\\varphi(n)$\n\n正文"}))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("不一致", probs[0])
+
+    def test_fold_does_not_mask_truncation(self):
+        """负向：折形只吞排版异形，折行截短（契约残题）仍按前缀关系报出。"""
+        c = _contract([("2.7", "2.7 Dirichlet inverses and the Mobius")])
+        probs = title_problems(
+            c, _units([("2.7", "Dirichlet inverses and the Möbius function")]),
+            _read({"2.7.md": "## §2.7 Dirichlet inverses and the Möbius function\n\n正文"}))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("契约侧截短", probs[0])
+
+    def test_symbol_macro_and_scripts_fold(self):
+        r"""`\mid`、`\zeta`、`\sigma_a` vs `\sigma_{a}`、`x^2` vs `x2` 全部同形。"""
+        self.assertEqual(norm_title("Evaluation of $(-1\\mid p)$ and $(2\\mid p)$", ""),
+                         norm_title("Evaluation of (-1|p) and (2|p)", ""))
+        self.assertEqual(norm_title("Zero-free regions for $\\zeta(s)$", ""),
+                         norm_title("Zero-free regions for ζ(s)", ""))
+        self.assertEqual(norm_title("contour integral for $\\psi_{1}(x)/x^{2}$", ""),
+                         norm_title("contour integral for ψ_1(x)/x2", ""))
+        self.assertEqual(norm_title("primitive roots mod $2^\\alpha$ for $\\alpha \\ge 3$", ""),
+                         norm_title("primitive roots mod 2α for α ≥ 3", ""))
+        self.assertEqual(norm_title("Chebyshev's functions $\\psi(x)$ and $\\vartheta(x)$", ""),
+                         norm_title("Chebyshev's functions ψ(x) and ϑ(x)", ""))
+
+    def test_symbol_fold_keeps_real_differences(self):
+        """负向：折形不得把 ζ 与 θ、ψ 与 φ 折成同一个字母。"""
+        self.assertNotEqual(norm_title("Zero-free regions for $\\zeta(s)$", ""),
+                            norm_title("Zero-free regions for $\\theta(s)$", ""))
+        self.assertNotEqual(norm_title("The average order of $\\varphi(n)$", ""),
+                            norm_title("The average order of $\\psi(n)$", ""))
 
 
 if __name__ == "__main__":

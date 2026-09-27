@@ -48,6 +48,7 @@ import subprocess
 from verify.script.struct_labels import (
     G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE,
     G_ITEM_BQ_HEAD_RE,
+    G_BQ_BOLD_HEAD_BOUNDARY_RE,
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
@@ -115,6 +116,12 @@ def check_g_quote_continuity(md_file):
     「证明|证|例」的 `G_HEAD` 开块，导致同一结构 EN 源单元不开块、CN 译单元判
     断裂——译者为过关把合法分块空行改写成空 `>` 行或私加 `---`，源/译两版结构
     分叉。现统一用 `G_ITEM_BQ_HEAD_RE`（例/Example/证明/Proof/解答/Solution）。
+    🔴 「下一个引用行是不是**新块**」还要认**任意粗体标签头**（`G_BQ_BOLD_HEAD_
+    BOUNDARY_RE`，Shafarevich 代数几何 1 附录 2026-09-28）：本技能的另一判据
+    `_H_MISSING_BQ` 要求 `注/Note/Remark` 也包成 `> **Remark** …`，而六词表不含
+    它们，于是「证明块 + 合法空行 + `> **Remark**`」被本检测判断裂，写手只能
+    把 Remark 挤进证明块（改结构）才过闸。实测放宽：corpus 全量 md 消 5 误报 /
+    新增 0 报告（散文续行从不以粗体 run 起头，保护力度不降）。
 
     Flagged:
       (1) **真断裂**：item 块内出现裸空行（无 `>` 的纯空行），且下一个非空行仍以
@@ -156,7 +163,8 @@ def check_g_quote_continuity(md_file):
             if j >= n:
                 continue  # trailing blank at EOF — nothing after to split, harmless
             nx = lines[j]
-            is_newblock = bool(G_ITEM_BQ_HEAD_RE.match(nx) or G_HEAD.match(nx))
+            is_newblock = bool(G_ITEM_BQ_HEAD_RE.match(nx) or G_HEAD.match(nx)
+                               or G_BQ_BOLD_HEAD_BOUNDARY_RE.match(nx))
             is_term = bool(G_TERM.match(nx) and not nx.lstrip().startswith('>'))
             if is_newblock or is_term:
                 in_block = bool(is_newblock and not is_term)
@@ -375,6 +383,21 @@ _H_MISSING_BQ = re.compile(
 
 _H_MISSING_BQ_FOOTNOTE = re.compile(r'^\s*\{')
 
+# 🔴 「章末注记题头」豁免（Robinson 李代数书 ch3/ch6 译单元实测 2026-09-28）。
+#   章末 `**Notes**` / `**注记 (Notes)**`（含 run-in 正文，如 `**Notes** On weight
+#   spaces … see Lemire [1]`）是**节级**标题，不属 V-F 第 29 条所指的 item 附属块。
+#   旧判据下英文 `**Notes**` 因 `Note(?![\w\-])` 的复数尾巴**天然不命中**，中文同位
+#   写法 `**注记 …**` 却命中 → 同一结构「源过 / 译不过」，译者只能把标题塞进 `>` 或
+#   改词规避，两版结构随之分叉（本书 ch3 0009/0034/0050、ch6 0008/0018 实测）。
+#   豁免形态收得很窄，以免冲掉 2026-09-27/28「`评注`/`注记` 补入必包表」的决定
+#   （见 `tests/test_h_mbq_bilingual_remark.py`）：**只**认「关键词 + 英文括注 +
+#   粗体 run 即止」——括注正是「印面标题词被翻译」的机械信号（`**注记 (Notes)**`）。
+#   仍必包：`**注记 3.1**：…`（带编号）、`**评注** 单独一个词。`（无括注）、
+#   `**Note**: …` / `**Remarks 3.4.1** …`（英文侧同判）。
+_H_NOTE_HEADING_RE = re.compile(
+    r'^\s*\*\*\s*(?:注记|评注|说明)\s*[（(]\s*(?:Notes?|Remarks?|Comments?)\s*[)）]\s*\*\*')
+
+
 def _h_ext_is_legit_bq(s):
     """A blockquote line that is LEGIT (proof/example/note/footnote) -> stop.
 
@@ -389,8 +412,13 @@ def _h_ext_is_legit_bq(s):
     if inner.startswith('^{'):
         return True
     # Chinese openers（解 = EN Solution 的对应标签，Rosen 8e 译单元实测 2026-09-26）
+    # 🔴 评注 / 说明 必须与必包表 `_H_MISSING_BQ` 同步（Etingof 表示论 2026-09-28 实测）：
+    # 必包表要求 `**评注 N.M**` 包进 `>`，但本判定只认 `**注`，`**评注` 开头认不出来，
+    # 于是**已经正确包裹**的中文评注块被当作「陈述区」，其块内 `> $$` 误报 h_stmt_bq，
+    # 而同结构的英文 `> **Remark 6.12**`（EN 分支在下方）却放行 → 「源过 / 译不过」。
     if (inner.startswith('**证明') or inner.startswith('**例')
-            or inner.startswith('**注') or inner.startswith('**解')):
+            or inner.startswith('**注') or inner.startswith('**解')
+            or inner.startswith('**评注') or inner.startswith('**说明')):
         return True
     # number-first form:  > **N.M-K 例  (book prints 编号在前)
     if re.match(r'^\*\*\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example|注|Note|Remark|证明|证|说明)', inner):
@@ -593,6 +621,8 @@ def check_labels_missing_blockquote(md_file):
             continue
         if re.match(r'^#{1,6}\s', ln):
             continue
+        if _H_NOTE_HEADING_RE.match(st):
+            continue    # 题式注记标签（两侧同口径豁免，见上方注释）
         if _H_MISSING_BQ.match(st) or _H_MISSING_BQ_FOOTNOTE.match(st):
             out.append(f"  x L{i+1}: label `{st[:40]}` should be inside `>` "
                        f"(add `> ` prefix)")

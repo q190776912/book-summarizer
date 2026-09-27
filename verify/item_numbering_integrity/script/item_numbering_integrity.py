@@ -104,6 +104,11 @@ def _numpath_regexes(levels):
 # (this silently broke combined 定义/定理/例 counters).  See _parse_entry.
 _ENTRY_LABELS = (
     r'系|定理|定义|引理|推论|命题|例子|例题|例|注记|评注|注|公理|问题|练习题|练习|习题|引例|附注'
+    # 🔴 Iwaniec-Kowalski 2026-09-28 实测：`猜想`/`Conjecture`（及断言/假设/条件）
+    # 是 _LABEL_CANON 已正名的标准条目类型，但不在本词表 → 合成 md 条头
+    # `**猜想7.32**` 只剩裸号 `7.32` 走 num-first、tail 空 → 被丢弃 →
+    # 共享计数器窗假「缺号 32」（BLOCKING、整章卡结构闸门）。
+    r'|猜想|断言|假设|假定|条件'
     r'|算法|性质|构造|应用|变式|警告|记号|术语|要求'
     # 🔴 Plurals MUST precede their singular ('Remarks|Remark'): the alternation
     # is first-match, so with the singular first a header '8. Remarks' matched
@@ -119,6 +124,11 @@ _ENTRY_LABELS = (
     r'|Exercises|Exercise|Problems|Problem|Notes|Note|Axioms|Axiom|Warnings|Warning'
     r'|Constructions|Construction|Notations|Notation|Terminology'
     r'|Applications|Application|Variations|Variation|Porisms|Porism'
+    # 🔴 同 CN 侧「猜想」缺失的同源 bug（Iwaniec-Kowalski 实测）：EN 词表无
+    # Conjecture/Assertion/Assumption/Condition 时 `**Conjecture 7.32**` 解析失败
+    # → 假缺号。Plurals 同样须排在单数前。
+    r'|Conjectures|Conjecture|Assertions|Assertion|Assumptions|Assumption'
+    r'|Conditions|Condition'
     r'|Calculations|Calculation'
 )
 # 🔴 Weibel「Calculation 6.2.1」这类以计算命名的条目：缺该类型词时条头解析
@@ -138,6 +148,8 @@ _LABEL_NORM = {
     '应用': 'Application', '变式': 'Variation', 'Application': 'Application',
     '系': 'Porism', '警告': 'Warning', '记号': 'Notation', '术语': 'Terminology',
     '要求': 'Requirement', 'Requirement': 'Requirement',
+    '猜想': 'Conjecture', '断言': 'Assertion', '假设': 'Assumption',
+    '假定': 'Assumption', '条件': 'Condition',
     'Variation': 'Variation', 'Porism': 'Porism',
 }
 

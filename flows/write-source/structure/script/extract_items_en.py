@@ -20,6 +20,7 @@ import os, sys
 import bisect
 import json, re
 from lib.regexlib import SEP_TIGHT
+from lib.label_typo import label_typo_normalize
 from item_dedup import dedup_items
 
 # ---------------------------------------------------------------------------
@@ -222,6 +223,71 @@ EN_LAB_RE_NF = re.compile(
 )
 
 
+def _poly_band(poly):
+    """OCR poly（扁平 ``[x0,y0,…]`` 或点列 ``[[x,y],…]``）→ ``(x0, x1, y0, y1)``；
+    无 poly 时返回 None（调用方据此放弃几何判据，退回旧行为）。"""
+    if not poly:
+        return None
+    if isinstance(poly[0], (list, tuple)):
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+    else:
+        xs = list(poly[0::2])
+        ys = list(poly[1::2])
+    if not xs or not ys:
+        return None
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _formula_slot_subject(txt, mend, blk, formulas):
+    """True when the lowercase MENTION_VERBS word right after the item number is
+    the **predicate** of a statement whose **subject** is an inline formula the
+    MFD lifted out of the line — i.e. a real entry head, not a cross-reference.
+
+    Shafarevich《Basic Algebraic Geometry 1》p180 实测：印面
+    ``Theorem 3.6  $\\widetilde{\\mathcal O}$ is a principal ideal domain with a
+    finite number of prime ideals.`` 公式被 MFD 单独切成 formula 项后，OCR 文本
+    行只剩 ``Theorem 3.6  is a principal…``（号后**双空格**= 公式槽位）。旧判据
+    见号后小写 ``is`` ∈ MENTION_VERBS 即按交叉引用丢弃 → 契约缺 定理3.6，B 层
+    「缺号 6」BLOCKING，且源侧查漏能捡到、抽取器自己永远捡不到（同一判据）。
+
+    两条证据必须同时成立（缺一即维持原判=丢弃），以免放行 Bass/Tu/Lee 那类真引用：
+      ① 号后紧跟 **≥2 个空格**——OCR 在该处看见了非文字符号（公式槽位）；散文
+         引用句 "Theorem 3.5 follows from…" 号后恒为单个空格；
+      ② 该行（y 带重叠）上确有一条 formula，且其左边界落在「号+槽位」的**估计
+         x 位置**附近（按块宽/字符数线性折算，容差 2 个字符宽）——即公式正好站在
+         槽位上，而不是跟在谓语之后的行尾行内式。
+    """
+    if not txt:
+        return False
+    gap = re.match(r"[ \t]{2,}", txt[mend:])
+    if not gap:
+        return False
+    band = _poly_band(blk.get("poly") if blk else None)
+    if not band or not formulas:
+        return False
+    bx0, bx1, by0, by1 = band
+    w = bx1 - bx0
+    n = len(txt)
+    if w <= 0 or n <= 0:
+        return False
+    cw = w / n                       # 平均字符宽（同一行内近似恒定）
+    est = bx0 + (mend + len(gap.group(0))) * cw
+    tol = 2 * cw
+    for f in formulas:
+        bb = f.get("bbox") if isinstance(f, dict) else None
+        if not bb or len(bb) < 4:
+            continue
+        fx0, fy0, fx1, fy1 = bb[0], bb[1], bb[2], bb[3]
+        if fy1 < by0 or fy0 > by1:   # 不在这一行
+            continue
+        if fx0 <= bx0:               # 行首之前 = 上一行/悬挂式公式
+            continue
+        if fx0 <= est + tol:
+            return True
+    return False
+
+
 def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False,
                      single=False, extra_labels=None, restart_per_section=None):
     """Extract English item headings from OCR pages.
@@ -342,6 +408,12 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
             txt = t.get("text", "")
             if not txt:
                 continue
+            # 🔴 类型词形近补救（与 check_structure_completeness 同一判据，
+            # 单一真源 lib/label_typo.py）：Apostol p42 印刷「Theorem 2.7」被 OCR
+            # 读成「Theorerm 2.7」，正字正则整体失配 → 条目既不入契约也不在源侧
+            # 候选集，闸门只能靠 --backfill 每轮重建后补一次（补数据不是根治）。
+            # 只替换块首一个词，偏移量不变，故下方所有 m.start()/m.end() 逻辑照旧。
+            txt = label_typo_normalize(txt, lab_labels) or txt
             for m in lab_re.finditer(txt):
                 label = m.group(1)
                 if label == "Example" and not want_examples:
@@ -371,6 +443,21 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                                 or (_nxt_c.isascii() and _nxt_c.isalpha())):
                             _mend = _mend2 = m.start(2) + len(_dm2.group(1))
                             _tok_adj = _dm2.group(1)
+                # 🔴 纯字母序标守卫（Shafarevich《Basic AG 1》I p202 实测）：原书在
+                # 数字编号之外另印**字母序标**条头（"Theorem A/B/C/D"、"Corollary A"，
+                # 书中自述 "Theorems are labelled with letters (Theorem A, etc.)"）。
+                # EN_OCR_NUM 把 B/D 视为 8/0 的形近字母，于是 "Theorem B An affine
+                # algebraic group is isomorphic…" 被归一成 numeric 幻影键 `定理8`
+                # （名还留着 "B An affine…"，一看即假），而同段的 A/C 又因无映射被整
+                # 条丢弃——同一族条头四种形态三种结局，键不可信。字母序标条目不占数字
+                # 计数器（不产生缺号），照散文继承即可；要成条目须走 manual_overrides
+                # 或 ORDINAL_HUM 体例，绝不由 OCR 形近表代答。
+                # 只拦「整条匹配无任何数字」的形态（`Theorem A.1` 这类字母章位 +
+                # 数字段照旧放行，那是 APP 体例）。
+                _rest_tok = (m.group(3) or '') if (not single and m.re.groups >= 3) else ''
+                if (_tok_adj or '') and not any(
+                        c.isdigit() for c in (_tok_adj + _rest_tok)):
+                    continue
                 # Reject cross-reference headings: a genuine entry heading is
                 # followed by a sentence period / space + title, never a closing
                 # delimiter.  do Carmo prints entries NUMBER-FIRST, so a label-
@@ -412,7 +499,12 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 _tail = _tm.group(0) if _tm else ""
                 _cand = (_tail + _wd) if _glued else _wd
                 if _cand and _cand.lower() in MENTION_VERBS and not _cand[:1].isupper():
-                    continue
+                    # 🔴 例外：号后是「公式槽位 + 谓语」（Shafarevich 定理3.6），
+                    #    主语被 MFD 拆成 formula 项 → 真条头，不是交叉引用。
+                    if _formula_slot_subject(txt, _mend, t, data.get("formulas")):
+                        pass
+                    else:
+                        continue
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.
                 n1 = _ocr_int_glue(_tok_adj, txt[_mend2:_mend2 + 1])

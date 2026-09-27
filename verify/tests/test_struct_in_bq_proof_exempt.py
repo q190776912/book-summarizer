@@ -56,6 +56,38 @@ class TestProofTitleExemption(unittest.TestCase):
         self.assertTrue(_hit(md),
                         "a structural entry swallowed into a quote must fail")
 
+    def test_proof_title_with_trailing_colon_not_flagged(self):
+        r"""Shafarevich《BAG 1》CN 体例（实测 5 处，ch2/0059、ch3/0057、ch4/0015、ch4/0094）：
+        印刷是 `> **Proof of Theorem 2.11**:`——冒号落在闭合粗体**之外**，故译文写成
+        「> **定理 2.11 的证明**：」。旧豁免要求 `**` 后即行尾，把证明标题误判为被吞条目，
+        `--fix` 还会剥掉 `>` 把标题拆出证明块（与 gate_units「证明须在 `>` 内」互相打脸）。"""
+        md = ("正文。\n\n"
+              "> **定理 2.11 的证明**：\n"
+              "> 1. 设 $f$ 正则……\n\n"
+              "> **引理 4.1 的证明**：\n"
+              "> 2. 逐项验证。\n\n"
+              "> **命题 3.5 的证明（续）**：\n"
+              "> 3. 同上。\n")
+        self.assertFalse(_hit(md), "「…的证明**：」是证明标题，必须豁免")
+
+    def test_struct_entry_with_trailing_colon_still_flagged(self):
+        """反向：真正的裸结构性条目即使尾随冒号也照报——豁免只认「…的证明」收尾。"""
+        md = "> **定义 4.1 射影空间**：\n>\n> 内容。\n"
+        self.assertTrue(_hit(md),
+                        "「> **定义 …**：」是被吞进引用的条目，必须 FAIL")
+
+    def test_fix_does_not_unwrap_exempted_proof_title(self):
+        """`--fix` 不得把豁免的证明标题从 `>` 块里剥出去（strip_bq 误伤=内容重排）。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.md"
+            src = "> **定理 2.11 的证明**：\n> 1. 关键步骤。\n"
+            p.write_text(src, encoding="utf-8")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                process_file(str(p), fix=True)
+            self.assertEqual(p.read_text(encoding="utf-8"), src,
+                             "豁免行被 fix 改动了")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -21,6 +21,26 @@
        * 编号仍在契约正文中（未挂上，作为散落的 `(C.N)` 文本块保留）—— **WARN**
          （信息未丢，但序标没挂到公式上，agent 调整时须手工补 `\tag`）；
        * 两者都没有（编号随文本块一起被噪声过滤/丢弃）—— **FAIL**（编号真丢了）。
+  2c. **正文块守恒（独立真值）**：同一管线「收集 → 噪声过滤」后保留的**每一个 text
+     块**，都必须能在契约树里找到同签名块（条目正文 / description / proof 任一）。
+     收不齐 = **锚点分派把整段正文丢了** → **FAIL**。为什么还要它：① 是「同管线
+     自证」（管线漏抓时两侧同样缺失 → 判 PASS），②c 拿**未经锚点分派的块流**对
+     **分派之后的树**，是唯一看得见「分派阶段吞块」的一项。
+     豁免（只放过管线的正常变形，逐条由 `verify/tests/test_content_block_conservation.py`
+     钉住）：公式归 2b、图片归 2 各自管；归一化长度 < 40 的碎片；本块是契约节点
+     `name` 的**子串**（`_strip_header` 把 OCR 粘连的印刷标题 `Lemma1.4Thegraph of…`
+     吃进了带键前缀的 name）；本块被并进更大的契约块、或＝「剥掉的标题 + 契约块」
+     （**只认内含 / 尾部贴合，中间包含不放行**——「节头+正文+节头」粘连块里正文在
+     契约、两头丢了，正是本闸要抓的形态）；整段本就是契约块但份数不够 → 不放行
+     （签名按份消耗）；本块＝「契约节点标题 + 尾随页码」= 印面**页眉**（Atiyah–
+     Macdonald p50/p128 实测：`_filter_noise` 的边缘重复判据要同一文本在 ≥2 页出现，
+     对奇偶页交替的章节页眉失明）；本块**越过**某个以省略号截断的节点 `name`
+     （`… ` 截到的接缝落在本块里）= 该行标题的未截断原形（Rising Sea p28/p460/p516
+     实测：契约存 `17.4.2. Theorem. … over a…`，印面整行比截断名长，既非 name 子串
+     也不等于任何正文块 → 假丢失）。判据自身执行异常 = FAIL（fail-closed，不静默放行）。
+     ⚠️ 边界：只管「丢」，不管「挂错地方」——印面有正文而某节点 content=0 多是
+     **分派错位**（内容活在隔壁节点），②c 判 PASS；那类问题由 D 层结构对账与
+     步骤 5 `gate_units` 的空正文闸负责。
   3. **证明覆盖审计（尽力而为）**：重算保留文本块中未被 proof 子节点收编的证明
      标记命中（内联「证…」漏检等）→ WARN 列出（供 agent 定位补拆，不阻断）。
 
@@ -243,6 +263,102 @@ def _nodes_by_type(node):
     return cnt
 
 
+_TRAIL_DIGITS_RE = re.compile(r"\d+$")
+# 契约节点 `name` 的**截断省略号**（管线把过长的印刷标题截断显示，非印面省略号）。
+_TRAIL_ELLIPSIS_RE = re.compile(r"(?:…|⋯|\.\.\.)\s*$")
+
+
+def _orphan_text_blocks(kept, contract):
+    """②c 判据（纯函数）：管线「收集 + 噪声过滤」后保留的 text 块 vs 契约树。
+
+    返回丢失块清单 `[(page, text), ...]`——契约里找不到同签名块、且不属于以下
+    **正常变形**豁免的正文块。① 的复算比对是同管线自证，管线自己漏抓时两侧同样
+    缺失判 PASS，看不见这类丢失，故须独立真值。
+
+    豁免：
+      * 归一化长度 < 40 的碎片（页码残迹 / 单字块）；
+      * **块是契约节点 `name` 的子串**——OCR 把印刷标题打成
+        `Lemma1.4Thegraph of…`，而 `name` 带键前缀（`引理1.4 Lemma1.4Thegraph…`），
+        该块已被 `_strip_header` 吃进标题（Shafarevich I ch1 p74/p88、ch3 p173 实测）。
+        🔴 反向（`name` 是块的子串）**不豁免**：真丢失的整段正文常常正好以节头/条目标题
+        开头，反向豁免等于把这类丢失放行；剥标题后的残段由下一条覆盖。
+      * 去掉**尾部数字**后正好等于某契约节点 `name`——印面页眉「节/章标题 + 页码」
+        （`EXTENDED AND CONTRACTED IDEALS … 41`，Atiyah–Macdonald p50/p128 实测）：
+        `_filter_noise` 的「跨页边缘重复」判据要同一文本在 ≥2 页出现，而**奇偶页
+        交替**的标题页眉每页文字互异（各只出现一次）→ 漏网成孤儿块。只削尾随数字，
+        正文段（哪怕以「… for $n = 41$」收尾）削完不等于任何标题，照常报。
+      * **越过截断标题**——契约节点 `name` 以省略号结尾（管线截断显示，剥掉省略号后
+        归一化长度 ≥ 25）时取其后 20 字为「接缝」；本块含有该接缝 → 它就是那一行印刷
+        标题的**未截断原形**，不算丢失（Rising Sea p28/p460/p516 实测）。🔴 只对**带
+        省略号**的 name 生效：未截断的节头仍走上一条（反向不豁免），否则「以节头开头的
+        真丢失整段」会被放行。
+      * 与任一契约正文块**尾部贴合**——`_strip_header` 从块首剥掉印刷标题后
+        契约里存的是残段，故本块 = 标题 + 契约块（`nt.endswith(c)`）；或本块整体
+        被并进某个更大的契约块（`nt in c`）。
+        🔴 **头部贴合不豁免**：`nt.startswith(c)` 意味着「契约只收了本块开头，
+        **尾巴丢了**」——那正是真丢失的形状，不能放行。
+        该豁免**不覆盖**「整段本就是契约块、只是份数不够」：这类块签名按份消耗
+        （`_norm_text` 与 `ac._norm` 两级），份数用尽后不再走包含豁免，否则
+        「印面两段同文、契约只挂一段」会被自己放行（判据测试钉住）。
+    """
+    have = collections.Counter(_collect_contract_blocks(contract))
+    names = [n for n in (ac._norm(x.get("name")) for x in _walk_nodes(contract)) if n]
+    names_set = set(names)
+    # 🔴 **截断标题的接缝**：管线把过长的印刷标题截断存进 `name`（尾随 `…`），于是
+    # 印面那一行的**未截断原形**在契约里既不是 name 的子串（比 name 长）、也不等于任何
+    # 正文块（残段挂在别的节点）→ 假丢失。判据：name 归一化（剥掉省略号）长度 ≥ 25 时，
+    # 取其后 20 字作「接缝」；本块若**含有**该接缝，说明它越过了截断点、正是同一行标题
+    # 的续文，不算丢失。
+    # 🔴 未截断的 name（无省略号）**不进这张表**——「真丢失段恰好以节头开头」的
+    #    反向放行仍由上一条测试钉住不放行。
+    seams = set()
+    for x in _walk_nodes(contract):
+        raw = (x.get("name") or "").strip()
+        if not _TRAIL_ELLIPSIS_RE.search(raw):
+            continue
+        core = ac._norm(_TRAIL_ELLIPSIS_RE.sub("", raw))
+        if len(core) >= 25:
+            seams.add(core[-20:])
+    ctexts_all = [ac._norm(b.get("text")) for b in ac._iter_blocks(contract)
+                  if "text" in b]
+    ctexts = [c for c in ctexts_all if len(c) >= 12]
+    cnorm = collections.Counter(ctexts_all)
+    cexact = set(ctexts_all)          # 消耗前快照：守卫用
+    orphans = []
+    for b in kept:
+        if "text" not in b:
+            continue
+        sig = _block_sig(b)
+        t = sig[1]
+        nt = ac._norm(t)
+        # 两级签名（`_norm_text` 保文 / `ac._norm` 归一）**同时**按份消耗：只销
+        # 一份计数器时，同文重复块的第二份会被另一份计数器放行（判据测试钉住）。
+        if have[sig] > 0 or cnorm[nt] > 0:
+            if have[sig] > 0:
+                have[sig] -= 1
+            if cnorm[nt] > 0:
+                cnorm[nt] -= 1
+            continue
+        if len(t) < 40:
+            continue
+        if any(nt in nm for nm in names):
+            continue
+        # 🔴 印刷**页眉**形态「节/章标题 + 尾随页码」：`nt` 去掉尾部数字后正好等于
+        # 某契约节点名 → 是版面家具不是正文（Atiyah–Macdonald p50/p128 实测：
+        # `EXTENDED AND CONTRACTED IDEALS … 41`、`DIMENSION THEORY … 119`，
+        # `_filter_noise` 的跨页重复判据对**只出现一次的奇偶页交替页眉**失明）。
+        _hd = _TRAIL_DIGITS_RE.sub("", nt)
+        if _hd and _hd in names_set:
+            continue
+        if any(s in nt for s in seams):
+            continue
+        # 🔴 整段本身就是契约里的某个正文块（只是份数不够）时**不走包含豁免**。
+        if nt not in cexact and any(nt in c or nt.endswith(c) for c in ctexts):
+            continue
+        orphans.append((b.get("page"), t))
+    return orphans
+
+
 def check_chapter(ext, ch_node):
     """校验单章：返回 (ok, lines[])。"""
     ch_key = str(ch_node.get("key"))
@@ -252,6 +368,13 @@ def check_chapter(ext, ch_node):
     # ① 确定性复算比对（块多重集）：build_chapter_contract 幂等
     # （内部先还原骨架），可直接对磁盘契约重建。
     built, stats = ac.build_chapter_contract(ext, ch_node)
+    # 🔴 复算必须镜像 build_structure 落盘前的同一后处理：剔除**无印刷锚点**的
+    # 毒 tag（`strip_unattested`，见 build_structure 收割处）。漏这一步时，磁盘
+    # 契约已被剔除、复算却把 tag 挂回来 → 同一公式「缺块 + 多块」假 FAIL
+    # （本书 ch15 的 `5-1` 实测；判据与闸门 ⑭ 同源）。
+    from lib.tag_attestation import (dir_page_loader as _dpl,
+                                     strip_unattested as _strip)
+    _strip(built, _dpl(_node_page_dir(ext, ch_node, ch_key), ext))
     built_sig = _collect_contract_blocks(built)
     p = ac.out_path(ext, ch_key)
     if not os.path.exists(p):
@@ -348,6 +471,32 @@ def check_chapter(ext, ch_node):
             lines.append(
                 f"    公式序标：书源={len(want_tags)} 已挂tag={len(want_tags & got_tags)}"
                 f" 未挂={len(unattached)}")
+
+    # ②c **正文块守恒（独立真值）**：管线「收集 + 噪声过滤」后的每一个正文块，
+    #     都必须能在契约树里找到同签名块（item / description / proof 任一）。
+    #     判据是纯函数 `_orphan_text_blocks`（豁免规则与边界见其 docstring；
+    #     正反用例 `verify/tests/test_content_block_conservation.py`）。
+    try:
+        _st, _en = int(ch_node.get("page_start") or 0), int(ch_node.get("page_end") or 0)
+        _pd = _node_page_dir(ext, ch_node)
+        _ncomp, _scope, _letter, _bare = ac.formula_cfg(ext, ch_key)
+        _srcb, _ph = ac._collect_blocks(ext, _st, _en, ch=ch_key, page_dir=_pd)
+        _kept = ac._filter_noise(_srcb, _ph, max(1, _en - _st + 1), _ncomp,
+                                 letter=_letter)
+        orphans = _orphan_text_blocks(_kept, built)
+        if orphans:
+            ok = False
+            lines.append(f"  ✗ 正文块丢失 {len(orphans)} 处（印面收集到、契约里没有——"
+                         f"锚点分派漏挂，须回源补进契约后重跑 attach + 拆分）：")
+            for pg, t in orphans[:12]:
+                lines.append(f"      - p{pg}: {t[:80]}")
+            if len(orphans) > 12:
+                lines.append(f"      … 其余 {len(orphans) - 12} 处同类")
+        else:
+            lines.append("  ✓ 正文块守恒（收集→契约无丢失）")
+    except Exception as _e:            # fail-closed：判据跑不起来绝不静默放行
+        ok = False
+        lines.append(f"  ✗ 正文块守恒检查执行失败（fail-closed）：{_e!r}")
 
     # ③ 证明覆盖审计（尽力而为，WARN 不阻断）
     missed = []

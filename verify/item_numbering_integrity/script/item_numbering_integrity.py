@@ -907,9 +907,19 @@ def _md_gap_blocking(ctx):
         # 的组就是 uncat 合并组（g.is_uncat）。真·独立习题计数器（Weibel/Lee 的
         # 具名 Exercise 组，is_uncat False）不受影响，仍照常开窗。
         _combined = bool(getattr(g, 'is_uncat', False))
+        # 🔴 共享计数器的书里 **Problem 也可能是同一条序列的成员**（Etingof《群表示论》
+        # 2026-09-27 实测）：该书章内只有一条 1..N 计数器，习题印作 "Problem 1.20"
+        # （紧接 Definition 1.19 续号、与条目同形）。只按 label 把 Problem 塞进
+        # `:ex:` 窗会造成双向假缺号——主窗把练习号当缺号、练习窗把条目号当缺号
+        # （ch1 一次 58 条假 BLOCKING）。判据取**序标形态**：点号多段（1.20）=
+        # 与条目同形 → 留在主窗；Lee 式 "Problem 1-1"（短横、章末独立题号）
+        # 仍照常开窗，不与 Theorem 1.1 撞号。
+        _stays_main = _shared and (
+            _lab in ('exercise', 'exercse', '习题', '练习')
+            or (_lab in ('problem', 'problems', '问题')
+                and re.search(r'\d+\.\d+', inner) is not None))
         _routed_ex = False
-        if (_lab in _EXERCISE_LABELS and not _combined
-                and not (_shared and _lab in ('exercise', 'exercse', '习题', '练习'))):
+        if _lab in _EXERCISE_LABELS and not _combined and not _stays_main:
             if ':' in gk:
                 _gh, _gb = gk.split(':', 1)
                 gk = f"{_gh}:ex:{_gb}"

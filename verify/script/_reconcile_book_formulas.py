@@ -111,7 +111,7 @@ def scan_sectioned(extract_dir, patterns, first, last, md_sections):
                 for m in pat.finditer(ts):
                     raw = m.group(1)
                     n =SourceFormulaIndex.norm(raw)
-                    if not n or not SourceFormulaIndex._plausible(n):
+                    if not n or not SourceFormulaIndex._plausible(n, raw):
                         continue
                     bc = centroid(tb)
                     best = None; bestscore = 1e18

@@ -406,6 +406,10 @@ class SourceFormulaIndex:
         # Section keys of the chapter being scanned (see _load_sec_keys /
         # _repair_heading): OCR repair of a glitched heading number.
         self._sec_keys: Optional[Set[str]] = None
+        # First page of the chapter-end CONSOLIDATED exercise block (see
+        # _load_sec_keys): its printed numbers are excluded from S because
+        # writing-rules drop that block wholesale.
+        self._tail_exer_page: Optional[int] = None
 
     # -- public API ---------------------------------------------------------
     def build(self, ch: int, start: int, end: int) -> None:
@@ -423,6 +427,8 @@ class SourceFormulaIndex:
         nums: Set[str] = set()
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
+            if self._in_exercise_tail(pg):
+                continue
             fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
                 continue
@@ -510,6 +516,8 @@ class SourceFormulaIndex:
         self._load_sec_keys(ch)
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
+            if self._in_exercise_tail(pg):
+                continue
             fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
                 continue
@@ -701,7 +709,7 @@ class SourceFormulaIndex:
                             continue  # ④ 括号号后紧跟逗号/分号 = 散文交叉引用（「(2.5.1), we consider」）
                         raw = mm.group(1)
                         n = self.norm(raw)
-                        if not n or n in self.ignore or not self._plausible(n):
+                        if not n or n in self.ignore or not self._plausible(n, raw):
                             continue
                         sectioned[sec].add(n)
                         # first occurrence's section == book-side definition section
@@ -847,13 +855,15 @@ class SourceFormulaIndex:
         self._cur_heading = self._repair_heading(h)
 
     def _load_sec_keys(self, ch) -> None:
-        """Section keys of THIS chapter from the structure contract.
+        """Section keys of THIS chapter (plus the consolidated-exercise tail
+        page) from the structure contract.
 
         Populated per build; ``None`` when the contract is unavailable, which
         makes ``_repair_heading`` a no-op (identical to the pre-repair
         behaviour).
         """
         self._sec_keys = None
+        self._tail_exer_page = None
         try:
             from data.book_structure.book_structure import chapter_json_path
             fp = chapter_json_path(self.extract_dir, ch)
@@ -862,6 +872,7 @@ class SourceFormulaIndex:
             with open(fp, encoding='utf-8') as f:
                 tree = json.load(f)
             keys: Set[str] = set()
+            tail: Optional[int] = None
             stack = [tree]
             while stack:
                 node = stack.pop()
@@ -869,10 +880,29 @@ class SourceFormulaIndex:
                     continue
                 if node.get('type') == 'section' and node.get('key'):
                     keys.add(str(node['key']))
+                if node.get('consolidated'):
+                    p = node.get('page_start')
+                    if isinstance(p, int) and (tail is None or p < tail):
+                        tail = p
                 stack.extend(node.get('sub_sec') or [])
             self._sec_keys = keys or None
+            self._tail_exer_page = tail
         except Exception:
             self._sec_keys = None
+            self._tail_exer_page = None
+
+    def _in_exercise_tail(self, pg) -> bool:
+        """Is page `pg` inside the chapter-end CONSOLIDATED exercise block?
+
+        Strogatz 3e ch13 (2026-09-27 实测)：题 13.6.5 (Ott-Antonsen) 里的
+        `(13)`/`(14)` 是**印刷编号**，而 writing-rules「有专门习题小标题的集中
+        习题块一律省略」+ `unit_node_entries` 对 ``consolidated`` 节点不出单元
+        → 该块内容**按设计**不进总结。此前 S 仍收这些号，MISSING 硬闸反过来
+        要求写手把习题答案写成正文公式。故：契约标了 consolidated 的起始页
+        及其后一律不入 S。非集中块书（无该标记）行为零改动。
+        """
+        return (self._tail_exer_page is not None
+                and isinstance(pg, int) and pg >= self._tail_exer_page)
 
     def _repair_heading(self, h: str) -> str:
         """OCR repair of a heading number against THIS chapter's real section
@@ -1002,7 +1032,7 @@ class SourceFormulaIndex:
                     if _ITEM_LABEL_RE.search(_pre):
                         continue
                 n = self.norm(raw)
-                if not n or n in self.ignore or not self._plausible(n):
+                if not n or n in self.ignore or not self._plausible(n, raw):
                     continue
                 nums.add(n)
                 if n not in self._source_text:
@@ -1127,7 +1157,7 @@ class SourceFormulaIndex:
         return False
 
     @staticmethod
-    def _plausible(n: Optional[str]) -> bool:
+    def _plausible(n: Optional[str], raw: Optional[str] = None) -> bool:
         """Reject normalised numbers that cannot be genuine per-section
         formula labels: `0` (function-at-zero artifacts like `x(0)` survive
         the lookbehind only as a bare `(0)`) and any integer > 99 (Kreyszig
@@ -1140,6 +1170,21 @@ class SourceFormulaIndex:
         if n == '0':
             return False
         core = re.sub(r'[a-zA-Z]$', '', n)
+        # 🔴 前导零永不可能是印刷公式号，但**归一化会把它折掉**（`norm('（A.03）')
+        # = 'A.3'`），所以判据必须看**原始串**：裸数字且 ≥3 位仍以 0 开头 =
+        # OCR 把列向量矩阵 (0,0,1) 转写成的独立块 `(001)`（Etingof《群表示论》
+        # 2026-09-27 实测假 MISSING）。两位以内（'03'）不动，避免误伤
+        # `（A.03）` 这类「字母章号 + 折零」既有语义。
+        if raw:
+            m2 = re.search(r'\d+(?:[.\-]\d+)*[a-zA-Z]?', str(raw))
+            if m2:
+                for comp in re.split(r'[.\-]',
+                                     re.sub(r'[a-zA-Z]$', '', m2.group(0))):
+                    if comp.isdigit() and len(comp) >= 3 and comp[0] == '0':
+                        return False
+        if any(p.isdigit() and len(p) > 1 and p[0] == '0'
+               for p in re.split(r'[.\-]', core)):
+            return False
         if core.isdigit() and int(core) > 99:
             return False
         return True
@@ -2119,7 +2164,9 @@ class QLayer(VerifyLayer):
                                           known_book=fknown,
                                           sections_global=bool(
                                               getattr(ctx.config,
-                                                      'sections_global', False)))
+                                                      'sections_global', False)
+                                              or formula.get(
+                                                  'sections_global', False)))
                 # 🔴 书章号集（供跨章引用过滤，见 build_sectioned 尾部注记）
                 try:
                     from data.book_structure.book_structure import list_chapter_keys as _lck

@@ -193,12 +193,41 @@ def fix_unlabeled_blockquotes(md_file):
     return changes
 
 
+_RUN_STOP_RE = re.compile(r'^\s*(?:-{3,}|#{1,6}\s|>|\$\$|\\begin\{|<div\b|<img\b)')
+
+
+def _is_run_continuation(line):
+    """Does `line` belong to the paragraph opened by the flagged label above it?
+
+    Stops at a blank line, at any block opener (`---` / heading / quote / `$$` /
+    `<div` / `<img` / TeX environment), at a structural ITEM label (定理/定理类 must
+    stay top level), and at another must-wrap label (that starts its own block; the
+    loop prefixes it when it reaches it)."""
+    s = line.strip()
+    if not s or _RUN_STOP_RE.match(line):
+        return False
+    if TOP_LEVEL_HEADER_RE.match(s):
+        return False
+    if _H_MISSING_BQ.match(s):
+        return False
+    return True
+
+
 def fix_labels_missing_blockquote(md_file):
-    """H-LAYER ext auto-fix: wrap top-level 证明/证/例/注/说明/注记/脚注
-    labels with `> `. Returns number of lines changed.
+    """H-LAYER ext auto-fix: wrap top-level 证明/证/例/注/注记/评注/说明/脚注
+    labels (and their EN counterparts Proof/Example/Solution/Note/Remark) with `> `.
+    Returns number of lines changed.
+
+    🔴 The label AND the paragraph run that follows it are wrapped together. A
+    label-only prefix used to leave `> **Remark 1.1** …` + bare top-level body,
+    which is exactly the「半包块」shape `check_g_quote_continuity` reports (seen on
+    Robinson ch7 after the 2026-09-27 bilingual G-layer fix) — i.e. the fixer's own
+    output failed another check. The run stops at a blank line or at any line that
+    opens a different block (heading / `---` / `<div` / `<img` / `$$` / already-quoted).
 
     Display math ($$...$$ fences) is skipped so legitimate CD-diagram rows
-    starting with `{` are never wrapped — see check_labels_missing_blockquote."""
+    starting with `{` are never wrapped — see check_labels_missing_blockquote.
+    The `{` (footnote) branch stays line-only: those rows are standalone."""
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -223,6 +252,15 @@ def fix_labels_missing_blockquote(md_file):
         if _H_MISSING_BQ.match(st) or _H_MISSING_BQ_FOOTNOTE.match(st):
             lines[i] = '> ' + ln
             changes += 1
+            if _H_MISSING_BQ.match(st):
+                # `**Remark 1.1** …` labels often carry their body on the next
+                # line(s); wrapping the label alone leaves a「半包块」that
+                # check_g_quote_continuity reports, so take the whole paragraph.
+                j = i + 1
+                while j < len(lines) and _is_run_continuation(lines[j]):
+                    lines[j] = '> ' + lines[j]
+                    changes += 1
+                    j += 1
     if changes > 0:
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))

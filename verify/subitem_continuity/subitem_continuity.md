@@ -59,6 +59,13 @@
     窗口 `_O_DECL_ATTACH_WINDOW`=120 行），并进该块 `decl` 与 `ords`。
   - 🔴 抑制集因此扩为 HEAD `… | decl_here`、INTERNAL `prev_ords | block_union | decl_here`；
     与既往一致，**只减少告警、绝不新增**（负例：删掉声明行后同一份 md 必须照报该组号）。
+  - 🔴 **中文版声明同样要认**（2026-09-27 Rosen 8e ch10 §10.1 中文版实测）：同一段落译成
+    `对习题 3 至 9，判断…` 后版式分毫不差，却因 `_O_GROUP_DECL_RE` 的英文偏置（介词只列
+    `For|In`、范围连接词只列 `[-–—]`）漏匹配 → 中文版凭空报出 3 条 `HEAD gap … missing (6, 7, 8, 9)`
+    而英文版绿灯。现接受可选中文介词前缀（对/对于/针对/在/关于）与 `至|到|~|～` 连接词。
+    判据语言中立化，**不改译文**（禁止为迎合判据删改忠实译文）。
+    负向/正向测试：`verify/tests/test_o_layer_group_decl_bilingual.py`（EN 与 CN 两种措辞同为零告警，
+    删掉声明行后两版都必须复现缺号）。
 - **HEAD/INTERNAL gap（阻断 FAIL）**：序列起始 >1 或 min–max 间缺号 → 视为真实遗漏，须补回（`x` 行，`problems += 1`）。
   HEAD 的 `missing (...)` **只列未被抑制集合吃掉的号**（旧版把 `1..min-1` 整段列出，读者分不清
   哪些真缺；判定口径不变，仅收窄显示）。

@@ -22,7 +22,9 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from tag_attestation import collect_contract_tags, tag_attestation_problems
+from tag_attestation import (collect_contract_tags, tag_attestation_problems,
+                             strip_unattested, unattested_tags,
+                             unharvested_anchor_tags, unharvested_anchor_problems)
 
 
 def formula_block(tag, tags=None):
@@ -132,6 +134,28 @@ class TestPhantom(unittest.TestCase):
                      ["%d" % n for n in range(3, 21)] for p in range(10, 13)}
         self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
 
+    def test_lettered_tag_in_integer_chapter_flagged(self):
+        """Strogatz 3e ch7 型：`2n` 来自 `2` + 下行 `n ?` 的换行粘连。它**恰好**成了一块
+        裸数字，所以逃过「无锚点」；判它的理由是「本章 60 个编号全是纯整数」。"""
+        tags = [str(n) for n in range(34, 60)] + ["2n"]
+        tree = contract(tags, lo=10, hi=12)
+        pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"] for p in range(10, 13)}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertTrue(any("2n" in p and "含字母" in p for p in probs), probs)
+
+    def test_lettered_dominant_chapter_not_flagged(self):
+        """字母编号书（Kreyszig `(7a)` 型）不得被判据③误伤：纯整数太少时字母是体例。"""
+        tree = contract(["7a", "7b", "7c", "7d", "7e", "3"], lo=10, hi=11)
+        pages = {p: ["7a", "7b", "7c", "7d", "7e", "(3)"] for p in range(10, 12)}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_lettered_majority_chapter_not_flagged(self):
+        """字母编号占多数（>10%）时不能判毒——那是该章体例而非 OCR 尾巴。"""
+        tags = ["1", "2", "3", "4", "5", "6a", "6b", "6c"]
+        tree = contract(tags, lo=10, hi=11)
+        pages = {p: ["%s" % t for t in tags] for p in range(10, 12)}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
     def test_missing_pages_fail_open(self):
         """整章无页文件 → 不判（缺数据不等于内容缺陷）。"""
         tree = contract(["7", "99"], lo=10, hi=12)
@@ -142,6 +166,191 @@ class TestPhantom(unittest.TestCase):
         pages = {p: ["(7)", "prose"] for p in range(10, 12)}
         probs = tag_attestation_problems(tree, loader(pages), chapter_label="ch5")
         self.assertTrue(probs[0].startswith("[ch5]"), probs)
+
+
+class TestStripUnattested(unittest.TestCase):
+    """收割处剔除：Strogatz 3e ch7/ch8 实测毒 tag（`0c`/`2x`/`2i`/`25`）留在契约里
+    会两头堵写手——凭空 `\tag` = 编造、删掉 = 漏写，且章级闸 ⑭ 永久 FAIL。"""
+
+    PAGES = {p: ["(%d)" % n for n in range(1, 8)] for p in range(10, 21)}
+
+    def test_unattested_tags_returns_set(self):
+        tree = contract(["3", "25"], lo=10, hi=20)
+        self.assertEqual(unattested_tags(tree, loader(self.PAGES)), {"25"})
+
+    def test_strip_removes_only_poison(self):
+        tree = contract(["3", "25"], lo=10, hi=20)
+        removed = strip_unattested(tree, loader(self.PAGES))
+        self.assertEqual(removed, ["25"])
+        left = [n for _k, n in collect_contract_tags(tree)]
+        self.assertEqual(left, ["3"])
+
+    def test_strip_keeps_formula_block(self):
+        """剔除的是**编号声称**，不是公式内容（正文一个不丢）。"""
+        tree = contract(["25"], lo=10, hi=20)
+        strip_unattested(tree, loader(self.PAGES))
+        blocks = tree["sub_sec"][0]["sub_sec"]
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["formula"], "x = y")
+        self.assertEqual(blocks[0].get("tag"), "")
+
+    def test_chapter_clean_after_strip(self):
+        tree = contract(["3", "25", "0c"], lo=10, hi=20)
+        self.assertTrue(tag_attestation_problems(tree, loader(self.PAGES)))
+        strip_unattested(tree, loader(self.PAGES))
+        self.assertEqual(tag_attestation_problems(tree, loader(self.PAGES)), [])
+
+    def test_multi_tag_list_partial_strip(self):
+        pages = {p: ["(%d)" % n for n in range(1, 10)] for p in range(10, 21)}
+        tree = contract([("9", ["9", "40"])], lo=10, hi=20)
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["40"])
+        blk = tree["sub_sec"][0]["sub_sec"][0]
+        self.assertEqual(blk["tag"], "9")
+        self.assertEqual(blk["tags"], ["9"])
+
+    def test_strip_lettered_tag(self):
+        """判据③的 tag 同样在**收割处**剔除（不只报错），剔除后章级闸 ⑭ 转绿。"""
+        tags = [str(n) for n in range(34, 60)] + ["2n"]
+        tree = contract(tags, lo=10, hi=20)
+        pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"] for p in range(10, 21)}
+        self.assertTrue(tag_attestation_problems(tree, loader(pages)))
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["2n"])
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_noop_when_all_attested(self):
+        tree = contract(["3", "7"], lo=10, hi=20)
+        self.assertEqual(strip_unattested(tree, loader(self.PAGES)), [])
+        self.assertEqual([n for _k, n in collect_contract_tags(tree)], ["3", "7"])
+
+    def test_noop_when_pages_missing(self):
+        tree = contract(["99"], lo=10, hi=12)
+        self.assertEqual(strip_unattested(tree, loader({})), [])
+        self.assertEqual([n for _k, n in collect_contract_tags(tree)], ["99"])
+
+
+class TestUnharvestedAnchors(unittest.TestCase):
+    """闸门 ⑭ 的**对偶**：印面 `(N)` 锚点在契约里在档、其展示式却没登记 tag（收割漏号）。
+
+    实测动因 = Strogatz 3e ch13 §13.5：印面 `(1)` 紧跟 `r e^{i\\psi} = \\langle
+    e^{i\\theta} \\rangle`，契约该块无 `tag` → 单元从 `\\tag{2}` 起写，而章级
+    tag 集合比较因 `(1)` 在 §13.4 也在账而**放行**（跨节串号盲区）。
+    判据保守：只认「锚点的**前一个内容块**是 display 公式且无号」；``*_problems``
+    再叠四条收紧（有落点 / 同节正文无该号 / 形态干净 / 序列有邻居且非习题键），
+    每条评论对应一个负向用例。
+    """
+
+    @staticmethod
+    def tree(blocks, key="13.5"):
+        return {"key": "13", "type": "chapter", "page_start": 512, "page_end": 553,
+                "sub_sec": [{"key": key, "type": "description", "sub_sec": blocks}]}
+
+    @staticmethod
+    def txt(s, **kw):
+        b = {"text": s}
+        b.update(kw)
+        return b
+
+    @staticmethod
+    def disp(latex, tag=None, tags=None):
+        b = {"formula": latex, "display": True}
+        if tag is not None:
+            b["tag"] = tag
+        if tags is not None:
+            b["tags"] = tags
+        return b
+
+    def test_untagged_display_before_anchor_detected(self):
+        tree = self.tree([self.txt("Thus"),
+                          self.disp(r"r e ^ { i \psi } = \langle e ^ { i \theta } \rangle"),
+                          self.txt("(1)", line_start=True, indent=27.4)])
+        got = unharvested_anchor_tags(tree)
+        self.assertEqual([(k, n) for k, n, _f in got], [("13.5", "1")], got)
+
+    def test_tagged_display_with_anchor_is_clean(self):
+        tree = self.tree([self.disp("r = a + b", tag="2"), self.txt("(2)")])
+        self.assertEqual(unharvested_anchor_tags(tree), [])
+
+    def test_anchor_after_prose_not_judged(self):
+        """保守边界：锚点前是散文（OCR 把公式切成多块）→ 不判，免得误伤。"""
+        tree = self.tree([self.disp("x = y"), self.txt("some prose line"),
+                          self.txt("(3)")])
+        self.assertEqual(unharvested_anchor_tags(tree), [])
+
+    def test_inline_formula_not_judged(self):
+        tree = self.tree([{"formula": "r", "display": False}, self.txt("(1)")])
+        self.assertEqual(unharvested_anchor_tags(tree), [])
+
+    def test_multi_line_group_covered_by_tags_list(self):
+        tree = self.tree([self.disp("array...", tag="9", tags=["9", "10"]),
+                          self.txt("(9)"), self.txt("(10)")])
+        self.assertEqual(unharvested_anchor_tags(tree), [])
+
+    def test_bare_number_is_not_an_anchor(self):
+        tree = self.tree([self.disp("x = y"), self.txt("3")])
+        self.assertEqual(unharvested_anchor_tags(tree), [])
+
+    def test_problems_only_for_nodes_with_unit_records(self):
+        """无单元落点（V-I 省略的成堆习题块）不报——否则书书皆红、把闸变成噪声。"""
+        tree = self.tree([self.disp("a = b"), self.txt("(1)")], key="13.6.5")
+        self.assertTrue(unharvested_anchor_tags(tree))
+        # 邻居号 2 在同单元正文里在账 → 满足序列相邻判据，只剩「有无落点」一条
+        bodies = {"13.6.5": [r"$x=1$" + "\n" + chr(92) + "tag{2}" + "\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, {}), [])
+        probs = unharvested_anchor_problems(tree, bodies, chapter_label="ch13")
+        self.assertEqual(len(probs), 1)
+        self.assertTrue(probs[0].startswith("[ch13]"), probs)
+        self.assertIn("13.6.5", probs[0])
+
+    def test_number_already_rendered_in_section_escapes(self):
+        """判据②：写手用 `\\qquad (1)` 之类的排版形态渲染过同号 = 没丢，不报。"""
+        tree = self.tree([self.disp("a = b"), self.txt("(1)")])
+        bodies = {"13.5": [chr(92) + "tag{2}\n", "…\n$$r=1 \\qquad (1)$$\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
+
+    def test_ocr_fragment_number_not_judged(self):
+        """判据③：`(00)` / `(01)` 一类是 OCR 碎片，形态不干净即不判。"""
+        tree = self.tree([self.disp("a = b"), self.txt("(00)")])
+        bodies = {"13.5": [chr(92) + "tag{1}\n" + chr(92) + "tag{2}\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
+
+    def test_cross_reference_without_neighbor_not_judged(self):
+        """判据④：散文式交叉引用自成一个 `(3)` 块，而序列里没有 2/4 → 不判。
+
+        实测 Kreyszig 型误伤源：``Hence we may use (3) also in connection with
+        particles.`` 被切成独立文本块，挂在上一条 display 之后。
+        """
+        tree = self.tree([self.disp("p = h / \\Lambda"), self.txt("(3)")])
+        bodies = {"13.5": ["body with no 2 or 4 anywhere\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
+
+    def test_exercise_key_exempt(self):
+        """判据④后半：键含 `-`（习题条目）的号与公式号不同源，不判。"""
+        tree = self.tree([self.disp("x = y"), self.txt("(1)")], key="11.2-3")
+        bodies = {"11.2-3": [chr(92) + "tag{2}\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
+
+    def test_strogatz_ch13_measured_case_reports(self):
+        """端到端复现动因：§13.5 印面 `(1)` 漏挂，单元从 `\\tag{2}` 起写 → 必须报。
+
+        池里只邻居 `2` 而无 `1` = 「连续号段里的洞」，正是 ⑱ 相对章级集合比较
+        （`(1)` 在 §13.4 也在账）唯一的可见增量。
+        """
+        tree = {"key": "13", "type": "chapter", "page_start": 512, "page_end": 553,
+                "sub_sec": [{"key": "13.4", "type": "description",
+                             "sub_sec": [self.disp("z = 0", tag="1"),
+                                         self.txt("(1)")]},
+                            {"key": "13.5", "type": "description",
+                             "sub_sec": [self.disp(
+                                 r"r e ^ { i \psi } = \langle e ^ { i \theta } \rangle"),
+                                 self.txt("(1)"),
+                                 self.disp("\\dot{\\theta} = \\omega - \\mu", tag="2"),
+                                 self.txt("(2)")]}]}
+        bodies = {"D7": ["… " + chr(92) + "tag{2} … " + chr(92) + "tag{3} …"]}
+        tree["sub_sec"][1]["key"] = "D7"          # 单元登记在公式块所在节点
+        probs = unharvested_anchor_problems(tree, bodies, chapter_label="ch13")
+        joined = "\n".join(probs)
+        self.assertIn("收割漏号", joined, probs)
+        self.assertIn("(1)", joined)
 
 
 if __name__ == "__main__":

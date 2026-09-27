@@ -108,6 +108,12 @@ def _EN3_REST_OK(txt, m):
     "Example 1.2.8."）、括号包裹引用（"Definition 5.1.1)"）、括号后小写延续
     （"Remark 5.1.2(a) that they..." 式行首引用）。"""
     rest = txt[m.end():].lstrip()
+    # 🔴 冒号收尾条头（Strogatz《Nonlinear Dynamics and Chaos》3e 实测）：印刷
+    # 条头是 "Example 2.2.1:"，标题/正文在**下一个 OCR 块**——rest 只剩冒号，
+    # 被下方「无字母即拒」（本行拦断行引用尾）整书吃掉，141 条例题全漏。
+    # 冒号与句点同为条头终止符：剥掉后按「空尾」处理（真条头恒在号后终止）。
+    if rest[:1] in (':', '\uff1a'):
+        rest = rest[1:].lstrip()
     if rest and not re.search(r"[A-Za-z]", rest):
         return False
     while True:

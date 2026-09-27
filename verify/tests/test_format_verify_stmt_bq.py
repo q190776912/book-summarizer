@@ -26,8 +26,6 @@ import lib.boot as _boot
 _boot.setup()
 
 from format_verify import _h_ext_is_legit_bq, _h_ext_is_structural_bq
-
-
 class CnProofHeaderLegitTest(unittest.TestCase):
     def test_label_prefixed_cn_proof_header(self):
         self.assertTrue(_h_ext_is_legit_bq(

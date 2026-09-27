@@ -184,6 +184,32 @@ def _chapter_entries(idx, ch):
     return [e for e in idx if (not has_chapter_field) or e.get('chapter') == ch]
 
 
+# OCR often misreads a caption's trailing digit as a visually similar letter
+# (final 0 -> 'o', 1 -> 'l/I', 2 -> 'z', 5 -> 's', 6 -> 'b', 8 -> 'B', 9 -> 'g/q').
+# When the E-layer extracts a figure NUMBER with `[0-9]+`, such a caption is
+# truncated at the letter ("Fig. 19o" -> "19"), producing a PHANTOM missing
+# figure even though the real crop (190) is present. We reconcile by appending
+# the mapped digits — but ONLY when the resulting longer number is an actually
+# extracted crop of this chapter, so a genuinely missing figure can never be
+# masked by this normalization.
+_OCR_TAIL_DIGIT = {
+    'o': '0', 'O': '0', 'l': '1', 'I': '1', 'z': '2', 'Z': '2',
+    's': '5', 'S': '5', 'b': '6', 'B': '8', 'g': '9', 'q': '9',
+}
+
+
+def _fig_ocr_tail_recovered(num, txt, end):
+    """Return `num` with a run of OCR letter->digit confusables that appear
+    IMMEDIATELY after position `end` in `txt` appended as their digit values,
+    or None if no such trailing letter exists (so the caption is clean)."""
+    i = end
+    extra = []
+    while i < len(txt) and txt[i] in _OCR_TAIL_DIGIT:
+        extra.append(_OCR_TAIL_DIGIT[txt[i]])
+        i += 1
+    return (num + ''.join(extra)) if extra else None
+
+
 def check_figure(ch, start, end, ext, ignore_fig=None):
     """Unified E+F figure layer.
 
@@ -224,9 +250,21 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
                 continue
             for m in cap_re.finditer(txt):
                 num = fig_label_from_match(m)
+                if num is None:
+                    continue
                 if components == 1:
                     # global integer figure numbering (e.g. Kreyszig "Fig. 2");
                     # no chapter prefix, so compare on the bare number directly.
+                    # OCR tail-digit reconciliation: a caption mis-scanned with a
+                    # trailing letter ("Fig. 19o") is the same figure as an
+                    # extracted crop whose label is the digits + mapped letter
+                    # ("190"). Only reconcile when that longer number IS an
+                    # extracted crop, so a genuine missing figure is never masked.
+                    if '.' not in num:
+                        rec = _fig_ocr_tail_recovered(num, txt, m.end())
+                        if rec is not None and normfig(rec) in extracted:
+                            caption.add(normfig(rec))
+                            continue
                     caption.add(normfig(num))
                 else:
                     parts = num.split('.')

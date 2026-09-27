@@ -43,7 +43,8 @@ __all__ = ["contract_run_lengths", "unit_run_length", "coverage_problems",
            "exercise_item_numbers", "exercise_runs", "exercise_run_gaps",
            "chapter_exercise_problems", "exercise_statements",
            "duplicate_exercise_statement_problems",
-           "EXER_SET_HEAD_RE", "EXER_ITEM_BARE_RE", "EXER_ITEM_LABEL_RE"]
+           "EXER_SET_HEAD_RE", "EXER_ITEM_BARE_RE", "EXER_ITEM_LABEL_RE",
+           "printed_ordinal_heads", "norm_ordinal"]
 
 # 行首编号项：`1. ` / `12) ` / `(1) `，允许 blockquote 前缀 `>` 与粗体 `**1.**`
 #
@@ -58,11 +59,30 @@ __all__ = ["contract_run_lengths", "unit_run_length", "coverage_problems",
 _AFTER_NUM = r"(?:[ \t]+\S|[^\s\d.\-)\])）])"
 
 
+# ── 中文集中题块标题（《数值分析》第五版实测，2026-09-27）───────────────
+# 中文教材章末依次印「复习与思考题」「习题」「计算实习题」（本书 9 章一致），与英文书的
+# ``Exercises`` / ``Problems`` 同属 writing-rules V-I 认可的**整块省略**形态。原判据里
+# 只有 ``习题|练习`` 两个词，且**尾部噪声集只认半角数字与句点**——中文 OCR 拖的是
+# ``· … ．``（``习题·…··..`` / ``计算实习题…·`` / ``复习与思考题··``），于是三类中文章末
+# 块**一个都没被识别**：题号 1..N 被当成「本节应写却漏写的编号内容」，门控反过来逼写手
+# 把整章习题抄进笔记。词表按**长词在前**排列（正则交替最左优先，``习题`` 先于 ``习题集``
+# 会让后者的 ``集`` 落在噪声集外、整行判据失配）。
+_CN_SET_WORDS = (r"复习与思考题|计算实习题|习题集|练习题|思考题|实习题|复习题"
+                 r"|习题|练习")
+# 标题行**尾部**的 OCR 噪声：英文书是数字与句点，中文书是 `·` `…` `．` `、` 等。
+_TAIL_NOISE = r"[0-9OoIlL.。·•・…．、,，~～_\-–— \t]*"
+
+
 def _build_num_re(open_p: str, close: str) -> "re.Pattern":
     """`open_p` / `close` = 前后括号字符类；骨架同一，按侧选形态（见下）。"""
+    # 🔴 前导空白必须认**全角空格** ``\u3000``：中文排版把列表项缩进成 ``　　（1）…``
+    # （数值分析 ch3/ch4 章末题即是），只认 ``[ \t]`` 时单元侧一个数不到 → 闸 ⑫ 报
+    # 「契约 1..12 / 单元没有任何编号项」的假阳，写手已写全的题被判成整块漏写。
+    # 两侧同改（OCR 也会印全角缩进），方向一致、不会制造不对称的误报。
+    _WS = "[ \t\u3000]"
     return re.compile(
-        r"^[ \t]*(?:>[ \t]*)*(?:\*\*)?[ \t]*" + open_p + r"[ \t]*(?P<n>\d{1,2})"
-        r"[ \t]*(?:\*\*)?" + close + _AFTER_NUM)
+        r"^" + _WS + r"*(?:>" + _WS + r"*)*(?:\*\*)?" + _WS + r"*" + open_p
+        + r"[ \t]*(?P<n>\d{1,2})[ \t]*(?:\*\*)?" + close + _AFTER_NUM)
 
 
 # 契约侧（OCR）与页侧：与历史判据逐字一致（只认半角）。全角收尾在 OCR 里多是
@@ -78,7 +98,12 @@ _NUM_LINE_RE_UNIT = _build_num_re(r"[(（]?", r"[.)\]）]")
 _CONTAINER_TYPES = ("chapter", "section", "subsection")
 
 # 抽取期 OCR 里节末习题块的标志（只用于**页侧**对账，见 page_problem_floors）
-_PAGE_HEAD_RE = re.compile(r"^\s*(?:Problems?|Problem\s*Set\s*[\d.]+)\s*$", re.I)
+# 🔴 **刻意只认英文**：页侧下限一旦成立，就要求「该节页窗里印的题逐题写全」，而
+# writing-rules V-I 规定「有专门小标题的集中题块**整块省略**」——中文教材章末的
+# 「习题 / 复习与思考题 / 计算实习题」正是这种块。给中文标题开门 = 让闸 ⑬ 逼写手恢复
+# V-I 认可的省略内容（假阳洪水）。故中文书不取页侧下限（少报 = 保守），章末块的省略
+# 识别走 ``consolidated_cut``（已含中文章末体例词）。
+_PAGE_HEAD_RE = re.compile(r"^\s*(?:Problems|Problem\s*Set\s*[\d.]+)\s*[.:]?\s*$", re.I)
 _PAGE_NUM_RE = re.compile(r"^\s*\(?(\d{1,2})[.)\]]" + _AFTER_NUM)
 # 页眉/节标题：`9.11 Some Title`。**同节号 = 页眉重复，不算「本节结束」**（Kreyszig 实测：
 # 习题跨页时每一页页顶都印当前节号，若一律当结束，下限会停在第一页 = 严重偏低）。
@@ -113,21 +138,6 @@ def longest_run_from_one(nums: Iterable[int]) -> int:
         if want > best:
             best = want
     return best
-
-
-def _leaf_texts(node: Dict[str, Any]) -> List[Any]:
-    out: List[Any] = []
-
-    def walk(n):
-        for b in n.get("sub_sec") or []:
-            if not isinstance(b, dict):
-                continue
-            if "type" in b:
-                walk(b)
-            else:
-                out.append(b.get("text"))
-    walk(node)
-    return out
 
 
 def _section_nodes(root: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -184,15 +194,16 @@ _OCR_BULLET = r"[■□•·◦○●▪▸\-*›»]*"
 # section``）里 "in" 前有空格，仍不匹配。
 _OCR_DIGIT = r"0-9OoIlL"
 _CONSOLIDATED_HEAD_RE = re.compile(
-    r"^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*(?:EXERCISES?|Exercises?|习题|练习)"
-    r"\s*(?:for\s*)?(?:Section\s*)?[" + _OCR_DIGIT + r".。]*\s*$"
+    r"^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*(?:EXERCISES?|Exercises?|" + _CN_SET_WORDS + r")"
+    r"\s*(?:for\s*)?(?:Section\s*)?" + _TAIL_NOISE + r"$"
     r"|^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*Section\s*\d+\s+Exercises?\s*$"
     # 块首**引言行**（题号紧跟其后）：OCR 常把它粘成 `InExercises21through6,determine…`
     # 或 `■EXERCISES23`。要求「Exercises」后**立刻**出现编号，散文里的裸词
     # （``Exercises show that…`` / ``see Exercises 22`` 不在行首）不会被误判。
     # 行首即可切：习题块恒在一节末尾，早切只会压低契约侧下限 = 少报 = 保守。
     r"|^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*(?:(?:In|For|The|Consider|See)\s*)?"
-    r"(?:EXERCISES?|Exercises?|习题|练习|Problems?)(?:\s*\d|[" + _OCR_DIGIT + r"])",
+    r"(?:EXERCISES?|Exercises?|Problems?|" + _CN_SET_WORDS + r")(?:\s*\d|["
+    + _OCR_DIGIT + r"])",
     re.IGNORECASE)
 
 
@@ -206,6 +217,35 @@ def is_consolidated_head(text: Any) -> bool:
     一个 type:1 组，verify B 层随即为每个被省略的题号报「缺号」。
     """
     return isinstance(text, str) and bool(_CONSOLIDATED_HEAD_RE.match(text))
+
+
+# 🔴 OCR 还会把块标题按**印刷竖排/断行**切成相邻的几个极短块（``习`` + ``题``、
+# ``计算实习`` + ``题``；数值分析目录页实测：``习`` 出现 9 次、``题`` 10 次，都是被切开
+# 的标题残块）。单块判据永远看不见它。只在**待拼接块极短**（去尾噪后
+# ≤ ``_GLUE_PART_MAX`` 字符）时才拼，普通正文凑不出这种形态。
+_GLUE_PART_MAX = 4        # 单块去尾噪后的最大字符数
+_GLUE_MAX_PARTS = 3       # 最多拼几块
+_GLUE_MAX_LEN = 12        # 拼接结果的最大长度
+_TAIL_NOISE_RE = re.compile(r"[·•・…．。.\s,，、~～_\-–—0-9]+$")
+
+
+def _glue_candidates(texts: List[Any], i: int) -> List[str]:
+    """从 ``texts[i]`` 起，把相邻极短块依次拼出的候选标题串（含单块本身）。"""
+    out: List[str] = []
+    parts: List[str] = []
+    for k in range(i, min(i + _GLUE_MAX_PARTS, len(texts))):
+        t = texts[k]
+        if not isinstance(t, str):
+            break
+        core = _TAIL_NOISE_RE.sub("", t.strip())
+        if not core or len(core) > _GLUE_PART_MAX:
+            break
+        parts.append(core)
+        cand = "".join(parts)
+        if len(cand) > _GLUE_MAX_LEN:
+            break
+        out.append(cand)
+    return out
 
 
 def consolidated_cut(texts: List[Any]) -> Optional[int]:
@@ -225,7 +265,52 @@ def consolidated_cut(texts: List[Any]) -> Optional[int]:
     for i, t in enumerate(texts):
         if isinstance(t, str) and _CONSOLIDATED_HEAD_RE.match(t):
             return i
+        # 竖排/断行拆分：拼相邻极短块再判（单块 ``习`` 自己不算标题）
+        for cand in _glue_candidates(texts, i):
+            if len(cand) > 1 and _CONSOLIDATED_HEAD_RE.match(cand):
+                return i
     return None
+
+
+_LATEX_MARK_RE = re.compile(r'[_}{\\]')
+
+
+def _is_formula_fragment(text: Any) -> bool:
+    """公式条款标号（如 ``(1) l_{jj}=(a_{jj}-…)``）常被 OCR 切成独立文本块，其
+    ``(1)`` 会被 ``_num`` 当成连续编号项，使覆盖率检查把公式内部的标号链
+    ``(1,2,3)`` 误判为「应补全的内容/习题项」。这类块含 LaTeX 结构符
+    （``_ { } \\``），而真正的习题/内容列举（如「(1) 证明…」）不含 LaTeX，
+    故据此将其编号排除出契约侧编号链，避免假阳性漏写告警。"""
+    if not isinstance(text, str):
+        return False
+    return bool(_LATEX_MARK_RE.search(text))
+
+
+def _node_text_bundles(node: Dict[str, Any]) -> List[List[Any]]:
+    """→ 该节内**每个契约节点各自**的文本块列表（含节自身）。
+
+    🔴 编号链只能在**同一个节点**内连成，绝不跨节点拼接：跨节点会把「定义里
+    印刷的 1./2. 列举」与「下一条目里被公式块劈断的 3./4. 行」串成一条假链
+    （Etingof《群表示论》ch4 §4.12 实测：假链 1..4 对单元真链 1..2 → 报
+    「缺 2 项」，而那 2 项在印面上根本不存在）。整块泄漏的习题/内容本就挂在
+    **同一个**节点的尾部 text 块里，per-node 不损失这项检出力。
+    """
+    bundles = []
+
+    def own(n):
+        texts = [b.get("text") for b in (n.get("sub_sec") or [])
+                 if isinstance(b, dict) and "type" not in b]
+        if texts:
+            bundles.append(texts)
+
+    def walk(n):
+        own(n)
+        for c in n.get("sub_sec") or []:
+            if isinstance(c, dict) and "type" in c:
+                walk(c)
+
+    walk(node)
+    return bundles
 
 
 def contract_run_lengths(root: Dict[str, Any]) -> List[Tuple[str, int, Tuple[str, ...]]]:
@@ -234,11 +319,19 @@ def contract_run_lengths(root: Dict[str, Any]) -> List[Tuple[str, int, Tuple[str
     for s in _section_nodes(root):
         if _skip_consolidated(s):
             continue
-        texts = _leaf_texts(s)
-        cut = consolidated_cut(texts)
-        if cut is not None:
-            texts = texts[:cut]
-        n = longest_run_from_one([x for x in (_num(t) for t in texts) if x])
+        n = 0
+        for texts in _node_text_bundles(s):
+            cut = consolidated_cut(texts)
+            if cut is not None:
+                texts = texts[:cut]
+            nums = []
+            for t in texts:
+                if _is_formula_fragment(t):
+                    continue
+                x = _num(t)
+                if x:
+                    nums.append(x)
+            n = max(n, longest_run_from_one(nums))
         if n:
             out.append((str(s.get("key") or ""), n, _descendant_keys(s)))
     return out
@@ -430,8 +523,12 @@ def page_floor_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, An
 # exercise 单元开段**（含隐式：exercise 单元没印集标题也算开段），其后紧接的单元即便
 # 是 desc/item 也照常接力（一集 68 题分散在 20 个单元里是常态），直到下一个集标题 /
 # 下一个 exercise 单元 / 新的 ``##`` 小节边界把号段结算。
+# 🔴 中文词必须含**章末体例词**：我们写的单元里章末标题是 ``**复习与思考题**`` /
+# ``**计算实习题**``（数值分析体例），只认 ``习题|练习`` 时它们不开段 → 闸 ⑮ 把这些题号
+# 并进前一个习题集的号段，一旦章末题与前一集号不接，就报一串「前一集缺号」的假洞。
 EXER_SET_HEAD_RE = re.compile(
-    r"\*\*[^*\n]{0,60}?(?:exercises?\b|problems?\b|习题|练习)(?!\s*\d)", re.I)
+    r"\*\*[^*\n]{0,60}?(?:exercises?\b|problems?\b|复习与思考题|计算实习题|思考题"
+    r"|实习题|复习题|习题|练习)(?!\s*\d)", re.I)
 _SECTION_HEAD_RE = re.compile(r"^\s*#{1,3}\s", re.M)
 # 题号两体：① 裸号 ``1.`` / ``2)`` / ``**12.**``；② 标签号 ``**Exercise 3.**`` /
 # ``**习题 17**``（Rosen 8e ch6 单元用后者，只认①会让整块缺号隐身）。
@@ -441,10 +538,34 @@ _SECTION_HEAD_RE = re.compile(r"^\s*#{1,3}\s", re.M)
 _EXER_RANGE = r"(\d{1,3})(?:\s*[.\u2013\u2014-]\s*(\d{1,3}))?"
 EXER_ITEM_BARE_RE = re.compile(
     r"^\s*(?:>\s*)?\*{0,2}" + _EXER_RANGE + r"[.)]\*{0,2}\s", re.M)
+# 🔴 标签体内允许 `\*`（印刷「\*Exercise 2.8.5.」带难度星号，md 须转义星号）：
+#   旧体只认 `**Exercise`，Robinson ch1/ch3 与 ch2 的星号习题头全部误报
+#   「认不出任何一条习题条目」（2026-09-27 实测 4 例）。`\s*` 吞掉 `**` 与该星。
 EXER_ITEM_LABEL_RE = re.compile(
-    r"^\s*(?:>\s*)?\*{1,2}\s*(?:exercises?|problems?|习题|练习|Exercises?)\s*"
+    r"^\s*(?:>\s*)?\*{1,2}\s*(?:\\?\*\s*)?(?:exercises?|problems?|习题|练习|Exercises?)\s*"
     + _EXER_RANGE + r"\b", re.M | re.I)
 _RANGE_SPAN_MAX = 30      # 区间跨度上限：超过它多半是两个不相干数字被粘住
+
+
+def printed_ordinal_heads(text: str) -> List[str]:
+    """行首粗体条目头里的**印刷点分序标**（`**\\*Exercise 2.8.5.**` / `**20.1.3.**` → 归一成 `2-8-5` / `20-1-3`）。
+
+    用途：单元契约键（dash 形态 `2.8-5`）与写手照印刷写出的点分头（`2.8.5`）
+    之间的对账——分隔符形态不同但序标相同即视为「题面在位」，不要求写手
+    为过闸篡改印刷编号（V-I 禁止统一风格）。
+    """
+    out = []
+    for m in re.finditer(
+            r"(?m)^\s{0,3}(?:>\s*)?\*\*[^*\n]*?"
+            r"(\d{1,3}(?:[.\-]\s*\d{1,3}){1,3})\s*[^*\n]*\*\*", text):
+        norm = re.sub(r"\s*[.\-]\s*", "-", m.group(1))
+        out.append(norm)
+    return out
+
+
+def norm_ordinal(key: str) -> str:
+    """把任意序标形态（`2.8-5` / `2.8.5` / `2.8 - 5`）归一成 dash 形态 `2-8-5`。"""
+    return re.sub(r"\s*[.\-]\s*", "-", str(key).strip())
 
 
 def exercise_item_numbers(text: str) -> List[int]:

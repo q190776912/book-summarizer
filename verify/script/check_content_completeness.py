@@ -104,7 +104,8 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     判据：文本块 poly 中心落在 ``figure_index.json`` 该页任一图 bbox 内 → 跳过。
     """
     from page_json import PageJson
-    from lib.numbering import formula_tag_number, formula_paren_tag_re
+    from lib.numbering import (formula_tag_number, formula_paren_tag_re,
+                               page_number_furniture)
     _dir = page_dir or ext
     lo, hi = int(start), int(end)
 
@@ -176,6 +177,16 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
                                 or bottom > 0.90 * page_height):
             edge_pages.setdefault(n, set()).add(p)
 
+    # 🔴 页码跟踪律（2026-09-27 Strogatz 3e 实测）：上面的「极端边缘」页码判据用
+    # 0.06/0.94 带，而本书奇数页页码印在**页眉**（y≈111 ≈ 页高 6.3%）→ 带外漏网，
+    # 于是 13 章各页页码（16..49 / 338..383 / 498..537 …共 ~380 个）整批进入真值集，
+    # 「公式编号未挂到公式」建议全线失真，还会诱导写手给页码编造 \tag{16}。
+    # 判据与 attach 侧共用 lib.numbering.page_number_furniture（页码 = 页序 − 恒定
+    # 偏移的算术指纹），两处不得各写一份。
+    _furn = page_number_furniture(
+        [(p, y, bottom, _norm_text(s).replace(" ", ""))
+         for p, y, bottom, s, _xc, _yc in raw], page_height)
+
     out = set()
     for p, y, bottom, s, _xc, _yc in raw:
         n = _norm_text(s).replace(" ", "")
@@ -189,6 +200,14 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         if (page_height > 0 and n.isdigit() and len(n) <= 3
                 and not formula_paren_tag_re(ncomp, letter=letter).match(s)
                 and (y < 0.06 * page_height or bottom > 0.94 * page_height)):
+            continue
+        if (p, n) in _furn:
+            continue                           # 页码跟踪律命中
+        # 🔴 无括号且含字母的短串（'2e' / '4c' / '020m' / '1970s'）= OCR 碎片（如
+        # `2e^{x}` 被切成独立块、年份被当成编号），不是编号：括号是编号的强信号，
+        # 缺了它就不接受字母位。（letter 书的 `(A.3)` 带括号，不受影响。）
+        if (not formula_paren_tag_re(ncomp, letter=letter).match(s)
+                and re.search(r'[A-Za-z]', n)):
             continue
         key = formula_tag_number(s, ncomp, letter=letter, bare=bare)
         if key is None:

@@ -18,6 +18,7 @@
 - 用 `fig_cap_re`（每本书 `ordinal` 的 Figure 组 `name` 前缀、段数取该组 `type` 经 `ORDINAL_DEPTH` 派生的 `depth`）扫 `page_*.json` 的 OCR 文本，抽本章图注号集合；与索引 `extracted` 求差。
 - **MISSING FIGURE（阻断 FAIL）**：章内 OCR 引用了「图 X.X.X」但 `figure_index.json` 无对应 `chapter==N, label==X.X.X` → 重跑 `extract_figures.py`/`assign_figures.py` 刷新或手动补图。
 - **EXTRA（仅 WARN）**：裁剪图 `label` 在本章 OCR 找不到对应图注，疑似误配对。
+- **OCR 尾数字粘连回捞（仅全局单分量 `components==1`，安全构造）**：OCR 常把多位图号尾数字读成字母（`Fig. 19o`→截断成 `19`，真图号实为 `190`），使 `build_fig_label_re` 的 `([0-9]+)` 在字母处截断、抽出短号 `19`，而索引里真 label 是 `190` → 假 `MISSING 190` + 假 `EXTRA 19`。`check_figure` 的 `_fig_ocr_tail_recovered` 在截断 token 之后按 `_OCR_TAIL_DIGIT`（o/O→0、l/I→1、z/Z→2、s/S→5、b→6、B→8、g/q→9…）逐字符尝试回捞尾数字，**仅当回捞结果已存在于 `extracted`（索引真 label 集）时**才并入 caption。**安全保证**：从不臆造新号、只在能对上真裁剪图 label 时才救回，真缺图（回捞号不在索引）仍照常 MISSING；对无此类粘连的书零影响（回捞返回 None 即走原逻辑）。
 
 ### 有效性 VALIDITY（原 F）
 - 对本章每条 index 条目，用 `np.fromfile`+`cv2.imdecode`（绕开 Windows 中文路径下 `cv2.imread` 静默失败）打开 `<ext>/<file>`。

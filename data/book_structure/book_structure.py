@@ -312,17 +312,26 @@ def chapter_image_map(root: Dict[str, Any]) -> Dict[str, List[str]]:
     return out
 
 
-def chapter_images(root: Dict[str, Any]) -> List[str]:
-    """契约树内**全部**图片路径（去重、保序）——章级「图片一个不漏」闸的真值集合。
+def chapter_images(root: Dict[str, Any],
+                   skip_consolidated: bool = True) -> List[str]:
+    """契约树内**应入正文**的图片路径（去重、保序）——章级「图片一个不漏」闸的真值集合。
 
     单元级对账（manifest.images / chapter_image_map）会有「key 歧义跳过」的缝隙，
     章级并集闸兜底：契约任一图片未被本章任何单元嵌入 = 图片被整体删除（曾发生
     步骤 5 agent 清理 OCR 噪声时连图带正文一起删光），门控必须拦。
+
+    🔴 `skip_consolidated`（Strogatz 3e ch2/ch3 实测假阳）：`consolidated: true` 的
+    章末集中习题块按 V-I **整块省略、不生成单元**，其插图在流水线里根本没有落点。
+    旧实现把这类图也算进「必须被嵌入」的真值集 → 写手只能①把习题图硬塞进不相干的
+    单元（V-E 归属错误），或②改 manifest 迁就（篡改脚本产物）。故默认**跳过**
+    consolidated 子树；传 `False` 可拿全书物理图全集（如纯盘点用途）。
     """
     out: List[str] = []
 
     def _w(n: Any) -> None:
         if isinstance(n, dict):
+            if skip_consolidated and n.get("consolidated") is True:
+                return
             img = n.get("image")
             if img and str(img) not in out:
                 out.append(str(img))

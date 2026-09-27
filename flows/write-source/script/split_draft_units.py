@@ -87,6 +87,16 @@ _DRAFT_RE = re.compile(r"<!-- book-summarizer DRAFT unit: id=(\S+) type=(\S+) ke
 _DONE_RE = re.compile(r"<!-- book-summarizer DONE unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
 
 
+def _is_done_first_line(line):
+    """首行是否 DONE 标记。
+
+    🔴 判据必须用 `_DONE_RE`（或含冒号的字面量）：标记实文是 `DONE unit: id=…`，
+    按 `" DONE unit "`（unit 后带空格）匹配永远为假——--keep-done 会静默保留 0 个
+    单元、--force 护栏会静默放行，两处保护同时失效（2026-09-27 Etingof 实测踩中）。
+    """
+    return bool(_DONE_RE.match(line or "")) or "book-summarizer DONE unit:" in (line or "")
+
+
 def _sanitize(name):
     """文件名安全化：去路径分隔符与控制字符（保留中文/字母数字/下划线）。"""
     return re.sub(r'[^\w\u4e00-\u9fff-]+', '_', str(name or "")).strip("_")
@@ -237,8 +247,49 @@ def _body_lines(lines):
     return out
 
 
-def split_chapter(ext, ch_key, language, force=False):
-    """拆分单章：产出 units/ch{N}/ 目录 + manifest.json。返回 manifest 路径。"""
+def _load_done_index(out_dir):
+    """旧 manifest → ``{(type, key): 旧单元记录}``；键冲突的条目整桶丢弃（宁可不保留）。
+
+    只登记首行确为 `DONE` 的单元——`DRAFT` 单元没有劳动可保护，重建本就是目的。
+    """
+    mpath = os.path.join(out_dir, "manifest.json")
+    if not os.path.exists(mpath):
+        return {}
+    try:
+        with open(mpath, encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:
+        return {}
+    out, dup = {}, set()
+    for u in old.get("units") or []:
+        fn = os.path.join(out_dir, u.get("file") or "")
+        if not u.get("file") or not os.path.exists(fn):
+            continue
+        try:
+            with open(fn, encoding="utf-8") as f:
+                text = f.read()
+        except Exception:
+            continue
+        if not _is_done_first_line(text.split("\n", 1)[0]):
+            continue
+        k = (u.get("type"), str(u.get("key")))
+        if k in out:
+            dup.add(k)
+            continue
+        # 连正文一起读进内存：调用方随后可能整目录清空重建（--force），
+        # 届时旧文件已不在磁盘上。
+        out[k] = dict(u, _text=text)
+    for k in dup:
+        out.pop(k, None)
+    return out
+
+
+def split_chapter(ext, ch_key, language, force=False, keep_done=False):
+    """拆分单章：产出 units/ch{N}/ 目录 + manifest.json。返回 manifest 路径。
+
+    `keep_done`（契约修正后重建单元用，见 main 的 --keep-done 说明）：正文源未变
+    的已改好单元原样保留，正文变了的照常回 DRAFT。
+    """
     cpath = chapter_json_path(ext, ch_key)
     if not os.path.exists(cpath):
         raise SystemExit("[split_draft_units] 缺 %s——先跑 build_structure + attach_content。" % cpath)
@@ -266,6 +317,7 @@ def split_chapter(ext, ch_key, language, force=False):
         return os.path.join(out_dir, "manifest.json")
     # 🔴 --force 必须清空旧 units 目录，否则上一 run 残留的孤儿/内容 bleed 文件
     # 会留存在磁盘（manifest 已不含它们，但文件仍在），造成 merge/verify 噪声。
+    _done_idx = _load_done_index(out_dir) if keep_done else {}
     if force and os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
@@ -276,9 +328,29 @@ def split_chapter(ext, ch_key, language, force=False):
         "final_md": "",                       # 由 merge_units 生成/填充
         "units": [],
     }
+    kept = 0
     for i, u in enumerate(units, start=1):
         fn = _unit_filename(i, u["type"], u["key"], u["name"])
         body = _body_lines(u["lines"])
+        h = _hash_text("\n".join(body))
+        mark = DRAFT_MARK.replace("DRAFT unit", "DONE unit").format(
+            id="%04d" % i, type=u["type"], key=u["key"], name=u["name"])
+        old_u = _done_idx.get((u["type"], str(u["key"]))) if keep_done else None
+        if old_u and old_u.get("hash") == h:
+            # 🔴 正文源逐字节未变 ⇒ 该单元的已改好稿子仍然有效：原样搬迁（只换
+            # 文件名 / id），DONE 标记与正文一并保留，manifest 记回旧 hash。
+            # 源变了的（哪怕一个字符）走下面的正常 DRAFT 重写路径。
+            body_txt = "\n".join(old_u["_text"].split("\n")[1:]).rstrip()
+            with open(os.path.join(out_dir, fn), "w", encoding="utf-8") as f:
+                f.write(mark + "\n" + body_txt + "\n")
+            kept += 1
+            manifest["units"].append({
+                "id": "%04d" % i, "file": fn, "type": u["type"],
+                "ntype": u.get("ntype") or "", "key": u["key"],
+                "name": u["name"], "tags": u.get("ntags") or [],
+                "images": u.get("nimages") or [],
+                "content": u.get("ncontent") or 0, "hash": h})
+            continue
         text = DRAFT_MARK.format(id="%04d" % i, type=u["type"], key=u["key"],
                                  name=u["name"]) + "\n" + "\n".join(body).rstrip() + "\n"
         with open(os.path.join(out_dir, fn), "w", encoding="utf-8") as f:
@@ -293,17 +365,46 @@ def split_chapter(ext, ch_key, language, force=False):
             "tags": u.get("ntags") or [],
             "images": u.get("nimages") or [],
             "content": u.get("ncontent") or 0,
-            "hash": _hash_text("\n".join(body)),
+            "hash": h,
         })
     mpath = os.path.join(out_dir, "manifest.json")
     with open(mpath, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
-    print("[split_draft_units] %s -> %d units (%s)" % (chapter_label(ch_key), len(units), out_dir))
+    print("[split_draft_units] %s -> %d units (%s)%s" % (
+        chapter_label(ch_key), len(units), out_dir,
+        " | 保留已改好单元 %d（正文源未变）" % kept if keep_done else ""))
     return mpath
 
 
+def _count_done(ext, keys):
+    """目标章现有 units 里首行为 DONE 的单元数（--force 覆盖前的毁稿计数器）。"""
+    n = 0
+    for k in keys:
+        d = os.path.join(ext, OUT_SUB, unit_dir_name(k))
+        mp = os.path.join(d, "manifest.json")
+        if not os.path.exists(mp):
+            continue
+        try:
+            with open(mp, encoding="utf-8") as f:
+                units = (json.load(f) or {}).get("units") or []
+        except Exception:
+            continue
+        for u in units:
+            fp = os.path.join(d, u.get("file") or "")
+            if not os.path.exists(fp):
+                continue
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    if _is_done_first_line(f.readline()):
+                        n += 1
+            except Exception:
+                pass
+    return n
+
+
 def main():
-    argv = [a for a in sys.argv[1:] if a != "--force"]
+    keep_done = "--keep-done" in sys.argv[1:]
+    argv = [a for a in sys.argv[1:] if a not in ("--force", "--keep-done")]
     force = "--force" in sys.argv[1:]
     if not argv:
         print(__doc__)
@@ -324,9 +425,20 @@ def main():
         chapters = argv[1:]
     keys = [k for k in list_chapter_keys(ext)
             if not chapters or k in {str(c) for c in chapters}]
+    if force and not keep_done:
+        # 毁稿护栏：--force 且不带 --keep-done 会把已改好的单元一起打回 DRAFT。
+        # 契约修正后重建（Etingof 边界切带那类场景）必须显式带 --keep-done，
+        # 否则静默作废 agent 劳动 = 不可逆损失，宁可停下来问。
+        n_done = _count_done(ext, keys)
+        if n_done:
+            print("[split_draft_units] BLOCKED: 目标章已有 %d 个 DONE 单元，"
+                  "--force 会全部打回 DRAFT。" % n_done)
+            print("  契约修正后重建请改用 `--force --keep-done`"
+                  "（正文源未变的 DONE 单元原样保留，源变了的回 DRAFT 重写）。")
+            return 2
     language = _rd._book_language(ext)
     for k in keys:
-        split_chapter(ext, k, language, force=force)
+        split_chapter(ext, k, language, force=force, keep_done=keep_done)
     return 0
 
 

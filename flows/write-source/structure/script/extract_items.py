@@ -379,6 +379,23 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
                 continue
             label = m.group(1)
             key = f"{label}{c}.{num}"
+            # 🔴 交叉引用 / 非条头位置守卫（冯琦《集合论》三卷实测：本守卫原为
+            #   本书而写（见上方 _cite_ctx_re 注释），却从未接进两级抽取循环——
+            #   正文内前向/回向引用被当成条目，first-wins「首现即定义页」把交叉
+            #   引用页误当定义页 → page_start 漂到早期页 → ANCHOR-SANITY 整章拒绝
+            #   落盘。实测四例：定理1.23 被「1.1.5小节中定理1.23中的证明」(p56，
+            #   真身在 p110 块首)、定理3.25 被「…处的定理3.25)」(p343，真身 p349)、
+            #   引理3.61 被「后面的引理3.61的证明中」(p367，真身 p398)、例2.27 被
+            #   「上面的例2.27具有…」(p254，本书 例2 只到 2.6，纯误引)。真条头必
+            #   位于块首（实测 140/142、111/112、266/266 皆如此），或至多紧跟句末
+            #   标点另起一句；正文引用的编号前必是中文助词/引用词（…的 / …中 /
+            #   根据 / 下述 / 见…）。据此剔除，真条目的 OCR 塌陷缺号交由步骤3完整性
+            #   闸门 + backfill / manual_overrides 恢复（比留在错误页好）。
+            _before = txt[max(0, m.start() - 8):m.start()].rstrip()
+            _is_head = (m.start() <= 1
+                        or bool(re.search(r'[。．.！!？?]$', _before)))
+            if (not _is_head) or _cite_ctx_re.search(_before):
+                continue
             text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
             lab_items.append({'key': key, 'page': p, 'label': label, 'text': text_preview})
 

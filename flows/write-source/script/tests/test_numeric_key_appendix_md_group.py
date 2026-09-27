@@ -147,6 +147,35 @@ class ContractLabelVocabularyTest(_Primed):
         self.assertEqual(miss, ["算法9"])
 
 
+class LocatorKeyBareLabelTest(_Primed):
+    """「定位符键」契约的在位判定（hum 型抽取器：`Corollary §3.3` = 第 3.3 节的推论，
+    印面条头是**裸标签**、不带任何编号）。
+
+    Robinson/Humphreys《Introduction to Lie Algebras and Representation Theory》ch1 实测：
+    `Corollary §3.3` / `Lemma §3.3` 已如实写进 md，但整键归一串 `corollary33` 永远不可能
+    出现，merge_source 证据被假拒。修向 = 键含 `§` 定位符时回退到裸标签词候选。
+    负向：md 里连该标签词都没有时仍须报缺（真漏写另有 gate_units ⑩ 兜底）。
+    """
+
+    def _contract(self, key, name, typ):
+        return {"key": "1", "type": "chapter", "name": "Basics",
+                "sub_sec": [{"key": key, "type": typ, "name": name,
+                             "page_start": 25, "page_end": 26, "sub_sec": []}]}
+
+    def test_bare_english_head_satisfies_locator_key(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("Corollary §3.3", "Corollary §3.3", "corollary"),
+            physical_evidence._norm_text(
+                "**Corollary**: Under the hypotheses of the theorem there exists a flag."))
+        self.assertEqual(miss, [])
+
+    def test_locator_key_without_that_label_head_still_reported(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("Lemma §3.3", "Lemma §3.3", "lemma"),
+            physical_evidence._norm_text("**Proposition**: nothing else worth noting."))
+        self.assertEqual(miss, ["Lemma §3.3"])
+
+
 class ZhSiblingLabelTest(_Primed):
     """中文同胞标签互换（do Carmo 中文版假报根因）。
 
@@ -178,6 +207,45 @@ class ZhSiblingLabelTest(_Primed):
             self._contract("评注3", "评注3"),
             physical_evidence._norm_text("**注 1.** 与 **评注 2.** 都在，唯独三缺席"))
         self.assertEqual(miss, ["评注3"])
+
+
+class FigureTableLabelTest(_Primed):
+    """图 / 表标签互译缺失的假报（Fraleigh《抽象代数基础》7e 实测，2026-09-27）。
+
+    契约把 `Figure 6.11` / `Table 1.20` 收作编号项，中文笔记版按书式印作「图 6.11」
+    「表 1.20」；`_LABEL_ZH2EN` 词表没有这两组，CN 组证据在 8 章报出 14 项「契约项
+    不在位」并硬拒 `merge_translation` 落账，而图/表（含 `<img>` 与表格实体）其实全部
+    在位。负向：md 里 EN 与 CN 两种写法都缺席的图表项**必须**仍报缺。
+    """
+
+    def _contract(self, key, name):
+        return {"key": "6", "type": "chapter", "name": "Relation",
+                "sub_sec": [{"key": key, "type": "item", "name": name,
+                             "page_start": 120, "page_end": 124, "sub_sec": []}]}
+
+    def test_figure_en_key_found_via_zh_label(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("Figure6.11", "Figure6.11"),
+            physical_evidence._norm_text("**图 6.11.** 哈斯图：$\\{1,2,3\\}$ 的幂集"))
+        self.assertEqual(miss, [])
+
+    def test_table_en_key_found_via_zh_label(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("Table1.20", "Table1.20"),
+            physical_evidence._norm_text("**表 1.20.** 运算 $|$ 在 $\\{a,b,c\\}$ 上"))
+        self.assertEqual(miss, [])
+
+    def test_zh_fig_key_found_via_en_label(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("图2.3", "图2.3"),
+            physical_evidence._norm_text("**Figure 2.3.** the lattice of subgroups"))
+        self.assertEqual(miss, [])
+
+    def test_absent_figure_still_reported(self):
+        miss = physical_evidence._missing_contract_names(
+            self._contract("Figure9.9", "Figure9.9"),
+            physical_evidence._norm_text("**图 6.11.** 只有一张图，九点九缺席"))
+        self.assertEqual(miss, ["Figure9.9"])
 
 
 if __name__ == "__main__":

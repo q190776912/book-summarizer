@@ -108,6 +108,20 @@ class ProofListSpacingTest(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_display_math_body_starting_with_minus_is_not_a_list(self):
+        # Robinson ch9 Cor 9.3.8: the display body line begins with `- n (...)`,
+        # which is bullet-shaped but is math content inside `$$`; the closing
+        # fence must NOT be reported and the fixer must not split the block.
+        md = ("Then for each $C \\in S_n$\n\n"
+              "$$\n- n ( h ( T , \\zeta ) + \\epsilon ) < \\log \\mu ( C )\n$$\n")
+        p = _write_md(md)
+        try:
+            self.assertEqual(check_proof_after_list(p), [])
+            self.assertEqual(fix_proof_after_list(p), 0)
+            self.assertEqual(Path(p).read_text(encoding="utf-8"), md)
+        finally:
+            os.unlink(p)
+
     def test_fixer_inserts_idempotently_under_legacy_key(self):
         p = _write_md("2. item two\n> **Proof sketch**: SCP.\n\ntext\n")
         try:

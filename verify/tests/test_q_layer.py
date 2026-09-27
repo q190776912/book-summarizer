@@ -56,6 +56,36 @@ def _ctx(ch, start, end, md_file, ext_dir, formula=None):
                          ext_dir=ext_dir, config=cfg)
 
 
+class PlausibleTagTest(unittest.TestCase):
+    """`_plausible` 的书源噪声下限（Etingof《群表示论》2026-09-27 实测）。
+
+    PP-Structure 会把列向量矩阵 (0,0,1) 转写成一个独立文本块 `(001)`，
+    进书源集合 S 后制造「印刷编号公式 1 在总结缺失」的假 MISSING。
+    印刷公式号从不带前导零，故在 `_plausible` 一票否决；同时锁住
+    「合法号不受影响」（1 / 10 / 99 / 7a / 3.11）。
+    """
+
+    def test_leading_zero_is_noise(self):
+        for bad in ('001', '007', '01', '3.004'):
+            self.assertFalse(SourceFormulaIndex._plausible(bad), bad)
+
+    def test_legitimate_labels_still_plausible(self):
+        for ok in ('1', '10', '99', '7a', '3.11', '12.3'):
+            self.assertTrue(SourceFormulaIndex._plausible(ok), ok)
+
+    def test_raw_bare_number_with_leading_zeros(self):
+        """norm 会把前导零折掉（'(001)' -> '1'），故必须带 raw 判。"""
+        self.assertFalse(SourceFormulaIndex._plausible('1', '(001)'))
+        self.assertFalse(SourceFormulaIndex._plausible('1', '001'))
+        self.assertTrue(SourceFormulaIndex._plausible('1', '(1)'))
+        # 字母章 + 折零的既有语义不得被误伤
+        self.assertTrue(SourceFormulaIndex._plausible('A.3', '(A.03)'))
+
+    def test_zero_and_oversize_unchanged(self):
+        self.assertFalse(SourceFormulaIndex._plausible('0'))
+        self.assertFalse(SourceFormulaIndex._plausible('146'))
+
+
 class NormTest(unittest.TestCase):
     def test_variants(self):
         n = SourceFormulaIndex.norm

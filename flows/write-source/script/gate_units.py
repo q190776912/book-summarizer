@@ -139,7 +139,10 @@ import check_unit_quality as _quality
 from lib.unit_order import check_unit_order
 from lib.problem_coverage import coverage_problems, page_floor_problems, \
     chapter_exercise_problems, duplicate_exercise_statement_problems
-from lib.tag_attestation import tag_attestation_problems
+from lib.tag_attestation import (tag_attestation_problems,
+                                 unharvested_anchor_problems)
+from lib.crossref_attestation import dropped_crossref_problems
+from lib.section_titles import title_problems as _section_title_problems
 from lib.numbering import formula_tag_noise
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
@@ -397,6 +400,25 @@ def _hash_text(text):
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+def _marker_leak_reason(path):
+    """首行标记内含**第二个** `-->` = `name=` 被改写（如把 OCR 箭头换成 ASCII）。
+
+    `_OUT_RE` 非贪婪匹配到第一个 `-->` 即止，正文取 `raw[m.end():]`，于是行尾残句
+    成为正文第一行：短残句能躲过「未翻译散文」阈值，最终随 merge 落进终稿 md
+    （`merge_units._read_body` 用同一个 match-end 切片）。marker 行本身从不进 F 层
+    裸箭头检查，所以正确写法是 line-1 逐字保留、只改 DRAFT→DONE。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            line1 = f.readline().rstrip("\r\n")
+    except Exception:
+        return ""
+    if line1.startswith("<!--") and line1.count("-->") > 1:
+        return ("首行标记内含多余 `-->`（name= 被改写）——HTML 注释提前闭合，"
+                "残句会漏成正文；line-1 须逐字保留（只改 DRAFT→DONE）")
+    return ""
+
+
 def _read_unit(path):
     """读单元文件，返回 (mark, id, type, key, body, body_hash)；解析失败返回 (None, ...)。"""
     try:
@@ -462,33 +484,14 @@ _PAGE_LABEL_CACHE = {}
 
 
 def _page_label_loader(ext):
-    """→ load(pdf_page) = 该页**可能承载印刷编号**的全部块文本（正文 + MFD 公式 latex）。
+    """→ load(pdf_page) = 该页**可能承载编号**的块文本（正文 + MFD 公式 latex）。
 
-    ⑭ 用：左缘印刷编号常被 MFD 当公式检测出来（`( 7 \\mathbf { c } ^ { \\prime } )`），
-    只看 ``text`` 流会把真实编号判成「查无锚点」。公式块只有 ``bbox``/``latex`` 两个
-    字段可用，按 y 排序即可。
+    读页口径与**收割处剔除**同源（`lib.tag_attestation.dir_page_loader`，闸门 ⑭ 的
+    判据也只住在那儿）——旧实现在本文件另写一份读页逻辑，`build_structure` 想复用
+    就得第三份，三份必然分叉。公式块只有 ``bbox``/``latex`` 两个字段可用，按 y 排序即可。
     """
-    def load(pg):
-        if pg in _PAGE_LABEL_CACHE:
-            return _PAGE_LABEL_CACHE[pg]
-        path = None
-        for cand in ("page_%03d.json" % pg, "page_%d.json" % pg, "page_%04d.json" % pg):
-            p = os.path.join(ext, cand)
-            if os.path.exists(p):
-                path = p
-                break
-        val = None
-        if path:
-            try:
-                with io.open(path, encoding="utf-8") as f:
-                    d = json.load(f)
-                val = [str(b.get("text") or "") for b in (d.get("text") or [])]
-                val += [str(b.get("latex") or "") for b in (d.get("formulas") or [])]
-            except Exception:
-                val = None
-        _PAGE_LABEL_CACHE[pg] = val
-        return val
-    return load
+    from lib.tag_attestation import dir_page_loader
+    return dir_page_loader(ext)
 
 
 def _render_check_chapter(ext, out_dir, units):
@@ -640,6 +643,13 @@ def gate_chapter(ext, ch_key, units_sub="units"):
             observed_imgs.update(
                 _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
             continue
+        _mr = _marker_leak_reason(up)
+        if _mr:
+            problems.append("单元 %s（%s %s）%s" % (
+                u["file"], u["type"], u["key"], _mr))
+            observed_imgs.update(
+                _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
+            continue
         # DONE：item / desc / exercise 单元必须「写对」——质量校验通过（公式闭合 /
         # 无裸数学 / 结构标签 / 无明显 OCR 残留 / 无内容审阅类残留）。
         # 🔴 判断标准是"写对"而非"重写"：不看内容指纹是否变化，而是看单元是否
@@ -788,6 +798,44 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # 号不比文，**看不见「写的是不是本题」**；文本指纹（归一化掉 LaTeX 空格/花括号差异）
     # 是唯一能揭穿的判据。与 ⑮ 同一份 ordered 视图，同样只对契约登记的习题单元取指纹。
     problems.extend(duplicate_exercise_statement_problems(_ordered_units_ch))
+    # 🔴 章级闸 ⑰：**节标题折行截短**对账（契约 name ↔ 单元标题）。原书节题排两行时
+    # 抽取器按单行正则只取第一行（`6.1 The Basics of` / `8.5 Inclusion-`），残题顺着拆分
+    # 灌进单元 H2、首行 name=、manifest 与最终 md **文件名**；全书 623 节点 34 个中招，
+    # 而既有闸门按 key/tag/图片对账、verify 的 B/O 层只比序标不比标题文字 → 全绿看不见。
+    # 两条判据（悬空末词 / 连字符结尾 + 契约↔单元标题归一相等）与负向用例见
+    # `lib/section_titles.py`、`lib/tests/test_section_titles.py`。译单元目录的 H2 是译文，
+    # 只跑悬空判据、不与英文契约名对账；判据全过 = 全书假阳 0（Rosen 实测）。
+    problems.extend(_section_title_problems(
+        contract, units, _read_body_ch, compare_names=(units_sub == "units")))
+    # 🔴 章级闸 ⑱：⑭ 的**对偶**——印面编号被收割弄丢。⑭ 管「契约多挂了原书没印的号」
+    # （毒 tag → 逼写手编造），本闸管反方向：`(N)` 锚点**已在契约里独立成块在档**，
+    # 其展示式却没登记 `tag`，于是单元对账（契约 tag ↔ 正文 `\tag`）根本不知道该号存在，
+    # 章级 tag 集合比较又常被**同章别处的同号**掩盖（Strogatz 3e ch13 实测：§13.5 印面
+    # `(1)` 紧跟 `r e^{i\psi}=\langle e^{i\theta}\rangle`，契约无 tag、单元从 `\tag{2}`
+    # 起写，而 `(1)` 在 §13.4 也在账 → ⑭/Q 层/单元级判据全绿）。修法在**收割/回填**
+    # （给契约补 `tag` + manifest `tags`，单元再补 `\tag{}`），不是让写手凭空编号。
+    # 判据保守（全语料 462 章实测：相邻+落点 491 处 → 叠四条收紧后 21 处，逐处抽检为真
+    # 漏）：①节点有单元记录；②该号在**同节**（无 § 祖先时退全章）单元正文里既不以
+    # `\tag` 也不以 `(N)` 出现过（换排版形态渲染过 = 没丢）；③编号形态干净（排除
+    # `(00)`/`(000)` 类 OCR 碎片）；④该号在印刷序列里**有邻居**且键非习题条目（散文里
+    # 的交叉引用 `use (3)` 自成一块却无 2/4 在账，据此排除）。实现与负向测试见
+    # `lib/tag_attestation.py`。
+    _bodies_by_key = {}
+    for _u in units:
+        _k = str(_u.get("key") if _u.get("key") is not None else "")
+        if _k:
+            _bodies_by_key.setdefault(_k, []).append(_read_body_ch(_u))
+    problems.extend(unharvested_anchor_problems(
+        contract, _bodies_by_key, chapter_label(ch_key)))
+    # 🔴 章级闸 ⑲：**散文交叉引用**对账（⑱ 管展示式编号漏收割，本闸管回指被改写吃掉）。
+    # 印面散文里 `Equation (2) is …` 的 `(2)` 是原书携带的信息；写手压缩 Tier-2 散文时常把
+    # 它换成「the governing equation」，号就此消失，而 ⑭/⑱ 只对**展示式** `\tag` 对账，
+    # 看不见散文回指（Strogatz 3e 实测 13 章 37 个「节×号」站点被丢，EN/CN 成对丢失）。
+    # 四条收紧判据（句中引用 / 号形干净且先剥数学 / 目标号在本节 `\tag` 池在账 / 本节散文
+    # 引用池里没有）与实现见 `lib/crossref_attestation.py`；修法在写手侧补回 `(N)`，
+    # 不改公式不重编号。源/译两目录复用同一判据（`_read_body_ch` 已按 units_sub 取正文）。
+    problems.extend(dropped_crossref_problems(
+        contract, _bodies_by_key, chapter_label(ch_key)))
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py

@@ -296,6 +296,15 @@ def print_result(r):
               f"between them — insert `---` (blank line + --- + blank line) between each pair:")
         for g in i_sep:
             print(g)
+    # ---- 条目 ↔ 描述性散文分隔符（I 层第二判据，语言无关）----
+    iprose = r.get('i_prose_sep', [])
+    if iprose:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · Missing separator before prose ({len(iprose)}): a `> **例/证明**` "
+              f"block ends and the next block is descriptive prose without `---` — insert "
+              f"`---` (blank line + --- + blank line) between them:")
+        for g in iprose:
+            print(g)
     # ---- 条目内分隔符（原 J 层）----
     j_hd = r.get('j_header_dash', [])
     if j_hd:

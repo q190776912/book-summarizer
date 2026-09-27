@@ -84,12 +84,13 @@ _boot.setup()
 sys.stdout.reconfigure(encoding="utf-8")
 
 from page_json import PageJson
+import chapter_boundary
 from data.book_structure.book_structure import (chapter_json_path,
                                                 list_chapter_keys,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
 from lib.numbering import (ordinal_depth, resolve_ordinal_code,
-                           formula_paren_tag_re,
+                           formula_paren_tag_re, page_number_furniture,
                            formula_tag_number, formula_trailing_tag, formula_tag_re,
                            formula_tag_shape_ok, formula_tag_noise)
 from lib.page_dir import node_page_dir as _node_page_dir
@@ -242,16 +243,35 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
     `page_dir` 为实际存放 page_*.json 的目录（多册书为对应分册子目录）；
     省略时等同 `ext`（单册书，保持历史行为）。
 
+    🔴 **章边界页按 y 切开**（`chapter_boundary`，Etingof 表示论实测 2026-09-27）：
+    章图只到「页」的粒度，而上一章的收尾常印在后一章起始页的**章标题之上**——整页
+    归后一章会把别章尾料挂成本章章首描述节点，同时让上一章**整节从全书消失**
+    （实测丢 `§2.10` + Theorem 2.26 及证明、Theorem 4.75 及证明，D/B 层各查本章
+    号空间故两边都不报）。据此：本章起始页只取**标题及其之下**（`head_min_y`），
+    并在紧邻的后一章起始页上补收**标题之上**那一截（`tail_band`）。判不出（无章图
+    / 标题在页顶）两侧均为 None ⇒ 逐字节退回历史行为。
+
     返回 (blocks, page_height)；page_height 为全书观测到的最大 bottom（同一本书
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
     ncomp, scope, letter, bare = formula_cfg(ext, ch)
     _dir = page_dir or ext
+    # 边界裁剪窗口（页码 → [lo, hi)；缺省不设限）
+    _head_y = chapter_boundary.head_floor(ext, _dir, ch, start) if ch else None
+    _tail = chapter_boundary.tail_band(ext, _dir, ch) if ch else None
+    _win = {}
+    if _head_y is not None:
+        _win[int(start)] = (_head_y, None)
+    if _tail:
+        _win[int(_tail[0])] = (0.0, _tail[1])
+    pages = list(range(int(start), int(end) + 1))
+    if _tail and int(_tail[0]) not in pages:
+        pages.append(int(_tail[0]))
     blocks = []
     # 跨页累积：已认领的公式编号（一个编号全书只挂一次，第二次出现是 OCR 碎片）
     claimed = set()
-    for p in range(int(start), int(end) + 1):
+    for p in pages:
         fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
             continue
@@ -339,6 +359,11 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
                                            letter=letter, bare=bare,
                                            scope=scope, ch=ch,
                                            claimed=claimed)
+        _lo, _hi = _win.get(int(p), (None, None))
+        if _lo is not None or _hi is not None:
+            page_blocks = [b for b in page_blocks
+                           if (_lo is None or b["y"] >= _lo)
+                           and (_hi is None or b["y"] < _hi)]
         blocks.extend(page_blocks)
     page_height = max((b["bottom"] for b in blocks), default=0.0)
     return blocks, page_height
@@ -415,6 +440,58 @@ def tag_re(ext, bare=True, ch=None):
     return formula_tag_re(ncomp, bare=bare, letter=letter)
 
 
+def _claim_key(num, page, scope=None):
+    """``claimed`` 集的键。scope==3（**节内重置**的裸整数号）→ 按「编号@页」去重，
+    只挡**同页**重复识别的碎片；其余 scope 维持全书唯一键（旧行为逐字节不变）。"""
+    if scope == 3:
+        return "%s@%s" % (num, page)
+    return str(num)
+
+
+def _in_figure(blk, fig_boxes, tol=5.0):
+    """编号候选块的中心是否落在本页**图片区**内。
+
+    图的坐标轴刻度 / 曲线标注（实测 Strogatz 3e p407 = 印面 392 的
+    ``10 20 30 40 50``、p357 的轴标）在 OCR 通道里是**独立成行的裸数字块**，
+    与真编号无形态区别；一旦当成锚点，契约会逼写手在公式上凭空 ``\\tag{40}``。
+    图区来自 ``figure_index.json``（步骤 2 图检测产物），按其 bbox 直接排除。
+    """
+    cx = 0.5 * (blk["x"] + blk["x1"])
+    cy = 0.5 * (blk["y"] + blk["bottom"])
+    for fx0, fy0, fx1, fy1 in fig_boxes:
+        if fx0 - tol <= cx <= fx1 + tol and fy0 - tol <= cy <= fy1 + tol:
+            return True
+    return False
+
+
+def _same_column_cluster(hits, fx0, fx1):
+    """块内多个编号只信**同列**的一簇（多解簇取最靠版心边者）。
+
+    逐行编号的多行公式，其编号纵向排开而**横向同列**，且这一列必然贴在版心**边**
+    （右缘书最右、左缘书最左）；而 OCR 从公式内部切出的碎片（分数分子分母、指数、
+    图轴标）横向散布在版心各处。据此把候选按横向位置单链聚类：簇宽 ≤ ``tol``，
+    **取离公式水平中点最远的一簇**（平票取成员多者）——两侧版式都不误伤，而
+    「最靠边」正是编号列的定义性特征。
+    """
+    if len(hits) < 2:
+        return hits
+    tol = max(0.06 * max(fx1 - fx0, 1.0), 12.0)
+    ordered = sorted(hits, key=lambda z: z[2])
+    clusters = [[ordered[0]]]
+    for h in ordered[1:]:
+        if h[2] - clusters[-1][-1][2] <= tol:
+            clusters[-1].append(h)
+        else:
+            clusters.append([h])
+    mid = 0.5 * (fx0 + fx1)
+
+    def score(c):
+        mt = sum(h[2] for h in c) / float(len(c))
+        return (abs(mt - mid), len(c))
+
+    return max(clusters, key=score)
+
+
 def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
                          scope=None, ch=None, claimed=None):
     """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
@@ -456,15 +533,34 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
     🔴 **一块可挂多个编号**：多行公式组在原书里逐行编号，几何上这些编号都落在
     同一个（很高的）公式 bbox 内。全部合格编号按 y 升序一并挂上——``tag`` 取
     首个（既有单号语义不变），``tags`` 为完整列表（供单元级 tag 对账作真值）。
+    🔴 **但两条几何护栏必须先把关**（2026-09-27 Strogatz 3e 实测，两类毒 tag 都
+    让写手「照写=编造、不写=漏写」两头堵）：
+      * **图区内的数字不是编号**（:func:`_in_figure`）——分岔图 / 蛛网图的坐标轴
+        刻度在 OCR 通道里就是独立成行的裸数字块（p407 的 ``10 20 30 40 50`` 被挂成
+        某展示式的 tag，写手遂凭空 ``\\tag{40}``）；按 ``figure_index.json`` 的图
+        bbox 直接排除。
+      * **跨列的多号必假**（:func:`_same_column_cluster`）——p262 的 (54) 与
+        ``\\begin{array}`` 里 ``3/8`` 分数的分子分母同挂一块，契约便要求
+        ``\\tag{2n}``+``\\tag{3}``+``\\tag{8}``+``\\tag{54}``；只信贴着版心边的那一列。
+      * **同块内只要出现带括号编号，裸排候选全不认**——p262 的 ``3``/``8`` 与
+        ``(52)``/``(53)``/``(54)`` **同在一列**，列聚类分不开；delimiter 才是与本书
+        版式一致的唯一证据。全书裸排编号的书无带括号候选，行为不变。
 
     🔴 **末尾编号**（OCR 把「公式文本 + 右缘编号」读成一整块，如
     ``'…dt.  (3.35)'``）也算编号锚点，但需额外护栏：该文本块必须与 display 公式
     **实质垂直重叠**（≥ 自身高度 60%）——它本就是公式的 OCR 读数行（实测真例
     91–100%）。散文行末尾的交叉引用（``…flow (6.20),``）与公式无重叠，据此排除。
-    🔴 **一个编号只认一次**：``claimed`` 是跨页共享的「已认领编号」集合。同一
-    编号在全书只应出现一次（章级编号书的编号唯一），故第二次出现必是 OCR 碎片
-    或截断（实测 Koopman：p166 的 ``…=01.1.(6.7)`` 实为 ``(6.70)`` 的截断，
-    真正的 (6.7) 在 p153）→ 不得再挂，否则制造假「缺编号」。
+    🔴 **一个编号只认一次**：``claimed`` 是跨页共享的「已认领编号」集合。**章/书级**
+    编号书（scope 1/2）的编号唯一，故第二次出现必是 OCR 碎片或截断（实测 Koopman：
+    p166 的 ``…=01.1.(6.7)`` 实为 ``(6.70)`` 的截断，真正的 (6.7) 在 p153）→ 不得
+    再挂，否则制造假「缺编号」。
+    🔴 **节内重置编号书（scope==3）必须按页去重**（见 :func:`_claim_key`）：这类书
+    每一节都从 ``(1)`` 重新起号，**同一整数在一章里合法出现 N 次**；旧实现把
+    全书唯一的数字串塞进 ``claimed``，于是只有**第一个**用到该号的公式挂得上，
+    其后各节的节首编号被整片吃掉（2026-09-27 Strogatz ch13 实测：§13.2 的 (1)、
+    §13.3 的 (1)(2)、§13.4 的 (1)(2)、§13.5 的 (1)-(4) 全部漏收，契约/manifest
+    ``tags`` 记空 → 门控反过来要求写手把印面带号公式改写成**无编号**展示式，
+    违反 V-K「带编号公式 1:1 跟书」）。
     """
     tags = []
     # 跨章守卫（与 Q 层 `norm().split('.')[0] == ch` 同口径）：章级编号书
@@ -478,9 +574,13 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
         _cks = str(ch).strip()
         if _cks.isdigit() or (len(_cks) == 1 and _cks.isalpha()):
             _guard_head = _cks
+    fig_boxes = [(b["x"], b["y"], b["x1"], b["bottom"])
+                 for b in page_blocks if b.get("kind") == "image"]
     for b in page_blocks:
         if b["kind"] != "text":
             continue
+        if fig_boxes and _in_figure(b, fig_boxes):
+            continue          # 图区内的裸数字 = 轴刻度 / 曲线标注，不是编号列
         raw = (b["text"] or "").strip()
         num = formula_tag_number(raw, ncomp, letter=letter, bare=bare)
         trailing = None
@@ -537,8 +637,10 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
         for t, num, paren, trailing, tx in tags:
             if id(t) in consumed:
                 continue
-            # 已在别处认领过的编号不再挂（OCR 截断 / 碎片会造出重复编号）
-            if claimed is not None and str(num) in claimed:
+            # 已在别处认领过的编号不再挂（OCR 截断 / 碎片会造出重复编号；
+            # 节内重置号按页作键，见 _claim_key 与函数 docstring）
+            if (claimed is not None
+                    and _claim_key(num, t.get("page"), scope) in claimed):
                 continue
             ov = min(t["bottom"], b["bottom"]) - max(t["y"], b["y"])
             if trailing:
@@ -555,8 +657,16 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
             on_left = t["x1"] <= x_left
             if not (on_right or on_left):
                 continue
-            hits.append((t, num))
+            hits.append((t, num, tx, paren))
         if hits:
+            # 🔴 同行候选里**只要出现带括号编号**，裸排候选一律不认：`(54)` 自带
+            # 书的编号 delimiter，是与版式唯一一致的强证据；裸 `3` / `8` 与分数
+            # 分子分母、图轴标无形态区别（实测 Strogatz 3e p262：(52)(53)(54) 与
+            # array 内 `3/8` 的分子分母**同在一列**，靠列聚类和垂直贴合都分不开）。
+            # 全书裸排编号的书（Kreyszig / PDE 等）没有带括号候选，行为不变。
+            paren_h = [h for h in hits if h[3]]
+            if paren_h:
+                hits = paren_h
             # 🔴 多行公式组（`\begin{array}` / aligned）在原书里**逐行编号**，而 MFD
             # 把它识别成**一个**公式块（bbox 纵向很高）。旧实现「一块只挂一个编号」，
             # 组内其余编号只能掉进散文 → 契约只认 1 个 tag，而 agent 在步骤 5 把
@@ -564,14 +674,18 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
             # （实测 Koopman ch3：块 y=[220,420] 内含 3.21+3.22，块 y=[692,819]
             # 内含 3.23+3.24+3.25）。改为块内全部合格编号按文档序（y 升序）一并
             # 挂上：`tag` 仍为首个（兼容既有单号语义），`tags` 为完整列表。
+            # 🔴 但**跨列**的多号必假（见 _same_column_cluster）：实测 Strogatz 3e
+            # p262 的 (54) 与 array 内 `3/8` 分数的分子分母同挂一块 → 契约要求
+            # `\tag{2n}`+`\tag{3}`+`\tag{8}`+`\tag{54}`，写手两头堵。
+            hits = _same_column_cluster(hits, b["x"], b["x1"])
             hits.sort(key=lambda z: (z[0]["y"], z[0]["x"]))
             b["tag"] = hits[0][1]
             if len(hits) > 1:
-                b["tags"] = [str(n) for _, n in hits]
-            for t, num in hits:
+                b["tags"] = [str(n) for _t, n, _tx, _p in hits]
+            for t, num, _tx, _p in hits:
                 consumed.add(id(t))
                 if claimed is not None:
-                    claimed.add(str(num))
+                    claimed.add(_claim_key(num, t.get("page"), scope))
     if consumed:
         page_blocks = [b for b in page_blocks if id(b) not in consumed]
     return page_blocks
@@ -649,6 +763,15 @@ def _filter_noise(blocks, page_height, n_pages, ncomp=None, letter=False):
         if _edge(b):
             edge_pages.setdefault(n, set()).add(b["page"])
 
+    # 🔴 页码跟踪律（与 check_content_completeness._source_formula_tags 共用
+    # lib.numbering.page_number_furniture）：旧判据只看 0.06/0.94 极端带，页码印在
+    # **页眉稍下**（Strogatz 3e 奇数页 y≈页高 6.3%）时整批漏网，于是页码被 splice
+    # 进段尾（实测 `…to the left when $x < 0$ 17`）→ 写手要额外手工删。页码的算术
+    # 指纹（值 = 页序 − 恒定偏移、多页复现）与页高/页眉页脚位置无关，两侧共用一份判据。
+    _furn = page_number_furniture(
+        [(b["page"], b["y"], b["bottom"], _norm(b["text"]).replace(" ", ""))
+         for b in blocks if b["kind"] == "text"], page_height)
+
     kept = []
     for b in blocks:
         if b["kind"] == "text":
@@ -669,6 +792,8 @@ def _filter_noise(blocks, page_height, n_pages, ncomp=None, letter=False):
                         (b.get("text") or "").strip())
                     and (b["y"] < 0.06 * h or b["bottom"] > 0.94 * h)):
                 continue
+            if (b["page"], n.replace(" ", "")) in _furn:
+                continue          # 页码跟踪律命中
         kept.append(b)
     return kept
 
@@ -1151,7 +1276,23 @@ def build_chapter_contract(ext, node, page_dir=None):
             own_blocks[id(tgt)] = blk
         elif tgt.get("type") in ("exercise", "problem"):
             # 练习/问题的「证明：…」是题干任务而非证明过程 → 题面即正文，不拆 proof
-            tgt["sub_sec"] = [_to_content(b) for b in blk]
+            # 但锚点分派对末锚点之后无上界：章尾标题「习题答案与提示」及其后全部
+            # （答案区+封底，实测 8519 块）会灌进末个习题桶 → 与 `_split_proofs`
+            # 同口径在首个章尾标题处截断，标题及其后走既有 trailing→description
+            # 通道（保留图片/块多重集，确定性复算两侧一致）。
+            # 🔴 跳过节点自身印刷标题（习题组头常在桶中部而非桶首——`_item_pos`
+            # 对短探测串返回 -1、锚点退化 (page,0) 时前一节尾料排在标题前）：
+            # 否则切在自家标题上，习题题面会整体误入尾随 description。
+            _nm = _norm(str(tgt.get("name") or ""))
+            ti = next((i for i, x in enumerate(blk)
+                       if _is_tail_heading(x)
+                       and _norm(str(x.get("text") or "")) != _nm), None)
+            if ti is None:
+                tgt["sub_sec"] = [_to_content(b) for b in blk]
+            else:
+                tgt["sub_sec"] = [_to_content(b) for b in blk[:ti]]
+                if blk[ti:]:
+                    trailing_map[id(tgt)] = blk[ti:]
         else:
             elements, trailing = _split_proofs(str(tgt.get("key")), blk)
             tgt["sub_sec"] = elements

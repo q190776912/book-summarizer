@@ -114,7 +114,8 @@ from format_verify import check_example_blockquote_lines  # G 层：example bloc
 # 习题题号判据（集标题 / 题号两体 / 号段切分 / 缺号）与 gate_units 的**章级**跨单元
 # 号流闸同源——同一判据两处实现必然分叉（本 skill 已多次踩过）。
 from lib.problem_coverage import (
-    EXER_SET_HEAD_RE, exercise_item_numbers, exercise_run_gaps)
+    EXER_SET_HEAD_RE, exercise_item_numbers, exercise_run_gaps,
+    printed_ordinal_heads, norm_ordinal)
 
 # ── 复用 format_verify 文档级检查（块引用/例/证明/列表结构），单元级化 ──
 # 这些检查在 verify 里以文件为输入；单元门控把单元正文写到临时 .md 后复用原函数，
@@ -128,6 +129,7 @@ from format_verify import (
     check_nested_blockquotes,          # G: > > ** 嵌套块引用
     check_example_proof_gap,           # G: 例与证明间断裂 / 同行
     check_g_quote_continuity,          # G: blockquote内 bare blank line 打断连续性
+    check_i_prose_separator,           # I: item 块结束后接顶层散文缺 `---`
     check_h_structural_blockquote,     # H: 结构标签误入 `>` / 孤儿空 `>`
     check_h_statement_in_blockquote,   # H: 陈述内容误包 `>`
     check_unlabeled_blockquotes,       # H: `>` 块无标签
@@ -197,6 +199,15 @@ _META_EXCUSE_RE = re.compile(
     r"(?:the|this|a|each)\s+(?:contract|manifest)\s+(?:node|entry|record|unit|slice)"
     r"|\bcontract\s+node\b|\bmanifest\s+(?:entry|record)\b"
     r"|outside\s+this\s+page\s+(?:group|range|span)"
+    # 🔴 英文侧裸形态（Rosen 8e ch5/0090 实测漏网 2026-09-27：整单元正文只有一句
+    #   「This unit's page group carries the closing part of the Section 5.3 exercise set …
+    #     those exercises are recorded in … because the contract assigns them to that
+    #     exercise node」——旧词表要求 `outside this page group` 全短语，故整段躲过；
+    #   中文侧「页组」早在词表里，于是**同一缺陷只在译文层暴露**（源侧 0 命中 = 失明）。
+    r"|\bthis\s+unit'?s\b|\bthese\s+units'?s\b"
+    r"|\bpage\s+(?:group|range|span)s?\b"
+    r"|\bcontract(?:s|ing)?\s+(?:assigns?|assigned|splits?|split|sliced?|groups?|records?|puts?|uses?)\b"
+    r"|\bare?\s+recorded\s+in\s+the\s+(?:contract|manifest|exercise|section|unit|chapter)"
     r"|(?:statements?|exercises?|problems?|content)\s+are\s+not\s+"
     r"(?:reproduced|included|present)(?:\s+in\s+this\s+(?:unit|entry|file))?"
     r"|not\s+reproduced\s+in\s+this\s+(?:unit|entry)"
@@ -477,6 +488,7 @@ _FV_UNIT_CHECKS = (
     check_nested_blockquotes,          # G: > > ** 嵌套
     check_example_proof_gap,           # G: 例与证明间断裂 / 同行（返回 (errors, warns)）
     check_g_quote_continuity,          # G: blockquote内 bare blank line 打断连续性
+    check_i_prose_separator,           # I: item 块结束后接顶层散文缺 `---`
     check_h_structural_blockquote,     # H: 结构标签误入 `>` / 孤儿空 `>`
     check_h_statement_in_blockquote,   # H: 陈述内容误包 `>`
     check_unlabeled_blockquotes,       # H: `>` 块无标签
@@ -944,6 +956,12 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
         # |P(0)|+|DP(0)|+|D^2P(0)|、Ω×ℝ×ℝⁿ、不等式链），非 OCR 抽风，跳过
         if any(c in unit for c in "()|{}^_[]<>"):
             continue
+        # 🔴 LaTeX 对齐栏重复（矩阵 / array 行里的「0 & 0 & 0 &」）= 合法数学排版，
+        #   非 OCR 抽风（Robinson 李代数 ch3 E6/E7/E8 Cartan 矩阵实测误报：一个
+        #   8×8 矩阵行天然连续重复 12+ 字符的「0 & 」）。判据保守：单元除 & 外只含
+        #   数字 / 空白 / 正负号 / 定界逗号才放行，掺进字母仍照常报警。
+        if "&" in unit and not re.sub(r"[\d&\s\-+.,]", "", unit):
+            continue
         all_problems.append(
             "疑似 OCR 乱码重复片段：「%s…」连续重复（须清理）"
             % unit[:20])
@@ -1097,15 +1115,20 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     #     内容块，而正文里**认不出一条习题条目** = 题面被占位文字换掉。判据 14 只拦
     #     「正文为空」，拦不住「非空但无题面」（Rosen ch5 §5.4 即为一例：4 行元话语
     #     冒充一整个习题集单元）。
-    #     🔴 「条目形态」两类都算在位（Katok 8e 全书用前者，只认集内序号会让该类书
+    #     🔴 「条目形态」三类都算在位（Katok 8e 全书用前者，只认集内序号会让该类书
     #        整章被打回——已由 verify/tests 的 test_clean_exercise_not_flagged 守住）：
     #       · 集内序号 ``1. `` / ``**Exercise 29.**``（``exercise_item_numbers`` 非空）；
-    #       · 粗体条目标头里带该单元的契约键序标 ``**20.1.3.**``（``key`` 真值）。
+    #       · 粗体条目标头里带该单元的契约键序标 ``**20.1.3.**``（``key`` 真值）；
+    #       · 🔴 粗体头里的**点分印刷序标**归一后等于契约键（``**\*Exercise 1.2.4.**``
+    #         ↔ 契约键 ``1.2-4``；Robinson 全书习题按印刷写 `\*Exercise N.S.i.`，
+    #         旧两判据同时失明：`\*` 打断标签正则、`-`≠`.` 打断键匹配 → 4 个单元
+    #         被误报「无题面」，2026-09-27 根治入 ``printed_ordinal_heads``）。
     if utype == "exercise" and content_blocks and \
             not exercise_item_numbers(body_clean) and \
             not (key and re.search(
                 r"(?m)^\s{0,3}(?:>\s*)?\*\*[^*\n]*" + re.escape(str(key).strip())
-                + r"[^*\n]*\*\*", body_clean)):
+                + r"[^*\n]*\*\*", body_clean)) and \
+            not (key and norm_ordinal(key) in printed_ordinal_heads(body_clean)):
         all_problems.append(
             "契约登记的习题单元正文认不出任何一条习题条目（既无集内序号，也无带契约键 "
             "%r 的粗体条目标头），而节点有 %d 个内容块——习题节点按 V-I 须完整收录题面"

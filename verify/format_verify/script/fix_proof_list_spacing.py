@@ -29,6 +29,10 @@ _boot.setup()
 import re
 
 from verify.script.base import LayerFixResult, register_fixer
+# Single source for the display-math exemption: a bullet-looking line inside a
+# `$$` block (e.g. `- n ( h ( T , \zeta ) ) < ...`) is math content, and
+# inserting a blank line there would break the fence.
+from verify.format_verify.script.format_verify import _k_display_mask
 
 _K_LIST_RE = re.compile(r'^\s*(?:\d+[.)]|\(\d+\)|[-+*])\s')
 
@@ -64,13 +68,18 @@ def fix_proof_after_list(md_file):
         return 0
     changes = 0
     n = len(lines)
+    disp = _k_display_mask(lines)
     i = 0
     while i < n - 1:
+        if disp[i]:
+            i += 1
+            continue  # display-math content, not a list boundary
         if _K_LIST_RE.match(lines[i]) and _k_next_is_new_block(lines[i], lines[i + 1]):
             # Insert blank line after the list item
             lines.insert(i + 1, '')
             changes += 1
             n += 1
+            disp.insert(i + 1, False)
             i += 1  # skip the newly inserted blank line
         i += 1
     if changes > 0:

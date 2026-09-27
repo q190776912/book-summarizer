@@ -146,6 +146,35 @@ class TestCoverage(unittest.TestCase):
                                            _read({})), [])
 
 
+class TestCrossNodeRunNotSpliced(unittest.TestCase):
+    """负向：编号链只能在同一契约节点内连成，不得跨节点拼接。
+
+    Etingof《群表示论》ch4 §4.12 实测：节导语里印着「1. 行子群 / 2. 列子群」，
+    而 Example 4.37 的「n = 3. For λ = (2,1)」「n = 4. …」被公式块劈断后行首
+    只剩「3.」「4.」——旧实现把两节点的文本块串起来数成假链 1..4，于是报
+    「单元里只写到 2，缺 2 项」，而那两项在印面上从来不存在。
+    """
+
+    def test_run_does_not_splice_across_nodes(self):
+        sec = node("section", "4.12",
+                   [txt("1. The row subgroup P"), txt("2. The column subgroup Q")],
+                   [node("example", "4.37",
+                         [txt("3. For X = (2, 1)"), txt("4. For X = (2, 2)")])])
+        root = chapter(sec)
+        bodies = {"4.37": "**Example 4.37**: nothing numbered here at all."}
+        self.assertEqual(coverage_problems(root, [unit("4.37", "")], _read(bodies)), [])
+
+    def test_same_node_chain_still_counted(self):
+        """正向对照：整块内容挂在**同一个**节点尾部仍必须报缺（不损失检出力）。"""
+        sec = node("section", "4.2", [txt("1. a"), txt("2. b")],
+                   [node("theorem", "4.2-1", PROBLEMS)])
+        root = chapter(sec)
+        bodies = {"4.2-1": "theorem statement only, list dropped"}
+        probs = coverage_problems(root, [unit("4.2-1", "")], _read(bodies))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("缺 5 项", probs[0])
+
+
 class TestPageFloors(unittest.TestCase):
     """闸 ⑬：契约瞎了（整页习题没进契约）时，页侧下限必须把缺口判出来。"""
 
@@ -264,6 +293,63 @@ class TestConsolidatedCut(unittest.TestCase):
 
     def test_no_header_returns_none(self):
         self.assertIsNone(self.cut("axioms are satisfied:", "1. closure", "2. identity"))
+
+
+class TestCJKConsolidatedCut(unittest.TestCase):
+    """中文章末题块体例（《数值分析》第五版实测，2026-09-27）。
+
+    中文教材章末依次印「复习与思考题」「习题」「计算实习题」，与英文 ``Exercises``
+    同属 V-I 认可的整块省略形态。旧判据只有 ``习题|练习`` 两个词，且**尾部噪声集只认
+    半角数字与句点**，而中文 OCR 拖的是 ``· … ．``，于是三类中文章末块一个都没被识别：
+    题号 1..N 被当成「本节应写却漏写的编号内容」，门控反过来逼写手把整章习题抄进笔记。
+    """
+
+    def cut(self, *blocks):
+        return consolidated_cut(list(blocks))
+
+    def test_cjk_block_titles(self):
+        for head in ("复习与思考题", "计算实习题", "习题", "习题集", "练习题"):
+            self.assertEqual(self.cut("本章要点如下。", head, "1. …"), 1, head)
+
+    def test_cjk_tail_dot_noise(self):
+        # OCR 把标题后的点线拖进文本：`·` `…` 不在半角噪声集里 → 旧判据整行失配
+        for head in ("复习与思考题··", "计算实习题…·", "习题·…··..",
+                     "复习与思考题.····", "计算实习题····"):
+            self.assertEqual(self.cut("本章要点如下。", head, "1. …"), 1, head)
+
+    def test_vertical_split_head(self):
+        # 印刷竖排/断行把标题切成相邻极短块（目录页实测：单独的「习」「题」各近十处）
+        self.assertEqual(self.cut("本章要点如下。", "习", "题", "1. …"), 1)
+        self.assertEqual(self.cut("本章要点如下。", "计算实习", "题", "1. …"), 1)
+
+    def test_cjk_prose_reference_does_not_cut(self):
+        for line in ("本章习题见书末答案。", "证明留作习题.", "见习题 3 的证明"):
+            self.assertIsNone(self.cut("本章要点如下。", line, "1. …"), line)
+
+    def test_cjk_body_list_is_not_a_block_head(self):
+        self.assertIsNone(self.cut("条件如下：", "1. 连续", "2. 可导", "3. 有界"))
+
+
+class TestCJKIndentItems(unittest.TestCase):
+    """中文排版用**全角空格**缩进列表项 ``　　（1）…`` —— 前导空白必须认 ``\\u3000``。
+
+    只认 ``[ \\t]`` 时单元侧一个数不到，闸 ⑫ 会报「契约 1..N / 单元没有任何编号项」，
+    把写手已写全的章末题判成整块漏写（数值分析 ch3/ch4 实测形态）。
+    """
+
+    def test_fullwidth_indent_counted(self):
+        md = "\n".join(["**复习与思考题**", "", "　　（1）判断正误。",
+                        "　　（2）说明理由。", "　　（3）举例反驳。"])
+        self.assertEqual(unit_run_length([md]), 3)
+
+    def test_coverage_passes_when_cjk_items_written(self):
+        # 契约侧 OCR 是半角 `1.`，单元侧按中文排版写全角 `（1）` → 必须判「已覆盖」
+        root = chapter(node("section", "3.27", [txt("1. a"), txt("2. b"),
+                                                txt("3. c")]))
+        md = "\n".join(["　　（1）判断正误。", "　　（2）说明理由。",
+                        "　　（3）举例反驳。"])
+        self.assertEqual(
+            coverage_problems(root, [unit("3.27", md)], _read({"3.27": md})), [])
 
 
 if __name__ == "__main__":

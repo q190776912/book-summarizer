@@ -47,6 +47,7 @@ import subprocess
 
 from verify.script.struct_labels import (
     G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE,
+    G_ITEM_BQ_HEAD_RE,
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
@@ -93,20 +94,36 @@ def check_katex(md_file):
 # not just `## `: a heading after a proof block ends it, and the blank line
 # required above headings (heading_blank_above) is a legitimate inter-block
 # separator.
-G_TERM = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$\s*$|<div)')
+G_TERM = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$\s*$|<div|\s*\|)')
+#     🔴 `\s*\|` = 顶级 markdown 表格行也是**块终止符**（Rosen 8e ch8 译单元实测，
+#     2026-09-26）：原书常把示例的题面与其数据表/解答表分排，EN 源里 `**Example 1.**`
+#     不被 G_HEAD 认出（G_HEAD 只认中文 证明/证/例），故该断裂只在**译单元**暴露；
+#     表格既是一块的结束也是下块的开端，其前的空行是合法的分块空行，不判「bare blank」。
 
 NESTED_BQ = re.compile(r'^>\s*>\s*\S')
+
+# 顶层「非散文」块起始：这些块自带边界语义，item 块与其之间不要求 `---`。
+_NON_PROSE_START = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$|<div|\s*\||>)')
+
 
 def check_g_quote_continuity(md_file):
     """G-LAYER: quote-block continuity.
 
     Returns a list of violation strings (with line numbers). Empty = pass.
-    Flagged: a bare blank line (strip()=='') occurring while inside a
-    `> **证明/例` block, whose next non-blank line is block CONTENT
-    (a `>` line or any line that is neither a new block start nor a block
-    terminator). Allowed bare blanks: those immediately preceding a new
-    block start (`> **证明/例`) or a terminator (`---` / any ATX heading /
-    top-level `**label**`) — these are inter-block separators.
+
+    🔴 判据必须**语言无关**（Strogatz 3e 2026-09-27 根治）：旧版用只认中文
+    「证明|证|例」的 `G_HEAD` 开块，导致同一结构 EN 源单元不开块、CN 译单元判
+    断裂——译者为过关把合法分块空行改写成空 `>` 行或私加 `---`，源/译两版结构
+    分叉。现统一用 `G_ITEM_BQ_HEAD_RE`（例/Example/证明/Proof/解答/Solution）。
+
+    Flagged:
+      (1) **真断裂**：item 块内出现裸空行（无 `>` 的纯空行），且下一个非空行仍以
+          `>` 开头但不是新 item 的头——同一个 blockquote 被劈成两段。
+      (2) **半包例子**（writing-rules V-F）：块头带 `>` 而正文留在顶层裸奔——即
+          裸空行后接顶层散文，且该 `>` 组除头行外没有任何正文行。
+    合法（不判）：裸空行后接新 item 头、或 `---`/标题/顶层 `**标签**`/`$$`/表格/
+    `<div` 等自带边界的块；以及**正文完整的 item 块**结束后接顶层散文（该处缺的
+    是 `---`，由 `check_i_prose_separator` 报，消息指向正确判据）。
     """
     try:
         with open(md_file, encoding='utf-8') as f:
@@ -116,13 +133,19 @@ def check_g_quote_continuity(md_file):
     n = len(lines)
     out = []
     in_block = False
+    body_seen = False      # 头行之后是否出现过 `>` 正文行（判「半包」）
     for i in range(n):
         ln = lines[i]
-        if G_HEAD.match(ln):
+        if G_ITEM_BQ_HEAD_RE.match(ln):
             in_block = True
+            body_seen = False
             continue
         if G_TERM.match(ln) and not ln.lstrip().startswith('>'):
             in_block = False
+            continue
+        if ln.startswith('>'):
+            if ln.strip() not in ('>', '> '):
+                body_seen = True
             continue
         # Only flag truly bare blank lines (no `>` prefix), not empty blockquote
         # lines (`> ` or `>`) which keep the blockquote contiguous.
@@ -133,15 +156,70 @@ def check_g_quote_continuity(md_file):
             if j >= n:
                 continue  # trailing blank at EOF — nothing after to split, harmless
             nx = lines[j]
-            is_newblock = bool(G_HEAD.match(nx))
+            is_newblock = bool(G_ITEM_BQ_HEAD_RE.match(nx) or G_HEAD.match(nx))
             is_term = bool(G_TERM.match(nx) and not nx.lstrip().startswith('>'))
             if is_newblock or is_term:
+                in_block = bool(is_newblock and not is_term)
                 continue  # legitimate inter-block separator
-            out.append(f"  x L{i+1}: bare blank line breaks the `> **证明/例` block "
-                       f"(next content L{j+1}: {nx.strip()[:40]})")
+            if nx.startswith('>'):
+                out.append(f"  x L{i+1}: bare blank line splits the `> **例/证明` block "
+                           f"(quote resumes at L{j+1}: {nx.strip()[:40]})")
+            elif not body_seen:
+                out.append(f"  x L{i+1}: example/proof head is quoted but its body is "
+                           f"bare top-level prose (half-wrapped block, L{j+1}: "
+                           f"{nx.strip()[:40]})")
+            # 正文完整 + 顶层散文：块到此确实结束，交给 I 层分隔线判据
+            in_block = False
         # A top-level (non->) non-blank line closes the blockquote
         if in_block and ln.strip() and not ln.startswith('>'):
             in_block = False
+    return out
+
+
+def check_i_prose_separator(md_file):
+    """I-LAYER: `---` required between a completed item block and prose.
+
+    writing-rules V-F「item 上方或下方是描述性散文时必须加 `---`」的机械化。
+    🔴 判据语言无关（同 `check_g_quote_continuity` 的根治口径）：旧版该结构只在
+    CN 侧被 G_HEAD 开块后以「断裂」形式误报，EN 侧同位裸奔无人管，两版只能各自
+    用不同手段规避。
+
+    判：一个 `>` item 块（头行为 例/Example/证明/Proof/解答/Solution，且头外还有
+    正文行）结束后的第一个非空行是**顶层散文**（既非 `---`/标题/顶层 `**标签**`/
+    `$$`/表格/`<div`，也非新的 `>` 块）→ 缺 `---`。块尾的空 `>` 行（`>`/`> `）与
+    其后的顶层散文之间同样缺 `---`——空 `>` 行是块**内**留白，不是块间分隔线。
+    不判：文件结束、`---` 已在位、下块自带边界（标题/标签/公式/表格/图）。
+    """
+    try:
+        with open(md_file, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except Exception:
+        return []
+    n = len(lines)
+    out = []
+    i = 0
+    while i < n:
+        if not G_ITEM_BQ_HEAD_RE.match(lines[i]):
+            i += 1
+            continue
+        j = i + 1
+        body = False
+        while j < n and lines[j].startswith('>'):
+            if lines[j].strip() not in ('>', '> '):
+                body = True
+            j += 1
+        if not body:
+            i = j
+            continue                      # 半包由 G 层报，不在此重复
+        k = j
+        while k < n and lines[k].strip() == '':
+            k += 1
+        if k < n and not _NON_PROSE_START.match(lines[k]) \
+                and not G_ITEM_BQ_HEAD_RE.match(lines[k]):
+            out.append(f"  x L{j}: missing `---` between the `> **例/证明**` block "
+                       f"(ends L{j}) and the descriptive prose at L{k+1}: "
+                       f"{lines[k].strip()[:50]}")
+        i = j
     return out
 
 def check_nested_blockquotes(md_file):
@@ -255,7 +333,7 @@ def check_example_blockquote(md_file):
 _H_UL_OPENERS = re.compile(
     r'^\s*>\s*\*\*(?:'
     r'(?:\d{1,3}[.．]\s*)?(?:'
-    r'(?:证明|证|例|评注|注|说明|算法'
+    r'(?:证明|证|解答?|例|评注|注|说明|算法'
     r'|Proof|Example|Solution|Note|Remark|Algorithm'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
     r')'
@@ -277,14 +355,21 @@ _H_MISSING_BQ = re.compile(
     # (the OLD pattern required the keyword to be immediately followed by `**`,
     #  so it only matched a bare `**Example**` and never fired on real
     #  examples like `**Example 1.1-2**:` or `**证明：...` — fixed here).
-    r'(?:证明|证|证明思路|证明概要|注记|说明'
-    r'|Proof|Example|Solution|Note)(?![\w\-])'
+    r'(?:证明|证|证明思路|证明概要|解答?|注记|说明'
+    # `Remark` was long missing from this table while its CN counterpart `注`
+    # (below) was present → same structure passed in the EN unit and FAILED in
+    # the CN translation (Robinson ch2/ch7 实测 2026-09-27, 根治 2026-09-27).
+    # SSOT = format_verify.md 第29/230 条「证明、例、注、说明等附属块一律 `>` 包裹」。
+    r'|Proof|Example|Solution|Note|Remarks?)(?![\w\-])'
     r'|例(?:\s*\d[\d.]*)?'           # 例 / 例1 / 例 1  (then content)
     r'|注(?:\s*\d[\d.]*)?'           # 注 / 注1
+    # 评注 = `Remark` 的标准译名（Weibel / do Carmo 黎曼几何 全书用此形）。
+    # 补 `Remarks?` 时必须同步补它，否则不对称只是换了个方向。
+    r'|评注(?:\s*\d[\d.]*)?'
     # number-first form: N.S-N + label word
     # (e.g. Kreyszig `3.1-3 Example (...)`, `3.1-3 例子（...）`)
     r'|\d{1,3}(?:[.．\-－]\d{1,3}){1,2}\s*'
-    r'(?:例|例子|Example|Solution|Proof|Note|Remark|证明|证|说明|注)'
+    r'(?:例|例子|Example|Solution|Proof|Note|Remarks?|证明|证|说明|注|评注)'
     r')'
 )
 
@@ -303,9 +388,9 @@ def _h_ext_is_legit_bq(s):
     inner = t[1:].lstrip()
     if inner.startswith('^{'):
         return True
-    # Chinese openers
+    # Chinese openers（解 = EN Solution 的对应标签，Rosen 8e 译单元实测 2026-09-26）
     if (inner.startswith('**证明') or inner.startswith('**例')
-            or inner.startswith('**注')):
+            or inner.startswith('**注') or inner.startswith('**解')):
         return True
     # number-first form:  > **N.M-K 例  (book prints 编号在前)
     if re.match(r'^\*\*\d{1,3}(?:[.．-]\d{1,3}){1,2}\s*(?:例|Example|注|Note|Remark|证明|证|说明)', inner):
@@ -667,6 +752,28 @@ def _k_next_is_new_block(item_line, nx):
         return True
     return False
 
+def _k_display_mask(lines):
+    """True at index i when lines[i] IS a `$$` fence or sits inside a display
+    block (also for `> $$` in-block fences).
+
+    Why: a display body may legitimately begin with a bullet-looking line
+    (`$$` / `- n ( h ( T , \\zeta ) ) < ...` / `$$` — Robinson ch9 Cor 9.3.8).
+    That is math content, not a list item, and inserting a blank line inside a
+    `$$` block is itself a violation, so the K pair check must skip it."""
+    mask = [False] * len(lines)
+    in_disp = False
+    for i, ln in enumerate(lines):
+        t = ln.strip()
+        if t.startswith('$$') or t.startswith('> $$'):
+            mask[i] = True
+            if t.count('$$') >= 2:      # single-line block: opens and closes
+                continue
+            in_disp = not in_disp
+            continue
+        mask[i] = in_disp
+    return mask
+
+
 def check_proof_after_list(md_file):
     """K-LAYER: ensure a blank line separates a list's last item from a
     following new block (proof blockquote, display math, structural label,
@@ -684,7 +791,10 @@ def check_proof_after_list(md_file):
         return []
     out = []
     n = len(lines)
+    disp = _k_display_mask(lines)
     for i in range(n - 1):
+        if disp[i]:
+            continue  # the item-looking line is display-math content
         if _K_LIST_RE.match(lines[i]) and _k_next_is_new_block(lines[i], lines[i + 1]):
             out.append(f"  x L{i+2}: new block `{lines[i + 1].strip()[:50]}` directly follows "
                        f"list item L{i+1} without blank line — add one")
@@ -890,6 +1000,7 @@ class FLayer(VerifyLayer):
             'h_ul_bq': check_unlabeled_blockquotes(ctx.md_file),
             'h_mbq': check_labels_missing_blockquote(ctx.md_file),
             'i_sep_gaps': check_i_separators(ctx.md_file),
+            'i_prose_sep': check_i_prose_separator(ctx.md_file),
             'j_header_dash': check_item_header_dash(ctx.md_file),
             'k_proof_list': check_proof_after_list(ctx.md_file),
             'l_sep_blanks': check_separator_blank_lines(ctx.md_file),

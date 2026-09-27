@@ -71,7 +71,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
-from lib.util import blk_text
+from lib.util import blk_text, norm_secnum
 from lib.unit_order import check_contract_anchors, check_section_key_page_order
 
 import json
@@ -82,6 +82,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 import scan_skeleton
+import chapter_boundary
 from extract_items import extract_items, extract_items_two_level
 from extract_items_cn_single import extract_items_cn_single
 from extract_items_en import extract_items_en
@@ -241,14 +242,29 @@ def _section_of_key(key, ordinal, chapter_first=True, chapter_local=False,
     return None
 
 
-def _section_of_exer(num):
-    """练习序标（如 "1.2.A" / "1.2" / "1.A" / "A.4-1"）推导章节号；不足两级归章级。"""
+def _section_of_exer(num, chapter_local_numbering=False, chapter_scoped=False):
+    """练习序标（如 "1.2.A" / "1.2" / "1.A" / "A.4-1"）推导章节号；不足两级归章级。
+
+    🔴 `chapter_scoped`（章内计数器书，`chapter_scoped_items: true`）下两分量键
+    `C.N` 的末段是**章内条目序标**而非节号（Etingof《群表示论》"Problem 3.4" 印在
+    p33，属 §3.2 的习题），按数字派生节号会把它绑进真存在的 §3.4（p35），并经
+    `page_start = min(子项页)` 把该节锚点整段前拖 → ANCHOR-SANITY「锚点与树序矛盾」。
+    与 `_section_of_key` 的 `chapter_scoped` 分支同源：一律返回 None，交由页码就近归节。
+    """
     # 🔴 字母前缀附录练习（Weibel "Exercise A.4.1" → key "A.4-1" → §A.4）
     _lm = re.match(r'^([A-Za-z])\s*[.\-]\s*(\d+)', num or "")
     if _lm:
         return f"{_lm.group(1).upper()}.{_lm.group(2)}"
     nums = re.findall(r"\d+", num)
     if len(nums) >= 2:
+        if chapter_scoped and re.fullmatch(r'\d+\.\d+', (num or "").strip()):
+            return None
+        # chapter_local_numbering（丘维声体例）：习题印 `章.节`（习题 6.2 挂
+        # 节 §2）——两分量都章内，归属 = 第二分量（= 节号）。默认 False 时
+        # 维持原「章.节」键（页就近 _place 会把习题 6.2 挂到页 230 的小节
+        # 3.1 而非页 222 的节 2 —— 本旗标的立项根因之一）。
+        if chapter_local_numbering:
+            return str(nums[1])
         return f"{nums[0]}.{nums[1]}"
     return None
 
@@ -451,6 +467,7 @@ def _item_pos(ext, it, page_dir=None):
         snip_body = snip
     probe = re.sub(r"\s+", " ", snip_body[:48]).lower()
     key_variants = [key] if key else []
+    _nf_specs = []   # 数字先行条头（number-first）变体，见下方注入点
     m_cn = re.match(r'^([\u4e00-\u9fff]+)', key)
     if m_cn:
         from verify_config import _LABEL_CANON as _LC
@@ -459,6 +476,19 @@ def _item_pos(ext, it, page_dir=None):
         # CN 键无分隔符（"定义1.1"）；EN 源文印 "Definition 1.1"（号前有空格）
         key_variants += [(en.lower() + ' ' + rest.lstrip('.')) for en, c in _LC.items() if c == cn]
         key_variants += [(en.lower() + rest) for en, c in _LC.items() if c == cn]
+        # 🔴 数字先行印刷头（do Carmo《黎曼几何》实测："2.1 DEFINITION. …"，
+        # 号在标签词前）。CN 规范键与上述 EN「标签+号」变体都永远匹配不到
+        # 行首 → y=-1 → attach_content 锚点退化 (page, 0.0)，同页内容全堆到
+        # 最后一个节点、多数条目 0 内容块。登记「号 + 标签词」头规格，
+        # 标签词被 OCR 打乱（DEFINrTION/PROPOsITION）时按字符相似度判。
+        _num = rest.strip(".-· ")
+        if _num and re.fullmatch(r"\d+(?:[.\-]\d+)*", _num):
+            _np = r"[.\-·]".join(re.escape(x) for x in re.split(r"[.\-]", _num))
+            for en, c in _LC.items():
+                if c == cn:
+                    _nf_specs.append(
+                        (re.compile(rf"^{_np}(?!\d)\s*([a-z]{{4,15}})"),
+                         en.lower()))
     # 三级点分 scheme（scheme three-level）：契约键用连字符（"1.2-1"），书源多印
     # 点分（"1.2.1"），反之亦然。追加对方分隔变体，否则 startswith 永不命中 →
     # y=-1 → _item_anchor 回退 (page, 0.0) → 同页多 item 内容全错归该页最后一个
@@ -528,6 +558,27 @@ def _item_pos(ext, it, page_dir=None):
         return (p, min(ys_head))
     if ys_contain:
         return (p, min(ys_contain))
+    # 数字先行头兜底（严格/包含均不中后启用；标签词形近判 ≥0.75 防误锚散文）：
+    # 命中「^<号> <形近标签词>」的块顶边即条头 y。放在 contain 之后保证
+    # 既有书（label-first、头/包含可中）行为零变化。
+    if _nf_specs:
+        from difflib import SequenceMatcher
+        ys_nf = []
+        for b in d.get("text", []):
+            if not isinstance(b, dict):
+                continue
+            s = blk_text(b).strip()
+            if not s:
+                continue
+            sl = re.sub(r"\s+", " ", s.lower())
+            for _pat, _alias in _nf_specs:
+                _mm = _pat.match(sl)
+                if _mm and SequenceMatcher(None, _mm.group(1), _alias).ratio() >= 0.75:
+                    poly = b.get("poly") or []
+                    ys_nf.append(poly[1] if len(poly) >= 8 else 0)
+                    break
+        if ys_nf:
+            return (p, min(ys_nf))
     # 最后兜底：OCR 数字↔形近字母容错条头（严格头/裸头/包含均未命中时才启用）。
     # 覆盖印刷序标被读成形近字母（"Corollary 1l"↔号 11）导致锚定失败、y=-1 误排
     # 最前的场景；仅追加匹配、不改动上面既有命中，零回归。
@@ -666,6 +717,53 @@ def _recognized_sections(ext, ch, start, end, page_dir=None):
             pos = (pg, 0)
         out.append((title, pos[0], pos[1], level))
     return out
+
+
+_SEP_NORM_RE = re.compile(r'[.\-–—·/．－〜]+')
+
+
+def _norm_sec_key(s):
+    """Normalize a section-number token to a comparable tuple of components.
+
+    ``"1.4"`` -> ``('1', '4')``; ``"1-2"``/``"1．2"`` -> ``('1', '2')``.  Used to
+    compare a scan_skeleton-detected section number against the authoritative
+    whitelist regardless of OCR separator variant.
+    """
+    return tuple(x for x in _SEP_NORM_RE.split(str(s).strip()) if x)
+
+
+def _load_section_whitelist(ext):
+    """无 phantom 抗性的**编号书**权威小节清单（TOC 真值）。
+
+    ``scan_skeleton`` 的通用节头检测器对「行首编号 + 中文散文残片」型交叉引用
+    碎片（如 ``1.13 中的等式`` = ``定义1.13 中的等式`` 断块、``3.9 已经给出…``
+    = 文中回指）会误判成真小节 → 契约凭空多出 §1.13/§3.9 等幻影节，触发
+    ANCHOR-SANITY 拒绝落盘。这类书的**目录页**给出全书真小节编号全集，是可靠
+    的人工判据。由 agent「校验识别」写出 ``<extract_dir>/_section_whitelist.json``::
+
+        { "1": ["1.1", "1.2", "1.3", "1.4", "1.1.1", ...],
+          "2": [...], "3": [...] }
+
+    本函数返回 ``{归一章键: set(归一小节号元组)}``；**文件缺失 → None**（调用方
+    no-op，其他书零回归）。仅对**有编号**书（``sections_unnumbered`` 为假）生效，
+    与无编号书的 ``_recognized_sections.json`` 注入路径互不干扰。
+    """
+    fp = os.path.join(ext, "_section_whitelist.json")
+    if not os.path.exists(fp):
+        return None
+    try:
+        data = json.load(open(fp, encoding="utf-8-sig"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    out = {}
+    for chkey, nums in data.items():
+        if not isinstance(nums, list):
+            continue
+        out[_norm_sec_key(chkey)[0] if _norm_sec_key(chkey) else str(chkey)] = {
+            _norm_sec_key(n) for n in nums if str(n).strip()}
+    return out or None
 
 
 def _real_subsections_from_markdown(ext, ch):
@@ -830,13 +928,56 @@ def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
     return None
 
 
-def _exercise_region_start(ext, ch, start, end, page_dir=None):
-    """Return the page where 'EXERCISES FOR CHAPTER <ch>' begins, else None.
+def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=None):
+    """章末**集中习题块**的起始页：本章最后一个真节头**之后**首个习题块标题页，无则 None。
 
-    Used to exclude exercise-region pages from the ITEM contract so that
-    exercise problems (e.g. Strogatz `3.1.1`) are not mistaken for chapter
-    items (examples/theorems).  Case-insensitive, space-optional to survive
-    OCR like `EXERCISESFORCHAPTER3`.
+    判据是**位置**而非措辞（`scan_skeleton.EXER_HEADING` 全行锚定，含
+    ``EXERCISES`` / ``EXERCISES FOR CHAPTER N`` / ``Exercises``）：只有出现在全部真节
+    之后的块，才在文档序上晚于所有节正文。节末块（do Carmo 每节末 EXERCISES，其后
+    还有新节）不属本形态 → 返回 None，行为零回归。
+
+    消费方（build_chapter step 5）据此把块内练习节点标 ``consolidated: true`` 并挂到
+    **章级子列表末尾**而非派生小节下：Strogatz《Nonlinear Dynamics and Chaos》3e 实测
+    章末习题区按节分组印「2.1 A Geometric Way of Thinking」+ 题号 2.1.1…，按号→节挂
+    进 §2.1 后摊平文档序成为 §2.1(p31) → 习题(p53) → §2.2(p33) 的页码倒退，
+    ANCHOR-SANITY 13 章 67 处拒绝落盘。集中块的省略由 ``consolidated`` 承载
+    （docs/writing-rules.md「有专门习题小标题的集中习题块一律省略」）。
+    """
+    if not last_sec_page:
+        return None
+    _dir = page_dir or ext
+    for p in range(int(start), int(end) + 1):
+        if p < int(last_sec_page):
+            continue
+        fp = os.path.join(_dir, 'page_%03d.json' % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding='utf-8'))
+        except Exception:
+            continue
+        for b in d.get('text', []):
+            if not isinstance(b, dict):
+                continue
+            for ln in blk_text(b).split('\n'):
+                ln = ln.rstrip('$').strip()
+                if ln and scan_skeleton.EXER_HEADING.match(ln) \
+                        and not ln.rstrip('. ．·').islower():
+                    return p
+    return None
+
+
+def _exercise_region_start(ext, ch, start, end, page_dir=None):
+    """习题块头 'EXERCISES FOR CHAPTER <ch>' 的位置 (page, y)，无则 None。
+
+    用于把习题区内的页从 ITEM 合同剔除，避免习题题号（如 Strogatz `3.1.1`）被
+    误判成 Example/Definition 条目。大小写无关、空白可选，容忍 OCR
+    `EXERCISESFORCHAPTER3`。
+
+    🔴 y 感知（Strogatz 3e ch6 实测）：旧版只返回页码，于是**与块头同页、却排在
+    块头上方**的真条目被整页误杀——p213 页底 (y=852) 的 `Example 6.8.6:` 先于
+    p213 的 `EXERCISES FOR CHAPTER 6` 标题，被连页丢掉（闸门报缺 1 项）。返回
+    (page, y) 后，同页条目按 y 比较，块头之上者保留。
     """
     head = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
     pat = str(ch)
@@ -849,11 +990,20 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
             d = json.load(open(fp, encoding='utf-8'))
         except Exception:
             continue
+        blocks = d.get('text', []) or []
         txt = " ".join(blk_text(b) if isinstance(b, dict) else str(b)
-                       for b in d.get('text', []))
+                       for b in blocks)
         m = head.search(txt)
-        if m and m.group(1) == pat:
-            return p
+        if not (m and m.group(1) == pat):
+            continue
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            if head.search(blk_text(b) or ''):
+                poly = b.get('poly') or []
+                y = float(poly[1]) if len(poly) >= 8 else 0.0
+                return (p, y)
+        return (p, 0.0)
     return None
 
 
@@ -1425,6 +1575,90 @@ def _seq_filter_letter_blocks(cands):
     return [(seen[k][0], k, seen[k][1]) for k in letters if k in keep]
 
 
+def _label_group_index(ordinal):
+    """canon-label -> 显式组下标（跳过 uncat 兜底组）。
+
+    ordinal 分组语义 = 「一同升序的标签进同一组」（verify_config.md），
+    因此**同组成员跨标签共享一条计数器**——异标签编号可直接比大小。
+    只登记显式列出的标签；未入组（落 uncat）者不建条目，调用方据此
+    回退旧 y 锚行为。"""
+    idx = {}
+    for gi, g in enumerate(ordinal or []):
+        if getattr(g, "is_uncat", False):
+            continue
+        for nm in g.name:
+            idx.setdefault(_canon_label(nm), gi)
+    return idx
+
+
+def _cross_label_order(la, lb, na, nb, ya, yb, label_group):
+    """同页**异标签**条目对的阅读序裁决（纯函数，判据测试
+    tests/test_shared_counter_doc_order.py）。
+
+    - 两标签同属一个显式 ordinal 组（共享计数器，如 do Carmo《黎曼几何》
+      节内 定义2.1/命题2.2/例2.6 同升一条号）→ **数字序**即真实阅读序；
+      y 锚定在密集混排页上噪声大（交叉引用块误锚即产生相邻对调）。
+    - 不同组 / 任一未入组（并行独立计数器，如 do Carmo《曲线曲面》各标签
+      各自起号）→ 数字不可比，维持**锚定 y 序**（y 缺失 → +inf 排末）。
+    返回 -1/0/1（a 先 / 同 / b 先）。
+    """
+    if label_group is not None:
+        ga = label_group.get(_canon_label((la or "").strip()))
+        gb = label_group.get(_canon_label((lb or "").strip()))
+        if ga is not None and ga == gb:
+            if na != nb:
+                return -1 if na < nb else 1
+            return 0
+    fa = ya if ya is not None else float("inf")
+    fb = yb if yb is not None else float("inf")
+    if fa != fb:
+        return -1 if fa < fb else 1
+    return 0
+
+
+def _item_counter_label(child):
+    """条目所属**计数器**的标签词（跨条目比较的分派依据）。
+
+    键里带标签词（`Remark 5.5-1` / `定义2.1`）时用键前缀；键是裸号
+    （Strogatz 3e 的 `6.8-1`）时跨计数器信息只住在节点 `type` 上——旧实现一律取键
+    前缀，两个裸号被当成「同一计数器」而走数字序，把印面上后出现的
+    Theorem 6.8.1 排到了 Example 6.8.4 之前（2026-09-27 实测 ch6 §6.8 / ch7 §7.2）。
+    """
+    k = str(child.get("key") or "")
+    lab = re.match(r"^([^\d]*)", k).group(1)
+    if lab:
+        return lab
+    return str(child.get("type") or "")
+
+
+def _item_order_cmp(a, b, y_of, label_group=None):
+    """同页两条目的阅读序裁决（-1/0/1，纯函数，判据测试
+    tests/test_item_order_cross_counter.py）。
+
+    🔴 跨计数器比较禁用数字序（do Carmo ch5 实测 2026-09-26）：节内**每个计数器
+    各自重启**（Definition 1 / Theorem 1 / Example 1 并存），把 key 数字段当作跨条目
+    主序会把 定理1(p401 页中) 排到 例2(p401 页上) 之前 → 前序页码回退，锚点闸整章
+    拒绝落盘。数字单调只在**同标签**（同计数器）内成立；异标签对的真实阅读序 =
+    源页锚定 y（锚不到取 +inf 排末）。Kreyszig 语义保留：同标签同页交叉引用误锚
+    仍按号序，不看 y。
+    """
+    pa, pb = int(a.get("page_start") or 0), int(b.get("page_start") or 0)
+    if pa != pb:
+        return -1 if pa < pb else 1
+    ka, kb = str(a.get("key") or "0"), str(b.get("key") or "0")
+    na = tuple(int(x) for x in re.findall(r"\d+", ka))
+    nb = tuple(int(x) for x in re.findall(r"\d+", kb))
+    la, lb = _item_counter_label(a), _item_counter_label(b)
+    if la != lb:
+        r = _cross_label_order(la, lb, na, nb, y_of(a), y_of(b), label_group)
+        if r:
+            return r
+        return -1 if _nat_key(ka) < _nat_key(kb) else (0 if ka == kb else 1)
+    if na != nb:
+        return -1 if na < nb else 1
+    return -1 if _nat_key(ka) < _nat_key(kb) else (0 if ka == kb else 1)
+
+
 def build_chapter(ext, ch, start, end, book, cm, manual=None):
     ordinal = book.primary_type
     language = book.language
@@ -1449,8 +1683,72 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                   exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
                                   plain_sec_heads=(ordinal == ORDINAL_HUM),
                                   sections_global=getattr(book, 'sections_global', False),
-                                  local_num_sec=getattr(book, 'numeric_local_sections', False))
+                                  local_num_sec=getattr(book, 'numeric_local_sections', False),
+                                  chapter_local_numbering=getattr(
+                                      book, 'chapter_local_numbering', False))
+    # 🔴 章边界尾带（判定与裁剪见 `chapter_boundary`，Etingof 表示论实测
+    # 2026-09-27）：上一章的收尾常印在本章起始页的**章标题之上**，章图只到「页」
+    # 的粒度 ⇒ 整页归本章时，上一章**整节 + 其编号项**从全书消失（实测丢 §2.10
+    # 含 Theorem 2.26/Remark 2.27 及证明、Theorem 4.75 及证明；D/B 层各查本章号
+    # 空间，两边都不报错）。据此对本章做两件事：① 起始页只保留标题及其之下的行
+    # （掉别章尾料伪造的节/习题行）；② 把**上一页所属**的尾带补扫一次（喂
+    # `clip_page` 裁出的临时页给同一套扫描器，不给十余个抽取器逐个加窗口参数），
+    # 行页码即尾带页 ⇒ 天然排在章末。判不出（无章图 / 标题在页顶）两侧均不生效。
+    _bd_head = chapter_boundary.head_floor(ext, page_dir or ext, ch, start)
+    if _bd_head is not None:
+        rows = [r for r in rows
+                if not (int(r[0]) == int(start)
+                        and isinstance(r[4], (int, float)) and r[4] < _bd_head)]
+    _bd_tail = chapter_boundary.tail_band(ext, page_dir or ext, ch)
+    _bd_tail_dir = _bd_tail_page = None
+    if _bd_tail:
+        _bd_tail_page, _bd_tail_hi = _bd_tail
+        _clip = chapter_boundary.clip_page(
+            page_dir or ext,
+            os.path.join(ext, "_boundary_tail", "ch%s" % ch),
+            _bd_tail_page, hi=_bd_tail_hi)
+        if _clip:
+            _bd_tail_dir = os.path.dirname(_clip)
+            if getattr(book, 'gm_bare_numbered', False):
+                _tr = [(p, "SEC", num, title, y) for (p, _k, num, title, y)
+                       in scan_gm(_bd_tail_dir, ch, _bd_tail_page, _bd_tail_page)]
+            else:
+                _tr = scan_skeleton.scan(
+                    _bd_tail_dir, ch, _bd_tail_page, _bd_tail_page, mode,
+                    section_depths=section_depths,
+                    chapter_first=book.chapter_first,
+                    exercise_headings=getattr(book, 'exercise_region_headings', None) or None,
+                    plain_sec_heads=(ordinal == ORDINAL_HUM),
+                    sections_global=getattr(book, 'sections_global', False),
+                    local_num_sec=getattr(book, 'numeric_local_sections', False),
+                    chapter_local_numbering=getattr(
+                        book, 'chapter_local_numbering', False))
+            rows = list(rows) + list(_tr)
     ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
+    # 同键习题行**首现保留**（scan 按页升序 → 首现即真习题条头）。全书通用守卫，
+    # 两种实测形态（都会把晚页复本挂成同号节点、把文档序排乱 → ANCHOR-SANITY
+    # 拒绝落盘）：
+    #   * 章末习题区里的**跨行交叉引用**（Strogatz 3e ch6 实测：p214 散文续行
+    #     "6.1.1. The nullcline …" 与真习题 6.1.1(p213) 同键，多出一条晚页复本）；
+    #   * 书末「习题答案」区复印行头（丘维声 ch_local 实测：p406 复本 7.x 晚于
+    #     section 2(p288)）。
+    # 🔴 同键复本的取舍偏好**习题区内**的行（Strogatz 3e ch9 实测）：正文页脚的跨句
+    # 回指 "Exercise 9.1.3.) Before we turn to that more famous system…"（p360）先于
+    # 真习题 9.1.3（块内 p391）出现，纯「首现保留」会把真题丢掉、只留幻影。
+    # 判据取**位置**：``EXERCISES FOR CHAPTER n`` 块头之后 = 区内；区外复本仅在
+    # 「区内无同号行」时兜底保留（ch6 的续行与真头同在区内 → 仍取首现，零回归）。
+    _ex_region = _exercise_region_start(ext, ch, start, end, page_dir=page_dir)
+    _ex_region_page = _ex_region[0] if _ex_region else None
+    _best_ex = {}
+    for _i, _er in enumerate(ex_rows):
+        _cur = _best_ex.get(_er[2])
+        if _cur is None:
+            _best_ex[_er[2]] = _i
+        elif (_ex_region_page is not None
+              and int(_er[0] or 0) >= _ex_region_page
+              and int(ex_rows[_cur][0] or 0) < _ex_region_page):
+            _best_ex[_er[2]] = _i
+    ex_rows = [_er for _i, _er in enumerate(ex_rows) if _best_ex.get(_er[2]) == _i]
 
     # 1b) 裸字母子块头（SUB 行；仅 sections_global 书由 scan_skeleton 产生）。
     # 语境定级：附录章（无数字 § 节头）里字母头**就是节** → 升格为 SEC 行，
@@ -1636,6 +1934,29 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             if title and not sec_titles.get(num):
                 sec_titles[num] = title
 
+    # 🔴 权威小节白名单（TOC 真值，编号书幻影节剔除）：scan_skeleton 通用节头
+    #     检测器会把「行首编号 + 中文散文回指残片」型交叉引用（如 `1.13 中的等式`
+    #     = 定义1.13 中的等式 断块、`3.9 已经给出…`）误判成 §1.13/§3.9 幻影节 →
+    #     ANCHOR-SANITY 拒绝落盘。agent 依目录写出 `_section_whitelist.json` 后，
+    #     此处把 skeleton 检出但不在白名单的小节号**剔除出 sec_pages**，令其等同
+    #     「skeleton 未检出」——随后由条目号再次派生的同号幻影，会被下方既有
+    #     「派生须命中 skeleton」幽灵过滤器一并清掉。文件缺失 → 零回归（其他书）。
+    _wl = _load_section_whitelist(ext)
+    if _wl is not None and not getattr(book, "sections_unnumbered", False):
+        _ckey = _norm_sec_key(ch)[0] if _norm_sec_key(ch) else str(ch)
+        _allowed = _wl.get(_ckey)
+        if _allowed is not None:
+            _dropped = [n for n in list(sec_pages)
+                        if not str(n).startswith("U")
+                        and _norm_sec_key(n) not in _allowed]
+            for n in _dropped:
+                sec_pages.pop(n, None)
+                sec_pos.pop(n, None)
+                sec_titles.pop(n, None)
+            if _dropped:
+                print(f"[build_structure] ch{ch} 小节白名单剔除幻影节 "
+                      f"{len(_dropped)} 处：{sorted(_dropped)}")
+
     # 3) 抽取器条目（权威 ITEM，排除练习类 + 练习区页）
     #    习题块（"EXERCISES FOR CHAPTER N" 起至章末）内的页码一律不从抽取器
     #    进入 ITEM 合同，否则习题题号（如 Strogatz `3.1.1`）会被误判为
@@ -1644,7 +1965,15 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                page_dir=page_dir,
                                sec_windows=[(pg, n) for n, pg in sec_pages.items()
                                             if not str(n).startswith("U")])
-    ex_start = _exercise_region_start(ext, ch, start, end, page_dir=page_dir)
+    if _bd_tail_dir:
+        # 尾带条目补扫（同 rows 的尾带补扫，见 1) 处注释）：Theorem 2.26 / 4.75
+        # 这类**印在下章起始页页首**的条目，按整页归属时对两章都不可见。
+        raw_items = list(raw_items) + _extract_items(
+            ext, ch, _bd_tail_page, _bd_tail_page, book, manual=manual,
+            page_dir=_bd_tail_dir,
+            sec_windows=[(pg, n) for n, pg in sec_pages.items()
+                         if not str(n).startswith("U")])
+    ex_start = _ex_region          # 同一次扫描结果（见 1) 习题行去重处）
 
     # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器
     #     已把它们作为带标签条目抓出，但练习节点权威来源是 skeleton EXER——
@@ -1665,7 +1994,12 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _exer_num_re = re.compile(
         r'((?:[A-Za-z][.\-])?\d{1,2}[.\-]\d{1,2}(?:[.\-](?:\d{1,3}|[A-Z]))?'
         r'|(?:[A-Za-z][.\-])\d{1,3})\.?$')
-    _exer_seen = {r[2] for r in ex_rows}
+    # 🔴 比较必须**分隔符归一**（Strogatz 3e ch9 实测）：skeleton EXER 行的号是
+    # 点分（scan 原样 "9.1.3"），而 raw_items 的 key 已过 normkey 转连字符
+    # （"9.1-3"），旧的字面比较永不命中 → 正文里的跨句回指 "(See\nExercise 9.1.3.)
+    # Before we turn…"（p360）被当成新习题追加，与区内真头 9.1.3(p391) **并存两个
+    # 同号节点**，且该幻影按页就近吃掉 §9.1 之后 86 个正文块。
+    _exer_seen = {norm_secnum(r[2]) for r in ex_rows}
     for it in raw_items:
         if (it.get("label") or "").strip() not in _EXERCISE_LABELS:
             continue
@@ -1673,16 +2007,30 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         if not m:
             continue
         num = m.group(1).rstrip('.')
-        if num in _exer_seen:
+        if norm_secnum(num) in _exer_seen:
             continue
-        _exer_seen.add(num)
+        _exer_seen.add(norm_secnum(num))
         title = _clean_title(it.get("text", ""), it["key"])
         _marker = 'PROB' if (it.get("label") or "").strip() in _PROBLEM_LABELS else 'EXER'
         ex_rows.append((it.get("page", 0), _marker, num, title, None))
 
     items = [it for it in raw_items
-             if (it.get("label") or "").strip() not in _EXERCISE_LABELS
-             and (ex_start is None or it.get("page", 0) < ex_start)]
+             if (it.get("label") or "").strip() not in _EXERCISE_LABELS]
+    # 🔴 y 感知（Strogatz 3e ch6 实测）：与块头**同页**的条目不再整页误杀——
+    # 块头上方（y 较小）者属正文须保留（p213 y852 的 `Example 6.8.6:` 早于同页
+    # y1149 的 `EXERCISES FOR CHAPTER 6`）；块头之下 = 习题区，剔除。
+    if ex_start is not None:
+        _ep, _ey = ex_start
+        _kept = []
+        for it in items:
+            if it.get("page", 0) < _ep:
+                _kept.append(it)
+                continue
+            pos = _item_pos(ext, it, page_dir=page_dir)
+            if pos is not None and pos[0] == _ep and pos[1] is not None \
+                    and pos[1] < _ey:
+                _kept.append(it)
+        items = _kept
 
     # 3a-1b) Filter out uncat cross-references: bare numbers followed by comma
     # (e.g. "1.5.1,以下两个极限存在：") are prose references, not real items.
@@ -1791,7 +2139,9 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                   sections_global=getattr(book, 'sections_global', False)),
                   it["page"])
     for row in ex_rows:
-        _note_sec(_section_of_exer(row[2]), row[0])
+        _note_sec(_section_of_exer(
+            row[2], getattr(book, 'chapter_local_numbering', False),
+            chapter_scoped=getattr(book, 'chapter_scoped_items', False)), row[0])
 
     # 剔除「条目号派生、但 skeleton 并未检出」的幽灵小节（如 EN 两级下
     # "Theorem 20.7" 派生的 §20.7，而 §20.7 并非真小节）。skeleton 扫描现已
@@ -1921,28 +2271,47 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
 
     # 5) 条目/练习挂到章节
     chapter_bucket = []  # 无章节可挂时归章级（置于最前）
+    # 章末集中习题块（exercise 节点置于章节**之后**，见 _chapter_end_exercise_start）
+    chapter_tail = []
 
-    def _place(node, sec_key, page, pos=None):
-        if sec_key is not None and sec_key in sec_nodes:
-            sec_nodes[sec_key]["sub_sec"].append(node)
-            return
+    def _place(node, sec_key, page, pos=None, dedup_name=None):
         # 归并：最近的、起始位置 <= 条目位置的章节。
         # sec_pos 非空（sections_unnumbered 路径）且条目带 (page, y) 时按字典序
         # (page, y) 比较——同页时 y 在节头之前的条目归前一节（2026-08-24 Evans
         # SDE：EXAMPLE 7 与 §B 节头同页但位于其前，页码比较会错归 §B）。
         use_pos = bool(sec_pos) and pos is not None
         cand = None
-        for n in all_sec_nums:
-            sp = sec_pages.get(n, derived_sec_firstpage.get(n, start))
-            if use_pos:
-                if sec_pos.get(n, (sp, 0)) <= pos:
-                    cand = n
-            elif sp <= page:
-                cand = n
-        if cand is not None:
-            sec_nodes[cand]["sub_sec"].append(node)
+        resolved = None
+        if sec_key is not None and sec_key in sec_nodes:
+            resolved = sec_key
         else:
+            for n in all_sec_nums:
+                sp = sec_pages.get(n, derived_sec_firstpage.get(n, start))
+                if use_pos:
+                    if sec_pos.get(n, (sp, 0)) <= pos:
+                        cand = n
+                elif sp <= page:
+                    cand = n
+            resolved = cand if cand is not None else '#chapter'
+        if dedup_name is not None:
+            # 章内三级体例守卫（chapter_local_numbering）：scope 节级重起的
+            # 同标签键在**同一节内**只留首个（最早页）——散文回指行
+            # （ch6 p239 "性质1，它们在…"）与真标题（p238 "性质1仿射…"）
+            # 同键同节，页序靠后的回指幽灵在此剔除，否则按编号自然序排到
+            # 真性质2(p238) 之前 → 前序页码倒退（ANCHOR-SANITY FAIL）。
+            # 跨节重起的同键（p222 §2 性质1 / p264 §6 性质1）解析到不同节，
+            # 不受影响。默认关闭，其余书零回归。
+            _pair = (resolved, dedup_name)
+            if _pair in _cln_pair_seen:
+                return False
+            _cln_pair_seen.add(_pair)
+        if resolved == '#chapter':
             chapter_bucket.append(node)
+        else:
+            sec_nodes[resolved]["sub_sec"].append(node)
+        return True
+
+    _cln_pair_seen = set()
 
     _unnumbered_book = getattr(book, "sections_unnumbered", False)
     for it in items:
@@ -1959,13 +2328,27 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             # 之前」语义只适用于无序号标书（Evans）；编号节书沿用旧「页码就近」
             # 行为——视为页末，归入本页已开节的最后一节。
             pos = (pos[0], float("inf"))
-        _place(node, sec_key, it["page"], pos=pos)
+        _place(node, sec_key, it["page"], pos=pos,
+               dedup_name=(str(it["key"])
+                           if getattr(book, 'chapter_local_numbering', False)
+                           else None))
 
+    _tail_ex_start = _chapter_end_exercise_start(
+        ext, ch, start, end,
+        max([int(v) for v in sec_pages.values()] or [0]), page_dir=page_dir)
     for row in ex_rows:
         p, num, title = row[0], row[2], row[3]
-        sec_key = _section_of_exer(num)
         name = (title if title else num)
         node = _node(num, "problem" if row[1] == "PROB" else "exercise", name, p)
+        if _tail_ex_start is not None and int(p or 0) >= _tail_ex_start:
+            # 章末集中习题块：挂章级子列表**末尾** + consolidated（见
+            # _chapter_end_exercise_start），不套进派生小节（否则文档序页码倒退）。
+            node["consolidated"] = True
+            chapter_tail.append(node)
+            continue
+        sec_key = _section_of_exer(
+            num, getattr(book, 'chapter_local_numbering', False),
+            chapter_scoped=getattr(book, 'chapter_scoped_items', False))
         _place(node, sec_key, p)
 
     # 6) 章节内子节点排序（2026-08-29 y 感知版 → 2026-09-26 Kreyszig 根治）：
@@ -2003,43 +2386,18 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 _nat_key_digits(child["key"]))
 
     _ANCHOR_TYPES = ("section", "exercise", "problem")
+    # 显式 ordinal 组成员表：同组标签=共享一条计数器（跨标签数字可比）。
+    _lbl_groups = _label_group_index(getattr(book, "ordinal", None))
 
     def _sort_doc_order(children):
         anchors = sorted((c for c in children
                           if c.get("type") in _ANCHOR_TYPES), key=_doc_sort_key)
-        def _item_order_cmp(a, b):
-            # 🔴 跨计数器比较禁用数字序（do Carmo ch5 实测 2026-09-26）：
-            # 节内**每个计数器各自重启**（Definition 1 / Theorem 1 / Example 1
-            # 并存），旧键把 key 数字段作为跨条目主序，把 定理1(p401 页中)
-            # 排到 例2(p401 页上) 之前 → 前序页码 401→403→401 回退，锚点闸
-            # 整章拒绝落盘。数字单调只在**同标签**（同计数器）内成立；
-            # 异标签对的真实阅读序 = 源页锚定 y（锚不到取 +inf 排末）。
-            # Kreyszig 语义保留：同标签同页交叉引用误锚仍按号序，不看 y。
-            pa, pb = int(a.get("page_start") or 0), int(b.get("page_start") or 0)
-            if pa != pb:
-                return -1 if pa < pb else 1
-            ka, kb = str(a.get("key") or "0"), str(b.get("key") or "0")
-            la = re.match(r'^([^\d]*)', ka).group(1)
-            lb = re.match(r'^([^\d]*)', kb).group(1)
-            if la != lb:
-                ya = _doc_y_of(a)
-                yb = _doc_y_of(b)
-                fa = ya if ya is not None else float("inf")
-                fb = yb if yb is not None else float("inf")
-                if fa != fb:
-                    return -1 if fa < fb else 1
-                return -1 if _nat_key(ka) < _nat_key(kb) else (
-                    0 if ka == kb else 1)
-            na = tuple(int(x) for x in re.findall(r"\d+", ka))
-            nb = tuple(int(x) for x in re.findall(r"\d+", kb))
-            if na != nb:
-                return -1 if na < nb else 1
-            return -1 if _nat_key(ka) < _nat_key(kb) else (
-                0 if ka == kb else 1)
+        def _cmp_items(a, b):
+            return _item_order_cmp(a, b, _doc_y_of, _lbl_groups)
 
         its = sorted((c for c in children
                       if c.get("type") not in _ANCHOR_TYPES),
-                     key=functools.cmp_to_key(_item_order_cmp))
+                     key=functools.cmp_to_key(_cmp_items))
         if not anchors:
             return its
         out, si = [], 0
@@ -2130,9 +2488,11 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     for s in ordered_secs:
         _fix_pages(s)
 
-    # 章级子节点：章级桶（无章节可挂）置于章节之前，按页码排（同页自然序）
+    # 章级子节点：章级桶（无章节可挂）置于章节之前，按页码排（同页自然序）；
+    # 章末集中习题块按页码排在**全部章节之后**（= 原书文档序）。
     chapter_bucket.sort(key=lambda x: (x["page_start"], _nat_key_digits(x["key"])))
-    sub = chapter_bucket + ordered_secs
+    chapter_tail.sort(key=lambda x: (x["page_start"], _nat_key_digits(x["key"])))
+    sub = chapter_bucket + ordered_secs + chapter_tail
 
     ch_title = _chapter_title(cm, ch)
     # 印刷序标（无编号附录 → 空串）：契约章名约定 "{ordinal} {title}"，下游
@@ -2248,6 +2608,17 @@ def main():
         # 定位到本册目录，否则下册章会挂成上册页的内容（静默错乱）。
         page_dir = _resolve_page_dir(ext, ch)
         full, stats = build_chapter_contract(ext, node.to_dict(), page_dir=page_dir)
+        # 🔴 收割处剔除**无印刷锚点**的公式编号（闸门 ⑭ 同一判据，共用
+        # lib.tag_attestation）：OCR 把公式内部数字（`= 0.50` 的小数尾巴、ε/2 的分母、
+        # `18 751 Å` 的波长、`x²-1` 碎片）当成独立编号块挂进契约后，就成了门控真值——
+        # 写手凭空 `\tag{25}` 判「编造」、删掉判「漏写」，两头堵（Kreyszig 5 个毒 tag、
+        # Strogatz 3e ch7 `0c`/`2x`/`2i` + ch8 `25` 实测）。判据保守（缺页不判），
+        # 剔除只去**编号声称**、公式内容块原样留在契约里（正文一个不丢）。
+        from lib.tag_attestation import dir_page_loader, strip_unattested
+        _poison = strip_unattested(full, dir_page_loader(page_dir, ext))
+        if _poison:
+            print("%-9s TAG-STRIP | 剔除无印刷锚点的契约编号 %s"
+                  % (chapter_label(ch), "、".join(_poison)))
         # 🔴 锚点-树序自相矛盾的契约**不落盘**：这类节点（实测：由抽取器 Exercise
         # 标签条目派生的「节习题块」，页码取自命中的页眉/散文行）会把整节内容
         # 挤到错误的阅读位置上，且只在下游门控 ⑪ 以几十条「单元跨节/跨页错位」

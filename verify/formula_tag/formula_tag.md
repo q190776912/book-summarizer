@@ -49,6 +49,7 @@
   - `q_inconsistent`(INCONSISTENT)：编号**重复**，或**跨章**（`scope == 2` 时首分量 ≠ 当前章号）→ 始终 FAIL。
 - **遗漏校验（未登记 `formula.ignore` 时阻断 FAIL）**：
   - `q_missing`(MISSING)：S 中属于本章、规范、前缀匹配的编号在总结无对应 `\tag` → **FAIL（阻断）**。writing-rules 硬性要求 7 规定书源所有带编号公式（含描述性散文中的推导式）都必须保留，故"未登记的遗漏"即"漏写公式"。书源确有该编号但属合法省略（如纯排版重复）时，把它加入 `formula.ignore` 跳过比对；未在 `ignore` 登记的遗漏一律阻断，以防漏写描述性推导公式。
+  - 🔴 **章末集中习题块不入 S（`_in_exercise_tail`，2026-09-27 Strogatz 3e ch13 根治）**：`build` / `build_sectioned` 的页循环先读分章契约，取 `consolidated: true` 节点的**最小叶号**，该页及其后一律不扫。理由：writing-rules「有专门习题小标题的集中习题块一律省略」+ `unit_node_entries` 对 `consolidated` 节点**不出单元** → 该块内容按设计不进总结，而印面确实带右缘编号（实测题 13.6.5 Ott-Antonsen 有 `(13)`p553 y=250、`(14)`p553 y=507），旧行为把 `(14)` 收进 S 后 MISSING 硬闸反过来要求写手把习题解答写成正文公式（只能靠编造上下文满足）。契约无 `consolidated` 标记的书（节末习题、无集中块）行为逐字节不变，判据测试 `verify/tests/test_q_layer_consolidated_exercise_tail.py`（含正/反两向控制）。
 - **序列顺序校验（WARN，永不阻断）**：
   - `q_order_mismatch`(ORDER_MISMATCH)：总结文档序与书源阅读序不一致 → 仅 WARN。`scope==3`（节级重置，编号每节重复）时按 `## §N.M` 窗口独立判定，且比较用 **per-(sec,n) 节内首现位置**（`_pos_sec`）——重复编号的全局首现位置恒来自最早含 `(n)` 的节，跨节比较必产生噪声（2026-08 Kreyszig 实测）；某 tag 无节内位置记录（其独立标签被 OCR 并行/丢失）时**跳过该 tag 的顺序判定**（既不判倒挂也不更新游标）。`scope==2/1` 时窗口跨节、沿用全局首现位置。
 - **小节定位校验（WARN，永不阻断）**：

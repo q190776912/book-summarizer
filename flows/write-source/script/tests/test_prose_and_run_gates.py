@@ -322,10 +322,50 @@ class TestMetaExcuseAndHollowExerciseUnit(unittest.TestCase):
             key="20.1.3", content_blocks=8)
         self.assertTrue(ok, probs)
 
+    def test_printed_star_exercise_head_with_dotted_key_counts(self):
+        """Robinson 8e 形态（2026-09-27 根治）：题头照印刷写 `**\\*Exercise 1.2.4.**`
+        （难度星号须转义），契约键是 dash 形态 `1.2-4`。旧三判据同时失明——
+        `\\*` 打断标签正则、`.`≠`-` 打断键匹配 → 整条题面在位的单元被误报「无题面」，
+        逼写手篡改印刷编号风格（V-I 禁止）。星号头 + 点分序标都必须算「题面在位」。"""
+        body = ("**\\*Exercise 1.2.4.** Show that $R_{\\alpha}$ and $R_{\\beta}$ are "
+                "conjugate by a homeomorphism if and only if $\\alpha = \\pm \\beta$ mod $1$.")
+        ok, probs = q.check_body("exercise", "*Exercise 1.2.4. Show that", body,
+                                 key="1.2-4", content_blocks=2)
+        self.assertTrue(ok, probs)
+
+    def test_hollow_unit_still_fires_after_star_support(self):
+        """负向：支持 `\\*` 头不得把真空心单元放过去——正文只有叙述句，无任何序标。"""
+        ok, probs = q.check_body(
+            "exercise", "*Exercise 1.2.4. Show that",
+            "This exercise asks about conjugacy of circle rotations.\n",
+            key="1.2-4", content_blocks=2)
+        self.assertFalse(ok)
+        self.assertTrue(any("认不出任何一条习题条目" in p for p in probs), probs)
+
     def test_benign_use_of_word_unit_not_flagged(self):
         ok, probs = q.check_body(
             "desc", "", "One unit of the algebra generates the whole group, "
                         "and every element has finite order in this sense.")
+        self.assertTrue(ok, probs)
+
+    def test_english_page_group_note_fires_gate(self):
+        """英文侧裸形态（Rosen 8e ch5/0090，2026-09-27 实测曾漏网）：整单元正文是一句
+        「This unit's page group carries … because the contract assigns them …」。
+        旧词表要求 `outside this page group` 全短语，所以放过了它——而中文译文的
+        「页组」命中，等于**同一缺陷只在译文层暴露**（源侧失明）。"""
+        note = ("This unit's page group carries the closing part of the Section 5.3 "
+                "exercise set (Exercises 50-67). Those exercises are recorded in the "
+                "Section 5.3 exercise unit of this chapter, because the contract assigns "
+                "them to that exercise node; Section 5.4 begins on the same printed page.")
+        ok, probs = q.check_body("desc", "", note, content_blocks=330)
+        self.assertFalse(ok)
+        self.assertTrue(any("流水线元话语" in p for p in probs), probs)
+
+    def test_page_and_unit_as_ordinary_words_not_flagged(self):
+        """负向：`page` / `unit` / `range` / `recorded in the table` 作普通名词不得误判。"""
+        ok, probs = q.check_body(
+            "desc", "", "A page of the ledger lists each unit of measure, and the range "
+                        "of the readings is recorded in the table below.")
         self.assertTrue(ok, probs)
 
     def test_faithful_quote_from_source_is_exempt(self):

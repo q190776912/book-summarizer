@@ -346,6 +346,53 @@ def formula_tag_tail_re(ncomp=None, bare=True, letter=False):
                       % '|'.join(_formula_tag_variants(ncomp, bare, letter)))
 
 
+PAGE_MARGIN_BAND = (0.12, 0.90)
+
+
+def page_number_furniture(blocks, page_height, band=PAGE_MARGIN_BAND,
+                          min_pages=3, max_digits=4):
+    """识别**页码家具**块，返回 ``(page, 归一文本)`` 键集合。
+
+    页码有确定的算术指纹：印刷页码 = 物理页序 − 恒定偏移（前封/前言页导致偏移非 0），
+    且该偏移在章内多页复现。据此识别，与「页码印在页眉还是页脚」「页高多少」无关——
+    单纯依赖 y 带会漏：Strogatz 3e 奇数页页码印在页眉 y≈页高 6.3%，正落在旧判据
+    （0.06/0.94 极端带）之外，13 章 ~380 个页码整批漏进公式序标真值集与正文散文尾。
+
+    参数
+      blocks     可迭代 ``(page, y, bottom, norm_text)``；``norm_text`` 须已去空白。
+      page_height 该章页区间内的最大 bottom（与 ``_filter_noise`` 同口径）。
+      band       页边距带（顶 < band[0]*h、底 > band[1]*h）；带外数字视为正文。
+      min_pages  同偏移需覆盖的最少页数（样本太少不足以断定是页码序列）。
+      max_digits 页码位数上限。
+
+    🔴 只判**纯数字**块：带括号的 ``(7)`` 永远是编号不是页码，含字母的 ``2e`` 属
+    OCR 碎片，两者都由调用方按各自语义处理。
+    """
+    if page_height <= 0:
+        return set()
+    top, bot = band
+    cand = []
+    for page, y, bottom, norm in blocks:
+        n = (norm or "").replace(" ", "")
+        # 🔴 只认 **ASCII** 数字：str.isdigit() 也把 `²`/`³` 之类的上标字符判为数字
+        # （Strogatz ch5 实测 OCR 碎片 `²4` → int() 直接 ValueError 崩掉闸门）。
+        if not (n.isascii() and n.isdigit()) or len(n) > max_digits:
+            continue
+        if not (y < top * page_height or bottom > bot * page_height):
+            continue
+        cand.append((page, n, y, bottom))
+    offsets = {}
+    for page, n, _y, _b in cand:
+        try:
+            off = page - int(n)
+        except ValueError:
+            continue
+        offsets.setdefault(off, set()).add(page)
+    good = {off for off, ps in offsets.items() if len(ps) >= min_pages}
+    return {(page, n) for page, n, _y, _b in cand
+            if (page - int(n)) in good}
+
+
 @functools.lru_cache(maxsize=None)
 def formula_paren_tag_re(ncomp=None, letter=False):
     """只认**带括号**的公式编号（半角 / 全角）。

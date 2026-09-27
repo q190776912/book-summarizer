@@ -271,7 +271,14 @@ _PROB_OP_RE = re.compile(r'(?<![.\w])(?:Pr|E|Var|Cov)\s*[\(\[\{]')
 _FUNC_CALL_RE = re.compile(r'(?<![A-Za-z$0-9.])([A-Za-z])\s*\(([^)]{0,25})\)')
 
 # (B) variable + subscript-digit token (x0 t1 y2 ...), standalone math variable.
-_VAR_DIGIT_RE = re.compile(r'(?<![A-Za-z$\\])([a-z])\d(?![A-Za-z$])')
+# 🔴 The look-around classes are Unicode LETTER classes ([^\W\d_$\\] = letters plus
+# the literal '$' / backslash we also want to exclude), NOT [A-Za-z]: a printed
+# bibliography key like "[Hén76]" (Hénon) has an accented letter right before the
+# digit run, and an ASCII-only lookbehind read "én76" as a bare "n7" variable —
+# forcing writers to corrupt the citation into "[Hén 76]" to get past the gate
+# (Robinson ch1 0085, 2026-09-27). Digits and '_' deliberately stay outside the
+# class so "2x0" / "x_0" behave exactly as before.
+_VAR_DIGIT_RE = re.compile(r'(?<![^\W\d_$\\])([a-z])\d(?![^\W\d_$])')
 
 # words that legitimately precede a '(' in prose — never a math function call.
 _LABEL_WORDS = (

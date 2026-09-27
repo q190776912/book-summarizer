@@ -10,6 +10,8 @@
 ## 步骤（语义与检查内容）
 - **七道闸门**：
   1. `p_exer_block`：独立 `### 练习/习题/Exercises` 归拢块——专拦「无中生有新建归拢块」的违规（见 SKILL.md 🔴 规则与 [`../../docs/writing-rules.md`](../../docs/writing-rules.md) 习题规则）。策略为：**穿插在小节中的习题原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`），**章末整块习题省略不写**；无论哪种，都禁止把原书穿插内容抽出来归拢成块。
+     - 🔴 **契约在账例外**（2026-09-27 Rosen 8e ch10 实测）：不少教材**每一节末自己印** `EXERCISES` 标题 + 1..N 题（Rosen 8e 全书如此）。抽取期该标题作为一整行内容块 `{"text": "Exercises"}` 进分章契约，写手照原书位置渲染成 `**习题**`（中文版）是忠实，而这条题集又被 `lib/problem_coverage` 系闸门（⑫⑬⑮）要求**必须整块在位、题号连续** —— 只按 md 文本判会把两条判据逼成无解矛盾（§10.7/§10.8 实测 2 条 BLOCKING 假阳）。现判据先取真值源 `contract_exer_heading_sections`（契约中印有整行习题标题的节号，按祖先匹配），该节放行；**契约无据的自建块照旧拦截**（豁免非橡皮图章，见 `verify/tests/test_p_layer_exer_block_contract.py` 的负向用例）。
+     - ⚠️ 已知偏松（**故意不改**）：`EXER_BOLD_RE` 的 `exercise\b` 在 `**Exercises**`（复数）里失配 → 英文复数标题逃检而中文 `**习题**` 命中。补上复数后会在已收官的 Leinster BCT ch4、Weibel ch5 等书新报 4 处（那些书的契约标题不以此形态单独成块，取不到豁免证据），故只修假阳、把偏松一侧留给上面的题号连续性对账兜底（详见实现处注释）。
   2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见分章契约 `book_structure/ch{N}.json`（经 `BookStructure.load` 聚合），由 `build_structure` 生成，SSOT 见 `flows/write-source/structure/structure.md`）。
@@ -26,6 +28,14 @@
   6. `p_verbose`：顶层纯散文段在 >450 字/段（`VERBOSE_PARA_CHARS`）**且与源书 8-gram 重合率 ≥60%** 时违规；**>1200 字无条件违规**（硬顶）。`≥6 段`（`VERBOSE_PARA_GATE`）只是报告打印的聚合阈值，非判定条件（与 docs/writing-rules.md V-P 一致）。
   7. `p_proof_verbose`：单个 `> **证明/解答**` 块 >700 字且未分条枚举，且此类块 ≥2（`VERBOSE_PROOF_GATE`）即 FAIL。
 - **关键豁免**：已用 `1. 2. 3. …` 分条枚举的证明【步数不限】不计入 `p_proof_verbose`；例（Example）题面与注记（Remark/Aside）按 Tier 1 忠实保留，不参与 verbose 判定。
+- **`FIGURE_MARKUP_RE`（嵌图排版行不计量）**：块引用里的 `<div …>` / `<img …>` / `</div>` 与图题标签行
+  （`**Figure n.** …` / `**图 n.** …` / 裸 `FIGURE n …`）是**排版标记不是散文**，`check_verbose_proofs`
+  累加字数前一律剔除。Rosen 8e 实测：长解答块内补一张印刷图（5 行标记 ≈250 字）把 640 字解答顶过 700 字
+  阈值，被误判成「逐段翻译原书 proof」——写手无法既保图又过闸。判据测试
+  `verify/tests/test_figure_markup_not_counted.py`（含「真散文墙仍照报未分条」负向）。
+  🔴 该函数由单元门控（`check_unit_quality`）与章级 verify **共用**，改一处两侧同时生效。
+  同理 `STEP_RE` 容忍步标号前的列表符与粗体标记（`> **(a) Construction …**` 视为已分条，
+  判据测试 `verify/tests/test_step_re_bold_enumeration.py`）。
 - **🔴 段界（什么算「一段散文」）**：`>` 块引用、`#` 标题、`$$`、`---`、表格行 `|`、
   `<div>/<img>` 图块、``` 围栏代码块、以及 **`<!-- … -->` 机器注释行**（如单元首行
   `<!-- book-summarizer DONE unit: … -->`）都**不是**散文——它们只断开段落，不参与计量

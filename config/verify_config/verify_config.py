@@ -625,6 +625,21 @@ class BookConfig:
     # that genuinely use chapter-local sections opt in; ``§C.S`` books are
     # completely unaffected.
     chapter_local_sections: bool = False
+    # 🔴 CHAPTER-LOCAL THREE-TIER OCR route (丘维声《解析几何（第三版）》2026-09-26
+    # 实测): 节 `§N` 每章重起（OCR 成 `8N`/`SN`/裸 `N`），小节印 `N.M`（两分量
+    # 均章内），习题印 `章.节`。与 `chapter_local_sections` 正交——后者从**已写出
+    # 的 md** 取节权威清单，在 write-source 之前的 structure 步必然拿到空 md →
+    # sections=0、习题落章级桶、锚点倒退（本模式的立项根因）。When True:
+    #   * scan_skeleton 自己检测 §N 节头（复用 SEC_GLOBAL_GLUE 形态但去掉 y 下限
+    #     ——节起于新页顶时节头就在页眉带；标题剥粘连页码 +「当前节 +1」单调闩锁 +
+    #     不含章名，杀页眉/页码行/公式行误报），并以「A == 当前节」闩锁 + 上限跑
+    #     通用两段检测器（`ch=None`：两分量都章内，`= ch` 守卫会拒掉真 `4.2`）；
+    #   * 放行「标题内含 `，+汉字`」的真中文节题（通用检测器的 CJK 粘连句读守卫
+    #     把 `4.2向量的外积的几何意义，平面的定向` 当散文碎片，整节漏检）；
+    #   * build_structure 把习题 `A.B` 挂到节 `B`（习题号=章.节，页就近会把
+    #     习题6.2 挂到页 230 的小节3.1 而非页 222 的节2）。
+    # Default False — every other book is completely unaffected.
+    chapter_local_numbering: bool = False
     # BOOK-GLOBAL single-number section numbering (Arnold《数学方法》: sections
     # print ``§12．变分法`` and the number runs GLOBALLY across the book,
     # §1..§52 spanning all chapters — the leading number is NOT the chapter).
@@ -938,6 +953,7 @@ class BookConfig:
             gm_bare_numbered=bool(data.get('gm_bare_numbered', False)),
             exercise_shared_numbering=bool(data.get('exercise_shared_numbering', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),
+            chapter_local_numbering=bool(data.get('chapter_local_numbering', False)),
             sections_global=bool(data.get('sections_global', False)),
             numeric_local_sections=bool(data.get('numeric_local_sections', False)),
             exercise_region_headings=[

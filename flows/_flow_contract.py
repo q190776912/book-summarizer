@@ -515,6 +515,11 @@ class physical_evidence:
         "问题": ("problem", "exercise"), "猜想": ("conjecture",),
         "记号": ("notation",), "约定": ("convention",),
         "算法": ("algorithm",),
+        # 图 / 表：英文书契约把 `Figure N.M` / `Table N.M` 收作编号项，中文笔记版
+        # 按惯例印作「图 N.M」「表 N.M」。缺这两条时 CN 组会假报「契约项不在位」，
+        # 硬拒 merge_translation 证据（Fraleigh 实测 8 章 14 项全为真在位）。
+        "图": ("figure", "graph", "diagram"), "示意图": ("figure", "diagram"),
+        "表": ("table",), "表格": ("table",),
     }
     _LABEL_EN2ZH = {}
     for _zh, _ens in _LABEL_ZH2EN.items():
@@ -586,6 +591,29 @@ class physical_evidence:
                 nc = physical_evidence._norm_text(core)
                 if nc and nc != nn:
                     cands.append(nc)
+            cands = [c for c in cands if c]
+            # 🔴 「定位符键」回退（hum 型抽取器，Robinson/Humphreys 式书）：契约键写成
+            #   `Corollary §3.3` = 「第 3.3 节里的推论」，**印面条头只有裸标签词、不带任何
+            #   编号**（同书 ch1 实测：Corollary §3.3 / Lemma §3.3 已如实写出，整键归一
+            #   串 `corollary33` 却永远不在 md 里 → merge_source 证据被假拒）。
+            #   故键含 `§` 定位符时，追加「裸标签词」候选（条头 `**Corollary**` 归一后
+            #   即标签词，中英两版互译同口径）。真漏写仍由 gate_units ⑩（契约↔manifest
+            #   双向覆盖，逐单元机械核对）与 verify B 层拦截，本处只作在位抽查。
+            if "§" in key:
+                lm = re.match(r"^([A-Za-z一-鿿]+)", key.strip())
+                if lm:
+                    lw = physical_evidence._norm_text(lm.group(1))
+                    if lw:
+                        cands.append(lw)
+                        if re.match(r"^[a-z]+$", lw):
+                            zh = physical_evidence._LABEL_EN2ZH.get(lw)
+                            if zh:
+                                cands.append(physical_evidence._norm_text(zh))
+                        else:
+                            for _zh, _ens in physical_evidence._LABEL_ZH2EN.items():
+                                if physical_evidence._norm_text(_zh) == lw:
+                                    cands.extend(_ens)
+                                    break
             cands = [c for c in cands if c]
             if not cands:
                 continue  # 无可用匹配键（纯符号名等），跳过避免假阳

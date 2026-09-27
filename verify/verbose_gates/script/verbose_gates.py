@@ -38,6 +38,11 @@ from lib.util import norm_secnum, sec_ordinals
 检测七类缺陷（全部 BLOCKING，不可 --fix，需重写）：
   p_exer_block  — 练习归拢块：独立的 `### 练习`/`### 习题`/`### Exercises` 标题，
                  或独立加粗 `**练习**`/`**习题**`/`**Exercise**`（无编号）。
+                 🔴 例外（契约在账即放行）：该节（或其祖先节）的分章契约子树里本就有
+                 一整行印刷标题（Rosen 8e 每节末印 `EXERCISES` → 内容块
+                 `{"text": "Exercises"}`）——那是原书结构，写手照位置渲染属忠实，
+                 且题集本身由 `lib/problem_coverage` 系闸门要求必须在位。判据源与
+                 边界见 `contract_exer_heading_sections` 文档。
   p_noise       — 照抄 OCR 噪声：页眉/页脚/版权行（(c) 2024 / draft / out-of-date /
                  Published by / 全大写 running header / 作者名 / 机构域名 等）。
   p_bare_item   — number-first 体例下条目标题缺失：裸 `**N.M.K**`（无标题、无类型词，
@@ -78,7 +83,116 @@ from verify.script.base import VerifyLayer, LayerResult, LayerFixResult
 # 旧写法 `[Ee]xercises?` 只覆盖首字母大小写，全大写标题被漏放（假阴）。
 EXER_HEADING_RE = re.compile(r'^#{1,6}\s+.*(?:练习|习题|exercises?)\s*$', re.I)
 # 独立加粗（无编号）：`**练习**` / `**习题**` / `**Exercise**` / `**练习：**`
+# ⚠️ 已知偏松（**故意不改**，2026-09-27 全库实测后定案）：`exercise\b` 在复数
+# `**Exercises**` 里失配，故英文复数标题逃检，而中文 `**习题**` 命中——同一段版式两版
+# 结果不一致。曾试着补 `exercises?|problems?`，随即在**已收官**的 Leinster BCT ch4
+# （3 处）、Weibel《同调代数方法》ch5（1 处 `**Problems**`）等新报出违规：那些书的
+# 契约里习题标题不以此形态单独成块，本层的「契约在账」豁免取不到证据 → 放宽只会把
+# 三条语言无关的假阴变成三本书的返工，收益为负。**修的是假阳（下面的契约豁免，
+# 语言中立），偏松的一侧留给契约对账闸（`lib/problem_coverage` 闸 ⑫⑬⑮）兜底**——
+# 它们本就用题号连续性判「该节的习题是否在位」，与标题措辞无关。
 EXER_BOLD_RE = re.compile(r'^\*\*(?:练习|习题|exercise)\b[：:]*\*\*\s*$', re.I)
+
+# 契约内容块里「原书自己印的习题集小标题」——整行只有一个标题词（OCR 常把它单独成块，
+# Rosen 8e 每节末印 `EXERCISES`，抽取后是 {"text": "Exercises"}）。词表与上面两条**告警**
+# 正则严格对齐（练习/习题/exercise），宁可少豁免也不放行无据标题。
+_CONTRACT_EXER_HEAD_RE = re.compile(
+    r'^\s*(?:\*\*)?\s*(?:练习|习题|exercises?)\s*[：:.]?\s*(?:\*\*)?\s*$',
+    re.I)
+
+
+def contract_exer_heading_sections(ext_dir, ch):
+    """契约中**自己印有**习题集小标题的节号集合（点分归一）。
+
+    p_exer_block 的判据对象是「无中生有新建归拢块」——把原书穿插排布的习题抽出来在节末
+    造一个 `### 习题`。但相当一部分教材（Rosen 8e 每一节末都印 `EXERCISES` 标题 + 1..N
+    题）**印刷体本身就有这个标题**：抽取期它作为 `{"text": "Exercises"}` 内容块进了契约，
+    写手照原书位置渲染成 `**习题**` / `**Exercises**` 是**忠实**，不是归拢。而本 skill 的
+    门控（`lib/problem_coverage` 系闸 ⑫⑬⑮）恰恰**要求**这些题集整块在位且题号连续——
+    两条判据此前直接互相矛盾（CN ch10 §10.7/§10.8 实测：闸 ⑮ 要题、P 层禁题头）。
+
+    本函数把「印刷标题在账」这一事实取回来当豁免真值源：只有该节（或其祖先节）的契约子树
+    里确实存在一行习题集标题，md 里对应的标题行才被放过；契约无据的自建块照旧拦截。
+    """
+    out = set()
+    root = _load_chapter_contract(ext_dir, ch)
+    if root is None:
+        return out
+
+    def walk(node, cur_sec):
+        if not isinstance(node, dict):
+            return
+        key = str(node.get("key") or "")
+        sec = _norm_secnum(key) if (node.get("type") == "section" and key) else cur_sec
+        for k, v in node.items():
+            if k in ("sub_sec", "key", "type", "name", "letter_subs"):
+                continue
+            vals = v if isinstance(v, list) else [v]
+            for item in vals:
+                texts = []
+                if isinstance(item, str):
+                    texts.append(item)
+                elif isinstance(item, dict):
+                    t = item.get("text")
+                    if isinstance(t, str):
+                        texts.append(t)
+                for t in texts:
+                    for line in t.split("\n"):
+                        if sec and _CONTRACT_EXER_HEAD_RE.match(line.strip()):
+                            out.add(sec)
+                            break
+        for c in node.get("sub_sec") or []:
+            walk(c, sec)
+
+    walk(root, "")
+    return out
+
+
+def _load_chapter_contract(ext_dir, ch):
+    """按章读原始契约 JSON（含内容块）。
+
+    🔴 不走 ``BookStructure.load``：它聚合**全书**各章，且文件名依赖进程级 kind
+    注册表（``prime_chapter_kinds``）——未灌注时附录章会被算成 ``ch14.json`` 而
+    FileNotFoundError（Rosen 实测：本豁免静默失效 → `**习题**` 假阳原样复发）。
+    读单章文件既避开该耦合，又拿到未经 ``to_dict`` _round-trip_ 的原始内容块。
+    """
+    from data.book_structure.book_structure import (chapter_json_path,
+                                                    prime_chapter_kinds)
+    try:
+        prime_chapter_kinds(ext_dir)
+        path = chapter_json_path(ext_dir, str(ch))
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _section_ancestors(sec):
+    """'10.7.3' → {'10.7.3', '10.7', '10'}（豁免按祖先匹配）。"""
+    parts = str(sec or "").split(".")
+    return {".".join(parts[:i]) for i in range(1, len(parts) + 1) if parts[:i]}
+
+
+_MD_SECTION_HEAD_FOR_EXER_RE = re.compile(r'^#{1,4}\s*§?\s*(\d+(?:\.\d+)*)')
+
+
+def check_exer_blocks(lines, ext_dir=None, ch=None):
+    """独立习题标题块。给出 ext_dir+ch 时按契约「印刷标题在账」豁免（见上）。"""
+    exempt = contract_exer_heading_sections(ext_dir, ch) if ext_dir else set()
+    out = []
+    cur_sec = ""
+    for i, ln in enumerate(lines):
+        hm = _MD_SECTION_HEAD_FOR_EXER_RE.match(ln)
+        if hm:
+            cur_sec = _norm_secnum(hm.group(1))
+        if EXER_HEADING_RE.match(ln) or EXER_BOLD_RE.match(ln):
+            if exempt and cur_sec and (_section_ancestors(cur_sec) & exempt):
+                continue      # 原书该节自己印的习题集标题 → 忠实渲染，非归拢块
+            out.append(f"  x L{i+1}: 练习归拢块（练习须原位内联为 "
+                       f"`**练习 N.M.X（Exercise N.M.X）：**`，不可抽出来建标题块）— {ln.strip()[:78]}")
+    return out
 
 # ── OCR 噪声：页眉/页脚/版权 ──────────────────────────────────────────────
 NOISE_RES = [
@@ -128,15 +242,6 @@ APPENDIX_HEAD_RE = re.compile(r'^#{2,4}\s*§?\s*(?:Appendix|附录)\b')
 # 要求 `§` 符号、编号可选。用于 unnumbered 书（如 Silverman）——闸门改用「按位置」
 # 比对结构契约小节，不依赖 md 标题里的数字（详见 SKILL.md 写作规则：尊重原书编号）。
 SEC_HEADING_RE_OPT = re.compile(r'^#{2,4}\s*§\s*([\dA-Za-z][\d.\-A-Za-z]*)?')
-
-
-def check_exer_blocks(lines):
-    out = []
-    for i, ln in enumerate(lines):
-        if EXER_HEADING_RE.match(ln) or EXER_BOLD_RE.match(ln):
-            out.append(f"  x L{i+1}: 练习归拢块（练习须原位内联为 "
-                       f"`**练习 N.M.X（Exercise N.M.X）：**`，不可抽出来建标题块）— {ln.strip()[:78]}")
-    return out
 
 
 def check_noise(lines):
@@ -467,6 +572,12 @@ LIST_ITEM_RE = re.compile(
     r'^[-*+]\s|^\d{1,3}[.)]\s|^[（(][A-Za-z0-9]{1,3}[)）]\s')
 # 单证明块过长的字符阈值
 VERBOSE_PROOF_CHARS = 700
+# 块引用里的「插图排版行」：嵌图 <div>/<img> 与其图题标签是**排版标记**，不是
+# 散文。Rosen 8e 实测：长解答块内补一张印刷图（5 行标记 ≈ 250 字）把 640 字的
+# 解答顶过 700 字阈值，被误判成「逐段翻译原书 proof」。计量前一律剔除。
+FIGURE_MARKUP_RE = re.compile(
+    r"^(?:<div\b|<img\b|</div>$)"
+    r"|(?:\*\*|\*)?\s*(?:FIGURE|Figure|图)\s*\d+\s*(?:[.。]|\s+[A-Z(一-鿿])")
 # 触发 FAIL 的聚合阈值（report.py 读取）
 VERBOSE_PARA_GATE = 6      # 顶层长散文段 ≥ 6 段 → 非核心内容未摘要
 VERBOSE_PROOF_GATE = 2     # 过长且未分条的证明/解答块 ≥ 2 块 → 逐段翻译
@@ -678,7 +789,8 @@ def check_verbose_proofs(lines):
                 cur = lines[j].strip()
                 if cur.startswith('>'):
                     tail = cur[1:].strip() if len(cur) > 1 else ''
-                    buf.append(tail)
+                    if not FIGURE_MARKUP_RE.match(tail):
+                        buf.append(tail)
                     j += 1
                 elif cur == '':
                     k = j + 1
@@ -758,7 +870,7 @@ class PLayer(VerifyLayer):
                 'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [],
                 'p_extra_item': [], 'p_verbose': [], 'p_proof_verbose': [],
             })
-        exer = check_exer_blocks(lines)
+        exer = check_exer_blocks(lines, ctx.ext_dir, ctx.ch)
         noise = check_noise(lines)
         bare = check_bare_items(lines, ctx.config.primary_type)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch,

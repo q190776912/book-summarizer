@@ -501,7 +501,8 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
         # F-LAYER FORMAT 聚合（原 C/G/H/I/J/K/L/M/N 九层统一为代号 F）：
         # 所有格式子项 finding 数求和，单一 F 计数呈现。
         f_n = (ke + ggaps + epg + hbq + hstmt + hul + hmbq
-               + isp + jsp + ksp + lsp + hblank + mdm + nbq + nbq_nested)
+               + isp + len(r.get('i_prose_sep', [])) + jsp + ksp + lsp + hblank
+               + mdm + nbq + nbq_nested)
         osub = len([g for g in r.get('o_subitem_gaps', []) if g.strip().startswith('x')])
         qf = len(r.get('q_fabricated', []) or [])
         qi = len(r.get('q_inconsistent', []) or [])

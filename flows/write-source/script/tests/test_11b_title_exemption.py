@@ -41,6 +41,22 @@ class Test11bTitleExemption(unittest.TestCase):
         ok, probs = cuq.check_body("item", "9.3-7", body)
         self.assertTrue(_dup_msgs(probs), probs)
 
+    def test_matrix_alignment_run_exonerated(self):
+        # Robinson 李代数 ch3 0034: E6/E7/E8 Cartan 矩阵行天然连续「0 & 0 & 0 &」
+        body = ('**Table 1** The Cartan matrices of the exceptional types:\n\n'
+                '$$\n\\mathsf{E}_{8} \\colon \\begin{pmatrix} 2 & 0 & -1 & 0 & 0 & 0 & 0 & 0 \\\\ '
+                '0 & 2 & 0 & -1 & 0 & 0 & 0 & 0 \\\\ -1 & 0 & 2 & -1 & 0 & 0 & 0 & 0 \\\\\n'
+                '\\end{pmatrix}\n$$')
+        ok, probs = cuq.check_body("item", "Table §11.4-1", body)
+        self.assertEqual(_dup_msgs(probs), [], probs)
+
+    def test_ampersand_bearing_text_duplicate_still_flagged(self):
+        # letters mixed into the repeat = not a matrix row, keep catching it
+        body = ('**11.4 Some title.** the diagram R & S commutes, the diagram '
+                'R & S commutes, as required by the hypothesis above.')
+        ok, probs = cuq.check_body("item", "11.4-1", body)
+        self.assertTrue(_dup_msgs(probs), probs)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1024,7 +1024,7 @@ _CONTRACT_TYPE_TO_FORM = {
 }
 
 
-def _contract_counter_evidence(extract_dir):
+def _contract_counter_evidence(extract_dir, include_chapter=False):
     """结构契约（book_structure/ch{N}.json）已存在时，用契约条目本身作为
     计数器分组证据 —— 比 ordinal 探测阶段的 OCR 标题扫描干净得多（OCR 漏识
     / 字符混淆会让 _shares_main_counter 的证据稀疏化，Weibel 实测被误判成
@@ -1035,6 +1035,16 @@ def _contract_counter_evidence(extract_dir):
     证据（exercise 不在 _CONTRACT_TYPE_TO_FORM）：练习计数器由
     `_detect_exercise_counter` / `_detect_appendix_exercise` 专属检测并
     单列组，与 LABEL_FORMS 刻意不含 Exercise 的口径一致。
+
+    `include_chapter=True`（单级 type-1 书专用）：单级书的条目键只含裸序号
+    （如 '定理1'），章节边界不在键里，故用**所属章号补成窗口分量**
+    comps=(chapter, num)，让 `_shares_main_counter` 的「同窗重复号」判据得以
+    区分「共享一条计数器」与「章内各自重起的平行计数器」。Arnold《ODE》实测：
+    第 2 章同时存在 Theorem 1-3、Corollary 1-12、Lemma 1-4——三族在窗口 (2,)
+    内**重号**，故是各自独立的计数器，必须拆成三个具名组；旧 `_group_single_level`
+    的「statement 标签一律合并」硬约定会把它们错误并成一组，使组合并最大号
+    （Corollary 12）漏进 Lemma/Theorem 的逐标签 TAIL 比对，制造成片假「源最大 12
+    ≫ md 最大 4」BLOCKING。
     """
     from data.book_structure.book_structure import BookStructure
     try:
@@ -1045,33 +1055,44 @@ def _contract_counter_evidence(extract_dir):
         return None
     out = []
 
-    def walk(n):
+    def walk(n, ch_int):
         if n.type in ("chapter", "section"):
             for k in n.sub_sec:
-                walk(k)
+                walk(k, ch_int)
             return
         form = _CONTRACT_TYPE_TO_FORM.get(str(n.type))
         if not form:
             return
         nums = re.findall(r"\d+", str(n.key))
+        if include_chapter:
+            if not nums:
+                return
+            out.append((form, (ch_int, int(nums[-1]))))
+            return
         if len(nums) < 2:
             return
         out.append((form, tuple(int(x) for x in nums)))
 
     for c in bs.chapters:
-        if not str(c.key)[:1].isdigit():
+        ck = str(c.key)
+        if not ck[:1].isdigit():
             continue  # 附录字母章键的窗口语义不同，交 letter_chapter 生成器
-        walk(c)
+        ch_int = int(re.match(r"\d+", ck).group(0))
+        walk(c, ch_int)
     # 同号去重：深层书的子项（如 Weibel ch9 的 `Corollary 9.3.3.1`）被抽取器
     # 展平成三段键后与宿主条目（Theorem 9.3-3）同号不同族——这属书的层级
     # 深度问题，不是「平行计数器」证据；按窗口首次出现保留，其余丢弃，
     # 否则重复号会让 _shares_main_counter 把正文族误拆成多组。
+    # 🔴 include_chapter（单级书）相反：同一 (章,号) 上**不同 form 共存正是
+    # 平行计数器的决定性证据**（Theorem 2 与 Corollary 2 同章并存 → 各自独立），
+    # 必须各自保留，只对「同一 form 的重复 (章,号)」去重。
     seen = set()
     deduped = []
     for form, comps in out:
-        if comps in seen:
+        sig = (form, comps) if include_chapter else comps
+        if sig in seen:
             continue
-        seen.add(comps)
+        seen.add(sig)
         deduped.append((form, comps))
     return deduped or None
 
@@ -1223,21 +1244,35 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     # 漏识干扰；无契约（首次 config，先于 structure）时保持原 OCR 路径零回归。
     # 仅主配置走此通路；附录 letter_chapter 配置由专属生成器处理。
     _contract_evidence = None
+    _single_level_windowed = False
     if not letter_chapter and depth >= 2:
         _contract_evidence = _contract_counter_evidence(extract_dir)
         if _contract_evidence:
             headings = [(0, f, comps) for (f, comps) in _contract_evidence]
-    # group by shared counter.  Single-level (type 1) books reset their
-    # counter per chapter, so the page scan has NO chapter window to separate
-    # shared vs independent counters (the window logic in _shares_main_counter
-    # needs >=2 components) — use the domain convention (_group_single_level).
-    if family == 1:
+    elif not letter_chapter and family == 1:
+        # 🔴 单级书：优先用「结构契约 + 章窗口」证据区分共享 vs 平行计数器，
+        # 取代 `_group_single_level` 的「statement 标签一律合并」硬约定。
+        # 契约条目键是裸序号（'定理1'），把所属章号补成 (chapter, num) 后即拥有
+        # 可比较的窗口分量，`_shares_main_counter` 的「同窗重号」判据便能正确
+        # 把 Arnold 的 Theorem/Corollary/Lemma/Prop 各自拆成独立计数组。
+        _single_evidence = _contract_counter_evidence(extract_dir, include_chapter=True)
+        if _single_evidence:
+            _contract_evidence = _single_evidence
+            _single_level_windowed = True
+            headings = [(0, f, comps) for (f, comps) in _single_evidence]
+    # group by shared counter.  Single-level (type 1) books WITHOUT a structure
+    # contract have no chapter window (OCR headings carry only a bare number),
+    # so they fall back to the domain convention (_group_single_level).  With a
+    # contract, chapter-windowed evidence drives the same duplicate-based split
+    # as multi-level books (see above).
+    if family == 1 and not _single_level_windowed:
         groups = _group_single_level(headings)
     else:
         # 契约证据是完备样本：min==1 的 reset 判据关闭（共享计数器书各标签
-        # 轮流当节首，见 _shares_main_counter 注释）。
+        # 轮流当节首，见 _shares_main_counter 注释）。单级窗口深度按 2 处理
+        # （comps = (chapter, num) 两段）。
         groups = _group_headings_by_counter(
-            headings, depth, strict_reset=not _contract_evidence)
+            headings, max(2, depth), strict_reset=not _contract_evidence)
     if family == ORDINAL_HUM:
         # config_setting 规则5（ORDINAL_HUM = 12，Humphreys《Intro to Lie Algebras
         # and Representation Theory》GTM 9）：正文条目头只印裸标签（"Lemma." /

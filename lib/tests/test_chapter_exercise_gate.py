@@ -114,6 +114,19 @@ class TestChapterExerciseGate(unittest.TestCase):
                  ("b.md", "## §4.2 More Stuff\n\nSteps:\n1. x\n2. y\n9. z\n")]
         self.assertEqual(chapter_exercise_problems(units), [])
 
+    def test_cjk_chapter_end_block_opens_its_own_segment(self):
+        # 《数值分析》体例：章末标题「复习与思考题」/「计算实习题」必须**各自开段**。
+        # 旧判据的集标题只认 习题|练习，这两个词不开段 → 章末题号并进前一集的号段，
+        # 缺号被记在**前一集**名下（补写位置指错单元），且段名与印刷体例对不上。
+        # 边界①：号流只由**契约登记的习题单元**开段，故 b.md 必须是 exercise 单元
+        units = [("a.md", "**习题**\n\n1. p\n2. q\n3. r\n", True),
+                 ("b.md", "**复习与思考题**\n\n1. 判断\n2. 说明\n9. 举例\n", True)]
+        probs = chapter_exercise_problems(units)
+        self.assertEqual(len(probs), 1)
+        self.assertIn("复习与思考题", probs[0])
+        self.assertNotIn("「习题」", probs[0])
+        self.assertIn("b.md", probs[0])
+
     def test_label_form_exercise_numbers_counted(self):
         units = [("a.md", "**Exercise Set 1.1**\n\n**Exercise 1.** p\n"
                           "**Exercise 2.** q\n**Exercise 9.** r\n", True),

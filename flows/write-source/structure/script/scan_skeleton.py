@@ -391,6 +391,13 @@ STICKY_EXER_RE = re.compile(r'^(\d{1,2})\.(\d{1,2})\.?(?![0-9.])')
 # latch, requiring only not-a-digit is safe.
 EXER_3N = re.compile(r'^(\d{1,2})\.(\d{1,2})\.(\d{1,3})(?![0-9])')
 
+# 🔴 题号第三段的「1 被 OCR 成 i/l/I」修复（Strogatz 3e ch5 实测）：习题 5.1.13 印作
+# "5.1.13 Why do you think a 'saddle point'…"，OCR 给出 `5.1.i3 …` → EXER_3N 失配，
+# 落到两段题号兜底分支被发成**假习题 5.1**（真号 13 丢失、契约多出一条与节号同形的
+# 条目）。只在「数字.数字.」之后、且第三段是 `[lIi]` + 数字时把该字母换成 1：
+# 罗马数字/字母分部（"10.3.A"、"5.1.i"）后面不接数字，一律不受影响。
+EXER_OCR_ONE = re.compile(r'^(\d{1,2}\.\d{1,2}\.)[lIi](\d{1,3}(?![0-9]))')
+
 # ---------------------------------------------------------------------------
 # Universal, DEPTH-AGNOSTIC section-header detection.
 #
@@ -501,7 +508,24 @@ def _sec_like_title(title):
     return True
 
 
-def _section_header_info(ln, ch=None, depths=None, max_depth=6):
+def _expected_next_sec(last_num, ch):
+    """紧随 `last_num` 之后应出现的印刷节号（同前缀、末段 +1）。
+
+    章内尚无节头时返回 `ch.1`（章首第一节）。用于「序位豁免」判据（见
+    `_section_header_info` 的 `successor_num`）——只描述号码接续，不做校验。
+    """
+    if last_num:
+        m = re.match(r'^(.*?)([.\-–·/．－〜]?)(\d+)$', str(last_num))
+        if not m:
+            return None
+        return '%s%s%d' % (m.group(1), m.group(2), int(m.group(3)) + 1)
+    if ch is None:
+        return None
+    return '%s.1' % ch
+
+
+def _section_header_info(ln, ch=None, depths=None, max_depth=6,
+                         allow_cjk_comma=False, successor_num=None):
     """Return ``(num_str, depth, title)`` for a genuine section header, else
     None.
 
@@ -509,7 +533,13 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
     scanning inside a chapter).  `depths` (set[int]) restricts to the declared
     section depths (>= 2); when None, any depth in ``[2, max_depth]`` is
     accepted.  `max_depth` bounds the hierarchy search (default 6 = chapter +
-    5 nested levels).
+    5 nested levels).  `allow_cjk_comma` relaxes the CJK 粘连句读守卫（标题内
+    「，+汉字」）——真中文节题合法地含全角逗号（丘维声《解析几何》
+    "4.2向量的外积的几何意义，平面的定向"，2026-09-26 实测 6 整节被该守卫
+    漏发），仅在 `chapter_local_numbering` 模式打开，其余书零影响。
+    `successor_num` 为「本章上一个节号 +1」（`_expected_next_sec`）：命中的
+    候选行获得**序位豁免**，绕过两条散文形态守卫（成句散文体例的书，见下方
+    注释）。不传即无豁免，行为与历史一致。
     """
     def _validate(num_str, m_end):
         # 🔴 星标装饰串否决（Rising Sea 2026-09-24 实测）：真节头打印为
@@ -593,6 +623,17 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         if (len(_num_tok) >= 3
                 and re.match(r'^\d{1,2}[.\-–]\d{1,3}', _rest_stripped)):
             return None
+        # 序位豁免（Etingof《Introduction to representation theory》实测
+        # 2026-09-27）：该书节题**本身就是成句散文**——"1.1 What is
+        # representation theory?" 与 "3.6 Unitary representations. Another
+        # proof of Maschke's theorem for complex representations" 被下方的
+        # 「小写连词动词闸」与「句中句界守卫」整节否决，契约与骨架双双漏节
+        # （§1.1 / §3.6 整节消失）。豁免判据不看书名、不看词表，只看**序位
+        # 接续**：该行编号恰为「本章上一个节号 +1」（章首节即 `ch.1`）。真节头
+        # 必然逐个接续印刷，而散文粘连行恰好命中「下一个节号」的概率极低；
+        # 且仍受「首词小写散文」「句首虚词」「Proof 冠头」三道守卫约束。
+        # 调用方不传 successor_num 时恒 False，其余书零影响。
+        _succ = (successor_num is not None and num_str == successor_num)
         # 句读尾守卫（Casella & Berger 实测）：真节标题从不以逗号/分号/冒号收尾；
         # 以句读收尾的「编号+短词」行是散文碎片（OCR 掉括号的公式引用行
         # "1.5.3. First,"——原书 "(1.5.3). First, ..."）不是节头。句号收尾
@@ -633,7 +674,7 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
             _lc_run = re.search(
                 r"\b[a-z][A-Za-z'\-]*(?:\s+[a-z][A-Za-z'\-]*){2,}\b",
                 _rest_stripped)
-            if _lc_run or len(_rest_stripped) > 56:
+            if (_lc_run or len(_rest_stripped) > 56) and not _succ:
                 return None
         # 🔴 小写连词动词闸（Kreyszig 章首导语实测 2026-09-26）：p17
         # "1.6. Another concept of theoretical and practical interest **is**
@@ -643,7 +684,11 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 真节头被首现去重压掉）。Title-Case 真节标题从不含**小写**连词动词
         # （系词/完成助动词），散文句恒有；大小写敏感匹配，"What Is…" 类
         # 大写标题不受影响。
-        if re.search(r'\b(?:is|are|was|were|been|being)\b', _rest_stripped):
+        # 🔴 同「序位豁免」（见上）：本书首节节题就是一个问句
+        # "1.1 What is representation theory?"——恰为章首应出现的 `ch.1`，
+        # 系词是标题自身的词而非散文证据。
+        if (re.search(r'\b(?:is|are|was|were|been|being)\b', _rest_stripped)
+                and not _succ):
             return None
         # CJK 粘连句读守卫：真中文节标题是**无句读**的短名词短语（"无穷小与无穷大"
         # /"函数的上极限和下极限"）；若标题内部出现「句点/逗号/分号（半角或全角）
@@ -651,7 +696,8 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6):
         # 常庚哲《数学分析教程》实测：引理 2.12.3 的正文跨行「2.12.3的要求都满足.
         # 因此…」被当作三级小节伪节头 → 契约凭空多出 §2.12.3。枚举顿号 `、` 不在
         # 本类，真节标题（含"、"者）不受影响。
-        if re.search(r'[。，,；;]\s*[一-鿿]', _rest_stripped):
+        if not allow_cjk_comma and re.search(r'[。，,；;]\s*[一-鿿]',
+                                             _rest_stripped):
             return None
         # 句首虚词守卫（见 _SEC_TITLE_SENTENCE_STARTS 注释）。
         if _SEC_TITLE_SENTENCE_STARTS.match(_rest_stripped):
@@ -817,7 +863,7 @@ def _merge_bare_num_head(ln, bi, blocks):
 
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
          exercise_headings=None, plain_sec_heads=False, sections_global=None,
-         local_num_sec=False):
+         local_num_sec=False, chapter_local_numbering=False):
     rows = []
     # Exercise-region state: once "EXERCISES" / "EXERCISES FOR CHAPTER N" is seen,
     # all subsequent bare `C.S.N` numbers (three-level mode) are exercises, and in
@@ -833,6 +879,11 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # 锥点时的当前节号（'universal 节检测同号守卫'用）：由于 scan()
     # 逐页扫描时不知道当前节，用最近一次发出的 SEC 行号维护。
     cur_exer_sec = None
+    # 本章已发出的全部 SEC 节号（闩锁内「重复节号 = 习题分组头」判据用，见
+    # universal 节检测处的 `_sec_emitted` 守卫）。
+    _sec_emitted = set()
+    # 本章最近发出的节号（「序位豁免」的锚点，见 _section_header_info）。
+    last_sec_num = None
     # Ross-style STICKY chapter-end exercise region（exercise_region_headings 声明）：
     # 一旦进入章末习题块就直到章末——SEC 检测不再解除闩锁（习题行
     # "3.11 Two cards..." 恰好长得像节头，绝不能把它当「新节」重置）。
@@ -867,6 +918,14 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     else:
         global_sec = bool(section_depths) and any(
             isinstance(d, int) and d == 1 for d in section_depths[1:])
+    if chapter_local_numbering:
+        # 🔴 章内三层体例（丘维声）强制关闭全局 § 家族（2026-09-26 实测）：
+        # 本模式的 §N 由下方专用分支检测（无 y 下限 + cur+1 闩锁），而全局
+        # 家族若开启会 ① 用带 y≥170 守卫的无闩锁 GLUE 抢先吃掉 § 行并伪造
+        # 节号（ch1 伪 SEC 6 "个数）…"）；② 其点号 SEC 尾过滤（见 scan 末尾
+        # `if global_sec:` 区）删掉**全部真小节**（22/22 被吞）。深度启发式
+        # 对 [1,1,2]（含单分量 role 1）必然误判 global，故以本旗标兜底。
+        global_sec = False
     # Current global §N while scanning (for SUB letter-head parentship).
     cur_global_sec = None
     # Numeric local sub-block latch (only used when local_num_sec): track which
@@ -909,7 +968,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 ln_y = None
             for _raw in (it.get('text') or '').split('\n'):
                 ln = _raw.rstrip('$').strip()
-                if not ln:
+                if ln:
+                    ln = EXER_OCR_ONE.sub(r'\g<1>1\g<2>', ln)
+                else:
                     continue
             # Exercise-region detection (case-insensitive, space-optional so it
             # survives OCR like `EXERCISESFORCHAPTER3`).  Once seen, the chapter
@@ -957,15 +1018,58 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # 之后不再有正文——闩锁激活后跳过 universal 节检测（习题长句
             # "3.11 Two cards..." 会被 universal 检测误判为真节头并错误解除闩锁）。
             if depths_set is not None and not (sticky_exer and in_exercise):
-                sec = _section_header_info(ln, ch=ch, depths=depths_set)
+                # chapter_local_numbering：两分量均章内（`4.2` 首分量≠章号），
+                # 关闭 `== ch` 守卫；并放行标题内全角逗号（见函数 docstring）。
+                # 该模式自带「A==当前节 + B 单调」闩锁，不参与序位豁免。
+                _succn = (None if chapter_local_numbering
+                          else _expected_next_sec(last_sec_num, ch))
+                sec = _section_header_info(
+                    ln, ch=None if chapter_local_numbering else ch,
+                    depths=depths_set,
+                    allow_cjk_comma=chapter_local_numbering,
+                    successor_num=_succn)
                 if sec is None:
                     # 数字/标题分块粘连回收（见 _merge_bare_num_head 注释）：
                     # 裸编号行 + 紧邻短标题块 → 合并串重新走全量校验。
                     _mg = _merge_bare_num_head(ln, _bi, _blocks)
                     if _mg is not None:
-                        sec = _section_header_info(_mg, ch=ch, depths=depths_set)
+                        sec = _section_header_info(
+                            _mg, ch=None if chapter_local_numbering else ch,
+                            depths=depths_set,
+                            allow_cjk_comma=chapter_local_numbering,
+                            successor_num=_succn)
+                if sec is not None and chapter_local_numbering:
+                    # 「A == 当前节 + B 单调」闩锁：杀章内交叉引用/公式行
+                    # （"6.1所示" p216、"2.1的第4题可知" p346——彼时当前节是
+                    # 1/6，A 不等即拒）与后续重号；B 上限杀 "3.17所示"。
+                    # B 允许跳号（OCR 偶发吞行不至于闷死整节后续小节）。
+                    # 标题不得再含一个 N.M 数字（ch6 实测散文行
+                    # "1.7和命题1.4，得" A==当前节通过——真小节标题永不含
+                    # 点分数字，交叉引用形态一票否决）。
+                    _cln = re.match(r'^(\d{1,2})\.(\d{1,2})$', sec[0])
+                    _ok = False
+                    if _cln:
+                        _a, _b = int(_cln.group(1)), int(_cln.group(2))
+                        _ok = (_a <= 12 and _b <= 8
+                               and _a == cur_global_sec
+                               and _b > (cur_local_sub or 0)
+                               and not re.search(r'\d+\.\d+', sec[2]))
+                        if _ok:
+                            cur_local_parent = _a
+                            cur_local_sub = _b
+                    if not _ok:
+                        sec = None
                 if sec is not None:
                     num_str, _depth, title = sec
+                    # 🔴 闩锁内「本章已发过的节号」不是新节（Strogatz《Nonlinear
+                    # Dynamics and Chaos》3e 实测）：章末习题区按节分组，印
+                    # 「2.1 A Geometric Way of Thinking」等小标题，与正文真节头
+                    # **逐字同形**，旧逻辑在此发 SEC 并解除闩锁 → 其后三段题号
+                    # 习题（2.1.1 / 2.2.1 …）不再走 EXER_3N，全书习题 0 收录。
+                    # 真节号一章内不可能印刷两次，故闩锁内的重复节号必是习题分组
+                    # 头（或摘要/页眉复本）：不发节、不解锁。
+                    if in_exercise and num_str in _sec_emitted:
+                        continue
                     if in_exercise and num_str == cur_exer_sec:
                         # 同号节 running-header 复本：不发 SEC 行、不解锁
                         # 习题区（真正的新节号必不同于锥点时的节号）。
@@ -1005,6 +1109,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                                 continue
                             # 非 2 段题号形态：维持旧行为（发 SEC 解锁）防兜底死锁。
                     rows.append((p, 'SEC', num_str, title, ln_y))
+                    _sec_emitted.add(num_str)
+                    last_sec_num = num_str  # 序位豁免的接续锚点
                     cur_exer_sec = num_str
                     in_exercise = False  # new section ends the exercise region
                     last_exer_num = 0
@@ -1128,6 +1234,35 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     rows.append((p, 'SUB', parent + m.group(1),
                                  m.group(2).strip()))
                     continue
+            # --- chapter-local §N heads（丘维声《解析几何》体例）-------------
+            # 节号每章重起，OCR 三形态：`81向量…`（§→8）、`S1映射`（§→S）、
+            # 裸 `1平面的仿射坐标变换`（§ 丢失）。复用 SEC_GLOBAL_GLUE 形态但
+            # **无 y 下限**：节起于新页顶时节头就在页眉带（ch2 §2 p78 y73，
+            # y≥170 会整节漏掉并连带闷死其下全部小节）。误报由三道闸拦：
+            # ① 号须 == 当前节+1（首现播种须为 1）——页眉页码行（"26第一章…"/
+            # "54第二章…"）与公式行（"2x+3y…"）不在序列上；② 标题 ≥2 汉字、
+            # 无数学运算符（_glue_title_ok）；③ 标题不含章名（页眉复本形态
+            # "…第一章几何空间的线性结构和度量结构…"）。粘连页码剥尾
+            # （"…向量的混合积39"）。同号重复行由下游 sec_best 首现去重吸收，
+            # 首现必是真节头（节题先于其页眉复本出现在页序中）。
+            if chapter_local_numbering:
+                m = SEC_GLOBAL_GLUE.match(ln)
+                if (m and ln_w is not None and ln_w <= _GLUE_MAX_WIDTH
+                        and _glue_title_ok(m.group(2))):
+                    _n = int(m.group(1))
+                    _t = _SEC_SPACED_TRAIL_PAGE.sub('', m.group(2)).strip()
+                    _seed = (cur_global_sec is None and _n == 1)
+                    _adv = (cur_global_sec is not None
+                            and _n == cur_global_sec + 1)
+                    if ((_seed or _adv) and _n <= SEC_MAX_NUMBER and _t
+                            and not re.search(r'第[一二三四五六七八九十\d]+章',
+                                              _t)
+                            and not re.search(r'\d+\.\d+', _t)):
+                        rows.append((p, 'SEC', str(_n), _t, ln_y))
+                        cur_global_sec = _n
+                        cur_local_parent = None
+                        cur_local_sub = None
+                        continue
             if mode == 'two-level':
                 m = SEC_2.match(ln)
                 # 🔴 chapter_first gate: for section-scoped books (do Carmo,
@@ -1435,7 +1570,9 @@ def main():
             print('%-9s SKIP (not in chapter_map)' % chapter_label(ch))
             continue
         start, end = rng[ch]
-        rows = scan(extract_dir, ch, start, end, mode, section_depths=section_depths)
+        rows = scan(extract_dir, ch, start, end, mode, section_depths=section_depths,
+                    chapter_local_numbering=getattr(
+                        loader.book, 'chapter_local_numbering', False))
         sec_best = {}
         for row in rows:
             if row[1] == 'SEC':

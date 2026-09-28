@@ -11,6 +11,15 @@ tag 全属此类：``22``（display 里两个 ε/2 的分母被 OCR 成独立数
 ② 本章编号以 ``(N)`` 为主（parenthesized 占比 ≥90% 且 ≥5 个）时，只有裸排锚点的
    tag 判毒——带括号的书里，裸数字块几乎总是公式内部碎片而不是编号列。
 
+**人工确证豁免**（``attested=``）：判据①②全靠 OCR 页窗，而**扫描书的 OCR 会整块漏掉
+某些真印编号**（页边号与公式粘连后被丢弃、双色排版、拟合裁剪切掉右缘）。这类号一旦被
+判毒，写手就陷入本模块开头说的两头堵：**凭印面真相 \tag 判编造、删掉判漏写**——闸与
+Q 层（``verify_config.json`` 的 ``formula.known_book``，其定义正是「书源确有、抽取器
+漏挂的真编号」）互相矛盾。故 ⑭ 与 Q 层共用同一份人工确证登记：在 ``attested`` 里的号
+**不再判毒**（三种理由码一律豁免），闸的举证责任回到登记方（人工目视印面后才登记，
+登记工具会复验 JSON）。``attested`` 默认 ``None`` = 行为与既往完全一致（收割期
+``strip_unattested`` 在人工复核之前，不传豁免）。
+
 负向测试见 ``lib/tests/test_tag_attestation.py``。
 
 本模块同时提供闸门 ⑭ 的**对偶** —— 闸门 **⑱**「收割漏号」
@@ -25,8 +34,12 @@ from lib.numbering import _FORMULA_SEP, formula_num_core
 
 __all__ = ["collect_contract_tags", "tag_attestation_problems",
            "unattested_tags", "strip_unattested", "dir_page_loader",
+           "attested_numbers",
            "unharvested_anchor_tags", "unharvested_anchor_problems",
-           "rendered_numbers"]
+           "glued_anchor_tags", "glued_anchor_problems",
+           "rendered_numbers", "page_geom_loader", "page_anchor_index",
+           "number_column", "column_separable", "margin_anchor_audit",
+           "numbering_gaps", "numbering_gap_problems"]
 
 
 def _norm(tag):
@@ -182,7 +195,58 @@ def dir_page_loader(*dirs):
 _LETTER_RE = re.compile(r"[A-Za-z]")
 
 
-def _condemned(tree, page_loader):
+def attested_numbers(ext):
+    """``verify_config.json`` 的 ``formula.known_book`` → 人工确证真印编号集合（裸号）。
+
+    这是 ⑭ 的**人工确证登记处**（SSOT，读页/读配置口径唯一）：``known_book`` 的定义
+    本就是「书源确有、却被抽取器漏挂的真实编号」（典型：编号与公式同行内联粘连，
+    或扫描书 OCR 整块漏掉页边号）。Q 层据此**要求** ``\\tag``，⑭ 若看不见它就会
+    **禁止**同一个 ``\\tag`` —— 两头堵（Iwaniec–Kowalski ch1 的 (1.104) 实测：印面
+    确有、OCR 全无，两处判据必须共用这份登记）。任何缺失 / 异常 → 空集（判据退回
+    既往行为）。兼容扁平（顶层 ``formula``）/ 分组（``ch``/``appendix``/
+    ``supplement``）/ 历史 ``data`` 三种配置形状。
+    """
+    import json
+    import os
+
+    path = os.path.join(str(ext), "verify_config.json")
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return set()
+    nums = set()
+
+    def _harvest(formula):
+        if isinstance(formula, dict):
+            for x in (formula.get("known_book") or []):
+                s = _norm(x)
+                if s:
+                    nums.add(s)
+
+    def _harvest_node(node):
+        if not isinstance(node, dict):
+            return
+        _harvest(node.get("formula"))
+        if "known_book" in node:
+            _harvest(node)
+
+    _harvest(cfg.get("formula"))
+    for grp in (cfg.get("ch"), cfg.get("appendix"), cfg.get("supplement")):
+        _harvest_node(grp)
+    data = cfg.get("data")
+    if isinstance(data, dict):
+        for sub in data.values():
+            _harvest_node(sub)
+    for v in cfg.values():
+        if isinstance(v, dict):
+            _harvest_node(v)
+    return nums
+
+
+def _condemned(tree, page_loader, attested=None):
     """→ (tags, kinds)；``kinds`` = {判毒 tag: 理由码}。页窗不可判时返回 (tags, {})。
 
     理由码：
@@ -190,8 +254,11 @@ def _condemned(tree, page_loader):
     * ``bare-only`` —— 只有裸排锚点，而本章编号以 `(N)` 为主；
     * ``lettered`` —— tag 含字母，而本章编号绝大多数是纯整数（字母尾巴 = 公式碎片 /
       换行粘连，如 Strogatz 3e ch7 的 `2n` 来自 `2` + 下一行 `n ?`）。
+
+    ``attested`` = 人工目视印面确证为**真印编号**的号集（豁免判据，见模块文档串）。
     """
-    tags = collect_contract_tags(tree)
+    skip = {_norm(x) for x in (attested or [])}
+    tags = [(k, n) for k, n in collect_contract_tags(tree) if n not in skip]
     if not tags:
         return tags, {}
     try:
@@ -218,23 +285,26 @@ def _condemned(tree, page_loader):
     return tags, kinds
 
 
-def unattested_tags(tree, page_loader):
+def unattested_tags(tree, page_loader, attested=None):
     """契约里**无印刷锚点 / 形态与本章体例矛盾**的 tag 集合（收割处剔除的判据）。
 
     与 :func:`tag_attestation_problems` 同一套判据（共用 :func:`_condemned`），
     只换成「集合」出口，供两处消费：① `build_structure` 落盘前剔除（毒 tag 不进契约）；
     ② 老契约的事后修复（步骤 5 单元已写毕、不能重建契约的书）。
+    ``attested``（人工确证真印编号）里的号**不算毒**，见模块文档串。
     """
-    return set(_condemned(tree, page_loader)[1])
+    return set(_condemned(tree, page_loader, attested)[1])
 
 
-def strip_unattested(tree, page_loader):
+def strip_unattested(tree, page_loader, attested=None):
     """**就地**删除 ``tree`` 内被判毒的公式 tag（``tag`` 字段与 ``tags`` 列表元素）。
 
     → 被删除的 tag 字符串列表（去重、按文档序）。删除后公式块仍在（正文不丢），
     只是不再声称自己带编号 —— 单元侧因此既不该写 `\tag{}`，也不该因缺它被判漏写。
+
+    ``attested`` 默认 ``None``：收割期还没有人工目视印面，此时不豁免任何东西。
     """
-    tags, kinds = _condemned(tree, page_loader)
+    tags, kinds = _condemned(tree, page_loader, attested)
     condemned = set(kinds)
     if not condemned:
         return []
@@ -268,14 +338,16 @@ def strip_unattested(tree, page_loader):
     return out
 
 
-def tag_attestation_problems(tree, page_loader, chapter_label=""):
+def tag_attestation_problems(tree, page_loader, chapter_label="", attested=None):
     """→ 问题描述列表（空 = 全部 tag 有印刷锚点）。
 
     ``tree`` 分章契约（dict，需 ``page_start``/``page_end``）；``page_loader(pg)``
     给该页文本块内容列表或 None（缺页文件时**跳过不判**，fail-open 于缺数据、
-    判毒只依据「有页而找不到锚点」）。
+    判毒只依据「有页而找不到锚点」）。``attested`` = 人工目视印面确证的真印编号
+    （典型来源 `verify_config.json` 的 ``formula.known_book``，与 Q 层同一份登记），
+    其中的号不参与判毒 —— 否则闸会逼写手删掉**照印面写对的** `\tag{}`。
     """
-    tags, kinds = _condemned(tree, page_loader)
+    tags, kinds = _condemned(tree, page_loader, attested)
     if not kinds:
         return []
     try:
@@ -384,6 +456,93 @@ def unharvested_anchor_tags(tree):
     return uniq
 
 
+# ── ⑱ 的**盲区**：锚点被 OCR 与公式残渣粘连成一块 ────────────────────────────
+# 🔴 单独一个正则而**非**放宽 `_ANCHOR_ONLY_RE`：整块-only 形态是 ⑱ 的既有判据，
+# 已在全语料标定；粘连形态是另一种证据强度，必须可单独关停（见 glued_anchor_problems）。
+_ANCHOR_GLUED_RE = re.compile(r"^\(\s*([0-9]{1,3}[a-z]?)\s*\)[.。]?\s*(\S.*)$")
+# 残渣里出现 ≥3 个连续英文字母 → 判为散文（交叉引用 / 句子开头），不是版面锚点。
+_RESIDUE_PROSE_RE = re.compile(r"[A-Za-z]{3,}")
+_GLUE_LOOKBEHIND = 5
+_GLUE_JUNK_LEN = 24
+
+
+def _glue_junk(text):
+    """锚点与展示式之间的中间块是否只是 OCR 残渣（可跳过）。"""
+    return len(text) <= _GLUE_JUNK_LEN
+
+
+def glued_anchor_tags(tree):
+    """契约树 → [(节点 key, 编号, 公式片段)]：**粘连锚点**版漏号探测。
+
+    :func:`unharvested_anchor_tags` 只认「整块恰好是 `(N)`」的锚点；OCR 常把编号
+    与公式残渣切成同一块（实测 Apostol IANT ch7 印面 `(9)` 收成 `(9) p(k)`、
+    `(15)` 收成 `(15) G(x) = ∑α(n)F`），这类锚点对旧判据**完全隐形**，于是契约
+    永不登记、写手按契约对账看不见自己少写两个号。
+
+    判据（与旧判据同构，只把「前一块是展示式」放宽为「往前最多
+    ``_GLUE_LOOKBEHIND`` 块、途中只允许跳过行内公式与 :func:`_glue_junk` 残渣，
+    遇到散文块即停」）：
+      * 块形如 ``(N) 残渣``，且残渣**不含 ≥3 个连续英文字母**——散文交叉引用
+        （`(10) with (9) we obtain`、`(1). But`、`(3). See problem`）据此排除；
+      * 命中的展示式**既无 `tag` 也不在其 `tags`**；
+      * 编号未登记（同旧判据）。
+
+    与 :func:`unharvested_anchor_tags` 一样**只报候选**，是否算真漏由
+    :func:`_anchor_problems_for` 的四条收紧判据决定。
+    """
+    out = []
+
+    def visit(node):
+        if isinstance(node, list):
+            for c in node:
+                visit(c)
+            return
+        if not isinstance(node, dict):
+            return
+        seq = _content_seq(node)
+        for i, blk in enumerate(seq):
+            txt = (blk.get("text") or "").strip() if "text" in blk else None
+            if txt is None:
+                continue
+            m = _ANCHOR_GLUED_RE.match(txt)
+            if not m:
+                continue
+            num, residue = m.group(1), m.group(2)
+            if _RESIDUE_PROSE_RE.search(residue):
+                continue
+            if _ANCHOR_ONLY_RE.match(residue):
+                continue
+            for step in range(1, _GLUE_LOOKBEHIND + 1):
+                j = i - step
+                if j < 0:
+                    break
+                prev = seq[j]
+                if prev.get("formula") is not None:
+                    if not prev.get("display"):
+                        continue
+                    if prev.get("tag") or prev.get("tags"):
+                        break
+                    if num in [_norm(x) for x in (prev.get("tags") or []) if _norm(x)]:
+                        break
+                    out.append((node.get("key"), num, str(prev.get("formula"))[:60]))
+                    break
+                if _glue_junk((prev.get("text") or "").strip()):
+                    continue
+                break
+        for c in node.get("sub_sec") or []:
+            if isinstance(c, dict) and c.get("key") is not None:
+                visit(c)
+
+    visit(tree)
+    seen, uniq = set(), []
+    for k, n, f in out:
+        if (k, n) in seen:
+            continue
+        seen.add((k, n))
+        uniq.append((k, n, f))
+    return uniq
+
+
 def rendered_numbers(text):
     """单元正文里**已按印刷形态出现过**的编号集合。
 
@@ -428,15 +587,18 @@ def _nearest_sec(chain):
     return None
 
 
-def unharvested_anchor_problems(tree, unit_bodies, chapter_label=""):
-    """→ 闸门 ⑱ 问题列表：印面 `(N)` 在契约在档、其展示式无 tag、**且本章正文里
-    整个号消失了**。
+def _anchor_problems_for(tree, candidates, unit_bodies, chapter_label=""):
+    """①–④ 收紧判据的**唯一实现**——检测趟与修复趟共用同一谓词。
+
+    ``candidates`` = ``[(节点 key, 编号, 公式片段)]``，由调用方给出锚点来源
+    （:func:`unharvested_anchor_tags` 整块-only 锚点 / :func:`glued_anchor_tags`
+    粘连锚点）。判据与来源无关，因此两种锚点形态的**假阳率可比**。
 
     ``unit_bodies`` = ``{契约节点 key: [该节点的单元正文, …]}``（manifest 已登记的
     节点；未登记的节点 = 无落点，属 V-I 省略，不判）。
 
     四条收紧判据（全语料 477 章实测：只用「相邻 + 有单元记录」报 491 处、再加号
-    形态与逃逸池报 96 处，本函数四条后剩 22 处且逐处抽检为真漏 —— 判据保守，宁漏
+    形态与逃逸池报 96 处，四条后剩 22 处且逐处抽检为真漏 —— 判据保守，宁漏
     报不误报）：
     ① 节点须在 ``unit_bodies`` 里（无落点不判）；
     ② 该号在**同节**（无 § 祖先时退全章）单元正文里既不以 ``\\tag`` 也不以 ``(N)``
@@ -465,7 +627,7 @@ def unharvested_anchor_problems(tree, unit_bodies, chapter_label=""):
         if s is not None:
             sec_pool.setdefault(s, set()).update(pool)
     out = []
-    for key, num, frag in unharvested_anchor_tags(tree):
+    for key, num, frag in candidates:
         k = str(key)
         if k not in bodies:
             continue
@@ -496,3 +658,328 @@ def unharvested_anchor_problems(tree, unit_bodies, chapter_label=""):
     if chapter_label and out:
         out = ["[%s] %s" % (chapter_label, p) for p in out]
     return out
+
+
+def unharvested_anchor_problems(tree, unit_bodies, chapter_label=""):
+    """→ 闸门 ⑱ 问题列表：「整块只有 `(N)`」锚点一侧的收割漏号。
+
+    判据见 :func:`_anchor_problems_for`（①–④ 四条收紧，全语料标定过）；候选来源
+    见 :func:`unharvested_anchor_tags`。**行为与既往一致**——⑱ 的既有假阳率不变。
+    """
+    return _anchor_problems_for(tree, unharvested_anchor_tags(tree),
+                                unit_bodies, chapter_label)
+
+
+def glued_anchor_problems(tree, unit_bodies, chapter_label=""):
+    """→ 粘连锚点（`(9) p(k)` / `(15) G(x) = ∑α(n)F` 一类）的收割漏号，**未接闸**。
+
+    与 :func:`unharvested_anchor_problems` 共用 ①–④ 谓词，只差锚点形态。暂**不**
+    并入闸门 ⑱：收紧判据会让**并行在跑**的书（同一技能、步骤 5 在飞）的旧 PASS
+    作废；等其在跑书目收官后再把它拼进 `gate_units` 的 ⑱ 调用，并先跑跨书普查报
+    backlog。当前用途 = 只读普查（`_extract/_probe_*.py`）+ 负向测试。
+    """
+    return _anchor_problems_for(tree, glued_anchor_tags(tree),
+                                unit_bodies, chapter_label)
+
+
+# ── 编号序列「空洞」判据（⑭/⑱ 与页池审计之外的第三条腿；纯函数，**未接闸**）────
+# ⑭ 与 ⑱ 的搜索空间都是契约树：⑭ 问「契约挂的号印面有没有」，⑱ 问「契约在档的
+# 锚点块公式挂上没」。收割把印面编号整块丢掉时，该号在契约里既无 ``tag`` 也无锚点
+# 块，两闸同时失明。本判据只用一条**本书级不变量**补这个洞：**逐章连续编号**的书里，
+# 一章登记的号集必须是 ``1..max`` 的**无洞前缀**——中间缺一个号 = 该号被收割丢了。
+# 实测 Apostol《Introduction to Analytic Number Theory》15 处丢失（ch4 (52)、ch6 (12)、
+# ch8 (14)(16)(26)、ch9 (30)(45)、ch12 (16)(28)(30)(31)(32)、ch13 (18)、ch14 (8)(25)）
+# 全部由此判据一次性数出，而 ⑭/⑱/页池审计三者的实测 lost 均为 0。
+#
+# 判据边界（负向测试逐条锁住）：
+# * **只判洞，不判截尾**：``max`` 之后的印面号看不见（那属 ⑱/粘连锚点）。
+# * **先验序列形态**：``1..max`` 命中率 < ``_GAP_DENSITY`` 时判为「非逐章连续编号」
+#   （按节重启编号的书，如 Strogatz；或只收割到零星号），**不出结论**。
+# * 号形须干净（``_CLEAN_NUM_RE``）；字母尾巴（``12a``）随其数字头入序。
+# * 该号若已在任一单元正文里以 ``\tag`` / ``(N)`` 出现过，**不报**——那是「契约缺档
+#   而单元已渲染」，闸门 ⑭ 会以「编造」方向先报，此处重复报只会把两个修法混在一起。
+_GAP_DENSITY = 0.8
+
+
+def numbering_gaps(tree):
+    """契约树 → ``[(缺号 int, 前一个在档号 or None, 后一个在档号 or None)]``。
+
+    非逐章连续编号（命中率 < :data:`_GAP_DENSITY`）或无数字号时返回 ``[]``。
+    """
+    reg = set()
+    for _key, num in collect_contract_tags(tree):
+        if not _CLEAN_NUM_RE.match(num):
+            continue
+        m = _NUM_HEAD_RE.match(num)
+        if m:
+            reg.add(int(m.group(0)))
+    if not reg:
+        return []
+    top = max(reg)
+    if top < 2 or len(reg) / top < _GAP_DENSITY:
+        return []
+    out = []
+    for n in range(1, top):
+        if n in reg:
+            continue
+        lo = max((x for x in reg if x < n), default=None)
+        hi = min((x for x in reg if x > n), default=None)
+        out.append((n, lo, hi))
+    return out
+
+
+def numbering_gap_problems(tree, unit_bodies, chapter_label=""):
+    """→ 编号序列空洞的问题列表（判据见模块内 ``# 编号序列「空洞」判据`` 段）。
+
+    **未接闸**：这是**收紧**方向的判据，会让并行在跑的书（同一技能、步骤 5 在飞）
+    的旧 PASS 作废；接闸前须先跑跨书普查并出 backlog。当前用途 = 只读普查 + 判据测试。
+    """
+    gaps = numbering_gaps(tree)
+    if not gaps:
+        return []
+    rendered = set()
+    for texts in (unit_bodies or {}).values():
+        for t in texts or []:
+            if t is not None:
+                rendered |= rendered_numbers(t)
+    out = []
+    for n, lo, hi in gaps:
+        if str(n) in rendered:
+            continue
+        out.append("本章印面编号 (%d) 在契约里整体无档（在档邻居：%s）且全章单元正文"
+                   "也无该号 —— 逐章连续编号序列出现空洞 = 收割丢了印刷编号，"
+                   "须按印刷证据回填契约 tag + manifest tags，再由单元补 \\tag{%d}"
+                   % (n, "%s / %s" % (lo, hi), n))
+    if chapter_label and out:
+        out = ["[%s] %s" % (chapter_label, p) for p in out]
+    return out
+
+
+# ── 页池审计：编号列（⑭/⑱ 的**共同**盲区；检测趟与修复趟共用一个谓词）────────
+# ⑭ 问「契约挂的号印面有没有」、⑱ 问「契约在档的锚点块公式挂上没」——**两者的搜索
+# 空间都是契约树**。收割把某些 `(N)` 锚点整块当噪声丢弃时，该号在契约里既无 ``tag``
+# 也无锚点块，两闸同时失明（实测 Apostol《Introduction to Analytic Number Theory》
+# 多个写手批次独立登记：ch6 (12)、ch8 (14)(16)、ch11 (16)、ch12 (16)(28)(30)(31)(32)、
+# ch13 (18)、ch14 (8) 印面有号而契约无档，写手按契约对账看不见自己少写一个号）。
+# 同一盲区的**反方向**：OCR 把公式**内部**括号切成独立块（``ζ(4)`` 的 ``(4)``），收割
+# 把它当编号挂上 → 契约多出一个印面不存在的号（实测 ch11 Exercise 15 的双和展示式，
+# fitz 目视确认该展示式左右均无编号；旧 ⑭ 拦不住，因为 ``(4)`` 确实"在页上"）。
+#
+# 判据只用**页池 + 几何**，不依赖契约树里是否留有锚点块：
+# ① 整块形如 `(N)`，允许 ≤1 个字母 + ≤3 个线状符号的 OCR 残渣（`(16s)`、`(28\`）；
+#    左括号本身也允许是 OCR 腐蚀形（`C4)` / `G4)` / `[4)`——实测 Apostol ch2 印面
+#    `(4)` 收成 `C4)`，旧正则整类失明）；`glued=True` 时另收「编号 + 公式残渣」的
+#    **粘连块**（谓词与闸门 ⑱ 的粘连探测同一条，见 :func:`page_anchor_index`）；
+# ② 该块落在本章**编号列**里——列区间**不写死**，由本章契约**已登记**的号所在列
+#    学出（本书印在左缘 x0≈55–160/966；右缘排版的书会自动落到右缘）；列种子**只取
+#    独立块**，粘连块只参与筛列；
+# ③ 号形干净（1–3 位数字，可选一个字母尾巴）。
+# 输出两个方向：``lost`` = 在列内而契约无档（收割漏号，须回填契约 tag + manifest）；
+# ``unsupported`` = 契约有档而全章找不到在列锚点（假 tag，须从契约剔除）。
+_PAGE_ANCHOR_RE = re.compile(
+    r"^[（(\[CG]\s*([0-9]{1,3}[a-z]?)[)）\\|]?\s*([A-Za-z]?[\\|]{0,3})$")
+_COLUMN_WINDOW = 120.0      # 编号列的滑动窗口宽度（与页内坐标同单位）
+_COLUMN_MIN_SAMPLES = 3     # 少于这么多在列样本就不学列（无从判据 → 不出结论）
+# 列**接受带**在簇两端各外扩这么多（同单位）。动因 = Apostol IANT 实测：同一列里
+# 独立锚点的 x0 跨 54–193（200-dpi 像素），而簇窗口只有 120，`min..max` 的接受带
+# 把 `(19)@(185)`、`(24)@(65)`、`(4)@(187)` 这类**页边**号判成列外，`unsupported`
+# 方向因此把 27/35 个真印编号误报成假 tag。外扩 40 后上界 ≈232，而本书正文/公式块
+# 起点 ≥328（实测 ch10 `(2k+1)²` 在 328/330），仍留 ~90 像素余量，不会把公式内部
+# 括号放进来。
+_COLUMN_PAD = 40.0
+# 编号列与**正文区**必须可分，否则几何判据不成立。本书实测：页边编号 `(3)` 在
+# x0=86、`C4)` 在 79，而散文行长块的左缘就在 68–71——**同一 x 带上混着编号和散文**，
+# 列筛选退化成「左半页都算列」，`unsupported` 因此把 35 个真印编号误报成假 tag
+# （实测本书 15 章全部不可分）。不可分时本审计**不出结论**（两向都空），把判断
+# 让给 :func:`numbering_gaps`（不依赖几何）。两侧各留这么多同单位余量才算可分。
+_COLUMN_SEP = 20.0
+_SEP_TEXT_MIN = 40          # 长块（≥此字符数）= 散文 / 整行公式，用作正文左右缘的锚
+
+
+def page_geom_loader(*dirs):
+    """→ ``load(pdf_page)`` = ``[(raw, x0, x1, y0)]`` 或 None。
+
+    与 :func:`dir_page_loader` 同一读页口径（``text`` 摊平 + ``formulas`` 的 latex），
+    差别只在**保留横向位置**——编号列判据需要 x 坐标。找不到页文件返回 None。
+    """
+    import json
+    import os
+
+    cache = {}
+
+    def _flat(s):
+        if isinstance(s, dict):
+            s = s.get("text")
+        return str(s or "")
+
+    def load(pg):
+        if pg in cache:
+            return cache[pg]
+        val = None
+        for d in dirs:
+            if not d:
+                continue
+            for name in ("page_%03d.json" % pg, "page_%d.json" % pg,
+                         "page_%04d.json" % pg):
+                p = os.path.join(d, name)
+                if not os.path.exists(p):
+                    continue
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        d_ = json.load(f)
+                except Exception:
+                    d_ = {}
+                rows = []
+                for b in (d_.get("text") or []):
+                    poly = b.get("poly") or []
+                    if len(poly) < 4:
+                        continue
+                    rows.append((_flat(b.get("text")).strip(),
+                                 float(poly[0]), float(poly[2]), float(poly[1])))
+                for b in (d_.get("formulas") or []):
+                    bb = b.get("bbox") or []
+                    if len(bb) < 4:
+                        continue
+                    rows.append((str(b.get("latex") or "").strip(),
+                                 float(bb[0]), float(bb[2]), float(bb[1])))
+                val = rows
+                break
+        cache[pg] = val
+        return val
+
+    return load
+
+
+def page_anchor_index(geom_loader, lo, hi, glued=False):
+    """页窗 → ``[(num, page, x0, y0)]``：满足判据 ①③ 的块，**未**筛列。
+
+    ``glued=False``（默认）与既往一致：**只**认整块形如 ``(N)``（可带字母尾巴 /
+    线状残渣）的独立锚点。``glued=True`` 时**额外**收「粘连锚点」——OCR 把页边编号
+    与同一行的公式残渣切成一块（实测 Apostol IANT ch7 ``(9) p(k)``、ch6 ``(12) B(x) =
+    ∑χ(d)/√(qd)``），这类块对整块-only 判据完全隐形，于是本审计的 ``unsupported``
+    方向会把**真印的**契约号误报成假 tag（本书普查实测 lost=0 / unsupported=19，
+    19 全是这类误报）。
+
+    🔴 粘连形态**复用**闸门 ⑱ 的同一谓词（:data:`_ANCHOR_GLUED_RE` +
+    :data:`_RESIDUE_PROSE_RE` 散文排除），不另起正则——检测趟与修复趟共用判据，
+    两处的假阳率才可比。粘连块的 ``x0`` 仍是**编号**的左缘（编号在页边，是该块最左
+    的文字），所以「编号列」几何约束照旧成立，列本身仍只由独立锚点学出（见
+    :func:`margin_anchor_audit`），不被粘连样本污染。
+    """
+    out = []
+    for pg in range(int(lo), int(hi) + 1):
+        rows = geom_loader(pg)
+        if not rows:
+            continue
+        for raw, x0, _x1, y0 in rows:
+            m = _PAGE_ANCHOR_RE.match(raw)
+            if m:
+                out.append((m.group(1), pg, x0, y0))
+                continue
+            if not glued:
+                continue
+            g = _ANCHOR_GLUED_RE.match(raw)
+            if not g:
+                continue
+            residue = g.group(2)
+            if _RESIDUE_PROSE_RE.search(residue):
+                continue
+            if _ANCHOR_ONLY_RE.match(residue):
+                continue
+            out.append((g.group(1), pg, x0, y0))
+    return out
+
+
+def number_column(anchors, seed_nums):
+    """在列样本 → ``(x_lo, x_hi)``；样本不足返回 None（不出结论）。
+
+    列由 ``seed_nums``（= 本章契约**已登记**的号）所在块的 x0 学出：取宽度
+    ``_COLUMN_WINDOW`` 的滑动窗口里样本最多的那一簇，故个别被切进公式区的假锚点
+    （实测 ch11 的 ``(4)`` 落在 x0=674）不会把列拉过去。接受带在簇两端各外扩
+    ``_COLUMN_PAD``（同页内坐标单位）——OCR 块左缘在同一列里就有 ~140 像素的抖动，
+    只取 ``min..max`` 会把真印的页边号判成列外（误报根因，见 ``_COLUMN_PAD`` 注）。
+    """
+    xs = sorted(x for n, _p, x, _y in anchors if str(n) in seed_nums)
+    if len(xs) < _COLUMN_MIN_SAMPLES:
+        return None
+    best = []
+    for i, v in enumerate(xs):
+        run = [u for u in xs[i:] if u <= v + _COLUMN_WINDOW]
+        if len(run) > len(best):
+            best = run
+    return (min(best) - _COLUMN_PAD, max(best) + _COLUMN_PAD)
+
+
+def column_separable(geom_loader, lo, hi, col):
+    """→ 编号列与**正文区**是否可分（判据见 ``_COLUMN_SEP`` 注）。
+
+    不可分 = 页边编号与散文行落在同一 x 带上（实测 Apostol IANT 全部 15 章如此），
+    此时「在列」退化成「在左半页」，几何筛失去判别力，本审计**无权出结论**。
+    正文左/右缘取长块（≥ ``_SEP_TEXT_MIN`` 字符）x0 的 5 分位、x1 的 95 分位——
+    用分位数而非极值，避免单个页眉/页脚块把结论带偏。
+    """
+    if not col:
+        return False
+    lefts, rights = [], []
+    for pg in range(int(lo), int(hi) + 1):
+        for raw, x0, x1, _y0 in (geom_loader(pg) or []):
+            if len(raw) < _SEP_TEXT_MIN:
+                continue
+            lefts.append(x0)
+            rights.append(x1)
+    if len(lefts) < _COLUMN_MIN_SAMPLES:
+        return False
+    lefts.sort()
+    rights.sort()
+    body_left = lefts[int(0.05 * (len(lefts) - 1))]
+    body_right = rights[int(0.95 * (len(rights) - 1))]
+    return (col[1] + _COLUMN_SEP <= body_left) or \
+           (col[0] - _COLUMN_SEP >= body_right)
+
+
+def margin_anchor_audit(tree, geom_loader, chapter_label="", glued=False):
+    """契约 ↔ 页池编号列 双向对账 → ``(lost, unsupported)`` 两向问题列表。
+
+    ``glued=True`` 时页池**额外**收粘连锚点块（判据与排除见
+    :func:`page_anchor_index`）：页边编号被 OCR 与公式切成同一块的书里，不开这个
+    开关会把**真印的**契约号成批误报成假 tag。列的**种子**始终只取独立锚点，
+    粘连样本只参与筛列、不参与学列。
+
+    * ``lost``：页池在列锚点里、契约 tag 集合**没有**的号 → 收割漏号。修法在
+      收割/回填（契约补 ``tag`` + manifest 补 ``tags`` → 单元补 ``\\tag{}``），
+      **不是**让写手凭空编号（那会被「多出=编造」判死）。
+    * ``unsupported``：契约登记了、全章在列锚点里**查无此号** → 假 tag（多半是
+      公式内部括号被切成独立块）。
+
+    🔴 **暂不接闸**：这是收紧判据，会让并行在跑的书（同一技能、步骤 5 在飞）的旧
+    PASS 作废；先做只读普查 + 负向测试，收官 backlog 里再拼进 `gate_units`。
+    """
+    try:
+        lo, hi = int(tree.get("page_start")), int(tree.get("page_end"))
+    except (TypeError, ValueError):
+        return [], []
+    seeds = page_anchor_index(geom_loader, lo, hi)
+    anchors = seeds if not glued else page_anchor_index(geom_loader, lo, hi,
+                                                       glued=True)
+    if not anchors:
+        return [], []
+    contract = {str(n) for _k, n in collect_contract_tags(tree)}
+    col = number_column(seeds, contract)
+    if not col or not column_separable(geom_loader, lo, hi, col):
+        return [], []
+    in_col = [a for a in anchors if col[0] <= a[2] <= col[1]]
+    nums = {str(n) for n, _p, _x, _y in in_col}
+    lost = sorted(nums - contract, key=lambda s: (len(s), s))
+    unsupported = sorted(contract - nums, key=lambda s: (len(s), s))
+    where = ("[%s] " % chapter_label) if chapter_label else ""
+    lost_msg = ["%s印面编号 (%s) 在编号列 x0≈%.0f–%.0f 内成块（p%s%s），"
+                "契约却无档 —— 收割漏号，须回填契约 tag + manifest 后由单元补 \\tag{%s}"
+                % (where, n, col[0], col[1],
+                   ",".join(str(p) for m, p, _x, _y in in_col if str(m) == n),
+                   "，粘连形态" if glued else "", n)
+                for n in lost]
+    uns_msg = ["%s契约登记编号 (%s)，但全章编号列里查无该锚点 —— 疑似公式内部括号"
+               "被切成独立块的假 tag，须从契约剔除（先目视印面确认）" % (where, n)
+               for n in unsupported]
+    return lost_msg, uns_msg
+

@@ -14,7 +14,7 @@
 本机制把"护栏"从**软提醒 / 退化默认**升级为**代码级硬拒绝 + 下游复核拒绝**，
 让违规文件根本进不了下一阶段。
 
-## 机制（四层）
+## 机制（五层）
 
 ### 1. 证明账本（ledger）
 - 位置：`<extract_dir>/.flow_gate.json`（单卷书即 `<book_dir>/_extract/.flow_gate.json`）
@@ -54,6 +54,24 @@ assert 上游完成，照样被挡：
 - `make_config.py` 生成的 `verify_config.json` 带 `_provenance.generated_by ==
   "make_config.py"`。`ConfigLoader` 据此 + `_extraction_done.json` 双重识别"合法来源"，
   手写文件无此戳即被拒。
+
+### 5. 证据复演 + 快照留底（`lib/snapshot_guard.py`，2026-09-28 加入）
+> 起因：Apostol《Introduction to Analytic Number Theory》一书中，**被派发的子代理**
+> 因手敲 CJK 路径写出形近异体目录（`数論`），随后用 `rm -rf "…\数论\<书目录>"` "清理"，
+> 方向搞反把**真书目录整棵树**删掉——源 PDF、15 份分章契约、703 个已验收 DONE 单元、
+> 全部 manifest、OCR `page_*.json`、图像资产、台账一次全灭；回收站无记录，而账本仍显示
+> 步骤 5 收官，**55 分钟内没有任何机械信号**。
+- **复演**：`mark` / `run` 落账前，对台账里每个已完成步骤**重新跑一遍它当初的证据谓词**
+  （判据与落账完全同源 = `flows/_flow_contract.EVIDENCE`，不另造第二套标准）。任一产物
+  已不在位 → 🔴 硬拒继续推进，并打印最近快照回滚命令。单独巡检用
+  `python tools/flow_runner.py audit <book_dir>`（`status` 也会附带报告）。
+- **留底**：每次成功 `mark` 自动写 `<extract_dir>/_snapshots/<时间戳>_<flow>.<step>.tar.gz`，
+  轻量快照含 `book_structure/`（契约 + units + units-translate + manifest）+ `_extract`
+  顶层 JSON/MD + 台账 + 书目录根级章 md；`extract.mm_repair` 那一次打 **全量快照**（tag 带
+  `.full`），额外含 `page_*.json` 与 `figure*`——OCR 是唯一"重跑要数小时"的产物，定稿后
+  只会变不会回来。修剪只发生在本模块自建的 `_snapshots/` 内（轻量留 6、全量留 2）。
+- 判据测试：`lib/tests/test_snapshot_guard.py`（含"单元被删 → 复演必须报出"的负向用例、
+  轻量快照不得含 OCR 页、修剪不得越界删他人文件）。
 
 ## 规范流程顺序（单一真源：flows/_flow_contract.py 的 FLOW_ORDER）
 
@@ -106,6 +124,9 @@ write_source:    [config, build_chapter_map, figure_detection, structure,
 python tools/flow_runner.py status <book_dir>
 python tools/flow_runner.py next   <book_dir>
 
+# 1b) 巡检「账上说做完了，盘上还在不在」（误删/挪动/截断的唯一机械信号）
+python tools/flow_runner.py audit  <book_dir>
+
 # 2) scripted 步（extract_text / write_source 的
 #    config/figure/structure/draft/verify）直接 run：
 python tools/flow_runner.py run <book_dir> write_source config --pdf "<pdf>"
@@ -120,6 +141,16 @@ python tools/flow_runner.py bootstrap <book_dir>
 ```
 
 ## ❌ 禁止清单（违反 = 违规，全盘风险）
+
+- ❌ **任何 agent（含主代理派发的子代理）执行删除命令**：`rm -rf` / `rm -f` / `del` /
+  `Remove-Item` / `shutil.rmtree` / `os.remove` / `Path.unlink`。散落的临时文件**留在原地**
+  回报给主代理处置；需要"清理"时只报告路径，绝不动手。此规则对 `corpus_root` 下的书目录
+  尤其致命——2026-09-28 就是一次子代理"清理"把整棵书树删光。
+- ❌ **手敲含中文（CJK）的路径**（凭记忆重打目录名）。路径必须**从列目录结果取得**
+  （`ls` 输出 / `os.listdir` / `sys.argv` / 上游变量传递）。手敲必然产出形近异体
+  （`数论`↔`数論`、`群表示论`↔`群表示論`）的幽灵目录，接着"删掉它"就会删到真目录。
+- ❌ 子代理越出自己的号段/scratch 目录改文件；发现盘上有他人文件或异常状态 → 回报，
+  不"顺手修"。
 
 - ❌ 在 `_extraction_done.json` 不存在时跑 `make_config.py` / `build_structure.py` /
   `verify_chapter.py`（它们会硬拒，但你**不应试图绕过**）。

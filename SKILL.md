@@ -71,6 +71,11 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
   双重识别，**手写 config 再也无法被下游消费**。
 - 推进步骤走 `python tools/flow_runner.py run <book_dir> <flow> <step>`；agent 步
   做完用 `verify` 复核 + `mark` 落账。**禁止手填账本、禁止手写/手改 config 绕过护栏。**
+- 🔴 **任何 agent（含子代理）禁止执行删除命令，禁止手敲含中文（CJK）的路径**（路径一律从
+  列目录结果取）——2026-09-28 一次子代理"清理幽灵目录"把整棵书目录 `rm -rf` 删光。
+  `flow_runner` 现会在每次 `mark`/`run` 前**复演已完成步的证据**（产物消失即硬拒并给回滚
+  命令），并在 `mark` 后自动快照到 `<extract>/_snapshots/`；单独巡检用
+  `python tools/flow_runner.py audit <book_dir>`。
 
 ## 退出条件
 

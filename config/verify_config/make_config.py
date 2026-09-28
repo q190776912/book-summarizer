@@ -145,6 +145,16 @@ def _load_old_formula(cfg_path, section_key="ch"):
         out["ignore"] = fc["ignore"]
     if "bare_number" in fc:
         out["bare_number"] = fc["bare_number"]
+    # 🔴 `known_book` 同样是**人工判断**（印面目视确证「书源确有、抽取器漏挂」的
+    # 编号，见 flows/write-source/write-source.md 闸门 ⑭ 的登记纪律），没有探测器
+    # 能重建它。`--force` 重生成若不回贴，登记即静默消失 → Q 层重新把写手照印面写对
+    # 的 `\tag` 判成 FABRICATED（两头堵）。`known_book_audit` 是它的证据账本
+    # （编号 / 章 / 理由 / 时间），必须同号同迁，否则审计线索断裂。
+    # 由 `config/verify_config/register_formula.py` 写入，禁止手改本文件。
+    if "known_book" in fc:
+        out["known_book"] = fc["known_book"]
+    if "known_book_audit" in fc:
+        out["known_book_audit"] = fc["known_book_audit"]
     return out or None
 
 # --- section hierarchy (D-layer) -------------------------------------------

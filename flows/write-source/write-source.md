@@ -143,6 +143,18 @@
        未被契约 tagger 抓到的编号）在对账时作为**额外白名单**——单元正文出现这些编号
        不算「编造」（`check_body(allow_extra=known_book)`）；「缺失」判定不受白名单影响，
        仍严格按契约要求对账。
+     - **🔴 闸门 ⑭ 与 Q 层共用同一份 `known_book`（人工确证通道）**：⑭ 用页窗 OCR
+       判契约 tag 是否「印面有号」，而**扫描书的 OCR 会整块漏掉真印的页边编号**
+       （Iwaniec–Kowalski《ANT》ch1 `(1.104)` 实测：fitz 裁页目视确在，页 JSON 全章
+       查无此号）。若 ⑭ 看不见人工登记，它就把写手照印面写对的 `\tag` 判成凭空编造，
+       与 Q 层（要求写该号）**互相矛盾**——两头堵即闸门 bug。故 `tag_attestation_problems`
+       / `unattested_tags` / `strip_unattested` 都接 `attested=`（按号豁免，三种理由码
+       一律不判；同章其他无锚点号照判），真值读取口 `lib.tag_attestation.attested_numbers`
+       （`gate_units._load_known_book` 与 verify 完整性复算 `check_content_completeness`
+       同一份，剔除/豁免不对称会造出「契约多块」假 FAIL）；**收割期 `build_structure`
+       默认不传**（那时还没有人工目视印面）。登记纪律：必须先 fitz 裁剪目视确认印面
+       确有该号，再 `known_book` 挂号，然后才允许契约/单元带它。
+       判据与负向测试见 `lib/tag_attestation.py`、`lib/tests/test_tag_attestation.py`。
      - **🔴 ⑪ 单元结构阅读顺序（页码单调，合并前）**：以内容化契约每节点的
        `page_start`（原书物理页 = 结构阅读顺序真值）为锚，断言 manifest / 合并单元序列
        **页码单调不减**；某单元页码严格小于「迄今最大页」即**跨节 / 跨页错位**（晚页内容
@@ -172,6 +184,18 @@
        散文交叉引用 `use (3)` 自成一块却无 2/4，据此排除。实现与负向测试：
        `lib/tag_attestation.py::unharvested_anchor_problems` + `lib/tests/test_tag_attestation.py`。
        🔴 正则里写 `\tag` 必须**双写反斜杠**（`"\t"+"ag"` 被 re 当成 TAB，判据会静默 0 命中）。
+     - **⑱ 的已知盲区 = 粘连锚点（探测器已就位，**暂未接闸**）**：⑱ 的锚点判据是「整块**恰好**是
+       `(N)`」，而 OCR 常把印面编号与公式残渣切成**同一块**——实测 Apostol *Introduction to
+       Analytic Number Theory* ch7：印面 `(9)`（p.150）收成 `(9) p(k)`、`(15)`（p.152）收成
+       `(15) G(x) = ∑α(n)F`，两块对 ⑱ 完全隐形 → 契约不登记，写手两头堵（照写=编造、不写=漏号），
+       只能在报告里登记异常。探测 = `lib/tag_attestation.py::glued_anchor_tags`（锚点形如
+       `(N) 残渣`，残渣含 ≥3 连英文字母者判为散文交叉引用而排除；往前最多 5 块、途中只允许跳过
+       行内公式与 ≤24 字残渣，遇散文块即停）+ `glued_anchor_problems`，**与 ⑱ 共用同一个
+       ①–④ 谓词**（`_anchor_problems_for`，检测趟与修复趟同源）。本书实测：⑱ 报 0 处、粘连探测
+       报 2 处，即上述两个真漏（已回填，`_extract/_backfill_ch7_tags.py`）。
+       🔴 **为何暂不并入闸门**：接闸 = 收紧判据，会让**同一技能上步骤 5 在飞的其他书**的旧 PASS
+       作废（并行会话纪律）。收官 backlog：等其在跑书目完成后 ① 跑跨书普查报数量 ② 把
+       `glued_anchor_problems` 拼进 `gate_units` 的 ⑱ 调用（一行，共用 `_bodies_by_key`）。
      - **🔴 ⑲ 散文交叉引用丢失（⑱ 管不到的一侧，章级）**：⑭/⑱ 只对**展示式**编号对账
        （契约 `tag` ↔ 正文 `\tag`），**散文里回指别的公式**那一次没有任何闸门在看。写手压缩
        Tier-2 散文时常把号换成指称语（Strogatz 3e 实测：印面 `Equation (2) is the governing
@@ -315,6 +339,11 @@
 - **🔴 规则6 — 翻译闸 = 源版校验 + 单元门控 + 1:1 同构闸**：翻译前的硬闸由机械闸承担：**源版已在步骤 6 拼接 + `--only-lang` 校验通过**（源单元定稿，译文不会基于旧源）+ **步骤 7(a) 内置的源单元门控**（init 前 `gate_units` 必须通过）+ **步骤 7(c) 双重门控**（翻译单元 `gate_units --units-dir units-translate` + `check_translate_parity` 同构闸）。整章 `verify --all`（源 + 译两版）统一在步骤 8 执行。严禁跳过单元目录直接凭整章 md 翻译——单元粒度是「一个不漏」机械保证的来源。
 - **🔴 规则7 — structure 完整性闸门是拆分的硬闸**：步骤 3 的查漏回填闸门（章节缺项 + 定理 / 定义等条目缺项，D 层 + B 层）**必须重跑至 `gate.passed == true`** 才允许进入步骤 4 拆分单元——先拆分再回填会让已拆的单元缺这些条目，返工成本远高于闸门前补齐。
 - **🔴 规则8 — 落账证据 = 「逐单元改好 + 门控通过」的机械核对（死规则）**：`write_source.write_chapters` 的证据复核（`flow_runner verify / mark`）**不只看章数**——对每个有单元的章机械核对：**单元门控通过**（`units/ch{N}/manifest.json` 中每个单元文件存在、首行 `DONE`、单元级质量校验通过 = 每个 item 都被 agent 改好，一个不漏）。**`merge_source`（步骤 6）的证据**：源语言 md 存在且未超阈未拆，且**结构契约全部 section 名 + 编号项 name 在源版 md 中在位**，再叠加**源版 `verify --only-lang` 全通过**。**`merge_translation`（步骤 8）的证据**：源 + 译两组最终 md 均存在且未超阈未拆，两组 md 契约项均在位，再叠加**源 + 译全量 `verify --all` 通过**（merge 拼接兜底，防单元内标题被改没导致漏项）。任何一项不过 → mark 被硬拒，必须回归对应单元目录补齐改好、重跑 `gate_units` 通过后再 merge。**严禁跳过单元目录直接凭 `page_*.json` / 印象写作**——脱离单元导致的漏项、自创层级与格式漂移在落账前即被拦截，而不是堆积到末步 verify 后全盘返工（证据实现见 `flows/_flow_contract.py` 的 `write_chapters_ok` / `merge_source_ok` / `translate_chapters_ok` / `merge_translation_ok`）。
+- **🔴 规则9 — 派单铁律（步骤 5 / 6 派发任何子代理时必须原样写进 brief）**：本流程全靠 agent 逐单元动手，一次误删就能让整本书归零（2026-09-28 Apostol 事故：子代理手敲 CJK 路径写出 `数論` 幽灵目录，再 `rm -rf` "清理"删掉**真**书目录，703 个已验收单元 + 契约 + OCR + 台账全灭，账本却毫无信号）。因此每个 brief 必须包含三条，缺一不可：
+  ① **禁止任何删除命令**（`rm -rf` / `rm -f` / `del` / `Remove-Item` / `shutil.rmtree` / `os.remove` / `Path.unlink`）；临时文件一律留在原地，只回报路径。
+  ② **禁止手敲含中文（CJK）的路径**——路径必须从 `ls` / `os.listdir` / `sys.argv` / 上游变量取得，不许凭记忆重打（形近异体 `数论`↔`数論` 就是这么来的）。
+  ③ **只授权改自己号段的单元**与自己 `_extract/` 下的新文件；发现盘上有他人文件或异常状态 → 回报主代理，绝不"顺手修"。
+  主代理侧：`flow_runner` 已在每次 `mark`/`run` 前复演已完成步的证据、并在 `mark` 后自动快照到 `_extract/_snapshots/`（见 [`_flow_gate.md`](../_flow_gate.md) 机制第 5 层）——发现被删可立即回滚，别再靠人肉巡检。
 - **核心原则（保真底线）**：OCR 噪声可修、表述可精简但**不得省略编号项 / 描述性内容中的公式概念**；**不编造**内容、**不编造结构**（不得新建原书没有的标题层级、不得重排条目顺序）；**严禁照抄 OCR 文本流**（页眉 / 页脚 / 版权行属噪声须剔除）；非核心内容须"摘要"而非整段照抄（Tier 1/2/3 分级见 `docs/writing-rules.md`）。
 - **双源铁律（结构 ≠ 内容）**：单元 = 结构契约（骨架）+ `page_*.json`（内容）的**预合并视图**，只是调整底稿而**非免检成品**——正文**必须忠于单元所载原文并回归 `page_*.json` 核对存疑处**，禁止脱离契约自创结构或重排顺序（单元骨架即契约骨架）；单元中的公式是 OCR 原样，**严禁照抄**（步骤 5 重写校正）。
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
@@ -338,6 +367,8 @@
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 调整时存疑处按节点 `page_start..page_end` 回查 OCR 原文（步骤 5 agent 改单元时）。
 - `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦可在步骤 7 翻译版修复时调用）。源版「顶层例/证包裹进 `>` + 连续性」由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer** 在步骤 8 `verify --fix`（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
 - `../../verify/script/audit_counts.py`：逐节条数核对（OCR 侧启发式工具）。**契约条目在位核对**以结构契约为真值（优于 OCR 启发式），由规则8 的落账证据在 mark 前强制拦截漏项；本脚本保留为 OCR 侧独立交叉核对，供疑议时人工复核。
+- `flows/write-source/script/check_exercise_coverage.py`：**印面练习覆盖独立审计**（建议性，默认 exit 0，`--strict` 时 MISSING exit 1）。扫描书的练习是小字标题 `EXERCISE n.`，不被结构阶段识别为节点 → 契约里练习数为 0 → 没有练习单元，而 B 层只在偶然引用缺号时暴露一部分，**整章练习丢失**永远看不见。以 `page_*.json` 印面标题为真值对上单元行首练习，双向报 MISSING / PHANTOM / OCR-EMPTY；页归属按印面页眉判定（GAP 页与章末溢出页不算跨章）。
+- `flows/write-source/script/check_section_coverage.py`：**印面目录节覆盖独立审计**（同建议性口径）。结构阶段的节节点靠正文页 OCR 粗体标题识别，扫描书里该块常被整块漏掉（实测 Iwaniec–Kowalski GTM207 §4.3 印面 p.69 明晃晃印着，契约里根本没有该节 → 没有节单元 → 合并 md 缺节标题，而 D 层按同一份契约对账看不见）。真值取书首目录页（`§N.M 标题 页码` 同块，OCR 命中率高），报 MISSING / EXTRA；命中 MISSING 的处置是**补契约节节点 + `split_draft_units --force --keep-done` 重建**（正文源未变的 DONE 单元原样保留），不是把标题塞进条目单元（`gate_units` 反自造层级会拒）。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 8 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 

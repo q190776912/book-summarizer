@@ -234,14 +234,20 @@ _GLUE_MIN_Y = 170.0
 # 闸门只能靠源侧回填兜底。判据两条都要：① 块顶落在页首带内（y < 100）；
 # ② 块首 x 明显右移（> 本页左边界 + 1/4 页宽）——真节/习题块标题恒在左边界，
 # 只有页眉跑马行右对齐。缺 poly 时返回 False（fail-open，宁闩不漏）。
+# 🔴 页首带**按本页自己的最顶文本行**放宽（Arnold《经典力学的数学方法》实测
+# 2026-09-28）：本书扫描页幅大，页眉印在 y≈119，绝对阈值 100 一律漏网；于是
+# p162 页眉「§36．外微分」(x0=572, y=119) 被当成 §36 的窗口左界，而 §35 的尾条
+# 问题13/14 正印在同一页页眉**之下**（y=604/745，真 §36 节头在更下的 y=1053），
+# 两条被判给 §36（契约里挂错节）。`top + _HEAD_TOP_TOL` 与绝对阈值取大者：既有
+# 书（页眉恒 <100）行为逐字不变，只把带下界推到「本页第一行印刷」这一页相对位置。
 _HEAD_BAND_Y = 100.0
+_HEAD_TOP_TOL = 12.0
 _GLUE_MAX_WIDTH = 1000.0
 
 
 def page_x_extent(blocks):
     """本页文本块的 (左边界, 页宽跨度)；无 poly 时返回 (None, None)。"""
-    polys = [b.get('poly') for b in blocks
-             if isinstance(b.get('poly'), (list, tuple)) and len(b.get('poly')) >= 8]
+    polys = _polys(blocks)
     if not polys:
         return None, None
     left = min(float(q[0]) for q in polys)
@@ -249,17 +255,31 @@ def page_x_extent(blocks):
     return left, (right - left)
 
 
-def is_running_head(x, y, left, span):
+def _polys(blocks):
+    """带可用 poly（≥8 个坐标）的块多边形列表。"""
+    return [b.get('poly') for b in blocks
+            if isinstance(b.get('poly'), (list, tuple)) and len(b.get('poly')) >= 8]
+
+
+def page_top_y(blocks):
+    """本页最顶文本行的 y（页眉相对带用，见 `is_running_head`）；无 poly 时 None。"""
+    ys = _polys(blocks)
+    return min(float(q[1]) for q in ys) if ys else None
+
+
+def is_running_head(x, y, left, span, top=None):
     """块是否页眉带复本（页首 + 明显右移），见 _HEAD_BAND_Y 注释。
 
-    scan_skeleton 的习题区闩锁与 build_structure 的习题区起点（`_exercise_region_start`）
-    共用本判据：两处都拿「EXERCISES FOR CHAPTER N」标题当信号，页眉每页重印一遍，
-    任一处在页首抢先采纳，同页其后的正文条目就被吞。缺几何信息返回 False（fail-open，
-    宁闩不漏）。
+    scan_skeleton 的习题区闩锁、build_structure 的习题区起点
+    （`_exercise_region_start`）与节/字母块窗口左界（`_demote_head_band_rows`）
+    共用本判据：三处都拿标题行当信号，页眉每页重印一遍，任一处在页首抢先采纳，
+    同页其后的正文条目就被吞。带下界 = max(绝对 100, 本页最顶行 y + 容差)，
+    `top` 由调用方按 `page_top_y` 传入。缺几何信息返回 False（fail-open，宁闩不漏）。
     """
+    band = _HEAD_BAND_Y if top is None else max(_HEAD_BAND_Y, float(top) + _HEAD_TOP_TOL)
     return (x is not None and y is not None and left is not None
             and span is not None and span > 0
-            and y < _HEAD_BAND_Y and x > left + 0.25 * span)
+            and y < band and x > left + 0.25 * span)
 
 
 def block_xy(poly):
@@ -270,6 +290,33 @@ def block_xy(poly):
         return float(poly[0]), float(poly[1])
     except Exception:
         return None, None
+
+
+def demote_head_band_rows(rows, head_band):
+    """删掉「同号在本页还有更靠下的行」的页眉带 SEC/SUB 行，返回 (新 rows, 删除数)。
+
+    窗口左边界按「页 + 块首 y」分桶后，页眉复本会把本节左界推到页顶，于是**上一页
+    末尾仍在续的条目**被判给本节（Arnold p162 案：§35 尾条 问题13/14 挂到 §36）。
+    判据保守，两条都要满足才删：
+      ① 该行落在 `is_running_head` 命中的页眉带线上（`head_band` = 扫描时按页记录
+        的 (页, 页眉行 y) 集合，谓词与习题区闩锁同源）；
+      ② 同一 (页, 节键) 在本页还有 y 更靠下的行（= 真节头在这一页，页眉只是复本）。
+    本页只有页眉一行时**照旧保留**（页中无真节头时页眉是该节在这一页的唯一锚点），
+    因此节起始页码、sec_pages 与 dedup「先到者胜出」一概不受影响。
+    """
+    if not head_band:
+        return rows, 0
+    grp = {}
+    for i, r in enumerate(rows):
+        if r[1] not in ('SEC', 'SUB') or len(r) < 5 or r[4] is None:
+            continue
+        grp.setdefault((r[0], str(r[2])), []).append((i, float(r[4])))
+    kill = {i for (p, _k), lst in grp.items()
+            for i, y in lst
+            if (p, y) in head_band and any(y2 > y for _j, y2 in lst)}
+    if not kill:
+        return rows, 0
+    return [r for i, r in enumerate(rows) if i not in kill], len(kill)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +464,157 @@ def _glue_title_ok(title):
     return True
 
 
+# ---------------------------------------------------------------------------
+# 🔴 全局单号节书（sections_global）的「幻一节头」闸（Arnold《经典力学的数学
+# 方法》中译本实测 2026-09-28）。
+# 印刷体例：节头 `§N．标题` **居中**，且每页页眉重印当前/下一节的节名。OCR 常把
+# 页眉行与其下**正文行**粘成一行，产出形如
+#   p19  '4黄上成事件堂宙A4电的平移构成一大重宝同八：'   （真身：§2 页眉 + 正文残句）
+#   p34  '22平面上就给出了所求的轨道，称为利萨如图形.'   （§5 页眉带 + 正文句）
+#   p174 '2n个数组成 T*V上点的局部坐标.'                （§37 页眉带 + 正文句）
+#   p210 '9 光线的方向' / p232 '2 n个常微分方程'         （正文行首的数字碎片）
+# 这类行命中 SEC_GLOBAL_GLUE（数字 + 直接粘连字母/汉字）→ 发出假 SEC 行，
+# build_structure 落成假节节点，其**印刷节号与本已存在的书内 § 序列自相矛盾**
+# （§1,§2,「§4」,§3 —— §4 真身在 ch2 p26），完整性闸门报「节序逆序」BLOCKING。
+#
+# 判据是**全书体例级**的，不点名书、不查词表：
+#   ① 体例事实：`sections_global` 书的 § 号全书严格递增 ⇒ 一章（连续页区间）
+#      内按阅读序取出的 § 号序列也必须严格递增。逆序点必有一侧是幻影。
+#   ② 决定性判据：对**去重后的首次出现序**求最长严格递增子序列（LIS）。
+#      某个号**不在任何**极大 LIS 上 ⇒ 它是「单调性硬冲突」，剔除后保留的节
+#      严格更多 → 无条件剔除（ch2 的 22 / ch8 的 2 / ch9 的 9 / ch10 的 2）。
+#   ③ 平局判据（LIS 长度相同、二选一，如 ch1 的 [1,2,4] vs [1,2,3]）：
+#      只在**输家余文读起来不像标题**时才剔除。像标题（`_sec_title_shaped`
+#      通过）的冲突号一律**不动**——把歧义留给闸门与人工，绝不自作主张删节。
+#      标题形态判据：不得以句读/运算符起头、句中不得含子句标点（，,；;？！）、
+#      不得以句点/冒号/分号等收尾（正文句的标志）。`、`（顿号）合法——
+#      真节题「方程的导出、定解条件」用它并列。
+#   ④ 附带修复：幻影节在扫描时已把 `cur_global_sec` 带偏，其后裸字母子块头
+#      会被记成 `<幻影号>.<字母>` 父键；剔除时按阅读序把这些 SUB 行**重新挂到
+#      该页之前最近的真节**（无真节则退化为无父键 `.<字母>`，与附录章同型）。
+# 仅对 `global_sec` 生效、仅对**单数字节键**生效（点分小节键/字母键不参与），
+# 其余书逐字节零回归。判据测试：
+#   flows/write-source/structure/script/tests/test_global_sec_intruder_heads.py
+# ---------------------------------------------------------------------------
+_SEC_SINGLE_KEY_RE = re.compile(r'^\d{1,2}$')
+# 句中子句标点：真节标题（名词短语）不含，正文句普遍含有。
+_SEC_TITLE_SENT_INNER = re.compile(r'[，,；;？!]')
+# 收尾句读：正文句以句号/冒号收尾，真节标题不带尾点。
+_SEC_TITLE_SENT_TAIL = re.compile(r'[.．。:：;,、！!]$')
+# 起头须是字母/数字/汉字（页眉粘连残句常以标点或运算符起头）。
+_SEC_TITLE_HEAD_OK = re.compile(r'^[0-9A-Za-z\u4e00-\u9fff]')
+
+
+def _sec_title_shaped(title):
+    """单号节候选的**余文**是否读起来像节标题（False = 正文句/页眉粘连残句）。"""
+    t = (title or '').strip()
+    if not t:
+        return False
+    if not _SEC_TITLE_HEAD_OK.match(t):
+        return False
+    if _SEC_TITLE_SENT_INNER.search(t):
+        return False
+    if _SEC_TITLE_SENT_TAIL.search(t):
+        return False
+    return True
+
+
+def _global_sec_intruders(seq):
+    """阅读序单号 § 清单 -> 应剔除的节号集合。见上方「幻一节头」闸注释。
+
+    `seq` = [(num, title), ...]（同一次扫描 = 同一章的页区间，按阅读序）。
+    返回 `set[int]`；无冲突 / 冲突不可判定时返回空集（保守：宁留待人工）。
+    """
+    nums, shaped = [], []
+    for num, title in seq or []:
+        try:
+            n = int(num)
+        except (TypeError, ValueError):
+            continue
+        ok = _sec_title_shaped(title)
+        if n in nums:
+            i = nums.index(n)
+            shaped[i] = shaped[i] or ok   # 同号二现（页眉复本）：任一模样像标题即算像
+            continue
+        nums.append(n)
+        shaped.append(ok)
+    m = len(nums)
+    if m < 2:
+        return set()
+    # g[i] / f[i]：以 i 结尾 / 以 i 开头的最长**严格递增**子序列长度。
+    g = [1] * m
+    for i in range(m):
+        for j in range(i):
+            if nums[j] < nums[i] and g[j] + 1 > g[i]:
+                g[i] = g[j] + 1
+    f = [1] * m
+    for i in range(m - 1, -1, -1):
+        for j in range(i + 1, m):
+            if nums[i] < nums[j] and f[j] + 1 > f[i]:
+                f[i] = f[j] + 1
+    L = max(g)
+    if L == m:
+        return set()          # 已单调：无需裁决
+    on_max = [i for i in range(m) if f[i] + g[i] - 1 == L]
+
+    # 极大 LIS 中「保留像标题的号」最多的那一条（平局判据的择路）。
+    memo = {}
+
+    def dp(i, left):
+        """以 i 为起点、长度恰为 left 的递增子序列可保留的最大「像标题」数。
+        不可能（f[i] < left）时返回 -1。"""
+        if f[i] < left:
+            return -1
+        key = (i, left)
+        if key in memo:
+            return memo[key]
+        mine = 1 if shaped[i] else 0
+        if left == 1:
+            res = mine
+        else:
+            best = -1
+            for j in range(i + 1, m):
+                if nums[j] > nums[i]:
+                    v = dp(j, left - 1)
+                    if v > best:
+                        best = v
+            res = mine + best if best >= 0 else -1
+        memo[key] = res
+        return res
+
+    chosen = set()
+    starts = [i for i in on_max if f[i] == L]
+    best_i, best_v = None, -1
+    for i in starts:
+        v = dp(i, L)
+        if v > best_v:
+            best_i, best_v = i, v
+    if best_i is not None:
+        i, left = best_i, L
+        while True:
+            chosen.add(i)
+            if left == 1:
+                break
+            target = dp(i, left) - (1 if shaped[i] else 0)
+            nxt = None
+            for j in range(i + 1, m):
+                if nums[j] > nums[i] and dp(j, left - 1) == target:
+                    nxt = j
+                    break
+            if nxt is None:
+                break
+            i, left = nxt, left - 1
+    drop = set()
+    for i in range(m):
+        if i in chosen:
+            continue
+        if i not in on_max:
+            drop.add(nums[i])              # 判据②：不在任何极大 LIS 上 → 硬冲突
+        elif not shaped[i]:
+            drop.add(nums[i])              # 判据③：平局 + 余文不成标题
+    return drop
+
+
 # 英文书「章内局部编号」单分量节头（Shafarevich《Basic Algebraic Geometry 1》
 # 体例，2026-09-28 实测）：每章节头印裸 `N Title`（"1 Definition and Basic
 # Properties"@p249，N 每章从 1 重起），小节印局部 `N.M Title`（"1.1 The Class
@@ -484,9 +682,10 @@ SUB_GLOBAL = re.compile(r'^([A-Z])[．.、。:]?\s*([^\n]{0,60})$')
 _SUB_MATH_OP_RE = re.compile(r'[=<>≤≥≠±×÷→←↔⇒∫∑√∂∇∈∋⊂⊃⊆⊇∪∩∞|‖\[\]{}]')
 # 真子块头块宽实测 101–650px（长标题如附录 G 的多行头可达 ~700）；通栏散文
 # /公式行 540–1036px 与之重叠，故宽度只做粗闸（≤720px 挡掉纯公式行），精确
-# 判别靠：标题必须以汉字起始（真头全部汉字开头；杂讯如 "SDiffD上的右不变黎
-# 曼度量"/"R上的每一个k-形式…"以大写拉丁开头）+ 禁句读标点（真标题无 ，。；
-# ？！、）+ 装配期字母序列过滤兜底。
+# 判别靠：标题以汉字起始，或以「数字/小写字母 + 连字符 + 短汉字」起始的数学
+# 名词复合词（§32「B.2-形式」「C.k-形式」，见 _sub_global_title_ok；杂讯如
+# "SDiffD上的右不变黎曼度量"/"R上的每一个k-形式…"以大写拉丁开头）+ 禁句读标点
+# （真标题无 ，。；？！、）+ 装配期字母序列过滤兜底。
 SUB_GLOBAL_MAX_WIDTH = 720
 
 
@@ -495,8 +694,16 @@ def _sub_global_title_ok(title):
     t = (title or '').strip()
     if not t:
         return False
+    # 真头标题以汉字起头（「D.两个1-形式的外乘积」），或以「数字/小写字母 + 连
+    # 字符 + 汉字」起头——Arnold《经典力学的数学方法》§32 实测 2026-09-28：字母块
+    # 题就是「B.2-形式」「C.k-形式」这种**数学名词复合词**，首字符不是汉字。旧判据
+    # 把它们整块丢弃 → §32 只登记到 D/E 两块，B/C 两块的 例1..例3 挤进同一计数器
+    # 桶，跨块重号被吞（ANCHOR-SANITY FAIL）。放行形态极窄：连字符后紧跟汉字且整
+    # 题短（散文噪声如「R上的每一个k-形式…」以大写拉丁开头、「m-1 个向量满足…」
+    # 含空格/句读，均被后续守卫与本式拦住）。
     if not re.match(r'[一-鿿]', t):
-        return False
+        if not re.match(r'^[0-9a-z][\-—－][一-鿿]{1,6}$', t):
+            return False
     if _SUB_MATH_OP_RE.search(t):
         return False
     if re.search(r'[，。；？！、]', t):
@@ -1224,6 +1431,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # page-proximity.  `bool(depths_set)` falls back to the mode's SEC regex
     # (SEC_2 for two-level) which correctly catches single-number sections.
     use_universal_sec = bool(depths_set)
+    # 页眉带线 (页, y)：扫描时按 `is_running_head` 记录，供行后
+    # `demote_head_band_rows` 把抢当窗口左界的页眉复本行降级。
+    _head_band = set()
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
@@ -1233,6 +1443,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
         _blocks = d.get('text', []) or []
         # 本页文本块的 x 极值（页眉带判据的左边界/页宽，见 _HEAD_BAND_Y 注释）。
         _m_left, _m_span = page_x_extent(_blocks)
+        _m_top = page_top_y(_blocks)
         for _bi, it in enumerate(_blocks):
             poly = it.get('poly') or []
             try:
@@ -1241,7 +1452,9 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 ln_w = None
             ln_x, ln_y = block_xy(poly)
             # 页眉带复本（页首 + 右对齐）：不得激活习题区闩锁，见 _HEAD_BAND_Y。
-            _run_head = is_running_head(ln_x, ln_y, _m_left, _m_span)
+            _run_head = is_running_head(ln_x, ln_y, _m_left, _m_span, _m_top)
+            if _run_head:
+                _head_band.add((p, ln_y))       # 供 demote_head_band_rows 降级窗口左界
             for _raw in (it.get('text') or '').split('\n'):
                 ln = _raw.rstrip('$').strip()
                 if ln:
@@ -1579,8 +1792,13 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 if (m and _sub_global_title_ok(m.group(2))
                         and (ln_w is None or ln_w <= SUB_GLOBAL_MAX_WIDTH)):
                     parent = f"{cur_global_sec}." if cur_global_sec else "."
+                    # 🔴 第 5 元带块首 y（与 SEC 行同槽位）：字母块的**窗口边界**必须
+                    # 精确到页内位置。§32 实测（2026-09-28）：B 块尾条 例2/例3 与
+                    # C 块起重 例1 **印在同一页**，页粒度的桶把 C 的 例1 归进 B 之后
+                    # （其后继 例2 又落在 D 桶），三条续接判据全落空 → 真条目被当
+                    # 回指吞掉。y 让抽取器把桶边界切在块头本身。
                     rows.append((p, 'SUB', parent + m.group(1),
-                                 m.group(2).strip()))
+                                 m.group(2).strip(), ln_y))
                     continue
             # --- chapter-local §N heads（丘维声《解析几何》体例）-------------
             # 节号每章重起，OCR 三形态：`81向量…`（§→8）、`S1映射`（§→S）、
@@ -1751,6 +1969,13 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 m = ITEM_3.match(ln)
                 if m and int(m.group(1)) == ch:
                     rows.append((p, 'ITEM', '%s.%s.%s' % m.group(1, 2, 3), m.group(4).strip()))
+    # 🔴 页眉带复本不得充当节/字母块的窗口左界（判据见 demote_head_band_rows）：
+    # 抽取器按「页 + 块首 y」分桶后，页顶那行页眉会把本节左界推到页首，同页页眉
+    # 之下仍在续的**上一节尾条**就被判给本节（Arnold ch7 p162 实测 2026-09-28）。
+    rows, _nhb = demote_head_band_rows(rows, _head_band)
+    if _nhb:
+        print('[scan_skeleton] ch%s 页眉带复本行降级 %d 条（同号在本页有更靠下的真行）'
+              % (ch, _nhb), file=sys.stderr)
     # global_sec（单级节号书）的节键必为单一数字：mode 正则（SEC_CN/SEC_2…）
     # 捕获的 "C.S" 形态在此类书里只可能是图号/页码粘连等散文误报（谷超豪
     # 《数学物理方程》ch7 实测 "7.7 所示"），一律剔除。
@@ -1758,6 +1983,42 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
         rows = [r for r in rows
                 if r[1] != 'SEC' or '.' not in str(r[2])
                 or str(r[2]) in local_sec_keys]
+        # 🔴 幻一节头闸（判据见 _global_sec_intruders 注释）：全局单号 § 在本章
+        # 阅读序上必须严格递增；逆序号中「不在任何极大递增子序列上」的必是幻影
+        # （页眉与正文粘连行），平局时只剔除余文不成标题的一方。剔除后把被带偏
+        # 的裸字母子块父键按页码重新挂回最近的真节。
+        _drop = _global_sec_intruders(
+            [(r[2], r[3]) for r in rows
+             if r[1] == 'SEC' and _SEC_SINGLE_KEY_RE.match(str(r[2]))])
+        if _drop:
+            _drop_str = {str(n) for n in _drop}
+            # 剔除后仍存活的单号 § (页码, 号)，按阅读序（rows 本身即阅读序）。
+            _kept = [(r[0], str(r[2])) for r in rows
+                     if r[1] == 'SEC' and _SEC_SINGLE_KEY_RE.match(str(r[2]))
+                     and str(r[2]) not in _drop_str]
+            rows = [r for r in rows
+                    if not (r[1] == 'SEC' and str(r[2]) in _drop_str)]
+            _fixed = []
+            for r in rows:
+                if r[1] != 'SUB':
+                    _fixed.append(r)
+                    continue
+                _par, _sep, _let = str(r[2]).rpartition('.')
+                if _par not in _drop_str:
+                    _fixed.append(r)
+                    continue
+                # 幻影号当时污染了 cur_global_sec：改挂该页之前最近的真节，
+                # 章内无前置真节时退化为无父键（与附录字母头同型）。
+                _new = ''
+                for _pg, _n in _kept:
+                    if _pg > r[0]:
+                        break
+                    _new = _n
+                _fixed.append((r[0], 'SUB', _new + _sep + _let, r[3], *r[4:]))
+            rows = _fixed
+            print('[scan_skeleton] ch%s 幻一节头剔除：§%s（与本章 § 阅读序矛盾 / '
+                  '余文不成标题）' % (ch, ','.join(sorted(_drop_str, key=int))),
+                  file=sys.stderr)
     # 🔴 C.S.1 二现冲突破解（Rising Sea 实测 35+ 节）：印刷字母习题 I 被
     # OCR 读成数字 1（"10.1.I. EXERCISE." p285 → "10.1.1. ExERCISE. …"），
     # 与该节真条目 "10.1.1. Motivation…" 撞键。数字条目在同节内不可能

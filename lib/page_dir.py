@@ -35,16 +35,35 @@ __all__ = [
 PAGE_FILE_RE = re.compile(r"^page_(\d+)\.json$")
 
 
+def _has_page_files(d):
+    """``d`` 顶层是否直接放着 ``page_*.json``。"""
+    try:
+        return any(PAGE_FILE_RE.match(f) for f in os.listdir(d))
+    except OSError:
+        return False
+
+
 def volume_dirs(ext):
     """``ext`` 下所有「直接含 page_*.json」的子目录（按名称排序）。
 
     判据是「目录里真的有 page 文件」，不硬编码 ``上册``/``下册`` 这类名字——
     册数、命名均不限。单册书没有这类子目录，返回空列表。
+
+    🔴 下划线 / 点前缀的子目录**一律不算分册**：``_extract`` 内的 ``_xxx`` 目录是
+    暂存 / 备份 / 演练区约定（``_mm_repair``、``_bak_*``、``_rehearsal``…），它们
+    往往是整区拷贝，自带 ``page_*.json`` 与 ``chapter_map.json``。Apostol IANT 实测
+    ``_extract/_rehearsal/``（60 页演练副本 + 自己的 chapter_map）被当成分册目录，
+    ``resolve_page_dir`` 依「分册自带 chapter_map 含本章」这条最优先判据选中它，
+    于是 Q 层对账只读到 64–79 页，80 页起的 ``page_080.json`` 不存在 → 被
+    ``except`` 静默跳过 → 真实印刷编号 (23)/(24) 从未进入书源集 S，忠实的
+    ``\\tag{23}`` 反被判成 FABRICATED。
     """
     if not os.path.isdir(ext):
         return []
     out = []
     for name in sorted(os.listdir(ext)):
+        if name.startswith("_") or name.startswith("."):
+            continue
         d = os.path.join(ext, name)
         if not os.path.isdir(d):
             continue
@@ -119,6 +138,9 @@ def resolve_page_dir(ext, ch=None):
     多册书：按证据优先级递减判定，任一步无法定论就落到下一步，全部无解才返回
     ``ext``（宁可退回旧行为，也不猜）：
 
+      0. **顶层有页 ⇒ 单册**：``ext`` 自己就放着 ``page_*.json`` 时，页池就是
+         ``ext``（书目录契约：多册书的页**只**放在各册子目录里，顶层不放页）。
+         这一条同时挡住「暂存/备份区被误当分册」；
       1. **分册自带 chapter_map** 声明的章集合（精确，首选）——每册的
          chapter_map 只列本册的章（实测上册 1-9 / 下册 10-18）；
       2. **页码回退边界**：按章序遍历顶层 chapter_map，某章 start 页小于上一章
@@ -129,6 +151,8 @@ def resolve_page_dir(ext, ch=None):
     🔴 不得用「章号阈值」之类魔数判分册：那是从单本书反推的过拟合，换一本分册点
     不同的书就静默选错分册，且不会报错。
     """
+    if _has_page_files(ext):
+        return ext
     vols = volume_dirs(ext)
     if not vols:
         return ext

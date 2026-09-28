@@ -287,6 +287,34 @@ def write_figure_index_md(out_dir):
         f.write("\n".join(md_lines) + "\n")
 
 
+def prune_stale_index(out_dir):
+    """删掉「裁图已不在盘上」的非 manual 索引条目（陈旧孤儿）。
+
+    章的划分一旦变化（例如附录从数字章 11..26 迁到字母章 A..P），按章合并的
+    `merge_index` 只会替换「本次处理到的章」的条目，旧章的记录既不会被触碰、
+    其 `chNN_*` 裁图也早已不存在 → figure_index.json 里留下指向不存在文件的
+    幽灵条目，E 层与契约图片对账随后全部失真。manual 条目一律保留。
+    """
+    fig_dir = figure_dir(out_dir)
+    idx = load_figure_index(out_dir) or []
+    kept, dropped = [], []
+    for e in idx:
+        f = e.get("file") or ""
+        if e.get("source") == "manual":
+            kept.append(e)
+            continue
+        if f and os.path.exists(os.path.join(fig_dir, os.path.basename(f))):
+            kept.append(e)
+        else:
+            dropped.append(e)
+    if dropped:
+        with open(os.path.join(out_dir, "figure_index.json"), "w", encoding="utf-8") as fh:
+            json.dump(kept, fh, ensure_ascii=False, indent=2)
+        print(f"[prune] 清除 {len(dropped)} 条裁图已不存在的陈旧 figure_index 条目"
+              f"（章 {sorted({str(e.get('chapter')) for e in dropped})}）")
+    return kept, dropped
+
+
 def run_book(pdf_path, out_dir):
     det = load_figure_detect(out_dir)
     if det is None:
@@ -337,6 +365,9 @@ def run_book(pdf_path, out_dir):
         # 无图书：仍要落一份空 figure_index.json —— 它是 figure_detection 步的完成
         # 证据，缺失会让顺序闸永久卡死（"检测跑完但零图" ≠ "没跑检测"）。
         merge_index(out_dir, None, [])
+    # 🔴 本次未再分配的章（旧章号 / 章划分变更后）留下的孤儿条目必须清掉，
+    #    否则索引里会出现指向不存在裁图的幽灵记录（见 prune_stale_index）。
+    prune_stale_index(out_dir)
     write_figure_index_md(out_dir)
     print(f"[done] assigned {total_assigned} figures -> figure_index.json")
 

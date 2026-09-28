@@ -221,8 +221,19 @@ def _is_header_boundary(tail):
         return False
     if c.isalpha():          # latin letter -> 'Theorem 4.1 and ...' prose
         return False
-    if '一' <= c <= '鿿':     # Han char -> '定理 4.1 的证明' prose
-        return False
+    if '一' <= c <= '鿿':
+        # A Han-char continuation after the number is normally a DESCRIPTIVE
+        # TITLE of the entry (e.g. '定理1 设 λ 为…', '例8 求 √115：'), which IS a
+        # real numbered entry header.  Only explicit possessive / citation openers
+        # mark a cross-reference ('定理 4.1 的证明', '由定理…') and must stay
+        # rejected.  This mirrors the _is_reference_tail philosophy: a Han-start
+        # descriptive title is a REAL entry, not a reference — rejecting it
+        # silently drops legitimate entries and manufactures false 缺号 (BLOCKING).
+        if re.match(r'^(?:的|之)?(?:证明|应用|推论|推广|逆|特例|注|说明|扩展|上界|下界|估计|逼近|表示|等价|形式)', s):
+            return False
+        if s[:1] in _CN_CITATION_STARTERS or (len(s) >= 2 and s[:2] in _CN_CITATION_STARTERS):
+            return False
+        return True
     return True
 
 
@@ -597,6 +608,55 @@ def _resolve_demoted_entries(entries, demoted):
     return entries
 
 
+def _merge_orphan_ex_windows(entries):
+    """窗算术第二步：把「其实属于条目计数器」的 problem 窗并回主窗。
+
+    label 强制路由（`problem`/`exercise` 一律进 `:ex:` 窗）对这一类书是错的：
+    书中 Problem 与 Theorem/Lemma **共用同一条章内计数器**——Iwaniec–Kowalski
+    ch7 印 Theorem 7.18 → **Problem 7.19** → Theorem 7.20（序标同形、同序、
+    7.1..7.35 一条序列；Etingof ch1 同形态，只是那本书恰好开了
+    `exercise_shared_numbering` 才没暴露）。后果是**双向**假 BLOCKING：主窗把
+    19/25/29 报成「缺号」，`:ex:` 窗把 1..18、20..28 报成「缺号」，ch7 一次 29 条。
+
+    判据（机械可验，只在「并回去正好把主窗补平」时触发，宁漏不误并）：
+      ① 独立习题计数器一定从 1 起号 → 窗内最小号 > 1 才可疑；
+      ② 窗内每个号都必须是主窗在 [min,max] 区间里的**洞**；
+      ③ 并入后主窗在该区间连续无洞。
+    Katok / Lee / Weibel 的按节重排窗 min=1 或 body 非数字前缀，天然不触发。
+    """
+    main_nums = {}
+    ex_nums = {}
+    for gk, num, _key, _lab, _pfx in entries:
+        if 'ex' in gk.split(':'):
+            ex_nums.setdefault(gk, set()).add(num)
+        else:
+            main_nums.setdefault(gk, set()).add(num)
+    for ex_gk in sorted(ex_nums):
+        parts = ex_gk.split(':')
+        if len(parts) != 3:
+            continue                      # 只处理 "{gi}:ex:{数字前缀}" 窗
+        gi, _ex, body = parts
+        if not re.fullmatch(r'\d+(?:\.\d+)*', body):
+            continue                      # file / file:label 窗不参与
+        main_gk = f"{gi}:{body}"
+        M = main_nums.get(main_gk)
+        nums = ex_nums[ex_gk]
+        if not M or min(nums) <= 1:
+            continue
+        E = {n for n in nums if n not in M}
+        if not E:
+            continue
+        lo, hi = min(M), max(M)
+        holes = set(range(lo, hi + 1)) - M
+        if not E <= holes or (set(range(lo, hi + 1)) - (M | E)):
+            continue                      # 并不平主窗 → 维持原路由
+        for i, (gk, num, key, lab, pfx) in enumerate(entries):
+            if gk == ex_gk and num in E:
+                entries[i] = (main_gk, num, key, lab, pfx)
+        M |= E
+    return entries
+
+
 def _source_item_comps_label(it, cfg):
     """Map an extraction item (ctx.items, the source contract) to
     (comps, label, group) using the SAME wildcard separator and the item's
@@ -946,6 +1006,7 @@ def _md_gap_blocking(ctx):
         entries.append((gk, item_num, key, label, prefix_str))
 
     _resolve_demoted_entries(entries, _demoted)
+    _merge_orphan_ex_windows(entries)
 
     groups = defaultdict(list)
     # 🔴 顺序错乱检测必须按 (prefix, type) 分组，不能仅按 prefix_str 混排所有类型。

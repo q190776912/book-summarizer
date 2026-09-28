@@ -54,6 +54,27 @@ SEP_SPLIT_RE = re.compile(SEP_WIDE)
 SEP_NUMERIC = r'[\s.\-–·．－〜，,]'
 
 
+# --- item-head leading noise (OCR 行首粘连标点) -----------------------------
+# 中文扫描版式里，上一句的句末标点常被 OCR 粘在下一行条头之前（实测 Arnold
+# 《经典力学的数学方法》page_078 行 '．例9考虑k个铰接杆所成的封闭链条这个力学系'
+# —— 印面「例 9」前粘了上条的句号「．」），行首锚定的条头正则因此整条漏识，
+# 契约缺项、B 层只报出一个「缺号」而不暴露根因。
+# 所有「行首条目头」检测在匹配前一律调用 ``strip_head_noise``：判据只此一份，
+# 抽取侧与查漏/回填侧共用（豁免只写在一侧 = `--fix` 静默毁数据的旧病）。
+# 字符集刻意只含**标点/引用符号**，绝不含数字或汉字，故只会放行「前面粘了
+# 噪声」的真条头，不会把句中引用变成行首命中。
+HEAD_NOISE_RE = re.compile(r'^[\s>\*_．。·、，,;；:：!！?？~～\-–—]+')
+
+
+def strip_head_noise(text):
+    """去掉 OCR 行首粘连的标点/引用符号，返回可用于「行首条头」匹配的前缀。
+
+    🔴 只用于**检测**（判断这一行是不是条目头 / 小节头）。返回值不得写回正文或
+    契约内容——正文快照一律取原始行，避免把真标点删掉。
+    """
+    return HEAD_NOISE_RE.sub('', text or '')
+
+
 def canon_sep(s):
     """Normalize any run of separators in ``s`` to a single '.' and strip ends."""
     parts = [p for p in SEP_SPLIT_RE.split(s) if p]

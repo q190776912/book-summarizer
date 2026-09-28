@@ -300,6 +300,27 @@ def _cln_dedup_name(it):
 _NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
 
 
+def _band_split_y(hits, blocks):
+    """同页命中 (x, y) 列表 → 优先「正文带」的最小 y，无正文命中时回落页眉带。
+
+    `hits` 为空返回 None。判据 `scan_skeleton.is_running_head` 与习题区闩锁、
+    `demote_head_band_rows`、`_numbered_heading_y` 同源一份（Arnold《经典力学的
+    数学方法》实测 2026-09-28：印刷把本节标题重印在本页页首右侧作页眉，页眉的
+    y 恒小于真节头 → 任何「取最小 y / 取首个命中」的锚点都会提到页顶，把上一节
+    尾料灌进本节、并让上一节末条目的尾随散文无上界吃到章末）。
+    """
+    if not hits:
+        return None
+    left, span = scan_skeleton.page_x_extent(blocks)
+    top = scan_skeleton.page_top_y(blocks)
+    body, band = [], []
+    for x, y in hits:
+        (band if scan_skeleton.is_running_head(x, y, left, span, top)
+         else body).append(y if y is not None else 0)
+    ys = body or band
+    return min(ys) if ys else None
+
+
 def _numbered_heading_y(ext, key, page, page_dir=None):
     """编号小节头在自身页上的 y：块文本以节号开头（含 OCR 粘连变体）才算命中。
 
@@ -323,8 +344,9 @@ def _numbered_heading_y(ext, key, page, page_dir=None):
         d = scan_skeleton.PageJson.load(fp).data
     except Exception:
         return None
-    ys = []
-    for b in d.get("text", []) if isinstance(d, dict) else []:
+    _blks = d.get("text", []) if isinstance(d, dict) else []
+    hits = []
+    for b in _blks:
         if not isinstance(b, dict):
             continue
         s = (b.get("text") or "").strip()
@@ -332,10 +354,10 @@ def _numbered_heading_y(ext, key, page, page_dir=None):
             continue
         for ln in s.split("\n"):
             if pat.match(ln.strip()):
-                poly = b.get("poly") or []
-                ys.append(poly[1] if len(poly) >= 8 else 0)
+                # 🔴 页眉带复本让位给正文命中（判据见 `_band_split_y`）。
+                hits.append(scan_skeleton.block_xy(b.get("poly") or []))
                 break
-    return min(ys) if ys else None
+    return _band_split_y(hits, _blks)
 
 
 def _find_title_pos(ext, title, start, end, page_dir=None):
@@ -377,16 +399,17 @@ def _find_title_pos(ext, title, start, end, page_dir=None):
             d = json.load(open(fp, encoding="utf-8"))
         except Exception:
             continue
-        ys = []
-        for b in d.get("text", []):
+        _blks = d.get("text", []) or []
+        hits = []
+        for b in _blks:
             if not isinstance(b, dict):
                 continue
             s = blk_text(b).strip()
             if s and anchor_re.match(s):
-                poly = b.get("poly") or []
-                ys.append(poly[1] if len(poly) >= 8 else 0)
-        if ys:
-            return (p, min(ys))
+                hits.append(scan_skeleton.block_xy(b.get("poly") or []))
+        y = _band_split_y(hits, _blks)   # 页眉带复本让位（见 _band_split_y）
+        if y is not None:
+            return (p, y)
     # --- Pass 1b: exact-case containment ---
     for p in range(start, end + 1):
         fp = os.path.join(_dir, "page_%03d.json" % p)
@@ -396,13 +419,17 @@ def _find_title_pos(ext, title, start, end, page_dir=None):
             d = json.load(open(fp, encoding="utf-8"))
         except Exception:
             continue
-        for b in d.get("text", []):
+        _blks = d.get("text", []) or []
+        hits = []
+        for b in _blks:
             if not isinstance(b, dict):
                 continue
             s_raw = blk_text(b).strip()
             if t_raw in s_raw:
-                poly = b.get("poly") or []
-                return (p, poly[1] if len(poly) >= 8 else 0)
+                hits.append(scan_skeleton.block_xy(b.get("poly") or []))
+        y = _band_split_y(hits, _blks)
+        if y is not None:
+            return (p, y)
     # --- Pass 2: legacy case-insensitive (y=0) ---
     for p in range(start, end + 1):
         fp = os.path.join(_dir, "page_%03d.json" % p)
@@ -989,11 +1016,12 @@ def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
             continue
         blocks = d.get('text', []) or []
         left, span = scan_skeleton.page_x_extent(blocks)
+        top = scan_skeleton.page_top_y(blocks)
         for b in blocks:
             if not isinstance(b, dict):
                 continue
             x, y = scan_skeleton.block_xy(b.get('poly') or [])
-            if scan_skeleton.is_running_head(x, y, left, span):
+            if scan_skeleton.is_running_head(x, y, left, span, top):
                 continue  # 页眉带复本不是块头，见 scan_skeleton._HEAD_BAND_Y
             for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
@@ -1049,11 +1077,12 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
             continue
         blocks = d.get('text', []) or []
         left, span = scan_skeleton.page_x_extent(blocks)
+        top = scan_skeleton.page_top_y(blocks)
         for b in blocks:
             if not isinstance(b, dict):
                 continue
             x, y = scan_skeleton.block_xy(b.get('poly') or [])
-            if scan_skeleton.is_running_head(x, y, left, span):
+            if scan_skeleton.is_running_head(x, y, left, span, top):
                 continue  # 页眉带复本不是块头，见 scan_skeleton._HEAD_BAND_Y
             for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
@@ -1105,6 +1134,7 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
         if not (m and m.group(1) == pat):
             continue
         left, span = scan_skeleton.page_x_extent(blocks)
+        top = scan_skeleton.page_top_y(blocks)
         has_dict = False
         for b in blocks:
             if not isinstance(b, dict):
@@ -1112,7 +1142,7 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
             has_dict = True
             if head.search(blk_text(b) or ''):
                 x, y = scan_skeleton.block_xy(b.get('poly') or [])
-                if scan_skeleton.is_running_head(x, y, left, span):
+                if scan_skeleton.is_running_head(x, y, left, span, top):
                     continue  # 页眉复本不作区界
                 return (p, y if y is not None else 0.0)
         if not has_dict:
@@ -1307,8 +1337,22 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         # 均不覆盖（extract_items 只认多级号，EN 单级抽取器无中文标签词），
         # 按 config_setting 规则5 走增量扩展的中文单级抽取器。
         if getattr(book, "language", "cn") == "cn":
-            return extract_items_cn_single(_dir, start, end, groups=book.ordinal,
-                                            manual_overrides=manual)
+            # 🔴 按节重置计数器（config ordinal 组 scope==3，Arnold《经典力学的
+            # 数学方法》实测）：章级同 key 收敛会把后一节起重号的真条头当前一节
+            # 的引用压掉（§13 例1 吞 §14 例1 → B 层 4:14 缺号 1 阻断）。把 scope==3
+            # 的标签 + 节窗口下传抽取器按节分桶，与 EN 单级分支同型（见
+            # _single_en_items）。无 scope==3 组 / 无窗口时行为逐字不变。
+            _cn_rst = []
+            if sec_windows and not book.section_scoped:
+                for _g in getattr(book, "ordinal", []) or []:
+                    if getattr(_g, "scope", None) == 3:
+                        for _nm in getattr(_g, "name", []) or []:
+                            if _nm and _nm not in _cn_rst:
+                                _cn_rst.append(_nm)
+            return extract_items_cn_single(
+                _dir, start, end, groups=book.ordinal, manual_overrides=manual,
+                restart_per_section=(set(_cn_rst), list(sec_windows or []))
+                if _cn_rst else None)
         return _single_en_items(_dir, start, end, book, sec_windows=sec_windows,
                                 manual=manual)
     if primary == ORDINAL_TWO_LEVEL and getattr(book, "language", None) == "en":
@@ -1903,16 +1947,25 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _is_appendix = ('Appendix' in _ch_name) or ('附录' in _ch_name) \
         or (not str(ch)[:1].isdigit())
     letter_sub_blocks = {}   # parent(str) -> [(page, letter, title)]
+    # 🔴 字母块块首的页内位置 `(page, letter) -> y`（scan_skeleton SUB 行第 5 元）：
+    # 下传给抽取器当**桶边界**，让同页相邻的两个字母块各归各桶（页粒度会把后一块
+    # 的起重条头并进前一块的计数器尾巴，Arnold §32 实测吞掉 C 块 例1/例2）。
+    _letter_block_pos = {}
     _appendix_letter_secs = []   # [(p, 'SEC', L, title)] 附录字母节升格行
     if any(r[1] == "SUB" for r in rows):
         sub_rows = [r for r in rows if r[1] == "SUB"]
         rows = [r for r in rows if r[1] != "SUB"]
         for row in sub_rows:
             p, _kind, num, title = row[0], row[1], row[2], row[3]
+            _y = row[4] if len(row) > 4 else None
             parts = num.split('.')
             L = parts[-1]
             if not (len(L) == 1 and L.isalpha() and L.isupper()):
                 continue  # 防御：SUB 键必为单个大写字母（挡 OCR 数字碎片）
+            if _y is not None:
+                _prev = _letter_block_pos.get((p, L))
+                if _prev is None or float(_y) < _prev:
+                    _letter_block_pos[(p, L)] = float(_y)
             if _is_appendix:
                 _appendix_letter_secs.append((p, L, title))
             else:
@@ -2093,22 +2146,57 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 print(f"[build_structure] ch{ch} 小节白名单剔除幻影节 "
                       f"{len(_dropped)} 处：{sorted(_dropped)}")
 
+    # 🔴 字母子块窗口（Arnold《经典力学的数学方法》体例，config role 5）：
+    # 节内印有小写字母块标题（§8 C. 微分形式 / D. 外微分 …），而例/问题/系
+    # 一类计数器**在每个字母块内从 1 起重**。只把 §N 当窗口时，后一个字母块
+    # 的起重条目会被抽取器按同 key 收敛压成前一块的引用回指（整条消失），
+    # 并把条目挂到错误页码上触发 ANCHOR-SANITY。故把 letter_subs 的块首一并
+    # 作为窗口下传（键 "父节.字母"，抽取器按「页 + 块首 y」分桶，见下方 _win；
+    # 跨块连续的计数器由抽取器的父节分量放行）。附录章的字母已升格为 SEC，
+    # 不在这里重复。
+    # 🔴 窗口边界精确到页内位置：`(page, 号) -> 块首最小 y`（同键的页眉复本取
+    # 最早出现者，故最坏退化为旧的页粒度，绝不会比旧判据更晚）。§N 与字母块
+    # 共用一张位置表，随窗口三元组下传抽取器分桶。
+    _win_y = {}
+    for _r in rows:
+        if len(_r) < 5 or _r[1] != 'SEC' or _r[0] is None or _r[4] is None:
+            continue
+        _k = (int(_r[0]), str(_r[2]))
+        try:
+            _yv = float(_r[4])
+        except (TypeError, ValueError):
+            continue
+        if _k not in _win_y or _yv < _win_y[_k]:
+            _win_y[_k] = _yv
+
+    def _win(pg, num):
+        y = _win_y.get((int(pg), str(num)))
+        return (pg, num, y) if y is not None else (pg, num)
+
+    _item_windows = [_win(pg, n) for n, pg in sec_pages.items()
+                     if not str(n).startswith("U")]
+    for _parent, _blocks in sorted(letter_sub_blocks.items()):
+        for _L, (_pg, _t) in sorted(_blocks.items()):
+            if str(_parent) in sec_pages:
+                _key = "%s.%s" % (_parent, _L)
+                _ly = _letter_block_pos.get((_pg, _L))
+                _item_windows.append((_pg, _key, _ly) if _ly is not None
+                                     else (_pg, _key))
+
     # 3) 抽取器条目（权威 ITEM，排除练习类 + 练习区页）
     #    习题块（"EXERCISES FOR CHAPTER N" 起至章末）内的页码一律不从抽取器
     #    进入 ITEM 合同，否则习题题号（如 Strogatz `3.1.1`）会被误判为
     #    Example/Definition 条目，造成重复键、错类型、乱序。
     raw_items = _extract_items(ext, ch, start, end, book, manual=manual,
                                page_dir=page_dir,
-                               sec_windows=[(pg, n) for n, pg in sec_pages.items()
-                                            if not str(n).startswith("U")])
+                               sec_windows=_item_windows)
     if _bd_tail_dir:
         # 尾带条目补扫（同 rows 的尾带补扫，见 1) 处注释）：Theorem 2.26 / 4.75
         # 这类**印在下章起始页页首**的条目，按整页归属时对两章都不可见。
         raw_items = list(raw_items) + _extract_items(
             ext, ch, _bd_tail_page, _bd_tail_page, book, manual=manual,
             page_dir=_bd_tail_dir,
-            sec_windows=[(pg, n) for n, pg in sec_pages.items()
-                         if not str(n).startswith("U")])
+            sec_windows=_item_windows)
     ex_start = _ex_region          # 同一次扫描结果（见 1) 习题行去重处）
 
     # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器

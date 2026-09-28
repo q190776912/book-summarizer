@@ -28,6 +28,8 @@ import re
 __all__ = ["prose_ref_numbers", "contract_prose_by_section", "dropped_crossref_problems"]
 
 _SEC_RE = re.compile(r"^[0-9]{1,3}\.[0-9]{1,3}$")
+_EMBED_SEC_RE = re.compile(r"^([0-9]{1,3}\.[0-9]{1,3})[ \t]+"
+                           r"[A-Z\u4e00-\u9fff]")
 _CLEAN_NUM_RE = re.compile(r"^[1-9][0-9]{0,2}[a-z]?$")
 _REF_RE = re.compile(r"(?<![0-9A-Za-z_.])[（(]\s*([1-9][0-9]{0,2}[a-z]?)\s*[)）]")
 # 🔴 回指的 `(` **前面不能是字母/数字/点**：印面写 `use (3)` / `式（3）`（空格或中文隔开），
@@ -71,14 +73,59 @@ def _has_text(d):
     return isinstance(d, dict) and isinstance(d.get("text"), str)
 
 
+def _embedded_section_head(text, sec_keys):
+    """文本块是否是一行**印面小节标题**（`4.8 An asymptotic formula …`）→ 节键或 None。
+
+    实测根因（Apostol ch4 §4.7/§4.8）：小节标题排在该节第一段之前，OCR 流里它和标题后
+    的续行一起被挂进了**上一节**的条目节点；于是「本节散文回指了式 (27)」被判给 §4.7，
+    而 (27) 的引用其实完好地留在 §4.8 的单元里。硬判会逼写手在 §4.7 的单元里凭空补一句
+    「见式 (27)」= 用编造内容喂闸门。
+    🔴 认条件（宁窄勿宽）：`line_start` 行首、`N.M` 后紧跟空格 + **大写/非 ASCII** 词
+    （`4.8 shows that …` 这类叙述句不认），且 `N.M` 必须是契约里真实存在的小节键。
+    """
+    if not isinstance(text, str):
+        return None
+    m = _EMBED_SEC_RE.match(text.strip())
+    if not m or m.group(1) not in sec_keys:
+        return None
+    return m.group(1)
+
+
+def _all_section_keys(tree):
+    keys = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            k = node.get("key")
+            if k is not None and _SEC_RE.match(str(k)):
+                keys.add(str(k))
+            for v in node.values():
+                collect(v)
+        elif isinstance(node, list):
+            for v in node:
+                collect(v)
+
+    collect(tree)
+    return keys
+
+
 def contract_prose_blocks(tree):
     """契约树 → `[(节键或 None, 所属节点键, 散文块)]`（文档序）。
 
     「节」= 键形如 `N.M` 的节点（与 ⑱ 的 `_sec_index` 同判据）；节内 desc/item/proof
     子节点的散文都归该节。「所属节点键」= 向上最近一个带 `key` 的祖先（`D7` / `13.6.1`
     等原样保留），用来判断这块内容在笔记里**有没有落点单元**。
+
+    🔴 溢出小节标题（:func:`_embedded_section_head`）会**就地改判**其后各块的归属节，
+    同一列表内继续生效（文档序），真实小节节点进入时照常覆盖。
     """
+    sec_keys = _all_section_keys(tree)
     out = []
+
+    def head_of(node):
+        if isinstance(node, dict) and _has_text(node) and node.get("line_start"):
+            return _embedded_section_head(node["text"], sec_keys)
+        return None
 
     def walk(node, sec, owner):
         if isinstance(node, dict):
@@ -87,12 +134,23 @@ def contract_prose_blocks(tree):
             cur = ks if (ks and _SEC_RE.match(ks)) else sec
             cur_owner = ks or owner
             if _has_text(node):
+                bleed = head_of(node)
+                if bleed:
+                    cur = bleed
                 out.append((cur, cur_owner, node["text"]))
+            running = cur
             for c in (node.get("sub_sec") or []):
-                walk(c, cur, cur_owner)
+                walk(c, running, cur_owner)
+                nxt = head_of(c)
+                if nxt:
+                    running = nxt
         elif isinstance(node, list):
+            running = sec
             for v in node:
-                walk(v, sec, owner)
+                walk(v, running, owner)
+                nxt = head_of(v)
+                if nxt:
+                    running = nxt
 
     walk(tree, None, None)
     return out

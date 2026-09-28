@@ -359,10 +359,30 @@ def formula_tag_tail_re(ncomp=None, bare=True, letter=False):
 
 PAGE_MARGIN_BAND = (0.12, 0.90)
 
+# 🔴 页码候选的「装饰」= 文本**两端**的空白与非字母数字符号，**不含括号/方括号**
+# （`(7)` 永远是编号不是页码）。**内部**的分隔点必须保留：`2.4` 的 `.` 是编号结构，
+# 一并剥掉就把真公式编号当页码杀掉（2026-09-28 跨书普查实测：数值分析 ch2 的
+# 2.4/2.5、Iwaniec ch15 的 15.10..15.12、随机过程 ch2/ch5 共 12 个契约在账编号被
+# 「去全部标点」版本归一成纯数字后消失 → 闸门对这些编号失明 = 假 PASS）。
+_FOLIO_EDGE_RE = re.compile(
+    r"^[\s·•‧・‥…。，,、.:：;；\-–—_*+=~]+"
+    r"|[\s·•‧・‥…。，,、.:：;；\-–—_*+=~]+$")
+
+
+def folio_norm(s):
+    """页码候选的**归一化**：剥掉文本两端的装饰符号与空白，内部结构原样保留。
+
+    印刷页码带装饰点，OCR 同一本书内会读成多种形态（阿诺尔德附录O 实测：`·373·` /
+    `: 377 .` / `380·` / 干净的 `386`）。剥掉两端装饰后它们才是同一个键，页码跟踪律
+    的样本数才不会被装饰点打散；而 `2.4` / `(7)` 这类内部或括号承载编号结构的形态
+    剥完仍不是纯数字，绝不会被误当页码。
+    """
+    return _FOLIO_EDGE_RE.sub("", (s or ""))
+
 
 def page_number_furniture(blocks, page_height, band=PAGE_MARGIN_BAND,
                           min_pages=3, max_digits=4):
-    """识别**页码家具**块，返回 ``(page, 归一文本)`` 键集合。
+    """识别**页码家具**块，返回 ``(page, folio_norm(文本))`` 键集合。
 
     页码有确定的算术指纹：印刷页码 = 物理页序 − 恒定偏移（前封/前言页导致偏移非 0），
     且该偏移在章内多页复现。据此识别，与「页码印在页眉还是页脚」「页高多少」无关——
@@ -370,7 +390,8 @@ def page_number_furniture(blocks, page_height, band=PAGE_MARGIN_BAND,
     （0.06/0.94 极端带）之外，13 章 ~380 个页码整批漏进公式序标真值集与正文散文尾。
 
     参数
-      blocks     可迭代 ``(page, y, bottom, norm_text)``；``norm_text`` 须已去空白。
+      blocks     可迭代 ``(page, y, bottom, text)``；``text`` 由本函数用
+                 ``folio_norm`` 归一化（传原样 OCR 文本即可，传入已归一化的文本亦幂等）。
       page_height 该章页区间内的最大 bottom（与 ``_filter_noise`` 同口径）。
       band       页边距带（顶 < band[0]*h、底 > band[1]*h）；带外数字视为正文。
       min_pages  同偏移需覆盖的最少页数（样本太少不足以断定是页码序列）。
@@ -384,7 +405,7 @@ def page_number_furniture(blocks, page_height, band=PAGE_MARGIN_BAND,
     top, bot = band
     cand = []
     for page, y, bottom, norm in blocks:
-        n = (norm or "").replace(" ", "")
+        n = folio_norm(norm)
         # 🔴 只认 **ASCII** 数字：str.isdigit() 也把 `²`/`³` 之类的上标字符判为数字
         # （Strogatz ch5 实测 OCR 碎片 `²4` → int() 直接 ValueError 崩掉闸门）。
         if not (n.isascii() and n.isdigit()) or len(n) > max_digits:

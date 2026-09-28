@@ -191,5 +191,70 @@ class TestDroppedCrossrefProblems(unittest.TestCase):
         self.assertEqual([p for p in probs if "(3)" in p], probs)
 
 
+class TestEmbeddedSectionHeading(unittest.TestCase):
+    """溢出小节标题：标题行被 OCR 挂进**上一节**节点，引用完好留在下一节单元里。
+
+    实测 = Apostol ch4 §4.7/§4.8：`(27)` 的回指句「The result is an application of
+    Theorem 4.10, Equation (27).」挂在 §4.7 的条目节点尾部，而笔记把它写在 §4.8 的
+    desc 单元。旧判据按「节」取引用池 → 报 §4.7 丢号，逼写手凭空补一句假引用。
+    """
+
+    def _bleed_tree(self):
+        return _chapter([
+            {"key": "4.7", "type": "section", "name": "4.7", "sub_sec": [
+                {"key": "定理4.11", "type": "theorem", "sub_sec": [
+                    _formula("sum theta = x log x", "28"),
+                    {"text": "4.8 An asymptotic formula for the partial",
+                     "line_start": True},
+                    _txt("sums over p"),
+                    _txt("The result is an application of Theorem 4.10, "
+                        "Equation (27)."),
+                ]},
+            ]},
+            {"key": "4.8", "type": "section", "name": "4.8", "sub_sec": [
+                {"key": "D11", "type": "description", "sub_sec": [
+                    _formula("sum 1/p = log log x", "27")]}]},
+        ])
+
+    def _bodies(self):
+        return {"定理4.11": ["**Theorem 4.11** ...\n$$\\tag{28}$$"],
+                "D11": ["In Chapter 1 we proved divergence; the result is an "
+                        "application of Theorem 4.10, Equation (27).\n$$\\tag{27}$$"]}
+
+    def test_bleed_reattributed_so_no_false_fail(self):
+        probs = dropped_crossref_problems(self._bleed_tree(), self._bodies(), "ch4")
+        self.assertEqual(probs, [])
+
+    def test_sections_of_bleed_blocks(self):
+        out = contract_prose_by_section(self._bleed_tree())
+        self.assertIn("The result is an application of Theorem 4.10, "
+                      "Equation (27).", out["4.8"])
+        self.assertNotIn("4.8 An asymptotic formula for the partial",
+                         out.get("4.7", []))
+
+    def test_narrative_sentence_is_not_read_as_a_heading(self):
+        """`4.8 shows that …` 是叙述句，不得改判归属节（否则真丢号会被藏起来）。"""
+        tree = _chapter([
+            {"key": "4.7", "type": "section", "name": "4.7", "sub_sec": [
+                _txt("4.8 shows that the same bound follows from (27)."),
+                _formula("sum 1/p", "27"),
+            ]},
+            {"key": "4.8", "type": "section", "name": "4.8", "sub_sec": [_txt("x")]},
+        ])
+        out = contract_prose_by_section(tree)
+        self.assertIn("4.8 shows that the same bound follows from (27).", out["4.7"])
+
+    def test_control_real_drop_still_reported_after_fix(self):
+        """同节真丢引用必须照判——修判据不许放水。"""
+        tree = _chapter([
+            _sec("4.7", [_txt("The estimate follows from Equation (27)."),
+                         _formula("sum 1/p", "27")]),
+        ])
+        probs = dropped_crossref_problems(
+            tree, {"4.7": ["The estimate follows at once.\n$$\\tag{27}$$"]}, "ch4")
+        self.assertEqual(len(probs), 1)
+        self.assertIn("(27)", probs[0])
+
+
 if __name__ == "__main__":
     unittest.main()

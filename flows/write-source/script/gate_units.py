@@ -140,7 +140,8 @@ from lib.unit_order import check_unit_order
 from lib.problem_coverage import coverage_problems, page_floor_problems, \
     chapter_exercise_problems, duplicate_exercise_statement_problems
 from lib.tag_attestation import (tag_attestation_problems,
-                                 unharvested_anchor_problems)
+                                 unharvested_anchor_problems,
+                                 attested_numbers)
 from lib.crossref_attestation import dropped_crossref_problems
 from lib.section_titles import title_problems as _section_title_problems
 from lib.unit_markers import marker_manifest_mismatch
@@ -226,51 +227,12 @@ def _load_known_book(ext):
     """读 verify_config.json 的 ``formula.known_book`` → 裸编号集合。
 
     known_book 登记「书源确有、但被契约抽取器漏挂」的真实公式编号（典型：编号
-    与公式同行内联粘连，非独立右缘块）。门控据此豁免「编造编号」误判。兼容扁平
-    （顶层 ``formula``）与分段（``data[section]["formula"]``）两种配置形状；任何
-    缺失 / 异常 → 空集（不影响正常对账）。
+    与公式同行内联粘连，非独立右缘块）。门控据此**两处**豁免「编造编号」误判：
+    ① 单元 ``\tag`` 对账的 ``allow_extra``；② 闸门 ⑭ 的印刷锚点判毒（``attested``）。
+    真值实现见 ``lib.tag_attestation.attested_numbers``（单一来源）——两处必须同
+    一份登记，否则 Q 层要求写的号会被 ⑭ 判成凭空编造（两头堵）。
     """
-    path = os.path.join(ext, "verify_config.json")
-    if not os.path.exists(path):
-        return set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception:
-        return set()
-    nums = set()
-
-    def _harvest(formula):
-        if isinstance(formula, dict):
-            for x in (formula.get("known_book") or []):
-                nums.add(str(x).strip())
-
-    def _harvest_node(node):
-        """从一处配置节点采集 known_book：节点自身是 formula map，或节点是含
-        ``formula`` 子 map 的（子）配置组。"""
-        if not isinstance(node, dict):
-            return
-        _harvest(node.get("formula"))
-        # 节点自身即是一个 formula map（含 type/scope/known_book 键）的兜底
-        if "known_book" in node:
-            _harvest(node)
-
-    # 扁平形状：顶层 ``formula``
-    _harvest(cfg.get("formula"))
-    # 外层 map 形状（当前 SSOT）：顶层按 kind 路由的组 ch/appendix/supplement，
-    # 每组的 ``formula.known_book``。
-    for grp in (cfg.get("ch"), cfg.get("appendix"), cfg.get("supplement")):
-        _harvest_node(grp)
-    # 历史 ``data`` 包装形状（若有）：data[section]["formula"]
-    data = cfg.get("data")
-    if isinstance(data, dict):
-        for sub in data.values():
-            _harvest_node(sub)
-    # 兜底：遍历所有顶层 dict 值，采集其 ``formula.known_book``（对未知分组名稳健）
-    for v in cfg.values():
-        if isinstance(v, dict):
-            _harvest_node(v)
-    return nums
+    return attested_numbers(ext)
 
 
 def _unit_source_map(contract):
@@ -806,8 +768,13 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # （波长 `18 751 Å`）。判据保守（漏报可接受）：页窗内既无 `(N)` 又无独立裸块 → 判毒；
     # 本章编号以 `(N)` 为主时，只有裸锚点的 tag 也判毒。缺页文件不判。
     # 修法在**收割处**（attach_content / lib.numbering 的形态与几何闸），不是写手台。
+    # 🔴 例外：扫描书 OCR 会**整块漏掉**真印的页边编号（本书 ch1 (1.104) 实测），此时
+    # 印面证据只能人工裁页目视取得。登记的 ``known_book`` 即人工确证通道，与 Q 层
+    # （要求写 `\tag`）**共用同一份登记**（`attested=`），否则闸会逼写手删掉照印面
+    # 写对的编号——判据与豁免见 `lib/tag_attestation.py` 文档串。
     problems.extend(tag_attestation_problems(contract, _page_label_loader(ext),
-                                             chapter_label(ch_key)))
+                                             chapter_label(ch_key),
+                                             attested=known_book))
     # 🔴 章级闸 ⑮：习题集题号**跨单元连续**对账（体例真值，不依赖契约）。⑫/⑬ 拿契约或
     # 页窗当「该节应有几题」的下限，可 Rosen 这类书整节习题被灌进一个 desc 节点后，
     # 契约侧只有 1 个内容块、页侧下限又被题号 OCR 粘连压低，于是「§10.1 抄了 1,2 就跳到

@@ -24,7 +24,10 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 
 from tag_attestation import (collect_contract_tags, tag_attestation_problems,
                              strip_unattested, unattested_tags,
-                             unharvested_anchor_tags, unharvested_anchor_problems)
+                             unharvested_anchor_tags, unharvested_anchor_problems,
+                             glued_anchor_tags, glued_anchor_problems,
+                             numbering_gaps, numbering_gap_problems,
+                             margin_anchor_audit, page_anchor_index, number_column)
 
 
 def formula_block(tag, tags=None):
@@ -217,6 +220,13 @@ class TestStripUnattested(unittest.TestCase):
         self.assertEqual(strip_unattested(tree, loader(pages)), ["2n"])
         self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
 
+    def test_strip_keeps_attested(self):
+        """人工确证登记里的号不得在收割处剔除：那正是「OCR 看不见、印面确有」的号。"""
+        tree = contract(["3", "25"], lo=10, hi=20)
+        self.assertEqual(strip_unattested(tree, loader(self.PAGES),
+                                          attested=["25"]), [])
+        self.assertEqual([n for _k, n in collect_contract_tags(tree)], ["3", "25"])
+
     def test_noop_when_all_attested(self):
         tree = contract(["3", "7"], lo=10, hi=20)
         self.assertEqual(strip_unattested(tree, loader(self.PAGES)), [])
@@ -226,6 +236,96 @@ class TestStripUnattested(unittest.TestCase):
         tree = contract(["99"], lo=10, hi=12)
         self.assertEqual(strip_unattested(tree, loader({})), [])
         self.assertEqual([n for _k, n in collect_contract_tags(tree)], ["99"])
+
+
+class TestHumanAttestedExemption(unittest.TestCase):
+    """``attested=`` 人工确证豁免（Iwaniec–Kowalski《ANT》ch1 的 `(1.104)` 实测）。
+
+    扫描书 OCR 会**整块漏掉**真印的页边编号，判据①把这类号一律读成「查无锚点 =
+    噪声」。若闸据此判毒，写手照印面写 ``\\tag{1.104}`` = 编造、删掉 = 漏写，两头堵，
+    而同一份 `verify_config.json` 的 ``known_book``（Q 层）却在**要求**这个号——闸与
+    Q 层互相矛盾。故 ⑭ 接受同一份人工确证登记作豁免，且**按号**豁免（不是按章）。
+    """
+
+    PAGES = {p: ["(%d)" % n for n in range(1, 20)] for p in range(10, 21)}
+
+    def test_attested_unanchored_number_passes(self):
+        tree = contract([str(n) for n in range(1, 20)] + ["1.104"], lo=10, hi=20)
+        # 不豁免时判「找不到任何印刷锚点」
+        self.assertTrue(any("1.104" in p for p in
+                            tag_attestation_problems(tree, loader(self.PAGES))))
+        self.assertEqual(tag_attestation_problems(tree, loader(self.PAGES),
+                                                  attested=["1.104"]), [])
+
+    def test_exemption_is_per_number_not_per_chapter(self):
+        """豁免一个号不得顺手放过同章其他无锚点号（否则闸失去判别力）。"""
+        tree = contract([str(n) for n in range(1, 20)] + ["1.104", "999"],
+                        lo=10, hi=20)
+        probs = tag_attestation_problems(tree, loader(self.PAGES),
+                                        attested=["1.104"])
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("999", probs[0])
+
+    def test_attested_bare_only_verdict_passes(self):
+        """判据②同理：带括号章里「只有裸锚点」的号若已人工确证，不再判毒。"""
+        tags = [str(n) for n in range(1, 22)] + ["22"]
+        tree = contract(tags, lo=10, hi=12)
+        pages = {p: ["(%d)" % n for n in range(1, 22)] for p in range(10, 13)}
+        pages[12] = list(pages[10]) + ["22"]
+        self.assertTrue(any("裸排" in p for p in
+                            tag_attestation_problems(tree, loader(pages))))
+        self.assertEqual(tag_attestation_problems(tree, loader(pages),
+                                                  attested=["22"]), [])
+
+    def test_attested_lettered_verdict_passes(self):
+        """判据③（字母尾巴）也受豁免——个别 `6a` 型真印号在同体例章里会被误伤。"""
+        tags = [str(n) for n in range(34, 60)] + ["2n"]
+        tree = contract(tags, lo=10, hi=12)
+        pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"] for p in range(10, 13)}
+        self.assertTrue(any("含字母" in p for p in
+                            tag_attestation_problems(tree, loader(pages))))
+        self.assertEqual(tag_attestation_problems(tree, loader(pages),
+                                                  attested=["2n"]), [])
+
+    def test_unattested_tags_respects_attested(self):
+        tree = contract(["3", "25"], lo=10, hi=20)
+        self.assertEqual(unattested_tags(tree, loader(self.PAGES)), {"25"})
+        self.assertEqual(unattested_tags(tree, loader(self.PAGES),
+                                         attested=["25"]), set())
+
+    def test_attested_none_default_keeps_verdict(self):
+        """默认不豁免：收割期（build_structure）还没有人工目视，行为须与既往一致。"""
+        tree = contract(["3", "25"], lo=10, hi=20)
+        self.assertEqual(unattested_tags(tree, loader(self.PAGES)),
+                         unattested_tags(tree, loader(self.PAGES), attested=None))
+
+
+class TestAttestedNumbersRegistry(unittest.TestCase):
+    """``attested_numbers`` = ⑭ 与 Q 层共用的登记读取口（形状兼容 + fail-open）。"""
+
+    def _write(self, cfg):
+        import json
+        import tempfile
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "verify_config.json"), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+        return d
+
+    def test_flat_and_grouped_shapes(self):
+        from tag_attestation import attested_numbers
+        flat = self._write({"formula": {"type": 2,
+                                        "known_book": ["1.104", " 3.7 "]}})
+        self.assertEqual(attested_numbers(flat), {"1.104", "3.7"})
+        grouped = self._write({"ch": {"formula": {"known_book": ["8.75"]}},
+                               "appendix": {"formula": {"known_book": ["A.9"]}}})
+        self.assertEqual(attested_numbers(grouped), {"8.75", "A.9"})
+
+    def test_missing_config_or_empty_entries_is_empty(self):
+        import tempfile
+        from tag_attestation import attested_numbers
+        self.assertEqual(attested_numbers(tempfile.mkdtemp()), set())
+        empty = self._write({"ch": {"formula": {"known_book": ["", None]}}})
+        self.assertEqual(attested_numbers(empty), set())
 
 
 class TestLetterChapterAnchors(unittest.TestCase):
@@ -418,6 +518,319 @@ class TestUnharvestedAnchors(unittest.TestCase):
         joined = "\n".join(probs)
         self.assertIn("收割漏号", joined, probs)
         self.assertIn("(1)", joined)
+
+
+class TestGluedAnchors(unittest.TestCase):
+    """粘连锚点探测（⑱ 的盲区）：OCR 把印面编号与公式残渣切成同一块。
+
+    动因 = Apostol IANT ch7：印面 `(9)`（p.150）与 `(15)`（p.152）在契约里分别
+    收成 `(9) p(k)` / `(15) G(x) = ∑α(n)F`，对「整块只有 `(N)`」的 ⑱ 判据完全
+    隐形 → 契约不登记、单元两头堵（照写=编造、不写=漏号）。
+    每条负向用例对应一个真实散文形态。
+    """
+
+    @staticmethod
+    def tree(blocks, key="7.4"):
+        return {"key": "7", "type": "chapter", "page_start": 158, "page_end": 168,
+                "sub_sec": [{"key": key, "type": "description", "sub_sec": blocks}]}
+
+    @staticmethod
+    def txt(s):
+        return {"text": s}
+
+    @staticmethod
+    def disp(latex, tag=None, tags=None):
+        b = {"formula": latex, "display": True}
+        if tag is not None:
+            b["tag"] = tag
+        if tags is not None:
+            b["tags"] = tags
+        return b
+
+    @staticmethod
+    def inline(latex):
+        return {"formula": latex, "display": False}
+
+    def test_apostol_ch7_measured_cases_report(self):
+        """端到端复现动因：残渣锚点 + 未挂 tag 的展示式 → 必须报候选。"""
+        tree = self.tree([self.txt("and rewrite (8) in the form"),
+                          self.disp("\\varphi ( k ) \\sum _ { p \\leq x } { \\frac { \\log p } { p } }"),
+                          self.inline("\\varphi(k)"),
+                          self.txt("x1(p)iog p"),
+                          self.txt("+(hxogP"),
+                          self.txt("(9) p(k)")], key="D5")
+        got = glued_anchor_tags(tree)
+        self.assertEqual([(k, n) for k, n, _f in got], [("D5", "9")], got)
+
+    def test_prose_cross_reference_residue_not_judged(self):
+        """残渣含英文词（≥3 连字母）= 散文回指，不是版面锚点。"""
+        for junk in ("(10) with (9) we obtain", "(1). But", "(3). See problem 12.",
+                     "(2) of Theorem 6.18", "(5) gives us"):
+            tree = self.tree([self.disp("a = b"), self.txt(junk)])
+            self.assertEqual(glued_anchor_tags(tree), [], junk)
+
+    def test_display_already_tagged_is_clean(self):
+        tree = self.tree([self.disp("G ( x ) = \\sum \\alpha ( n ) F", tag="15"),
+                          self.txt("(15) G(x) = ∑α(n)F")])
+        self.assertEqual(glued_anchor_tags(tree), [])
+
+    def test_prose_block_between_stops_search(self):
+        """锚点与展示式之间隔着整句散文 → 归属无从断定，不判。"""
+        tree = self.tree([self.disp("a = b"),
+                          self.txt("This identity then yields, after summation by parts,"),
+                          self.txt("(7) z \\log t")])
+        self.assertEqual(glued_anchor_tags(tree), [])
+
+    def test_inline_formula_only_before_anchor_not_judged(self):
+        tree = self.tree([self.inline("\\chi _ { 1 }"), self.txt("(4) p(k)")])
+        self.assertEqual(glued_anchor_tags(tree), [])
+
+    def test_beyond_lookbehind_window_not_judged(self):
+        tree = self.tree([self.disp("a = b"), self.txt("x"), self.txt("y"),
+                          self.txt("z"), self.txt("w"), self.txt("v"),
+                          self.txt("(6) p(k)")])
+        self.assertEqual(glued_anchor_tags(tree), [])
+
+    def test_only_anchor_also_seen_by_glued_probe(self):
+        """整块-only 锚点形态在粘连判据下**不**重复报（残渣须非空）。"""
+        tree = self.tree([self.disp("a = b"), self.txt("(1)")])
+        self.assertEqual(glued_anchor_tags(tree), [])
+
+    def test_problems_share_18_tightening_predicates(self):
+        """①–④ 与 ⑱ 同源：无落点 / 同号已在节池 / 无邻居 都不报。"""
+        blocks = [self.disp("\\varphi ( k ) S"), self.txt("+(hxogP"), self.txt("(9) p(k)")]
+        tree = self.tree(blocks, key="D5")
+        self.assertTrue(glued_anchor_tags(tree))
+        self.assertEqual(glued_anchor_problems(tree, {}), [])           # ① 无落点
+        self.assertEqual(glued_anchor_problems(                          # ② 已渲染
+            tree, {"D5": [chr(92) + "tag{9}\n"]}), [])
+        self.assertEqual(glued_anchor_problems(                          # ④ 无邻居
+            tree, {"D5": ["no 8 or 10 anywhere\n"]}), [])
+        probs = glued_anchor_problems(tree, {"D5": [chr(92) + "tag{8}\n"]},
+                                      chapter_label="ch7")
+        self.assertEqual(len(probs), 1)
+        self.assertIn("[ch7]", probs[0])
+        self.assertIn("(9)", probs[0])
+
+
+class TestNumberingGaps(unittest.TestCase):
+    """逐章连续编号序列的「空洞」判据（⑭/⑱ 与页池审计之外的第三条腿）。
+
+    动因 = Apostol IANT 15 处丢失印刷编号（ch6 (12)、ch8 (14)(16)(26)、ch12
+    (16)(28)(30)(31)(32)、ch13 (18)、ch14 (8)(25)…）：编号被收割整块丢弃时，
+    契约既无 ``tag`` 也无锚点块，⑭/⑱/页池审计三者的 lost 实测全为 0，只有
+    「一章的号集必须是 1..max 无洞前缀」这条不变量数得出来。
+    """
+
+    @staticmethod
+    def tree(per_node):
+        """per_node: [(节点 key, [tag|None|(首号,[多号])])] → 多节点章契约。"""
+        secs = []
+        for key, tags in per_node:
+            blocks = []
+            for t in tags:
+                if isinstance(t, (list, tuple)):
+                    blocks.append({"formula": "x = y", "display": True,
+                                   "tag": t[0], "tags": list(t[1])})
+                elif t is None:
+                    blocks.append({"formula": "x = y", "display": True})
+                else:
+                    blocks.append({"formula": "x = y", "display": True, "tag": t})
+            secs.append({"key": key, "type": "item", "sub_sec": blocks})
+        return {"key": "ch6", "type": "chapter", "page_start": 150,
+                "page_end": 160, "sub_sec": secs}
+
+    def test_hole_in_dense_prefix_reported(self):
+        tree = self.tree([("6.20", ["1", "2", "3", None, "5"])])
+        self.assertEqual(numbering_gaps(tree), [(4, 3, 5)])
+        probs = numbering_gap_problems(tree, {"6.20": ["body"]}, "ch6")
+        self.assertEqual(len(probs), 1)
+        self.assertIn("(4)", probs[0])
+        self.assertTrue(probs[0].startswith("[ch6]"))
+
+    def test_gapless_prefix_silent(self):
+        self.assertEqual(numbering_gaps(self.tree([("1", ["1", "2", "3"])])), [])
+
+    def test_truncation_is_not_a_hole(self):
+        """判据只抓洞：max 之后的印面号不属本判据（那是 ⑱/粘连锚点的活）。"""
+        tree = self.tree([("1", ["1", "2", "3", "4", "5"])])
+        self.assertEqual(numbering_gaps(tree), [])
+        self.assertEqual(numbering_gap_problems(tree, {"1": ["prose"]}, "ch1"), [])
+
+    def test_sparse_set_is_not_consecutive_numbering(self):
+        """按节重启编号 / 零星收割的书（Strogatz 型）密度不足 → 不出结论。"""
+        tree = self.tree([("1", ["1", "3", "7", "20"])])
+        self.assertEqual(numbering_gaps(tree), [])
+        self.assertEqual(numbering_gap_problems(tree, {"1": ["x"]}, "ch1"), [])
+
+    def test_rendered_number_not_reported(self):
+        """单元已渲染该号（契约缺档）→ 本判据让路，闸门 ⑭ 的「编造」方向先报。"""
+        tree = self.tree([("6.20", ["1", "2", "3", None, "5"])])
+        self.assertEqual(numbering_gaps(tree), [(4, 3, 5)])
+        self.assertEqual(numbering_gap_problems(
+            tree, {"6.20": ["$$\na=b \\tag{4}\n$$"]}, "ch6"), [])
+
+    def test_multi_tag_block_counts_every_number(self):
+        tree = self.tree([("D14", ["1", ("2", ["2", "3"]), "4", ("5", ["5", "6", "7"])]),
+                         ("14.8", ["8"])])
+        self.assertEqual(numbering_gaps(tree), [])
+
+    def test_letter_suffix_tag_shares_its_digit_head(self):
+        tree = self.tree([("1", ["1", "2", "3b", "4"])])
+        self.assertEqual(numbering_gaps(tree), [])
+
+    def test_letter_chapter_tags_ignored(self):
+        """附录字母章位编号 (A.5) 型不参与数字序列判据。"""
+        tree = self.tree([("A.1", ["A.1", "A.2", "A.3"])])
+        self.assertEqual(numbering_gaps(tree), [])
+
+    def test_apostol_measured_case_ch6_12(self):
+        """实测形态 ch6 (12)：截尾**不可见**（只判洞），中间空洞才报。"""
+        tags = [str(i) for i in range(1, 12)]
+        tree = self.tree([("6.20", tags)])
+        probs = numbering_gap_problems(tree, {"6.20": ["prose without the number"]},
+                                       "ch6")
+        self.assertEqual([p for p in probs if "(12)" in p], [])
+        tree2 = self.tree([("6.20", tags + [None])])   # 印面 (12) 的块在、tag 没了
+        self.assertEqual(numbering_gap_problems(tree2, {"6.20": ["prose"]}, "ch6"),
+                         [])                            # 12 在 max 之外 → 判据失明
+        tree3 = self.tree([("6.20", tags[:9] + [None, "11", "12"])])
+        probs3 = numbering_gap_problems(tree3, {"6.20": ["prose"]}, "ch6")
+        self.assertEqual(len(probs3), 1)                 # (10) 是中间洞 → 报
+        self.assertIn("(10)", probs3[0])
+
+
+class TestMarginAnchorAuditGlued(unittest.TestCase):
+    """页池编号列审计的**粘连锚点**开关（本书 19 处 unsupported 误报的根因）。
+
+    动因 = Apostol IANT 实测：页边 `(N)` 被 OCR 与公式残渣切成同一块，整块-only
+    的页池收不到号 → 契约里**真印的**号被 `unsupported` 方向成批误报（普查实测
+    lost=0 / unsupported=19）。开关默认关（既往行为不变），开时与闸门 ⑱ 共用
+    ``_ANCHOR_GLUED_RE`` / ``_RESIDUE_PROSE_RE`` 两条谓词。
+    """
+
+    COL = 60.0        # 编号列 x0（页边）
+    BODY = 400.0      # 正文/公式区 x0
+    TAGS = ["1", "2", "3", "4"]
+
+    PROSE = "This proves the theorem and completes the whole argument here"
+
+    def geom(self, rows_by_page, prose_at=None):
+        """rows_by_page: {page: [(raw, x0)]} → page_geom_loader 同口径的 load。
+
+        每页自动补一条**长散文块**（正文左缘 = ``prose_at``，默认 BODY）——编号列
+        与正文区可分是本审计的前置条件（见 ``column_separable``），不补就无从判据。
+        """
+        pa = self.BODY if prose_at is None else prose_at
+        pages = {}
+        for p in set(rows_by_page) | {10, 11, 12}:   # 一章多页，正文缘样本才够
+            rr = list(rows_by_page.get(p) or []) + [(self.PROSE, pa)]
+            pages[p] = [(raw, x, x + 40, 100.0) for raw, x in rr]
+
+        def load(pg):
+            return pages.get(pg)
+        return load
+
+    def test_glued_off_keeps_past_behaviour(self):
+        """默认关：与既往一致——粘连块不算锚点，真印的 (4) 被误报成假 tag。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(4) x = y", self.COL)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1")
+        self.assertEqual(lost, [])
+        self.assertEqual(len(uns), 1)
+        self.assertIn("(4)", uns[0])
+
+    def test_glued_on_removes_false_unsupported(self):
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(4) x = y", self.COL)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1",
+                                        glued=True)
+        self.assertEqual((lost, uns), ([], []))
+
+    def test_glued_lost_number_reported(self):
+        """截尾形态（契约登记到 4，印面还有 (5)）——本审计看得见，空洞判据看不见。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(4)", self.COL),
+                                 ("(5) B(x) = t(d) / r(qd)", self.COL)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1",
+                                        glued=True)
+        self.assertEqual(uns, [])
+        self.assertEqual(len(lost), 1)
+        self.assertIn("(5)", lost[0])
+        self.assertIn("粘连形态", lost[0])
+
+    def test_glued_number_outside_column_not_trusted(self):
+        """公式**内部**括号粘连成行首形状时，列外一律不收（几何仍是主筛子）。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(4)", self.COL),
+                                 ("(99) = f(n)", self.BODY)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1",
+                                        glued=True)
+        self.assertEqual(uns, [])
+        self.assertEqual([m for m in lost if "(99)" in m], [])
+
+    def test_glued_prose_residue_excluded(self):
+        """`(12) We use Theorem 5.4 …` 是散文交叉引用，不是编号列锚点。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(4)", self.COL),
+                                 ("(12) We use Theorem 5.4 to obtain", self.COL)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1",
+                                        glued=True)
+        self.assertEqual([m for m in lost if "(12)" in m], [])
+
+    def test_column_seeded_only_by_standalone_anchors(self):
+        """列由独立锚点学出；全章无独立样本时**不出结论**（fail-closed）。"""
+        loader = self.geom({10: [("(1) x = y", 900.0), ("(2) a + b", 30.0),
+                                 ("(3) p(k)", 500.0)]})
+        self.assertEqual(margin_anchor_audit(contract(self.TAGS[:3]), loader,
+                                             "ch1", glued=True), ([], []))
+        self.assertEqual(len(page_anchor_index(loader, 10, 20, glued=True)), 3)
+        self.assertIsNone(number_column(page_anchor_index(loader, 10, 20),
+                                        set(self.TAGS[:3])))
+
+    def test_corrupted_opening_bracket_still_attests(self):
+        """实测 ch2：印面 `(4)` 被 OCR 成 `C4)`，左括号腐蚀形也要认（列内才认）。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("C4)", self.COL)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1")
+        self.assertEqual((lost, uns), ([], []))
+        # 裸数字块（无任何括号形）**不**算锚点
+        loader2 = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                  ("(3)", self.COL), ("4", self.COL)]})
+        self.assertEqual(len(page_anchor_index(loader2, 10, 20)), 3)
+
+    def test_column_band_tolerates_margin_jitter(self):
+        """同列样本 x0 抖动 ~140 像素时不得把页边号判成列外（27/35 误报的根因）。"""
+        loader = self.geom({10: [("(1)", 54.0), ("(2)", 120.0), ("(3)", 170.0),
+                                 ("(4)", 185.0)]})
+        lost, uns = margin_anchor_audit(contract(self.TAGS), loader, "ch1")
+        self.assertEqual((lost, uns), ([], []))
+        # 但正文区（x0 远大于列带）仍须排除
+        far = self.geom({10: [("(1)", 54.0), ("(2)", 120.0), ("(3)", 170.0),
+                              ("(4)", 330.0)]})
+        _l, u2 = margin_anchor_audit(contract(self.TAGS), far, "ch1")
+        self.assertEqual(len(u2), 1)                       # 列外 = 不采信
+        self.assertIn("(4)", u2[0])
+
+    def test_overlapping_body_column_stays_silent(self):
+        """本书形态：页边编号与散文行**同 x 带** → 几何失去判别力 → 不出结论。"""
+        loader = self.geom({10: [("(1)", self.COL), ("(2)", self.COL),
+                                 ("(3)", self.COL), ("(9)", self.COL)]},
+                           prose_at=self.COL)      # 正文左缘 = 编号列（Apostol 实测）
+        # (9) 是契约里的假 tag，但列不可分 → 本审计不判（让位给 numbering_gaps）
+        self.assertEqual(margin_anchor_audit(contract(["1", "2", "3", "9"]),
+                                             loader, "ch1"), ([], []))
+        self.assertEqual(margin_anchor_audit(contract(["1", "2", "3", "9"]),
+                                             loader, "ch1", glued=True), ([], []))
+
+    def test_page_anchor_index_default_excludes_glued(self):
+        loader = self.geom({10: [("(7) x = y", self.COL), ("(8)", self.COL)]})
+        self.assertEqual([n for n, _p, _x, _y in page_anchor_index(loader, 10, 10)],
+                         ["8"])
+        self.assertEqual(
+            sorted(n for n, _p, _x, _y in page_anchor_index(loader, 10, 10,
+                                                            glued=True)),
+            ["7", "8"])
 
 
 if __name__ == "__main__":

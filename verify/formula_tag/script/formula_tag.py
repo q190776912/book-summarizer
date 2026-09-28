@@ -118,6 +118,14 @@ _ITEM_LABEL_RE = re.compile(
     r'(definition|theorem|remark|example|proposition|corollary|'
     r'exercise|lemma|defnition|exercse|figure|fig|problem|section|'
     r'equation|eq|chapter)\b', re.IGNORECASE)
+# 形态③（左缘编号粘连，Apostol IANT 2026-09-28）：块首的 `(N)`，编号后可有可无
+# 空白（`(16)x(a) = …` 是 OCR 无空白粘连），但后面必须还有内容（纯编号走形态①）。
+_FORM3_HEAD_RE = re.compile(r'\s*[（(]\s*(\d+[a-zA-Z]?)\s*[）)]\s*[.。]?\s*(?=\S)')
+# 编号之后的剩余算「数学」的证据：关系/运算符/求积符号/LaTeX 命令，或一个自括号
+# 的函数群 `(n)` / `(x)`（OCR 把 |f(n)| 读成 `If(n)l` 时整块没有运算符）。
+# 刻意不含裸字母词——`(12) gives us` 这类散文回指必须留在门外。
+_FORM3_MATHISH_RE = re.compile(
+    r'[=≤≥≠∑∫√∂∏±×÷\\^_]|[(（][^()（）\s][^()（）]{0,11}[)）]')
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -192,6 +200,14 @@ def _heading_num(s: str) -> Optional[str]:
     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
         return _head_norm(hm.group(1))
     return None
+
+
+def _norm_anchor(s) -> str:
+    """Collapse a text to an alphanumeric-only lowercase prefix for block↔node
+    matching (the consolidated-exercise tail anchor).  OCR spacing differs
+    between the contract's stored item text and the page block, so only letters
+    and digits are compared."""
+    return re.sub(r'[^0-9a-z\u4e00-\u9fff]+', '', str(s or '').lower())
 
 # Figure-caption leader prefixes (Bug #22).  A text block whose stripped content
 # STARTS with one of these keywords is a figure caption, NOT a formula-bearing
@@ -401,6 +417,12 @@ class SourceFormulaIndex:
         # genuinely misplaced.
         self._sec_start_page: Dict[str, int] = {}
         self._n_pages: Dict[str, Set[int]] = {}
+        # 书源「同一编号被真印几次」的证据：key = (sec|None, 归一编号) -> 出现过的
+        # 页集（按页去重，避免同一页的 text/formulas 双通道重复计数）。INCONSISTENT
+        # 重复检测以此数为允许上限（label_limit），于是原书确实重印同一编号的两处
+        # （Apostol §3.11 在印刷页 66、67 各印一次 (17)）不再被误判，而总结凭空多写
+        # 一个 \tag 仍会被判。见 label_limit 的「未知即 1 = 维持原严格度」。
+        self._label_pages: Dict[tuple, Set[int]] = {}
         self._walk_last_page: int = 0
         self._cur_heading: Optional[str] = None
         # Section keys of the chapter being scanned (see _load_sec_keys /
@@ -421,13 +443,14 @@ class SourceFormulaIndex:
         self._pos_sec = {}
         self._sec_start_page = {}
         self._n_pages = {}
+        self._label_pages = {}
         self._walk_last_page = 0
         self._cur_heading = None
         self._load_sec_keys(ch)
         nums: Set[str] = set()
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
-            if self._in_exercise_tail(pg):
+            if self._tail_page_skip(pg):
                 continue
             fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
@@ -450,6 +473,10 @@ class SourceFormulaIndex:
                     poly = block.get('poly') or []
                     if len(poly) >= 2:
                         y = poly[1]
+                # 章末集中习题块：起始页只做块级剔除（锚点以上仍是正文，见
+                # _locate_tail_anchor），其余页整页剔除。
+                if self._in_exercise_tail(pg, y):
+                    continue
                 self._track_heading(txt)
                 self._scan_text(txt, nums, pg, y)
                 # 🔴 Leading-number latex guard（2026-09-09，Han–Lin (4.3) 实测）：
@@ -479,6 +506,8 @@ class SourceFormulaIndex:
                     if not (re.match(r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]', ls)
                             or re.match(r'^[（(]\s*[A-Z]\s*[.·]\s*\d{1,3}\s*[）)]', ls)):
                         continue
+                    if self._in_exercise_tail(pg, None):
+                        continue  # latex 块无 y 可判：习题起始页一律不采
                     self._scan_text(ls, nums, pg, None)
         self._by_chapter[ch] = nums
         # 🔧 known_book supplement (2026-09-14): register genuine book formula
@@ -509,6 +538,7 @@ class SourceFormulaIndex:
         self._pos_sec = {}
         self._sec_start_page = {}
         self._n_pages = {}
+        self._label_pages = {}
         self._walk_last_page = int(start)
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
@@ -516,7 +546,7 @@ class SourceFormulaIndex:
         self._load_sec_keys(ch)
         _pdir = resolve_page_dir(self.extract_dir, ch)
         for pg in range(int(start), int(end) + 1):
-            if self._in_exercise_tail(pg):
+            if self._tail_page_skip(pg):
                 continue
             fp = os.path.join(_pdir, f'page_{pg:03d}.json')
             if not os.path.exists(fp):
@@ -645,6 +675,9 @@ class SourceFormulaIndex:
                     poly = block.get('poly') or []
                     if len(poly) >= 2:
                         y = poly[1]
+                # 章末集中习题块：起始页按锚点做块级剔除（锚点以上仍属正文）。
+                if self._in_exercise_tail(pg, y):
+                    continue
                 # Only count `(N)` from genuine display-formula blocks.
                 #
                 # For per-section *standalone* numbering (Kreyszig, ncomp==1)
@@ -669,14 +702,33 @@ class SourceFormulaIndex:
                         # 编号并进公式行时，块「含数学记号且以 `(N)` 结尾」——
                         # 只放行块尾那一个匹配（_tail_only_span），块内部的括号
                         # 数字（因子/生成元记号等）仍被拒绝，不污染 S。
-                        if not self._block_has_math(txt):
-                            continue
                         _rtxt = txt.rstrip()
-                        _m_tail = re.search(
+                        _m_tail = (re.search(
                             r'[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?$', _rtxt)
-                        if _m_tail is None:
-                            continue
-                        _tail_only_span = (_m_tail.start(), _m_tail.end())
+                            if self._block_has_math(txt) else None)
+                        if _m_tail is not None:
+                            _tail_only_span = (_m_tail.start(), _m_tail.end())
+                        else:
+                            # 形态③（Apostol IANT 2026-09-28 实测）：**左缘**编号的
+                            # 书把编号粘在公式行**开头**——`(12) B(x) = \sum...`。
+                            # 只放行块首那一个匹配（同 _tail_only_span 机制），
+                            # 于是 15 处忠实继承印刷号的 `\tag` 不再被误判
+                            # FABRICATED（此前这些章因页池被 `_rehearsal` 劫持而
+                            # S 全空，掩盖了本形态从未被采集的事实）。
+                            # 必要条件：① 编号在块**最开头**（strip 前导空白后）；
+                            # ② 编号后是公式正文而非另一段散文——判据 =
+                            #   `_block_has_math(整块)` 或「编号之后的剩余里出现数学
+                            #   记号 / 一个自括号的函数群」（`(16)x(a) = x(b)…` 无
+                            #   空格粘连、`(26) If(n)l`＝|f(n)| 被 OCR 读成字母，
+                            #   两者都过不了 `_block_has_math`，但剩余含 `=` 或 `(n)`
+                            #   即足以与 `(12) gives us` 这类散文回指区分）。
+                            _m_head = _FORM3_HEAD_RE.match(txt)
+                            if _m_head is None:
+                                continue
+                            if not (self._block_has_math(txt)
+                                    or _FORM3_MATHISH_RE.search(txt[_m_head.end():])):
+                                continue
+                            _tail_only_span = (_m_head.start(), _m_head.end())
                 elif not self._block_has_math(txt):
                     continue
                 # extract formula numbers and attach to the current section
@@ -685,6 +737,12 @@ class SourceFormulaIndex:
                         if _tail_only_span is not None and not (
                                 mm.start() >= _tail_only_span[0]
                                 and mm.end() <= _tail_only_span[1]):
+                            continue
+                        # 🔴 双括号 OCR 残迹（Apostol ch11 p253 `'((40)'`）：编号
+                        # 左缘再套一个括号 = 数学内容 `ζ(2s)` 被读成 `(20)`/`(40)`
+                        # 后粘上的碎片。收下即造出一条假 MISSING（40 根本不是本书
+                        # 该章的编号）。真正的编号列不会写成 `((N)`。
+                        if mm.start() > 0 and txt[mm.start() - 1] in '(（':
                             continue
                         # 🔴 Katok 2026-09-13：sectioned 内联提取此前缺 _scan_text
                         # plain 路径的条目词守卫——「Proposition 1.3.3. If α is
@@ -717,6 +775,9 @@ class SourceFormulaIndex:
                         if not self._embedded_ref(txt, mm.start(), mm.end()):
                             if n not in self._book_section:
                                 self._book_section[n] = sec
+                            # 「真标签出现」计数：与 plain 路径 _scan_text 同一
+                            # 谓词（非嵌入引用），供 label_limit 放宽重复检测。
+                            self._count_label(n, pg, sec)
                             self._record_pos(n, pg, y)
                         # (sec, n) membership — authoritative for per-section books
                         self._book_section_sec[(sec, n)] = sec
@@ -829,6 +890,29 @@ class SourceFormulaIndex:
     def source_text(self, n: str) -> str:
         return self._source_text.get(n, '')
 
+    def _count_label(self, n: str, pg, sec=None) -> None:
+        """Record one occurrence of a **printed label** (not a prose ref).
+
+        Deduplicated per page so the same typeset number cannot be counted
+        twice through the two extraction channels (`text[]` and a leading-label
+        `formulas[].latex`).
+        """
+        if not isinstance(pg, int):
+            return
+        self._label_pages.setdefault((sec, n), set()).add(pg)
+
+    def label_limit(self, n: str, sec=None) -> int:
+        """How many summary ``\\tag``\\ s for ``n`` are source-faithful.
+
+        Returns the number of distinct source pages carrying that label in that
+        bucket, and **1 when the source has no record for the key** — i.e. a
+        number with no counted occurrence keeps the pre-existing strict
+        duplicate behaviour, so this can only ever relax false positives, never
+        tighten.  ``sec=None`` is the chapter-scoped (plain path) key.
+        """
+        pages = self._label_pages.get((sec, n))
+        return len(pages) if pages else 1
+
     def primary_pos(self, n: str):
         """Earliest (page, y) occurrence of `n` (definition site), or None."""
         return self._primary_pos.get(n)
@@ -864,6 +948,7 @@ class SourceFormulaIndex:
         """
         self._sec_keys = None
         self._tail_exer_page = None
+        self._tail_exer_anchor_y = None
         try:
             from data.book_structure.book_structure import chapter_json_path
             fp = chapter_json_path(self.extract_dir, ch)
@@ -873,6 +958,7 @@ class SourceFormulaIndex:
                 tree = json.load(f)
             keys: Set[str] = set()
             tail: Optional[int] = None
+            tail_names: Set[str] = set()
             stack = [tree]
             while stack:
                 node = stack.pop()
@@ -882,17 +968,76 @@ class SourceFormulaIndex:
                     keys.add(str(node['key']))
                 if node.get('consolidated'):
                     p = node.get('page_start')
-                    if isinstance(p, int) and (tail is None or p < tail):
-                        tail = p
+                    if isinstance(p, int):
+                        if tail is None or p < tail:
+                            tail = p
+                            tail_names = set()
+                        if p == tail:
+                            _nm = _norm_anchor(node.get('name'))
+                            if _nm:
+                                tail_names.add(_nm)
                 stack.extend(node.get('sub_sec') or [])
             self._sec_keys = keys or None
             self._tail_exer_page = tail
+            # 🔴 尾块锚点按**块**而非按**页**界定（Apostol IANT 2026-09-28 实测）：
+            # 章末集中习题块的起始页往往**同时**载有该章最后几个显示公式——
+            # ch6 (12)@y415、ch7 (20)(21)、ch13 (36) 都在习题起始页的上半部，
+            # 旧的「pg >= tail 整页剔除」把这几条真实印刷编号一起丢掉，忠实的
+            # `\tag` 反被误判 FABRICATED。补救：在该页里用习题条目自身的文本
+            # （契约 consolidated 节点 name 的归一前缀，且块长 >=40 以避开页眉
+            # 重复的「Exercises for Chapter N」running head）定位首个习题块，记下
+            # 它的 y 作为锚点；锚点之上的块照常入 S，之下（含其后整页）仍剔除。
+            # 找不到锚点时 `_tail_exer_anchor_y` 保持 None → 退回旧行为（整页剔除），
+            # 不会给任何书新放开一页习题噪声。
+            self._tail_exer_anchor_y = self._locate_tail_anchor(ch, tail, tail_names)
         except Exception:
             self._sec_keys = None
             self._tail_exer_page = None
+            self._tail_exer_anchor_y = None
 
-    def _in_exercise_tail(self, pg) -> bool:
-        """Is page `pg` inside the chapter-end CONSOLIDATED exercise block?
+    def _locate_tail_anchor(self, ch, tail: Optional[int],
+                            tail_names: Set[str]) -> Optional[float]:
+        """y of the first exercise-item block on the tail page, or None."""
+        if not isinstance(tail, int) or not tail_names:
+            return None
+        fp = os.path.join(resolve_page_dir(self.extract_dir, ch),
+                          f'page_{tail:03d}.json')
+        if not os.path.exists(fp):
+            return None
+        try:
+            with open(fp, encoding='utf-8') as f:
+                data = PageJson.load(fp).data
+        except Exception:
+            return None
+        best: Optional[float] = None
+        for block in data.get('text', []) or []:
+            txt = block.get('text', '') if isinstance(block, dict) else ''
+            if not txt or len(txt.strip()) < 40:
+                continue
+            poly = block.get('poly') or []
+            if len(poly) < 2:
+                continue
+            _n = _norm_anchor(txt)
+            # 窗口比较：块文本可能带习题序号前缀（"1.LetG…"），OCR 字形残损也
+            # 只发生在前缀之后，故取 name 归一后的前 22 个字母数字判「在块内」。
+            if any(len(tn) >= 16 and tn[:22] in _n for tn in tail_names):
+                y = poly[1]
+                if isinstance(y, (int, float)) and (best is None or y < best):
+                    best = float(y)
+        return best
+
+    def _tail_page_skip(self, pg) -> bool:
+        """Page-level tail test: skip the whole page only when NO block of it
+        can survive the tail gate (beyond the tail page, or the tail page
+        itself while the exercise anchor is still unknown)."""
+        tail = self._tail_exer_page
+        if tail is None or not isinstance(pg, int) or pg < tail:
+            return False
+        return pg > tail or getattr(self, '_tail_exer_anchor_y', None) is None
+
+    def _in_exercise_tail(self, pg, y=None) -> bool:
+        """Is this block (page `pg`, top-y `y`) inside the chapter-end
+        CONSOLIDATED exercise block?
 
         Strogatz 3e ch13 (2026-09-27 实测)：题 13.6.5 (Ott-Antonsen) 里的
         `(13)`/`(14)` 是**印刷编号**，而 writing-rules「有专门习题小标题的集中
@@ -900,9 +1045,20 @@ class SourceFormulaIndex:
         → 该块内容**按设计**不进总结。此前 S 仍收这些号，MISSING 硬闸反过来
         要求写手把习题答案写成正文公式。故：契约标了 consolidated 的起始页
         及其后一律不入 S。非集中块书（无该标记）行为零改动。
+
+        ``y`` 非空时判**块**不判页：起始页上半部仍属正文（章末最后几个显示
+        公式与习题块同居一页），只有锚点及以下才剔除；无锚点（或调用方没给
+        y）时退回旧的整页剔除。
         """
-        return (self._tail_exer_page is not None
-                and isinstance(pg, int) and pg >= self._tail_exer_page)
+        tail = self._tail_exer_page
+        if tail is None or not isinstance(pg, int) or pg < tail:
+            return False
+        if pg > tail:
+            return True
+        anchor = getattr(self, '_tail_exer_anchor_y', None)
+        if anchor is None or y is None:
+            return True
+        return float(y) >= anchor
 
     def _repair_heading(self, h: str) -> str:
         """OCR repair of a heading number against THIS chapter's real section
@@ -1055,6 +1211,9 @@ class SourceFormulaIndex:
                 #    ch1 p13 坐标块 `(1,2)` 会顶替 p21 的真标签 `(1.2)`。
                 if ',' in raw or '，' in raw:
                     continue
+                # 「真标签出现」计数（与位置证据同一谓词，勿另立判据）：INCONSISTENT
+                # 重复检测按此放宽，见 label_limit。
+                self._count_label(n, pg)
                 self._update_pos(n, pg, y)
 
     @staticmethod
@@ -1540,6 +1699,21 @@ def _letter_led_note(found: Set[str]) -> Optional[str]:
         f"（formula 配置 \"letter_ch\": true）。")
 
 
+def _dup_beyond_source(src, counts: Dict[str, int], key: str, n: str,
+                       sec=None) -> bool:
+    """True when the summary repeats one tag number MORE often than the book
+    prints it in the same bucket.
+
+    Single predicate shared by `_compare` (chapter key, `sec=None`) and
+    `_compare_sectioned` (per-section key) so the detection and the
+    relaxation can never drift apart.  `label_limit` returns 1 whenever the
+    source has no counted occurrence, so an unrecorded number keeps the
+    original strict duplicate behaviour.
+    """
+    limit = getattr(src, 'label_limit', None)
+    return counts[key] > (limit(n, sec) if callable(limit) else 1)
+
+
 def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
              chapter_prefix: bool = True,
              ignore: Optional[Set[str]] = None,
@@ -1588,7 +1762,7 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
         prefix_ok = (not chapter_prefix) or (
             _first_component(n) == str(ch))
         ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
-        if counts[ik] > 1:
+        if _dup_beyond_source(src, counts, ik, n):
             status = 'INCONSISTENT'          # duplicate \tag number
         elif not prefix_ok:
             status = 'INCONSISTENT'          # cross-chapter number
@@ -1745,8 +1919,11 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     * FABRICATED : a summary ``\\tag`` number not in the chapter-wide union S
       (genuinely invented / mis-copied).  Uses the union (not the per-section
       set) so source-section misalignment can never false-flag.
-    * INCONSISTENT: duplicate ``\\tag`` number *within the same section*
-      (legitimate for per-section numbering across sections, so must be local).
+    * INCONSISTENT: duplicate ``\\tag`` number *within the same section*,
+      (legitimate for per-section numbering across sections, so must be local)
+      and MORE often than the book prints that label in the section — a source
+      that genuinely re-prints a number (Apostol §3.11 prints (17) twice) makes
+      the faithful second tag legal, see ``label_limit``.
     * MISSING    : a book-source formula number for this section absent from
       the summary (WARN only; uses the per-section set).
     """
@@ -1797,7 +1974,7 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
             if not n or n in ignore or (sec, n) in (scoped_ignore or set()):
                 continue
             ik = SourceFormulaIndex.norm_full(t.raw_tag) if t.raw_tag else t.normalized
-            if counts[ik] > 1:
+            if _dup_beyond_source(src, counts, ik, n, sec):
                 status = 'INCONSISTENT'
             elif s_empty_book:
                 continue                 # S-empty: structural-only, no OK/FAB
@@ -1882,6 +2059,29 @@ def _section_prefix_compatible(a: str, b: str) -> bool:
     return short == long[:len(short)]
 
 
+def _pos_before(a, b):
+    """Is book position ``a`` strictly before ``b``?  ``True`` / ``False`` /
+    ``None`` (= 证据不足，不作判定)。
+
+    位置元组是 ``(page, y)``，而 ``y`` 可以是 ``None``——``_record_pos`` 允许
+    「页已知、行内纵坐标未知」的页级证据（formulas 通道无 poly / text 块缺 poly，
+    Iwaniec–Kowalski ch5 的 5.114 实测）。旧代码直接 ``cur < prev_pos`` 比较元组，
+    同页时退化成 ``None < 560.0`` → TypeError 把整个 verify 崩掉（2026-09-28 实测）。
+    页号不同的先后仍可信；同页且任一侧缺 y 时不下结论（宁漏不误报）。
+    """
+    if a is None or b is None:
+        return None
+    pa, ya = a
+    pb, yb = b
+    if pa is None or pb is None:
+        return None
+    if pa != pb:
+        return pa < pb
+    if ya is None or yb is None:
+        return None
+    return ya < yb
+
+
 def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                                  ignore: Optional[Set[str]] = None,
                                  reset_on_section: bool = True,
@@ -1944,7 +2144,7 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         else:
             cur = src.primary_pos(n)
         if cur is not None:
-            if prev_pos is not None and cur < prev_pos:
+            if _pos_before(cur, prev_pos):
                 if n not in seen_om:
                     seen_om.add(n)
                     om.append({

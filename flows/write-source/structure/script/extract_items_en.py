@@ -332,7 +332,11 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
         _rl, _rws = restart_per_section
         _rst_labels = {str(x).strip().lower() for x in (_rl or [])}
         _anchor = None
-        for _pg, _num in sorted(_rws or [], key=lambda t: (t[0], str(t[1]))):
+        for _w in sorted(_rws or [], key=lambda t: (t[0], str(t[1]))):
+            # 窗口可能是 2 元 (page, 节号) 或 3 元 (page, 节号, 块首 y)。EN 分支
+            # 维持**页粒度**归桶（本抽取器的桶判据与 CN 单级不同型，暂无同页字母
+            # 块实测）；第 3 元在此只作形参兼容，不被解包丢弃。
+            _pg, _num = _w[0], _w[1]
             _s = str(_num)
             # nested under the current bucket's anchor section ("1.1.2" inside
             # anchor "1.1") → same reset bucket; anything else opens a new one.

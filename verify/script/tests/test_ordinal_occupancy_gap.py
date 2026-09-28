@@ -147,5 +147,89 @@ class TestThreeLevelShapeUnaffected(unittest.TestCase):
                                  occ_items, occ_secs, gap_left))
 
 
+class TestLetterWindowOccupancyIsSectionScoped(unittest.TestCase):
+    """字母窗口分支（B 层按 `## §` 标题分窗，窗口令牌以字母起头）。
+
+    本书真实来路是附录的跨字母块共享计数器（`1:F 缺号 1（序列 7..10 …`，附录B
+    定理1..15 横跨 D/F/H/J/K 五块）。Arnold 实测 2026-09-28：条目计数器只在**所属
+    节内**连续，旧实现的占用表按**整章**汇总 `{标签: {号}}`，于是任一节的在账条目
+    能把另一节的真漏抽洗白（闸门 PASS 而契约少一条）。现键为 ``(所属节, 标签)``：
+    数字节取其节号，字母块（附录把字母块升级成 `## §`）归一为 ``""``，与
+    `shared_counter_letter_gap` 里「窗口令牌无点 = 裸字母」同源。
+    """
+
+    @staticmethod
+    def _app_tree():
+        """附录形态：字母块即窗口，全章共用一条 定理 计数器（实测附录B 定理1..15）。"""
+        return _node("B", "chapter",
+                     _node("F", "section", *[_node("定理%d" % n, "theorem")
+                                             for n in (1, 2, 3)]),
+                     _node("G", "section", *[_node("定理%d" % n, "theorem")
+                                             for n in (5, 6)]))
+
+    @staticmethod
+    def _main_tree():
+        """正文形态：条目全在**数字节** §36 之下，另有裸字母窗口 F。
+
+        （用 定理 而非 问题：占用表与服务对象同纪律——练习/问题族 B 层豁免，
+        本就不进这张表。）
+        """
+        return _node("7", "chapter",
+                     _node("36", "section",
+                           _node("36.G", "section", _node("定理9", "theorem"))))
+
+    def _gap(self, win, n, lo, hi, label="定理"):
+        return ("  WARN (BLOCKING): 0:%s 缺号 %d（序列 %d..%d 不连续 — 严格模式）"
+                % (win, n, lo, hi))
+
+    def _call(self, msg, tree, labels, readable=None):
+        occ = csc.letter_window_occupancy(tree)
+        return csc.occupied_ordinal(msg, set(), set(), set(),
+                                    ({0: labels}, occ, readable or {}))
+
+    def test_letter_blocks_share_one_counter(self):
+        tree = self._app_tree()
+        self.assertEqual(
+            self._call(self._gap("F", 5, 6, 9), tree, {"定理"}),
+            "shared-counter-window",
+            "同一字母块家族里 G 块的 定理5 在账 = 跨块共享计数器，不是缺号")
+
+    def test_dotted_letter_window_same_family(self):
+        tree = self._app_tree()
+        self.assertEqual(
+            self._call(self._gap("B.G", 3, 4, 9), tree, {"定理"}),
+            "shared-counter-window",
+            "带点字母窗口（「字母.字母」）父级仍归 \"\"，与裸字母同源")
+
+    def test_other_section_items_do_not_whitewash(self):
+        tree = self._main_tree()
+        self.assertEqual(csc.letter_window_occupancy(tree), {("36", "定理"): {9}},
+                         "占用表须按所属节分键（先自证桩数据形状）")
+        self.assertIsNone(
+            self._call(self._gap("F", 9, 10, 12), tree, {"定理"}),
+            "§36 的 定理9 不得替裸字母窗口 F 的 定理9 抵账（旧整章汇总会放行）")
+
+    def test_readable_source_item_still_blocks(self):
+        """安全网：源侧报出该号 readable 遗漏（印刷条头在而契约无账）→ 不豁免。"""
+        self.assertIsNone(
+            self._call(self._gap("F", 5, 6, 9), self._app_tree(), {"定理"},
+                       readable={"定理": {5}}))
+
+    def test_interior_hole_is_not_exempt(self):
+        """序列内部的洞（缺号 ≥ 序列下界）不是「前一窗口占用」，照拦。"""
+        self.assertIsNone(
+            self._call(self._gap("F", 2, 1, 6), self._app_tree(), {"定理"}))
+
+    def test_unwired_letter_ctx_raises_instead_of_fake_blocking(self):
+        """判据未接线 = 调用点 bug：必须炸，不得静默退化成假阻断。"""
+        with self.assertRaises(AssertionError):
+            csc.occupied_ordinal(self._gap("F", 5, 6, 9), set(), set(), set())
+
+    def test_digit_message_without_ctx_keeps_old_behaviour(self):
+        """数字窗口消息不传 letter_ctx 时行为与旧版逐字一致（不抛、不豁免）。"""
+        self.assertIsNone(csc.occupied_ordinal(_BLOCK_FMT % (0, 7, 12),
+                                               set(), set(), set()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

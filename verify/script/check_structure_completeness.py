@@ -659,6 +659,22 @@ def _match_contract_key_style(tree, key, label):
     return "%s%s" % (_canon_label(str(label or '')), num.group(1).replace('．', '.').replace('-', '.').replace('–', '.'))
 
 
+def _anchor_problem_count(tree):
+    """契约前序页码单调性违例条数（判据与 ``lib.unit_order.check_contract_anchors`` 同源）。
+
+    回填候选位置的**事后否决**用：邻近锚定（canon-adjacency）只看条目号相邻，不看
+    页码，条目号与节号同一编号空间的「章内共享计数器」书里会把晚页条目插到早页节
+    内容之前（Iwaniec-Kowalski ch3 命题3.7 / ch5 命题5.25 / ch20 命题20.7 实测：
+    合并 md 阅读顺序倒退，门控 ⑪ 事后必拦）。判据本身异常 → 返回 -1（不否决，
+    保守维持旧行为；第 4 步闸门仍会阻断）。
+    """
+    from lib.unit_order import check_contract_anchors
+    try:
+        return len(check_contract_anchors(tree.to_dict()))
+    except Exception:
+        return -1
+
+
 def insert_item(tree, key, label, page, canon, snippet=""):
     """把遗漏条目插回结构树（StructureNode）。three_level 优先归到 C.S 节；否则按页码归最近节。
     节点字段（key/type/name/page）与 build_structure 完全一致，回填后 write-source / verify 可直接消费。
@@ -690,16 +706,26 @@ def insert_item(tree, key, label, page, canon, snippet=""):
         _collect(tree)
         prevs = [t for t in items_doc if t[0] < canon]
         nexts = [t for t in items_doc if t[0] > canon]
+        # 🔴 事后否决（Iwaniec-Kowalski ch3/ch5/ch20 实测 2026-09-28）：条目号相邻
+        # ≠ 阅读位置相邻。章内共享计数器的书里 canon 前驱可能跨了好几节（前驱 p61、
+        # 本条目 p65），照抄「插在前驱之后」就把晚页条目挂到了早页节内容之前 → 契约
+        # 锚点自相矛盾。插入后锚点违例变多即撤销，改试 canon 后继位、再回落页码就近。
+        # 比较前后**都不跑** `_fix_pages`：它会把节锚点改写成子节点最小页（节引言
+        # 散文不是带类型子节点时锚点被抬高），先跑一次反而污染回落判据的输入。
+        _base_anchor = _anchor_problem_count(tree)
+        _cands = []
         if prevs:
-            _, par, i = max(prevs, key=lambda t: t[0])
-            par.sub_sec.insert(i + 1, node)
-            _fix_pages(tree)
-            return True, "(canon-adjacency)"
+            _cands.append((max(prevs, key=lambda t: t[0]), True))
         if nexts:
-            _, par, i = min(nexts, key=lambda t: t[0])
-            par.sub_sec.insert(i, node)
-            _fix_pages(tree)
-            return True, "(canon-adjacency)"
+            _cands.append((min(nexts, key=lambda t: t[0]), False))
+        for _cand, _at_end in _cands:
+            _, _par, _i = _cand
+            _pos = _i + 1 if _at_end else _i
+            _par.sub_sec.insert(_pos, node)
+            if _base_anchor < 0 or _anchor_problem_count(tree) <= _base_anchor:
+                _fix_pages(tree)
+                return True, "(canon-adjacency)"
+            _par.sub_sec.remove(node)
     if sn is None:
         secs = list(_iter_sections(tree))
         cand = None
@@ -1428,30 +1454,127 @@ def ordinal_occupancy_sets(ch_node, miss_it2):
 
 
 _GAP_ORDINAL_RE = re.compile(r"(\d+(?:\.\d+)*)\s*缺号\s*(\d+)")
+# 🔴 B 层缺号消息的锚是**窗口号** `gk = "<组号>:<窗口>"`（verify/item_numbering_integrity
+# 的窗口路由：scope==3 组按 `## §` 标题分窗）。窗口有两种形态：
+#   · 数字/点分节号（"4:14"、"0:1.2"）——上方 `_GAP_ORDINAL_RE` 把它与缺号拼成完整
+#     序标 canon，交「契约占用表 / 源侧 readable 差集」判定；
+#   · **字母小节**（附录按字母块分窗：Arnold《经典力学的数学方法》附录B 实测
+#     "1:F 缺号 1（序列 7..10 不连续…"）。附录 B 全篇只有**一条** 定理 计数器
+#     （定理1..6 印在字母块 D 的 p271-272、定理7..10 印在块 F 的 p273，其后
+#     11..12 在 H、13 在 J、14..15 在 K），B 层按块开窗就把「前一节用掉的号」报成
+#     本块缺号——数字锚形态的占用表对此**永不**命中（"1:F" 里 缺号 之前是字母），
+#     于是成为假阻断。
+# 判据（机械可验、不外溢）：窗口标识是字母 + 缺号 < 本窗已印序列的下界 + 该号在
+# 本章契约里**同名标签**下的别的窗口确有其条 + 源侧差集在该号上没报 readable 遗漏。
+# 四条同时成立才豁免，且一律登记进 `gate.b_gap_ordinal_occupancy` 供人工复核。
+_GAP_LETTER_WINDOW_RE = re.compile(
+    r"(?:^|[^\w])(\d{1,3}):([A-Za-z][A-Za-z0-9.]*)\s*缺号\s*(\d+)"
+    r"(?:（序列\s*(\d+)\.\.(\d+))?")
+_ITEM_KEY_LABEL_RE = re.compile(r"^([^\d.]+?)\s*(\d{1,3})$")
 
 
-def occupied_ordinal(message, occ_items, occ_secs, gap_left):
-    """B 层「缺号」消息 → 占用形态（``"item"`` / ``"section"``）；真缺号返回 None。
+def letter_window_occupancy(ch_node):
+    """契约条目占用表 ``{(所属节, 规范标签词): {号, ...}}``（仅服务字母窗口分支）。
+
+    条目键形如 "定理7"（CN 单级）→ 标签 "定理" + 号 7。节 / 章 / 练习节点不计
+    （练习/问题族 B 层豁免，与本表同纪律——它们不会报出缺号，也就无需抵账）。
+
+    🔴 键必须带**所属节**（Arnold 实测 2026-09-28，本书附录B 的字母窗口
+    `1:F 缺号 1（序列 7..10 …` 是该分支唯一真实来路）：本书条目计数器只在**所属节
+    内**连续，同号 定理9 可以在 §36 确有其条、在别处真缺。旧实现按整章汇总
+    `{标签: {号}}`，于是任一节的在账条目能把**另一节**的真漏抽洗白（闸门 PASS 而
+    契约少一条）。父级取章下**第一层** section 键：字母块（附录把字母块升级成
+    `## §`，键以字母起头）归一为 `""`，与 `shared_counter_letter_gap` 里「窗口令牌
+    无点 = 裸字母」同源，使同一附录内跨字母块的共享计数器照旧互相抵账。
+    """
+    occ = {}
+
+    def walk(n, sec):
+        key = str(n.key or "")
+        cur = sec
+        if n.type == "section" and sec is None:
+            cur = "" if not re.match(r"^\d", key) else key.split(".")[0]
+        if n.type not in ("section", "chapter", "exercise", "problem"):
+            m = _ITEM_KEY_LABEL_RE.match(key)
+            if m:
+                occ.setdefault((cur or "", _canon_label(m.group(1))),
+                               set()).add(int(m.group(2)))
+        for c in n.sub_sec:
+            walk(c, cur)
+
+    walk(ch_node, None)
+    return occ
+
+
+def shared_counter_letter_gap(message, group_labels, occ_label_nums, readable_nums):
+    """字母窗口 + 跨块共享计数器 → ``"shared-counter-window"``；否则 None。
+
+    ``group_labels``: ``{组号: {规范标签词}}``（cfg.ordinal 下标）；
+    ``occ_label_nums``: `letter_window_occupancy` 的产物（按所属节分键）；
+    ``readable_nums``: 源侧差集里 status=='readable' 的 ``{标签: {号}}``（安全网）。
+    """
+    w = _GAP_LETTER_WINDOW_RE.search(message)
+    if not w:
+        return None
+    gi, win, missing = w.group(1), w.group(2), int(w.group(3))
+    if win.isdigit():
+        return None          # 数字窗口归 `_GAP_ORDINAL_RE` 的序标形态管
+    lo = int(w.group(4)) if w.group(4) else None
+    if lo is not None and missing >= lo:
+        return None          # 序列内部的洞不是「前一节占用」
+    labels = (group_labels or {}).get(int(gi)) or set()
+    if not labels:
+        return None
+    for lab in labels:
+        if missing in (readable_nums.get(lab) or ()):
+            return None      # 源侧确有该条头却未进契约：真漏抽，不豁免
+    # 窗口令牌 → 所属节：`35.G` 归 §35；裸字母 `F`（附录字母块即窗口）归 ""。
+    parent = win.split(".")[0] if "." in win else ""
+    if not re.match(r"^\d", parent):
+        parent = ""
+    for lab in labels:
+        if missing in (occ_label_nums.get((parent, lab)) or ()):
+            return "shared-counter-window"
+    return None
+
+
+def occupied_ordinal(message, occ_items, occ_secs, gap_left, letter_ctx=None):
+    """B 层「缺号」消息 → 占用形态（``"item"`` / ``"section"`` /
+    ``"shared-counter-window"``）；真缺号返回 None。
 
     安全网：该序标在源侧差集里被报成 `readable` 遗漏时**一律不豁免**——真漏抽的
     条头必先被 `scan_raw_items` 抓到，所以本判据只可能放过「书中本无此条」的
     印刷体例（共享计数器 / 序标被节标题占用），不会掩盖数据缺陷。
+
+    ``letter_ctx``: ``(group_labels, occ_label_nums, readable_nums)``。数字窗口
+    形态的消息不传时行为与旧版逐字一致；**字母窗口**形态的消息不传则直接抛
+    `AssertionError`（判据未接线 = 调用点 bug，不得静默退化成假阻断）。
     """
     if not isinstance(message, str):
         return None
     m = _GAP_ORDINAL_RE.search(message)
-    if not m:
+    if m:
+        try:
+            canon = tuple(int(x) for x in m.group(1).split(".")) + (int(m.group(2)),)
+        except ValueError:
+            return None
+        if canon in gap_left:
+            return None
+        if canon in occ_items:
+            return "item"
+        if ".".join(str(x) for x in canon) in occ_secs:
+            return "section"
         return None
-    try:
-        canon = tuple(int(x) for x in m.group(1).split(".")) + (int(m.group(2)),)
-    except ValueError:
-        return None
-    if canon in gap_left:
-        return None
-    if canon in occ_items:
-        return "item"
-    if ".".join(str(x) for x in canon) in occ_secs:
-        return "section"
+    if _GAP_LETTER_WINDOW_RE.search(message) and letter_ctx is None:
+        # 🔴 判据未接线的**响铃**（fail-loud）：字母窗口形态的缺号消息到达本函数，
+        # 而调用方没建占用表 → 旧行为是静默不豁免，整章被假阻断（Arnold 附录B
+        # 实测：`_letter_ctx` 在 `step4_gate` 里算好了却漏传，6 条假缺号一路 FAIL，
+        # 且因该分支无打印而毫无线索）。宁可炸出调用点，也不要让「忘接线」
+        # 伪装成「数据有问题」。
+        raise AssertionError(
+            "字母窗口缺号消息未接 letter_ctx（判据未接线）：%s" % message.strip())
+    if letter_ctx:
+        return shared_counter_letter_gap(message, *letter_ctx)
     return None
 
 
@@ -1523,6 +1646,23 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     # （替代 `ignore_chN` 手工账——ignore 是「人说了算」，本判据是「账说了算」）。
     _occ_items, _occ_secs, _gap_left_canon = ordinal_occupancy_sets(
         ch_node_after, miss_it2)
+    # 字母窗口形态（附录按字母块分窗 + 计数器跨块延续，见
+    # `_GAP_LETTER_WINDOW_RE` 注释）：另建「组号 → 标签词」「标签词 → 契约号集」
+    # 「标签词 → 源侧 readable 号集」三张表，交给 occupied_ordinal 的 letter_ctx。
+    _group_labels = {}
+    for _i, _g in enumerate(getattr(cfg, "ordinal", None) or []):
+        _group_labels[_i] = {_canon_label(str(x))
+                             for x in (getattr(_g, "name", None) or [])}
+    _occ_label_nums = letter_window_occupancy(ch_node_after)
+    _readable_nums = {}
+    for _m in (miss_it2 or []):
+        if _m.get("status") != "readable":
+            continue
+        _c = _m.get("canon") or []
+        if len(_c) == 1 and isinstance(_c[0], int):
+            _readable_nums.setdefault(
+                _canon_label(str(_m.get("label") or "")), set()).add(_c[0])
+    _letter_ctx = (_group_labels, _occ_label_nums, _readable_nums)
 
     b_gap_occupancy = []
     real_b_blocking = []
@@ -1531,7 +1671,8 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
             continue
         if _is_exercise_gap(b):
             continue
-        occ = occupied_ordinal(b, _occ_items, _occ_secs, _gap_left_canon)
+        occ = occupied_ordinal(b, _occ_items, _occ_secs, _gap_left_canon,
+                               letter_ctx=_letter_ctx)
         if occ:
             b_gap_occupancy.append({"message": str(b).strip(), "occupied_by": occ})
             continue
@@ -1539,8 +1680,18 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
     # 🔴 同父小节键序闸（见 subsection_order_problems 注释）：D 层对 level 3
     # 结构性失明，锚点回扫扫歪时整节内容会重复挂两个节点，必须在拆单元前阻断。
     order_problems = subsection_order_problems(ch_node_after)
+    # 🔴 契约锚点自洽闸（回填位缺口补齐）：``build_structure`` 已在写契约前跑过
+    # ``check_contract_anchors``，但**回填路径**（``insert_item`` / 人工
+    # ``manual_overrides``）在它之后落盘，锚点倒退的条目就此漏网——门控 ⑪（写源期）
+    # 才报「单元跨节/跨页错位」，那时 27 章已拆完、返工面是整章。此处补拦 = 在
+    # 拆单元之前阻断（Iwaniec-Kowalski ch3/ch5/ch20 实测 2026-09-28）。
+    from lib.unit_order import check_contract_anchors
+    try:
+        anchor_problems = check_contract_anchors(ch_node_after.to_dict())
+    except Exception as e:
+        anchor_problems = ["契约锚点自查执行失败（fail-closed）：%r" % (e,)]
     passed = (not sec_left) and (not readable_left) and (not real_b_blocking) \
-        and (not order_problems)
+        and (not order_problems) and (not anchor_problems)
     return {
         "passed": passed,
         "residual_sections": sec_left,
@@ -1548,6 +1699,7 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         "residual_b_blocking": real_b_blocking,
         "b_gap_ordinal_occupancy": b_gap_occupancy,
         "residual_section_order": order_problems,
+        "residual_anchor_order": anchor_problems,
     }
 
 
@@ -1695,6 +1847,8 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
              if gate.get('residual_section_order') else ""))
     for p in gate.get('residual_section_order') or []:
         print("  BLOCKING(节序): " + p)
+    for p in gate.get('residual_anchor_order') or []:
+        print("  BLOCKING(锚点): " + p)
     return report
 
 

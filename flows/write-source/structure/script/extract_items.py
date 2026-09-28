@@ -23,7 +23,7 @@ import os, sys
 import json, re, os, sys
 
 from extract_items_en import extract_items_en
-from lib.regexlib import SEP_TIGHT, SEP_NUMERIC
+from lib.regexlib import SEP_TIGHT, SEP_NUMERIC, strip_head_noise
 from lib.numbering import ordinal_depth
 from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
                         BookConfig, GroupConfig)
@@ -410,7 +410,9 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
         r'(?!(?:[与和或]\s*(?:定义|定理|引理|推论|命题|例|性质|注)\s*\d))')
     single_raw = []
     for p, y, txt in all_blocks:
-        m = single_re.match(txt)
+        # 行首粘连标点（'．例9…'）先剥离再匹配；正文快照仍取原始 txt。
+        # 判据与 CN 单级抽取器同源（lib.regexlib.strip_head_noise）。
+        m = single_re.match(strip_head_noise(txt))
         if not m:
             continue
         label = m.group(1)

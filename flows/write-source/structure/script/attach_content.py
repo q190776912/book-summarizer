@@ -94,7 +94,7 @@ import build_structure as _bs
 from lib.numbering import (ordinal_depth, resolve_ordinal_code,
                            formula_paren_tag_re, page_number_furniture,
                            formula_tag_number, formula_trailing_tag, formula_tag_re,
-                           formula_tag_shape_ok, formula_tag_noise)
+                           formula_tag_shape_ok, formula_tag_noise, folio_norm)
 from lib.page_dir import node_page_dir as _node_page_dir
 
 OUT_DIR_NAME = "book_structure"
@@ -1201,21 +1201,59 @@ def _dedupe_sibling_nodes(node):
         吸进练习节点（实测该形态里空壳在前、真标题在后）。
       * `name` 取组内首个**不等于裸 key** 的名字（保住印出来的标题，弃
         `10.2` 这类裸号名），子节点仍按文档序保留并集。
+
+    🔴 **字母子块豁免**（Arnold《经典力学的数学方法》实测 §8 / §14）：父节带
+    `letter_subs` 元数据时，节内印有小写字母块标题（C. / D. / E.），而例/问题
+    一类计数器**在每个字母块内从 1 起重**——同 key 兄弟分处**不同**字母块，
+    是两条真条目而非重号空壳，合并会整条删掉后一块的题头并把锚点页码改歪
+    （`check_contract_anchors` 随即报 ANCHOR-SANITY）。判据用块首页把条目
+    归到窗口（bisect），窗口不同即不合并；同窗口（含同页）照旧合并，
+    无 `letter_subs` 的书行为逐字不变。
     """
     kids = node.get("sub_sec")
     if not isinstance(kids, list):
         return
+
+    bounds = []
+    for e in (node.get("letter_subs") or []):
+        try:
+            bounds.append(int(e.get("page_start")))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    bounds.sort()
+
+    def _letter_window(c):
+        """条目落在父节第几个字母块窗口（块首前 = -1）；无元数据返回 None。
+
+        用 `bisect_left`：块首**同页**的条目按印刷序多半仍在**上一块**内
+        （Arnold §8 实测：D 块的 问题2..6 与 E 块首同印于 p43，E 的
+        问题1..3 在 p47）。判据只用于「是否分处两块」，同页必然同窗口 →
+        照旧合并，故宁可把边界页条目算作前一块也不误并两条真条目。
+        """
+        if not bounds or str(c.get("type")) in ("chapter", "section"):
+            return None
+        try:
+            p = int(c.get("page_start") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return bisect.bisect_left(bounds, p) - 1
+
     merged, by_id = [], {}
     for c in kids:
         if not (isinstance(c, dict) and "key" in c and "type" in c):
             merged.append(c)
             continue
         gid = (str(c.get("key")), str(c.get("type")))
-        if gid not in by_id:
-            by_id[gid] = c
+        w = _letter_window(c)
+        # 登记处按 (key, type, 字母块窗口) 分格：同块内重号仍是空壳要合并，
+        # 跨块重号是两条真条目各占一格（无 letter_subs 时窗口恒 None，逐字
+        # 退回旧行为）。
+        slot = (gid, w)
+        if slot not in by_id:
+            by_id[slot] = c
             merged.append(c)
             continue
-        keep, new = by_id[gid], c
+        keep, new = by_id[slot], c
         try:
             later = int(new.get("page_start") or 0) > int(keep.get("page_start") or 0)
         except (TypeError, ValueError):

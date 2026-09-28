@@ -116,6 +116,9 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     ``attach_content._filter_noise`` 对齐——契约侧已正确把页码当噪声丢弃，若此处
     不过滤，源真值会把页码当成"独立成块的公式编号"→ 源/契约不对称 → 假 FAIL
     （数学分析 ch9-18 实测：页脚页码 '37'/'492' 等被误判为公式编号）。
+    🔴 **页码类判据的文本归一化须与契约侧同源**（``lib.numbering.folio_norm``）：
+    印刷页码常带装饰点（``·376·``），只压空白的归一化会让跟踪律样本被装饰点打散，
+    而偶发漏掉装饰点的那一页（``386``）就会单独漏进真值集 → 同样是不对称假 FAIL。
 
     🔴 **图区排除**：图内坐标标签（如 ``(1,2)``、``(0,1)``）整块恰为“编号形态”，
     但它们是图内容而非公式编号。契约侧这些文本随图区域内容被 splice 拆碎 /
@@ -125,7 +128,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     """
     from page_json import PageJson
     from lib.numbering import (formula_tag_number, formula_paren_tag_re,
-                               page_number_furniture)
+                               page_number_furniture, folio_norm)
     _dir = page_dir or ext
     lo, hi = int(start), int(end)
 
@@ -203,8 +206,13 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     # 「公式编号未挂到公式」建议全线失真，还会诱导写手给页码编造 \tag{16}。
     # 判据与 attach 侧共用 lib.numbering.page_number_furniture（页码 = 页序 − 恒定
     # 偏移的算术指纹），两处不得各写一份。
+    # 🔴 **归一化也必须同源**（2026-09-28 阿诺尔德附录O p401 实测）：印刷页码带装饰
+    # 点（`·373·` / `: 377 .` / `380·`），只压空白的 `_norm_text` 让它们进不了纯数字
+    # 统计 → 恒定偏移样本 <3 页 → 跟踪律失明；偏偏偶有一页 OCR 漏掉装饰点（p401 的
+    # 干净 `386`）→ 该页页码被当成「独立成块的公式编号」，而契约侧（用 `_norm` 去标点）
+    # 早已把它当噪声丢弃 → 源/契约不对称 → `CONTENT GATE: FAIL 公式编号丢失 ['386']`。
     _furn = page_number_furniture(
-        [(p, y, bottom, _norm_text(s).replace(" ", ""))
+        [(p, y, bottom, folio_norm(s))
          for p, y, bottom, s, _xc, _yc in raw], page_height)
 
     out = set()
@@ -212,16 +220,19 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         n = _norm_text(s).replace(" ", "")
         if not n:
             continue
+        nf = folio_norm(s)                    # 页码类判据的键（与契约侧同源）
         if len(n) >= 4 and len(edge_pages.get(n, ())) >= 2:
             continue                           # 页眉/页脚/版权行
         if len(all_pages.get(n, ())) >= max(3, int(0.5 * n_pages)):
             continue                           # running head 变体
         # 页码：极端边缘的短纯数字（带括号的编号豁免——它是真编号，见 _filter_noise）
-        if (page_height > 0 and n.isdigit() and len(n) <= 3
+        # 🔴 纯数字判定用 `nf`（去装饰点后才是数字）——`_filter_noise` 用的 `_norm`
+        # 同样去标点，两侧口径一致；括号豁免仍查原样 `s`，`(7)` 永远不被当页码。
+        if (page_height > 0 and nf.isdigit() and len(nf) <= 3
                 and not formula_paren_tag_re(ncomp, letter=letter).match(s)
                 and (y < 0.06 * page_height or bottom > 0.94 * page_height)):
             continue
-        if (p, n) in _furn:
+        if (p, nf) in _furn:
             continue                           # 页码跟踪律命中
         # 🔴 无括号且含字母的短串（'2e' / '4c' / '020m' / '1970s'）= OCR 碎片（如
         # `2e^{x}` 被切成独立块、年份被当成编号），不是编号：括号是编号的强信号，
@@ -373,8 +384,14 @@ def check_chapter(ext, ch_node):
     # 契约已被剔除、复算却把 tag 挂回来 → 同一公式「缺块 + 多块」假 FAIL
     # （本书 ch15 的 `5-1` 实测；判据与闸门 ⑭ 同源）。
     from lib.tag_attestation import (dir_page_loader as _dpl,
-                                     strip_unattested as _strip)
-    _strip(built, _dpl(_node_page_dir(ext, ch_node, ch_key), ext))
+                                     strip_unattested as _strip,
+                                     attested_numbers as _attested)
+    # 🔴 豁免集与闸门 ⑭ 同一份登记（verify_config `formula.known_book` = 人工目视
+    # 印面确证的真编号）。扫描书 OCR 会整块漏掉页边编号，人工按印面把号回填进契约
+    # 之后，复算若仍无差别剔除它，就报「磁盘比复算多一块」的假 FAIL，并把回填判成
+    # 手改污染。
+    _strip(built, _dpl(_node_page_dir(ext, ch_node, ch_key), ext),
+           attested=_attested(ext))
     built_sig = _collect_contract_blocks(built)
     p = ac.out_path(ext, ch_key)
     if not os.path.exists(p):

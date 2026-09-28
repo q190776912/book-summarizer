@@ -419,7 +419,8 @@ def _fence_issues(line_list):
       F7c) blockquote 内 `> $$` 开围栏的上一非空行不是空 `>` 行（如紧接
            `> **证明**：` 文字）——须插一个空 `>` 行；
       F7d) 顶层开 `$$` 的上一非空行是普通文本（缺空行）；
-      F7e) `\tag{` 出现在数学模式外（tag 必须在 `$$` 块内）。
+      F7e) `\tag{` 出现在数学模式外（tag 必须在 `$$` 块内）；
+      F7f) blockquote 显示式围栏过度缩进 `>    $$`（须归一为 `> $$`）。
     """
     problems = []
     in_math = False        # 顶层 $$ 块
@@ -427,6 +428,15 @@ def _fence_issues(line_list):
     prev_raw = None        # 紧邻上一非空行（lstrip 原文；空行清空）
     for raw in line_list:
         is_bq = raw.lstrip().startswith(">")
+        # F7f：blockquote 显示式围栏过度缩进（`>    $$`）。章级 F 层
+        # （check_katex.py Pass 1h）一直判违规，但此处 `content` 先剥掉
+        # `>` + 单个空白再 strip()，`>    $$` 与 `> $$` 变得无法区分 →
+        # 单元门控全程放行，88 处（Iwaniec-Kowalski ch4/ch21）直到 merge
+        # 后的整章校验才暴露。判据与 Pass 1h 同形：`>` 后 2 个以上空白接 `$$`。
+        if is_bq and re.match(r"^\s*>\s{2,}\$\$", raw):
+            problems.append(
+                "over-indented blockquote display math (`>    $$`) — normalize "
+                "to `> $$`（围栏独占一行、`>` 后只留一个空格）")
         content = re.sub(r"^\s*>\s?", "", raw) if is_bq else raw
         s = content.strip().replace("\\$", "")
         if s == "$$":

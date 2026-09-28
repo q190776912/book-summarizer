@@ -45,6 +45,10 @@ CHAPTER_MAP = {"chapters": [{"chapter": CH, "start": START, "end": END}]}
 
 # 印刷真值：§5.1 标题首词恰为 Definition（伪装源），§5.3 标题与 Definition
 # 无关（真条头同号不同文，不得被豁免吞掉）；定理5.3 是契约真缺项。
+# 🔴 定理5.3 的页码排在 定理5.4（p119）之后（旧夹具放在 p120）会被
+# `check_contract_anchors`（回填后锚点自洽闸）与 B 层「顺序错乱」双向夹住——
+# 序标 5.3 晚于 5.4 印刷在真实书里不存在（章内共享计数器恒随页码递增），
+# 那正是新闸要拦的形态；故夹具把真缺条头挪到它编号应有的页位。
 PAGES = {
     118: [
         "5.1 Definition and basic properties of the zeta function",
@@ -54,11 +58,12 @@ PAGES = {
     ],
     119: [
         "5.3 Linear congruences",
+        "Theorem 5.3. Third theorem, genuinely absent from the contract.",
         "5.3 Definition of a reduced residue system, genuinely printed here.",
         "Theorem 5.4. Wilson's theorem.",
     ],
     120: [
-        "Theorem 5.3. Third theorem, genuinely absent from the contract.",
+        "A closing paragraph without any labelled head.",
     ],
 }
 

@@ -170,5 +170,85 @@ class TestSectionedPathTailExcluded(unittest.TestCase):
             self.assertEqual(out["_sectioned"].get("1.1"), {"1", "2", "3"})
 
 
+def _write_pages_y(ext, pages):
+    """`pages` = per-page list of (text, y) blocks, so the y coordinate of a
+    block on the tail page can be placed above / below the exercise anchor.
+    Polygons are flat (`[x0, y0, x1, y1, …]`) exactly as in real page JSON,
+    which is what `poly[1]` == top-y relies on."""
+    os.makedirs(ext, exist_ok=True)
+    for i, blocks in enumerate(pages, start=1):
+        with open(os.path.join(ext, "page_%03d.json" % i), "w",
+                  encoding="utf-8") as f:
+            json.dump({"text": [{"text": t, "poly": [0, y, 10, y + 12]}
+                                for t, y in blocks]},
+                      f, ensure_ascii=False)
+
+
+EX_NAME = "Prove that the series converges uniformly"
+
+
+class TestTailPageAnchorIsBlockLevel(unittest.TestCase):
+    """Apostol IANT ch6/ch7/ch13 (2026-09-28): the consolidated-exercise block
+    STARTS on a page that also carries the chapter's LAST display formulas, so
+    excluding the whole page deleted real printed labels (12)/(20)(21)/(36) and
+    turned faithful `\\tag`s into FABRICATED.  The exclusion is now bounded by
+    the first exercise block's y ON that page; when no anchor can be located
+    the old whole-page behaviour is kept (no book gains a page of tail noise).
+    """
+
+    def _run(self, ext, tail_blocks):
+        _write_pages_y(ext, [
+            [("1.1 Some Theory", 20), ("(1)", 60)],
+            tail_blocks,
+        ])
+        _write_contract(ext, 1, [
+            _section("1.1", 1),
+            {"key": "1.1.1", "type": "exercise", "name": EX_NAME,
+             "page_start": 2, "page_end": 2, "sub_sec": [],
+             "consolidated": True},
+        ])
+        src = SourceFormulaIndex(ext, build_formula_patterns(1), True)
+        return src.build_sectioned(1, 1, 2, ["1.1"], ncomp=1)
+
+    def test_labels_above_exercise_anchor_are_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            ext = os.path.join(d, "_extract")
+            out = self._run(ext, [
+                ("(12)", 100),                      # body formula, above anchor
+                ("1. " + EX_NAME + " on the whole interval.", 300),
+                ("(13)", 900),                      # inside the exercise block
+            ])
+            self.assertEqual(out["_sectioned"]["1.1"], {"1", "12"})
+
+    def test_anchorless_tail_page_falls_back_to_whole_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            ext = os.path.join(d, "_extract")
+            # No block on the tail page quotes the exercise title -> no anchor
+            # -> the whole page is excluded (pre-fix behaviour, zero new noise).
+            out = self._run(ext, [("(12)", 100), ("(13)", 900)])
+            self.assertEqual(out["_sectioned"]["1.1"], {"1"})
+
+    def test_pages_after_the_anchor_page_are_always_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            ext = os.path.join(d, "_extract")
+            _write_pages_y(ext, [
+                [("1.1 Some Theory", 20), ("(1)", 60)],
+                [("1. " + EX_NAME + " on the whole interval.", 300)],
+                [("(99)", 100)],
+            ])
+            _write_contract(ext, 1, [
+                _section("1.1", 1),
+                {"key": "1.1.1", "type": "exercise", "name": EX_NAME,
+                 "page_start": 2, "page_end": 2, "sub_sec": [],
+                 "consolidated": True},
+            ])
+            src = SourceFormulaIndex(ext, build_formula_patterns(1), True)
+            src._load_sec_keys(1)          # tail page + anchor come from here
+            self.assertTrue(src._tail_page_skip(3))
+            self.assertFalse(src._tail_page_skip(2))
+            out = src.build_sectioned(1, 1, 3, ["1.1"], ncomp=1)
+            self.assertEqual(out["_sectioned"]["1.1"], {"1"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

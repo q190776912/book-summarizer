@@ -6,6 +6,10 @@
   · 进入 flow X 的 step S 前，flow X 内 S 之前的所有步骤必须已 done（顺序闸）；
   · 进入某 flow 前，其上游 flow 的末步必须已完成（主干闸）；
   · 一个步骤只有在「物理证据复核通过」后才被标记 done（禁止手填账本）；
+  · mark/run 之前先复演**已完成步**的证据：账上做完的东西被误删时立即拒绝并给出
+    快照回滚提示（lib/snapshot_guard，2026-09-28 一次子代理 rm -rf 抹掉整棵书树后加）；
+  · 每次成功 mark 自动在 ``<extract_dir>/_snapshots/`` 留一份 tar.gz 快照
+    （契约 + units + 章 md + 台账；``extract.mm_repair`` 另含 page_*.json 与图像）；
   · 历史已合规完成之书用 ``bootstrap`` 一次性回填账本 + 补写 _extraction_done.json。
 
 用法
@@ -15,6 +19,7 @@
   python tools/flow_runner.py verify <book_dir> <flow> <step> [--extract <extract_dir>]
   python tools/flow_runner.py mark   <book_dir> <flow> <step> [--extract <extract_dir>]
   python tools/flow_runner.py run    <book_dir> <flow> <step> [--pdf <pdf>] [--extract <extract_dir>]
+  python tools/flow_runner.py audit  <book_dir> [--extract <extract_dir>]
   python tools/flow_runner.py bootstrap <book_dir> [--extract <extract_dir>]
 
 约定：book_dir 为本书工作目录（含最终 .md）。extract_dir 默认 = <book_dir>/_extract；
@@ -44,6 +49,40 @@ from lib.flow_gate import (FLOW_ORDER as FG_FLOW_ORDER,  # noqa: E402
                            is_done, status as gate_status, bootstrap as gate_bootstrap,
                            ledger_path, FlowGateError)
 from flows._flow_contract import RUN_COMMANDS, EVIDENCE, check_evidence  # noqa: E402
+from lib import snapshot_guard  # noqa: E402
+
+# 需要连 OCR / 图像一起归档的步（重跑代价最大，且此后再不会变）
+FULL_SNAPSHOT_STEPS = {"extract.mm_repair"}
+
+
+def _guard_existing_evidence(book_dir, extract_dir):
+    """落账新步之前复演**已完成步**的证据谓词：产物消失（误删/挪走/截断）即拒绝。
+
+    判据与当初 mark 用的完全同一套（``flows._flow_contract.EVIDENCE``），所以这里
+    FAIL 的含义只有一个：账上已经做完的东西，盘上不存在了。
+    """
+    ex = _extract_dir(book_dir, extract_dir)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    if bad:
+        print("❌ 拒绝继续：台账里已完成的步骤，其物理证据已不在位（疑似误删/挪动）：")
+        for step, detail in bad:
+            print(f"  🔴 {step}: {detail}")
+        print("  " + snapshot_guard.restore_hint(ex))
+        print("  先从快照回滚或重做对应步骤，再回来 mark/run。")
+    return bad
+
+
+def _after_mark(book_dir, extract_dir, flow, step):
+    ex = _extract_dir(book_dir, extract_dir)
+    tag = "%s.%s%s" % (flow, step,
+                       ".full" if f"{flow}.{step}" in FULL_SNAPSHOT_STEPS else "")
+    try:
+        path = snapshot_guard.snapshot(book_dir, ex, tag)
+    except Exception as e:  # 快照失败不阻塞落账，但必须喊出来
+        print(f"⚠️ 快照失败（{e}）——本次落账没有留底。")
+        return
+    if path:
+        print(f"   📦 快照: {os.path.relpath(path, ex)}")
 
 
 def _extract_dir(book_dir, override=None):
@@ -86,7 +125,28 @@ def _next_step(book_dir, extract_dir=None):
 
 def cmd_status(book_dir, extract_dir):
     _print_status(book_dir, extract_dir)
-    return 0
+    ex = _extract_dir(book_dir, extract_dir)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    if bad:
+        print("\n🔴 证据复演（已完成步的产物是否仍在位）:")
+        for step, detail in bad:
+            print(f"   ❌ {step}: {detail}")
+        print("   " + snapshot_guard.restore_hint(ex))
+    return 1 if bad else 0
+
+
+def cmd_audit(book_dir, extract_dir):
+    """只跑证据复演：台账说做完了，盘上还在不在。"""
+    ex = _extract_dir(book_dir, extract_dir)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    if not bad:
+        print(f"✅ 证据复演通过：{ex}")
+        return 0
+    print(f"🔴 证据复演失败（{len(bad)} 步的产物已不在位）:")
+    for step, detail in bad:
+        print(f"   ❌ {step}: {detail}")
+    print("   " + snapshot_guard.restore_hint(ex))
+    return 1
 
 
 def cmd_next(book_dir, extract_dir):
@@ -120,6 +180,9 @@ def cmd_mark(book_dir, flow, step, extract_dir=None):
         print(f"✘ 拒绝标记 {flow}.{step}：不是已注册的流程步骤。\n"
               f"  已注册: {known}")
         return 1
+    # 🔴 先复演已完成步的证据：产物被误删时绝不允许继续往前落账
+    if _guard_existing_evidence(book_dir, extract_dir):
+        return 1
     # 标记前先复核证据
     ok, detail = check_evidence(flow, step, book_dir, extract_dir)
     if not ok:
@@ -128,6 +191,7 @@ def cmd_mark(book_dir, flow, step, extract_dir=None):
         return 1
     mark(book_dir, flow, step, evidence={"detail": detail}, extract_dir=extract_dir)
     print(f"✅ 已标记 {flow}.{step} 完成（{detail}）。")
+    _after_mark(book_dir, extract_dir, flow, step)
     return 0
 
 
@@ -141,6 +205,9 @@ def _default_pdf(book_dir):
 
 
 def cmd_run(book_dir, flow, step, pdf=None, extract_dir=None):
+    # 0) 🔴 已完成步的证据复演——上游产物被误删时，任何新脚本步都不许起跑
+    if _guard_existing_evidence(book_dir, extract_dir):
+        return 1
     # 1) 主干前置闸
     try:
         require_flow_prereqs(book_dir, flow, extract_dir)
@@ -182,6 +249,7 @@ def cmd_run(book_dir, flow, step, pdf=None, extract_dir=None):
         mark(book_dir, flow, step, evidence={"detail": detail, "cmd": cmd},
              extract_dir=extract_dir)
         print(f"✅ {flow}.{step} 完成并标记（{detail}）。")
+        _after_mark(book_dir, extract_dir, flow, step)
         return 0
     else:
         print(f"▶ [{flow}.{step}] 需 agent 手动完成（{kind}）:")
@@ -215,6 +283,7 @@ USAGE = """\
   flow_runner.py verify  <book_dir> <flow> <step> [--extract <extract_dir>]
   flow_runner.py mark    <book_dir> <flow> <step> [--extract <extract_dir>]
   flow_runner.py run     <book_dir> <flow> <step> [--pdf <pdf>] [--extract <extract_dir>]
+  flow_runner.py audit   <book_dir> [--extract <extract_dir>]   # 已完成步的证据复演（产物是否仍在位）
   flow_runner.py bootstrap <book_dir> [--extract <extract_dir>]
 
 多册书：每册操作时传 --extract <book_dir>/_extract/<册>，账本分册隔离。
@@ -244,6 +313,11 @@ def main():
             print(USAGE); return 2
         ex = _pop_extract(rest)
         return cmd_status(rest[0], ex)
+    if cmd == "audit":
+        if not rest:
+            print(USAGE); return 2
+        ex = _pop_extract(rest)
+        return cmd_audit(rest[0], ex)
     if cmd == "next":
         if not rest:
             print(USAGE); return 2

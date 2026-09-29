@@ -7,8 +7,9 @@
 例10..13 被判「缺号 1..9」——structure 完整性闸门 ch1 实测 141 条假 blocking。
 
 根治（_section_anchors）：token 以「当前节号 + '.'」为前缀 = 节内子小节头，
-不注册锚点；真重启边界（谷超豪 "### §2"、Arnold "### §A"、跨节 "## §1.2"）
-行为逐字不变。
+不注册锚点；真重启边界（谷超豪 "### §2"、跨节 "## §1.2"）行为逐字不变。
+2026-09-29 追加：裸字母子块 "### §A" 同样**不**开新窗（继承父节锚）——Arnold
+《经典力学的数学方法》节内计数器横跨字母块连续编号，旧的分窗字母锚假报 65 条缺号。
 """
 import sys
 import unittest
@@ -55,9 +56,24 @@ class TestAnchorContainment(unittest.TestCase):
         md = "## §4 a\n**性质1** x\n### §2 b\n**性质1** y\n"
         self.assertEqual(_anchors(md), ["4", "4-2"])
 
-    def test_arnold_letter_blocks_kept(self):
-        md = "## §24 a\n### §A b\n## §25 c\n### §B d\n"
-        self.assertEqual(_anchors(md), ["24", "24.A", "25", "25.B"])
+    def test_arnold_letter_blocks_inherit_parent_window(self):
+        # 字母子块不是计数器边界（Arnold ch7 §32 实测：问题1..15 横跨 A..E）：
+        # 挂在 `### §D` 下的 问题4..8 必须仍属 "32" 窗，不得切出 "32.D" 假缺号。
+        md = ("## §32 外形式\n\n**问题1** a\n\n### §A 1-形式\n\n**问题2** b\n\n"
+              "### §D 外乘积\n\n**问题4** c\n\n**问题8** d\n\n### §E 外单项式\n\n"
+              "**问题9** e\n")
+        self.assertEqual(_anchors(md), ["32"])
+
+    def test_letter_blocks_in_different_sections_do_not_merge(self):
+        # 旧逻辑担心的并窗（§24.B 的定理3、4 与 §25.B 的定理1 混成 [3,4,1]）仍被区分：
+        # 父节锚天然不同窗 ⇒ 负向判据不许回退成裸字母锚。
+        md = "## §24 a\n### §B b\n**定理3** x\n**定理4** y\n## §25 c\n### §B d\n**定理1** z\n"
+        self.assertEqual(_anchors(md), ["24", "25"])
+
+    def test_parentless_letter_heading_still_registers(self):
+        # 无 `## §<数字>` 父节时（单级体例）裸字母标题维持旧注册行为。
+        md = "### §A a\n### §B b\n"
+        self.assertEqual(_anchors(md), ["A", "B"])
 
     def test_dangling_parentless_deep_heading_kept(self):
         # 父节未知（无 ## 节头）时深层数字标题维持旧注册行为（各自成窗）。

@@ -586,6 +586,33 @@ def _norm_entry_label(label):
     return label, None
 
 
+# 🔴 带撇条目号（Serre《Linear Representations of Finite Groups》2026-09-29 实测
+# ch18 p.152：Theorem 42 之后印 **Theorem 35'**，ch11 甚至排到 Theorem 23'''）：
+# 撇号项是原书对**已陈述定理的重述/加强**，按定义不占主计数器席位，所以它合法地
+# 出现在更大编号之后。`_parse_entry` 会把撇号剥掉 → 35' 解析成 35 落进同一阅读
+# 序列 [42, 42, 35, 43] → 假「顺序错乱」BLOCKING（本书 ch10/11/18 共 8 处）。
+# 判据 = 条头**自身编号**之后紧跟撇号（' ’ ′ ` ´，可裹在 $…$ 里）且撇号不接单词
+# （`Definition 7 'the norm'` 这种引号式标题不是撇号项）。这类条目**不进阅读顺序
+# 窗**（section_order），但照常计入 groups/present_md，故它所重述的号与自身都不
+# 会被误报缺号——只豁免「顺序」这一项，不豁免「存在」这一项。
+_OWN_NUM_RUN_RE = re.compile(r'\d+(?:' + SEP_TIGHT + r'\d+)*')
+_PRIME_GLYPHS = "'’′`´"
+_PRIME_AFTER_NUM_RE = re.compile(
+    r'^\s?\$?[' + _PRIME_GLYPHS + r']{1,3}(?![A-Za-z0-9\u4e00-\u9fff])')
+
+
+def _own_number_primed(inner):
+    """条头自身编号后是否紧跟撇号（'Theorem 35'' / '35' 定理'）。
+
+    只取 `inner` 里**第一个**编号段——条头总是以「类型词+自身号」或「自身号+…」
+    开头，其后的编号才可能是交叉引用（'Theorem 5 (cf. 3'' )' 的自身号是 5）。
+    """
+    m = _OWN_NUM_RUN_RE.search(inner or '')
+    if not m:
+        return False
+    return bool(_PRIME_AFTER_NUM_RE.match(inner[m.end():]))
+
+
 def _resolve_demoted_entries(entries, demoted):
     """两步法窗算术：专名内嵌习题词的条头（'~Exercise'/'~Problem'/ '~问题'）先
     按内容窗登记（entries 里 label 即 '~Word'）；随后，仅当其目标习题窗已存在
@@ -595,15 +622,15 @@ def _resolve_demoted_entries(entries, demoted):
     的 2 号已有真习题头 → 不回补，留在内容窗）；ch10「Topology Exercise 10.9.2」
     是真习题（习题窗 10.9 缺 2 号且 10.9.2 内容另有其头 → 回补）。"""
     ex_present = {}
-    for gk, num, _key, _lab, _pfx in entries:
+    for gk, num, _key, _lab, _pfx, _primed in entries:
         if 'ex' in gk.split(':'):
             ex_present.setdefault(gk, set()).add(num)
     for idx, gi, prefix_str, item_num in demoted:
         ex_gk = f"{gi}:ex:{prefix_str}"
         have = ex_present.get(ex_gk)
         if have is not None and item_num not in have:
-            gk0, num0, key0, lab0, pfx0 = entries[idx]
-            entries[idx] = (ex_gk, num0, key0, lab0, pfx0)
+            gk0, num0, key0, lab0, pfx0, pr0 = entries[idx]
+            entries[idx] = (ex_gk, num0, key0, lab0, pfx0, pr0)
             have.add(item_num)
     return entries
 
@@ -626,7 +653,7 @@ def _merge_orphan_ex_windows(entries):
     """
     main_nums = {}
     ex_nums = {}
-    for gk, num, _key, _lab, _pfx in entries:
+    for gk, num, _key, _lab, _pfx, _pr in entries:
         if 'ex' in gk.split(':'):
             ex_nums.setdefault(gk, set()).add(num)
         else:
@@ -650,9 +677,9 @@ def _merge_orphan_ex_windows(entries):
         holes = set(range(lo, hi + 1)) - M
         if not E <= holes or (set(range(lo, hi + 1)) - (M | E)):
             continue                      # 并不平主窗 → 维持原路由
-        for i, (gk, num, key, lab, pfx) in enumerate(entries):
+        for i, (gk, num, key, lab, pfx, pr) in enumerate(entries):
             if gk == ex_gk and num in E:
-                entries[i] = (main_gk, num, key, lab, pfx)
+                entries[i] = (main_gk, num, key, lab, pfx, pr)
         M |= E
     return entries
 
@@ -829,12 +856,13 @@ def _section_anchors(txt):
     groups are untouched (zero regression).  The anchor id is the first token
     after § (numbered "2-2" / appendix-style "2-A" / descriptive word for
     unnumbered sections) so every distinct `## §` heading resets the window.
-    🔴 锚点层级感知（Arnold《数学方法》体例回归）：裸字母子块标题 `### §A`
-    的首 token 是 "A"，若直接作锚点，则不同节下的同名块 A/B/C 全部并窗
-    （§24.B 的定理3、4 与 §25.B 的定理1 混成 seq=[3,4,1] 假错序）。故对
-    `##`（数字节）与 `###`+（字母子块）分层维护锚点路径：子块锚 =
-    "<最近节数字>.<字母>"，节锚 = 自身 token。纯 `## § <标题>` 无 token 时
-    维持旧行为（不注册新窗口）。
+    🔴 锚点层级感知：裸字母子块标题 `### §A` **继承父节窗口**（不另开一窗）。
+    印刷体例里节内计数器横跨 A./B./C. 子块连续编号（Arnold《经典力学的数学方法》
+    §32 的 问题1..15 分布在五个字母块中），旧逻辑把 "32.D" 当独立窗口就把连续序列
+    切开、假报「缺号 1..3」（字母材料化后 ch7 一次 65 条 blocking，2026-09-29 实测）。
+    旧逻辑想防的「不同节下同名字母块并窗」（§24.B 的定理3、4 与 §25.B 的定理1 混成
+    seq=[3,4,1]）由父节锚天然区分（"24" vs "25"）。父节未知时仍退化为裸字母锚。
+    数字型深层子标题（谷超豪 "### §2"）与节内子小节头（Rosen "### §1.1.3"）行为不变。
     """
     _sec_pos = []   # sorted heading start offsets
     _sec_str = []   # parallel section ids
@@ -850,10 +878,27 @@ def _section_anchors(txt):
             # （type1/scope3 书计数器在 §1.1 级重置、不在 1.1.x 级重起），
             # 例10..13 挂在 "## §1.1.3" 下若另开窗口会假报「缺号 1..9」（ch1
             # 实测 141 条 blocking 全由此出）。不注册锚点，父节窗口继续有效。
-            # Gu 超豪式「### §2」（token 不以父节号开头）与 Arnold 字母子块
-            # 均不受影响——它们是真重启边界。
+            # Gu 超豪式「### §2」（token 不以父节号开头）不受影响——它是真重启边界。
+            continue
+        if _cur_num and re.match(r'^[A-Z]$', _tok):
+            # 🔴 字母子块不是计数器窗口边界（Arnold《经典力学的数学方法》ch7 实测
+            # 2026-09-29）：印刷体例里 §32 的 问题1..15 横跨 A./B./C./D./E. 五个字母
+            # 子块连续编号，把 "32.D" 当独立窗口就切成 4..8 / 9..15 两段，各段都被判
+            # 「缺号 1..3」——字母材料化后一章一次假报 65 条 blocking。
+            # 旧的「24.A / 25.B」分窗只为了防**跨节**并窗（裸字母 "B" 把 §24.B 与
+            # §25.B 混成 seq=[3,4,1]），继承父节锚同样达到该目的（窗 = "24" vs "25"），
+            # 且不再切开节内连续计数器。父节未知时（_cur_num 为空）维持旧行为。
             continue
         if len(_m.group(1)) == 2:
+            # 🔴 无父节的字母块同样**不是**窗口边界（Arnold《经典力学的数学方法》
+            # 附录B 实测 2026-09-29）：附录把字母块升到 `## §A`，而全篇只有**一条**
+            # 定理计数器（定理1..6 印在块 D、7..10 在块 F、11..12 在 H、13 在 J、
+            # 14..15 在 K），逐字母开窗就把连续序列切开 → 假「1:F 缺号 1..6」
+            # （BLOCKING，整章卡死）。不注册锚点 = 整篇共用一个窗（`gi:file`），
+            # 与上面「字母子块继承父节」同源；真按字母重启计数的书其条头自带
+            # 前缀（`Theorem A.1`）走 prefix_str 分支，本判据碰不到。
+            if _cur_num is None and re.match(r'^[A-Z]$', _tok):
+                continue
             # 两级节（或任何非单大写字母 token 的标题）：锚 = 自身 token
             _anchor = _tok
             if re.match(r'^\d', _tok):
@@ -869,8 +914,9 @@ def _section_anchors(txt):
             else:
                 _anchor = _tok
         else:
-            # 单大写字母子块：锚 = 父节数字 + 字母（父未知时退化为裸字母）
-            _anchor = f"{_cur_num}.{_tok}" if _cur_num else _tok
+            # 单大写字母子块且**父节未知**（全书无 `## §<数字>` 头）：退化为裸字母锚，
+            # 维持旧注册行为（有父节时上面的分支已把它并回父节窗口）。
+            _anchor = _tok
         _sec_pos.append(_m.start())
         _sec_str.append(_anchor)
     return _sec_pos, _sec_str
@@ -915,7 +961,7 @@ def _md_gap_blocking(ctx):
         return _sec_str[i] if i >= 0 else None
 
     _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
-    entries = []  # (group_key, item_num, unique_key, label, prefix_str)
+    entries = []  # (group_key, item_num, unique_key, label, prefix_str, primed)
     _demoted = []  # 习题窗两步法候选：(entries 下标, gi, prefix_str, item_num)
     for span in _SPAN_RE.finditer(txt):
         inner = span.group(1).strip()
@@ -1003,7 +1049,8 @@ def _md_gap_blocking(ctx):
             _dw_norm = _norm_label(_demoted_word)
             _dgi = cfg.ordinal.index(cfg.group_for_label(_dw_norm))
             _demoted.append((len(entries), _dgi, prefix_str, item_num))
-        entries.append((gk, item_num, key, label, prefix_str))
+        entries.append((gk, item_num, key, label, prefix_str,
+                        _own_number_primed(inner)))
 
     _resolve_demoted_entries(entries, _demoted)
     _merge_orphan_ex_windows(entries)
@@ -1017,7 +1064,7 @@ def _md_gap_blocking(ctx):
     # 检查保持一致地按 gk 分组即可正确按类型隔离顺序校验。
     section_order = defaultdict(list)   # gk -> [item_num,...] 阅读顺序（按类型隔离，用于顺序错乱检测）
     present_md = set()
-    for gk, num, key, label, prefix_str in entries:
+    for gk, num, key, label, prefix_str, primed in entries:
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
         # per-type mode embeds the label ("C.S:LABEL"), combined mode does not
         # ("C.S").  Re-adding `label` here would split a combined section into
@@ -1026,7 +1073,10 @@ def _md_gap_blocking(ctx):
         present_md.add(key)
         # 阅读顺序记录（无论 per-type/combined，同一节前缀 §C.S 的编号按出现先后入列，
         # 用于跨类型顺序错乱检测：例如 2.6-8 这种 Example 掉到 2.6-11 这种 Lemma 之后）。
-        section_order[gk].append(num)
+        # 🔴 撇号重述项（Theorem 35'）不占主计数器席位，不入阅读顺序窗，否则
+        # 「35 出现在 42 之后」的合法印面会被误判 BLOCKING 错位（见上 _PRIME 注释）。
+        if not primed:
+            section_order[gk].append(num)
 
     # --- route-A: .md 自身引用的 Table/Figure 编号，序列查缺时跳过 -------------
     # Fraleigh 把表/图编入连续章节序号，但 .md 把它们写成正文（如 "Table 1.20
@@ -1313,6 +1363,20 @@ def _scan_book_category_items(ch, start, end, ext_dir):
     return {k: sorted(set(v)) for k, v in by.items()}
 
 
+def _split_extra(all_keys, entry_keys, extracted):
+    """把「md 有、契约无」的键分成**条目级**与**提及级**两桶。
+
+    条目级 = md 里以独立加粗条头出现（`entry_keys`）→ 契约很可能漏登记一个印面
+    条目；提及级 = 只出现在正文/交叉引用里 → 通常是正确过滤的引用。
+    返回 ``(union, entry_bucket, mention_bucket)``；union 保持旧 `extra` 口径，
+    两桶是其不切分信息的重述（``entry ∪ mention == union``），pass/fail 语义不变。
+    """
+    ex = set(all_keys) - set(extracted)
+    ent = ex & set(entry_keys)
+    return (sorted(ex, key=sortkey), sorted(ent, key=sortkey),
+            sorted(ex - ent, key=sortkey))
+
+
 def _merged_category_first_missing(ctx, all_keys, blocking):
     """Q 逻辑并入 B：整类首项缺失检测。仅 three_level 方案启用（ordinal=3）。"""
     if ctx.config.primary_type != ORDINAL_THREE_LEVEL:
@@ -1390,7 +1454,18 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         extracted = extracted_raw - ignore_keys                          # 剔噪书集
         truly_missing = sorted(extracted - all_keys)
         mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
-        extra = sorted(all_keys - extracted, key=sortkey)
+        # 🔴 EXTRA 分桶（判据见 `_split_extra`）。混在一行时报告文案
+        # "usually correctly-filtered cross-refs" 会把**契约漏登记的真条目**说成
+        # 良性噪声：Apostol ch9 §9.6 印面确有 `EXAMPLE 1`（fitz 300dpi 目视，物理页
+        # 199），md 也照印面写了条头，只因 OCR 把条头粘进句子
+        # （`ExAMPLE1Determinewhether219…`）而契约无节点 → 该 EXTRA 被一路判成
+        # 「交叉引用，无需处置」。
+        # 跨书普查（51 书全部章，脚本 = Apostol 书 _extract/_census_entry_extra.py）：
+        # 条目级 EXTRA 分布在 ≥6 书、数十章，且多数是**体例**而非漏登记
+        # （statistical-inference 契约用两段键而 md 条头三段号；Lie 代数 ch1 无号
+        # 条头 `**例**`/`**定义**`）→ 一律阻断会打爆已收官书，故**只改可读性、
+        # 不改 pass/fail 语义**（`extra` 仍是并集，老消费者逐字节不变）。
+        extra, extra_entry, extra_mention = _split_extra(all_keys, entry_keys, extracted)
 
         # --- P2：提取侧查漏（Q 类整项缺失 + over-mark 守卫，归 B 层统一处理）---
         blocking = []
@@ -1467,4 +1542,6 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             'truly_missing': truly_missing,
             'mentioned_only': mentioned_only,
             'extra': extra,
+            'extra_entry': extra_entry,
+            'extra_mention': extra_mention,
         })

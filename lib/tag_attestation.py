@@ -103,6 +103,18 @@ _PAREN_LABEL_RE = re.compile(
     r"[（(]\s*((?:%s|%s)%s)\s*[)）]" % (_ORD_DIGIT, _ORD_LETTER, _LABEL_TAIL))
 _BARE_LABEL_RE = re.compile(r"(?:%s)%s" % (_ORD_DIGIT, _LABEL_TAIL))
 _LATEX_NOISE_RE = re.compile(r"\\[a-zA-Z]+\s*")
+# 🔴 **无数字头的符号编号**（Arnold《经典力学的数学方法》§52 印作 `(*)` 的展示式，
+# 印刷 p.231）：编号主体 SSOT `formula_num_core` 以 `\d+` 开头，因此**收割端永远产不
+# 出**这类 tag（`formula_tag_re` 整块匹配必须命中数字头）。于是上面两条正则对它是
+# 双盲：契约里一旦出现手回填/将来体例变化产生的 `*`，页窗里明明印着 `(*)` 却「查无
+# 锚点」→ ⑭ 判毒 → 写手照印面 `\tag{*}` 判编造、删掉判漏写（两头堵，本模块文档串
+# 开头描述的正是这个形态）。
+# 该分支**只认括号形态**：裸排 `*` 与脚注星号 / 乘号 / OCR 火星无区别。
+# 🔴 为何这个放宽对既有判据是**安全**的（不会把真毒 tag 放回来）：收割器产出的 tag
+# 一律含数字头，其锚点仍由 `_PAREN_LABEL_RE` 判定，本分支只对「整块纯粹由
+# 星号/撇号构成」的号生效，对既有全语料标定结果零影响（实测跨书普查：除本书回填的
+# `*` 外，607 份契约无任何数字头缺失 tag）。
+_SYMBOL_LABEL_RE = re.compile(r"[（(]\s*([*'’′＊]{1,3})\s*[)）]")
 
 
 def _label_forms(raw):
@@ -130,6 +142,7 @@ def _label_index(page_loader, lo, hi):
 
     ``paren`` 收**任意块内**出现的 ``(N)``（编号被 OCR 粘进公式行、或被 MFD 当公式
     检测出来都认），``bare`` 只收**整块就是一个数**的块。
+    ``paren`` 另收**无数字头**的符号编号 `(*)` / `(**)`（见 `_SYMBOL_LABEL_RE`）。
     """
     paren, bare = set(), set()
     for pg in range(int(lo), int(hi) + 1):
@@ -143,6 +156,8 @@ def _label_index(page_loader, lo, hi):
                     bare.add(tt)
                 for m in _PAREN_LABEL_RE.finditer(tt):
                     paren.add(m.group(1).replace("．", "."))
+                for m in _SYMBOL_LABEL_RE.finditer(tt):
+                    paren.add(m.group(1))
     return paren, bare
 
 

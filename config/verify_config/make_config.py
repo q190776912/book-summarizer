@@ -87,8 +87,30 @@ from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_i
 from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM,
-                           APPENDIX_NAME_RE, SUPPLEMENT_NAME_RE)
+                           SCOPE_BOOK, APPENDIX_NAME_RE, SUPPLEMENT_NAME_RE,
+                           MAP_KEY_SPECIAL_SAME_STYLE)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
+
+
+def _load_old_section_cfg(cfg_path, section_key="ch"):
+    """旧 verify_config.json 里**本段**的配置字典（map / 旧扁平两种格式都吃）。
+
+    map 格式取 ``data[section_key]``；旧扁平格式（顶层就是字段）取顶层——
+    当年扁平配置的顶层声明对附录/补篇同样生效（无 appendix 子配置时
+    ConfigLoader 整章回退主配置），所以回贴扁平顶层 = 零回归而非跨段污染。
+    读不到 / 解析失败 → ``{}``（调用方据此保持探测默认值，绝不静默放松）。
+    """
+    try:
+        with open(cfg_path, encoding="utf-8-sig") as f:
+            data = json.load(f) or {}
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if any(k in data for k in ("ch", "appendix", "supplement")):
+        sub = data.get(section_key)
+        return sub if isinstance(sub, dict) else {}
+    return data
 
 
 def _load_old_ordinal(cfg_path, section_key="ch"):
@@ -1189,6 +1211,83 @@ def _contract_counter_evidence(extract_dir, include_chapter=False,
     return deduped or None
 
 
+# 「全书连续」判据阈值：至少 2 个跨章接续证据，且连续票 ≥ 2×重起票。
+_BOOK_SCOPE_MIN_CONT = 2
+_BOOK_SCOPE_RATIO = 2
+
+
+def _book_scope_votes(per_chapter):
+    """``{章号: [条目号, …]}`` → ``(连续票数, 重起票数)``（纯函数，不读磁盘）。
+
+    按章号升序逐章扫描：本章**最小编号 > 前面所有章节的最大编号** 说明计数器
+    没有随章归零，而是接着上一章往下数 → 一票「连续」；本章出现了前面已经数过
+    的号（重起或交叠）→ 一票「重起」。
+    """
+    chs = sorted(per_chapter)
+    if len(chs) < 2:
+        return 0, 0
+    cont = restart = 0
+    running_max = max(per_chapter[chs[0]])
+    for c in chs[1:]:
+        nums = per_chapter[c]
+        if nums and min(nums) > running_max:
+            cont += 1
+        else:
+            restart += 1
+        running_max = max(running_max, max(nums))
+    return cont, restart
+
+
+def _refine_book_scope(extract_dir, ordinal_arr):
+    """把**跨章连续**的单级计数器组从默认 scope=2（每章重启）改判 scope=1（全书）。
+
+    🔴 `SCOPE_BY_TYPE` 对单级（type 1）一律给 scope=2，于是 Serre《Linear
+    Representations of Finite Groups》这类「Theorem / Proposition / Lemma 全书
+    连续起号」的书（ch2 印 Theorem 3–8、ch12 印 Theorem 24–28 + Proposition
+    32–37 + Lemma 12–19）一经 `make_config --force` 重生成就被判成每章从 1 重起，
+    B 层逐章报「缺号 1 … 17」假 BLOCKING（实测 40/40 → 14/40，26 章 FAIL）。
+    证据取**结构契约**（`_contract_counter_evidence(include_chapter=True)`，
+    已核准的 (章, 号) 事实），不取 OCR 页扫。判不清一律保持 scope=2 —— 只收紧
+    漏判方向，不放松既有书的校验力度（fail-closed）。
+
+    只改判 `type == 1` 的组：单级键的「最后一个数字」才等价于条目序号，多级键
+    的分量语义不同。组内**每个**标签都必须自己投连续票才改判整组——混进一条按章
+    重启的标签就不动整组。返回 ``(ordinal_arr, notes)``。
+    """
+    ev = _contract_counter_evidence(extract_dir, include_chapter=True)
+    if not ev:
+        return ordinal_arr, []
+    by_form = {}
+    for form, comps in ev:
+        if len(comps) < 2:
+            continue
+        by_form.setdefault(form, {}).setdefault(comps[0], []).append(comps[-1])
+    notes = []
+    for g in ordinal_arr:
+        if g.get("type") != 1 or g.get("scope") == SCOPE_BOOK:
+            continue
+        names = [n for n in (g.get("name") or []) if n]
+        if not names:
+            continue
+        total_cont = total_restart = 0
+        for n in names:
+            per_ch = {c: v for c, v in (by_form.get(n) or {}).items() if v}
+            if len(per_ch) < 3:
+                total_cont = -1
+                break
+            cont, restart = _book_scope_votes(per_ch)
+            if cont < _BOOK_SCOPE_MIN_CONT or cont < _BOOK_SCOPE_RATIO * restart:
+                total_cont = -1
+                break
+            total_cont += cont
+            total_restart += restart
+        if total_cont >= 0:
+            g["scope"] = SCOPE_BOOK
+            notes.append("%s：跨章连续 %d 票 / 章内重起 %d 票 → scope=1（全书计数器）"
+                         % ("/".join(names), total_cont, total_restart))
+    return ordinal_arr, notes
+
+
 def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     """Full-scan EVERY page_*.json and (a) vote on the numbering FAMILY and
     (b) detect which entry-type labels appear as numbered headings, then GROUP
@@ -2027,11 +2126,27 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
             "name": _fig_labels or ["Figure"],
             "scope": 1 if _fig_depth == 1 else 2,
         })
+    # 🔴 计数器边界两补：① 单级探测只有 scope 2/3 两档，先按**结构契约**补判
+    # 「跨章连续」= scope 1；② 旧账（含当年人工核准的那份）声明过的 scope 与
+    # strict 一律回贴——`--force` 只该重扫体例，不该顺手改写既有书的判定边界。
+    # Serre《Linear Representations of Finite Groups》实测：两处都缺时重生成把
+    # 全书连续号判成每章重启并打开 strict，B 层对 26 章报假缺号（40/40 → 14/40）。
+    if not is_appendix:
+        ordinal_arr, _sc_notes = _refine_book_scope(extract_dir, ordinal_arr)
+    else:
+        ordinal_arr, _sc_notes = ordinal_arr, []
+    ordinal_arr, _rp_notes = _repaste_old_scopes(cfg_path, ordinal_arr, section_key)
+    ordinal_arr, _pt_notes = _repaste_old_partition(cfg_path, ordinal_arr, section_key)
+    for _n in _sc_notes + _rp_notes + _pt_notes:
+        print(f"[make_config] 计数器边界：{_n}")
     config = {
         "ordinal": ordinal_arr,
         "strict": True,
         "language": language,
     }
+    _old_strict = _load_old_section_cfg(cfg_path, section_key).get("strict")
+    if isinstance(_old_strict, bool):
+        config["strict"] = _old_strict
     config["chapter_first"] = bool(cm_chapter_first)
     config["section_scoped"] = bool(not cm_chapter_first)
     if not is_appendix and _detect_chapter_exercise_shared(extract_dir, pages=pages):
@@ -2111,6 +2226,15 @@ _MANUAL_DECLARED_FLAGS = (
     'chapter_scoped_items',       # 条目按章重启、不带节段
     'gm_bare_numbered',           # 裸单号条目（GM 型）
     'exercise_region_headings',   # 练习区标题词（列表，非布尔）
+    # 🔴 两本**印面目视确证账**（列表，非布尔）：探测器无从重建，`--force` 若不回贴
+    # 就会静默清空，下游判据随即翻脸——`content_overrides` 一丢，① 复算闸重新把
+    # 已按印面剔掉的噪声块报成「契约缺块」（Iwaniec–Kowalski ch1/9/22/23）；
+    # `exercise_printed_attested` 一丢，练习覆盖审计把印面确有、OCR 整行漏扫的练习
+    # 报成 PHANTOM（同书 ch1 Ex2 / ch4 Ex7 / ch5 Ex6；同批 4 处里的 ch4 Ex4 是**判据漏**
+    # ——标题在 OCR 里只读歪一个字母——已改 `printed_label`，不在本账）。写入侧见
+    # `lib/content_overrides.py` 与 `flows/write-source/script/check_exercise_coverage.py`。
+    'content_overrides',          # 契约内容块的人工裁定（drop 噪声 / retag 挪位）
+    'exercise_printed_attested',  # 印面确有、OCR 漏扫的练习号登记
 )
 
 
@@ -2144,6 +2268,106 @@ def _load_old_manual_flags(cfg_path, section_key="ch"):
     return out
 
 
+def _repaste_old_scopes(cfg_path, ordinal_arr, section_key="ch"):
+    """旧账里**同名标签组**声明过的 `scope` 原样回贴（账本保真）。
+
+    🔴 与 `_load_old_ordinal` 的 Figure 分支、`_load_old_manual_flags` 同一个
+    设计意图：`--force` 是整份**重扫**，探测只有 scope 2/3 两档（见
+    `_refine_book_scope` 的 scope=1 补判），人工/历史核准过的计数器边界若不在
+    回贴范围内就会被静默洗掉——Serre《Linear Representations of Finite Groups》
+    实测：旧账 Theorem/Proposition/Lemma scope=1、Corollary scope=3（按节重启），
+    重生成后一律变 scope=2 且 `strict` 打开，B 层对 26 章报假缺号。
+    配对口径 = 标签集合有交集（探测常把一族拆/并成不同组名）；旧组声明过 scope
+    即沿用旧值并打一行提示，探测值只在旧账没记时生效。返回 ``(arr, notes)``。
+    """
+    notes = []
+    claimed = set()          # 已被某个旧组认领的新组下标，避免一个旧组改多个新组
+    for old_g in _load_old_ordinal(cfg_path, section_key):
+        onames = {n for n in (old_g.get("name") or []) if n}
+        if not onames or old_g.get("scope") is None:
+            continue
+        target = None
+        for i, g in enumerate(ordinal_arr):
+            if i in claimed:
+                continue
+            if onames & {n for n in (g.get("name") or []) if n}:
+                target = i
+                break
+        if target is None:
+            continue
+        claimed.add(target)
+        g = ordinal_arr[target]
+        sc = int(old_g["scope"])
+        if g.get("scope") != sc:
+            notes.append("%s：scope %s → 沿用旧账 %s"
+                         % ("/".join(sorted(onames)), g.get("scope"), sc))
+            g["scope"] = sc
+    return ordinal_arr, notes
+
+
+def _repaste_old_partition(cfg_path, ordinal_arr, section_key="ch"):
+    """旧账的**计数器划分**（哪些标签各自成一条计数器）优先于本轮合并结果。
+
+    🔴 判据不对称：探测说「两条计数器合并」依据的只是**同窗不重号**（缺席
+    证据），而旧账把它们分列是当年核对过印面的**正面判断**——缺席证据不能推翻
+    正面账本，这与 `_repaste_old_scopes` / `_load_old_manual_flags` 同一口径。
+    Serre《Linear Representations of Finite Groups》实测：命题 12–45 与引理 1–25
+    是两条**独立的全局**计数器，在任何一章都不会撞号（ch12 = 命题32–37 +
+    引理12–19），于是「窗内无重号」把它们并成一组，B 层的 TAIL 比对随即错接
+    （「源最大 37 远大于 md 最大 19」），12 章 EN+CN 各报一条假 BLOCKING。
+
+    口径：① 旧账声明过的标签按旧组原样重建（含旧 type / 旧 scope），**本轮没
+    检出的也照样留在账上**（漏检 ≠ 书里没有）；② 本轮新检出的标签（旧账没有的，
+    如 Definition / Remark / Example / Figure）从各新组里摘掉旧标签后
+    **保持探测的分组与 scope**；③ 一个标签只认第一个旧组；④ 旧组**缺** type /
+    scope 时（残缺账本，如早期手写的 `[{"name": ["Figure"]}]`）用本轮探测到同
+    标签的那组补齐——绝不写出无 type 的组，否则下游 `require_complete`/分组消费
+    直接 KeyError（test_fig_group_guarantee 实测）。
+    没有旧账（首次配置）时原样返回，零影响。返回 ``(arr, notes)``。
+    """
+    old_groups = _load_old_ordinal(cfg_path, section_key)
+    if not old_groups:
+        return ordinal_arr, []
+
+    def _detected(onames):
+        """本轮探测里带这些标签的组（用于补齐旧组缺失的 type/scope）。"""
+        for g in ordinal_arr:
+            if onames & {n for n in (g.get("name") or []) if n}:
+                return g
+        return ordinal_arr[0] if ordinal_arr else {}
+
+    out, claimed, notes = [], set(), []
+    for og in old_groups:
+        onames = [n for n in (og.get("name") or []) if n and n not in claimed]
+        if not onames:
+            continue
+        claimed.update(onames)
+        fb = _detected(set(onames))
+        rebuilt = {}
+        for k in ("type", "scope"):
+            v = og.get(k)
+            if v is None:
+                v = fb.get(k)
+            if v is not None:
+                rebuilt[k] = v
+        rebuilt["name"] = onames
+        out.append(rebuilt)
+        notes.append("旧账划分：%s 各自成组（type=%s scope=%s）"
+                     % ("/".join(onames), rebuilt.get("type"), rebuilt.get("scope")))
+    for g in ordinal_arr:
+        rest = [n for n in (g.get("name") or []) if n and n not in claimed]
+        if not rest:
+            continue
+        claimed.update(rest)
+        new_g = dict(g)
+        new_g["name"] = rest
+        out.append(new_g)
+        notes.append("本轮新检出：%s（type=%s scope=%s，按探测值）"
+                     % ("/".join(rest), g.get("type"), g.get("scope")))
+    # 旧账声明过、本轮没检出的标签在 loop ① 里已原样保留（漏检 ≠ 书里没有）
+    return out, notes
+
+
 def _generate_special_verify_configs(extract_dir):
     """Generate appendix/supplement sub-configs (letter-chapter convention) by
     scanning EACH kind's page range independently.
@@ -2156,8 +2380,16 @@ def _generate_special_verify_configs(extract_dir):
 
     仅当某类页区间检出字母章位体例（ORDINAL_APP=13 三级 / ORDINAL_APP2=14 两段）
     才产出子配置；否则回退主配置。
+
+    🔴 回退分两种，必须可区分（否则下游警告永远消不掉）：
+      * **已裁决同体例**——该类章检出、页区间也扫了，结论是编号首段仍是数字章号
+        （Serre GTM42 附录实测）→ 记入返回的 ``same_style`` 清单，由 main() 写进
+        ``verify_config.json`` 的 ``_special_same_style``；ConfigLoader 见此声明
+        即安静回退（此时回退是**正确行为**，不是错配）。
+      * **没扫到/没检出**（无该类章、或检出章却没有可用页区间）→ 不进清单，
+        下游静默回退警告保留，因为那份配置从没对这个 kind 做过任何结论。
     """
-    out = {"appendix": None, "supplement": None}
+    out = {"appendix": None, "supplement": None, "same_style": []}
     for kind, key, label in ((KIND_APPENDIX, "appendix", "附录"),
                              (KIND_SUPPLEMENT, "supplement", "补篇")):
         chs = _detect_special_chapters(extract_dir, kind)
@@ -2167,18 +2399,23 @@ def _generate_special_verify_configs(extract_dir):
             continue
         pages = _special_page_files(extract_dir, chs)
         if not pages:
-            print(f"[make_config] 检出{label}章但无可用页区间，跳过 \"{key}\" 子配置。")
+            print(f"[make_config] 检出{label}章但无可用页区间，跳过 \"{key}\" 子配置。"
+                  f"（未做体例裁决 ⇒ 下游回退警告会保留，请核对 chapter_map 页区间。）")
             continue
         cfg, family, groups, ordinal, depth = _build_config_dict(
             extract_dir, os.path.join(extract_dir, 'verify_config.json'),
             letter_chapter=True, is_appendix=True, pages=pages,
             section_key=key)
         if not ordinal or ordinal not in (ORDINAL_APP, ORDINAL_APP2):
-            # 该类页区间未检出字母章位体例（可能本书该类与正文同体例）→ 不产出，
-            # 避免一份与主配置等价的冗余子配置。
+            # 该类页区间**已扫描**且未检出字母章位体例 → 本书该类与正文同体例。
+            # 不产出与主配置等价的冗余子配置，但必须把这一裁决落账，否则
+            # ConfigLoader 的静默回退警告永远无法被补救（它给出的补救命令
+            # ——本脚本 --force——对本类书永远只会重复同一结论）。
+            out["same_style"].append(key)
             print(f"[make_config] {label}页区间检出编号族={ordinal}"
                   f"（非字母章位 type 13/14），"
-                  f"视为与正文同体例，跳过 \"{key}\" 子配置。")
+                  f"视为与正文同体例，跳过 \"{key}\" 子配置，"
+                  f"并记入 {MAP_KEY_SPECIAL_SAME_STYLE} 声明。")
             continue
         # 字母章位保留式练习计数器（`Exercise A.1.1` / `Exercise B.4`，两段/
         # 三级形态见 _APP_EX_RE）不在 LABEL_FORMS 中，单独探测后按计数器
@@ -2243,16 +2480,32 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
         if special.get(key) is not None:
             data[key] = special[key]
             added.append(key)
-    if not added:
+    # 🔴 该类章扫过、结论是「与正文同体例」→ 落账声明（不产出冗余子配置）。
+    # 没有它，老配置的 appendix 键缺失会永久触发一条 --force 也消不掉的警告。
+    declared = []
+    ss = [k for k in (special.get("same_style") or []) if k in missing]
+    have = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
+    existing = {str(k) for k in have} if isinstance(have, (list, tuple, set)) else set()
+    for key in ss:
+        if key not in existing:
+            declared.append(key)
+    if declared:
+        data[MAP_KEY_SPECIAL_SAME_STYLE] = sorted(existing | set(declared))
+    if not added and not declared:
         print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。"
               f"缺 {missing} 键但对应 kind 的章未检出或无页区间——若这不符合预期，"
               f"请核对 chapter_map.json 的章名/章号。")
         return 0
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"[make_config] ⚠ 增量升级 {cfg_path}：补写缺失的 {added} 子配置"
-          f"（既有键原样保留）。附录/补篇章自下一次运行起改走自己的编号体例；"
-          f"须重跑 build_structure 重建这些章的契约。")
+    if added:
+        print(f"[make_config] ⚠ 增量升级 {cfg_path}：补写缺失的 {added} 子配置"
+              f"（既有键原样保留）。附录/补篇章自下一次运行起改走自己的编号体例；"
+              f"须重跑 build_structure 重建这些章的契约。")
+    if declared:
+        print(f"[make_config] ⚠ 增量升级 {cfg_path}：{declared} 判明与正文同体例，"
+              f"已记入 {MAP_KEY_SPECIAL_SAME_STYLE} 声明（不产出冗余子配置）。"
+              f"下游 ConfigLoader 的回退警告自此消音——回退在这里是正确行为。")
     return 0
 
 
@@ -2295,6 +2548,24 @@ def main():
         print('  ❌ 禁止跳过章节映射直接生成配置。')
         return 2
 
+    # 🔒 硬闸：附录 / 补篇的**阿拉伯数字序标**必须有印刷证据（lib/appendix_ordinal）。
+    # 成因实测（Shafarevich BAG1 2026-09-29）：印面标题就是裸的 "Algebraic Appendix"，
+    # 却被顺着正文章号登记成 ch5，于是整条命名链长出伪造序标——契约 appendix5.json、
+    # 单元目录 units/appendix5/、成品 附录5_*.md / Appendix5_*.md、H1 "# Chapter 5:"。
+    # 判据保守（只判数字序标；字母/罗马一律放过），故可直接 fail-closed。
+    from data.chapter_map.chapter_map import load_chapter_records as _load_recs
+    from lib.appendix_ordinal import appendix_ordinal_problems as _apx_probs
+    _problems = _apx_probs(_load_recs(extract_dir), extract_dir)
+    if _problems:
+        print('[make_config] BLOCKED: chapter_map 的附录/补篇序标没有印刷证据'
+              '（页窗 + 前置目录区均取不到「附录/补篇词 + 该数字」相邻共现）：')
+        for _p in _problems:
+            print('  - ' + _p)
+        print('  修法见 SKILL.md「附录命名总则」：印面无序标 → 该章键直接写裸 '
+              '"appendix"（补篇写 "supplement"）；印面有字母序标 → 照抄字母。')
+        print('  ❌ 禁止把附录顺着正文章号编号来绕过本闸。')
+        return 2
+
     # One full scan yields the numbering family, the set of entry-type labels
     # actually present as numbered headings, their GROUPING by shared counter,
     # AND the book's language (derived from which label forms were seen).
@@ -2312,6 +2583,12 @@ def main():
         out_map["appendix"] = special["appendix"]
     if special.get("supplement") is not None:
         out_map["supplement"] = special["supplement"]
+    # 🔴 已裁决「与正文同体例」的 kind 落账（见 _generate_special_verify_configs）：
+    # 没有这条声明，ConfigLoader 无法区分「扫过、结论是同体例」与「从没扫过」，
+    # 于是它对Serre式附录永远打印一条 --force 也消不掉的警告。
+    same_style = list(special.get("same_style") or [])
+    if same_style:
+        out_map[MAP_KEY_SPECIAL_SAME_STYLE] = same_style
 
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(out_map, f, ensure_ascii=False, indent=2)

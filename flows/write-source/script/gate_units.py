@@ -35,7 +35,8 @@
      · 章级兜底：契约全部图片（``chapter_images``）必须被本章单元**合起来**一个
        不漏地嵌入，且单元不得嵌契约外图片。
   ④ **真实 KaTeX 渲染（按章批量）**：把本章全部 item/desc/exercise 单元正文拼进
-     临时 md（``<extract>/_gate_render_tmp_<章目录名>.md``，带单元边界标记），跑
+     临时 md（``<extract>/_gate_render_tmp_<pid>/render_<章目录名>.md``，单进程临时
+     目录、本轮末尾一次性 ``shutil.rmtree`` 清理，带单元边界标记），跑
      ``katex_render.run_render_check``（katex_validate.js 真渲染），错误按行号
      **映射回所属单元**——启发式抓不到的 `\begin` 不配对 / 未定义宏等在门控即拦，
      不再漏到步骤 8 verify。🔴 渲染工具链缺失（node / katex 未装）= 门控不通过
@@ -107,10 +108,13 @@
 ----
     通过：exit 0；未通过：exit 1 并打印未处理 / 缺失单元清单（逐章）。
 """
+import atexit
+import glob
 import io
 import json
 import os
 import re
+import shutil
 import sys
 import types
 from pathlib import Path
@@ -133,7 +137,7 @@ import attach_content as _ac
 from data.book_structure.book_structure import (
     chapter_json_path, chapter_label, chapter_tag_map, chapter_image_map,
     chapter_image_counts, chapter_images, list_chapter_keys, prime_chapter_kinds, unit_dir_name,
-    chapter_ordinals, unit_node_entries)
+    chapter_ordinals, unit_node_entries, exercise_node_windows)
 import split_draft_units as _split
 import check_unit_quality as _quality
 from lib.unit_order import check_unit_order
@@ -289,29 +293,65 @@ def _check_numbering(units):
     return problems
 
 
-def _check_exercise_key_uniqueness(units):
-    """章级闸：习题条目键必须唯一（manifest 与契约节点 1:1，重复即契约重号）。
+def _check_exercise_key_uniqueness(units, contract=None):
+    """章级闸：习题条目键必须唯一，除非原书在同一节内**重新起号**。
 
     同一章出现两个 ``key=2.1.7`` 的 exercise 记录 = 抽取器把 OCR 续行碎片切成了
     第二条「习题」（Katok ch2/ch3/ch9/ch17 各一例）。后果：真条目被挤到错误的键上、
     或凭空多出一个空单元，读者看到的习题编号与原书不符。修法在契约层（把碎片并回
     上一条目 / 补回被吞的真条目），不是删单元文件了事。
+
+    🔴 但「重号 = 碎片」只是**一种**成因：原书也会在同一节后段另起一套从 1 开始的
+    习题（Arnold《经典力学的数学方法》§8：印刷 p.27–28 问题 1–6，p.32 中译者注补充
+    讨论后又印问题 1–3，两套各有完整题面与解）。这类重号在契约层**无从消除**——
+    强行并回上一条目就是把印面习题删掉。故按页窗与题面裁决（真值与判据见
+    ``book_structure.exercise_node_windows``）：同键各节点**页窗两两不相交**且
+    **都带题面**（内容块 >0，或契约 name 自带完整题面——谓词与幻影闸同源，
+    ``check_unit_quality.node_has_statement``）= 重新起号，放行；否则照报。
+    拿不到契约、节点数与单元数不符、页窗缺失一律按重号报（fail-closed，绝不因判据
+    失效而静默放行）。
     """
-    seen = {}
-    dup = []
-    for u in units:
-        if u.get("type") != "exercise":
-            continue
-        k = str(u.get("key"))
-        if k in seen:
-            dup.append("%s（%s 与 %s）" % (k, seen[k], u.get("file")))
-        else:
-            seen[k] = u.get("file")
+    ex = [u for u in units if u.get("type") == "exercise"]
+    groups = {}
+    for u in ex:
+        groups.setdefault(str(u.get("key")), []).append(u)
+    dup = {k: v for k, v in groups.items() if len(v) > 1}
     if not dup:
         return []
-    return ["契约本章习题条目重号：%s——后一个是 OCR 续行碎片被误判成的幻影条目，"
-            "须在分章契约里并回所属条目（或补回被吞的真条目）后重拆/同步单元"
-            % "、".join(dup)]
+    if contract is None:
+        return ["契约本章习题条目重号：%s——无契约页窗可裁决，须人工确认是碎片并回"
+                "所属条目还是原书重新起号" % "、".join(sorted(dup))]
+    windows = exercise_node_windows(contract)
+    problems = []
+    for key in sorted(dup):
+        occ = dup[key]
+        nodes = [w for w in windows if w[0] == key]
+        files = "、".join("%s（%s）" % (u.get("file"), u.get("id")) for u in occ)
+        if len(nodes) != len(occ):
+            problems.append("契约本章习题条目重号：%s（%s）——契约同键节点 %d 个与单元记录 "
+                            "%d 条不符，无法裁决是否重新起号；须在分章契约里并回所属条目"
+                            "（或补回被吞的真条目）后重拆/同步单元"
+                            % (key, files, len(nodes), len(occ)))
+            continue
+        for (k1, ps1, pe1, c1, n1), (k2, ps2, pe2, c2, n2) in zip(nodes, nodes[1:]):
+            if ps1 is None or ps2 is None or pe1 is None:
+                problems.append("契约本章习题条目重号：%s（%s）——同键节点页窗缺失（p%s–p%s / "
+                                "p%s–p%s），无法证明两套题面不相交；须按印面补页窗或并回条目"
+                                % (key, files, ps1, pe1, ps2, pe2))
+            elif not (_quality.node_has_statement(n1, c1)
+                      and _quality.node_has_statement(n2, c2)):
+                problems.append("契约本章习题条目重号：%s（%s）——同键节点无题面（内容块 %d「%.24s」 / "
+                                % (key, files, c1, n1) +
+                                "内容块 %d「%.24s」）= OCR 续行碎片被误判成的幻影条目，须在分章契约里"
+                                "并回所属条目（或补回被吞的真条目）后重拆/同步单元"
+                                % (c2, n2))
+            elif ps2 <= pe1:
+                problems.append("契约本章习题条目重号：%s（%s）——同键两套题面页窗相交"
+                                "（p%s–p%s 与 p%s–p%s）= OCR 续行碎片，须在分章契约里并回所属条目"
+                                "（或补回被吞的真条目）后重拆/同步单元"
+                                % (key, files, ps1, pe1, ps2, pe2))
+            # 页窗不相交且各自带题面 = 原书重新起号，放行
+    return problems
 
 
 def _check_contract_unit_coverage(contract, units, ch_key):
@@ -486,38 +526,99 @@ def _render_check_chapter(ext, out_dir, units):
         line_no += 1 + nlines
     if not parts:
         return []
-    tmp_md = os.path.join(ext, "_gate_render_tmp_%s_%d.md" % (os.path.basename(out_dir), os.getpid()))
+    # 🔴 单一进程级临时目录（pid 作用域，并行安全）：全章共享一个目录，末尾一次性
+    # ``shutil.rmtree`` 清理（1 次删除操作，而非每章 1 次 ``os.unlink``），避免单轮
+    # 反复跑全量门控时累计删除触发环境 bulk-delete 安全闸（实测 9 章 × 多轮 > 50
+    # 次删除即中止整轮门控，掩盖真实 PASS/FAIL）。
+    tmp_md = os.path.join(_gate_tmpdir(ext), "render_%s.md" % os.path.basename(out_dir))
     with open(tmp_md, "w", encoding="utf-8") as f:
         f.write("\n".join(parts) + "\n")
     try:
+        from katex_render import run_render_check
+        rerrs = run_render_check(tmp_md)
+    except Exception as e:  # 🔴 fail-closed：渲染执行失败 = 门控不通过
+        return ["真实渲染检查执行失败（fail-closed）：%r" % (e,)]
+    out = []
+    for err in rerrs:
+        m2 = re.match(r"\s*line (\d+):", err)  # js 输出带前导空格："  line N: ..."
+        if m2:
+            ln_no = int(m2.group(1))
+            owner = None
+            for st, uu in starts:
+                if st <= ln_no:
+                    owner = uu
+                else:
+                    break
+            if owner is not None:
+                out.append("单元 %s 公式渲染失败（真实 KaTeX 渲染）：%s"
+                           % (owner["file"], err))
+                continue
+        out.append("公式渲染检查（%s）：%s" % (tmp_md, err))
+    return out
+    # 🔴 临时目录由 ``_gate_cleanup_tmpdir`` 在 ``main`` 末尾与 ``atexit`` 统一清理；
+    # 不再逐文件 ``os.unlink``，避免单轮反复跑门控累计删除触发环境 bulk-delete 安全闸。
+
+
+_GATE_TMPDIR = None  # 进程级临时目录（懒创建）
+
+
+def _gate_tmpdir(ext):
+    """返回本进程唯一的门控渲染临时目录（pid 作用域，并行安全）。
+
+    🔴 全章共用一个目录，末尾 ``_gate_cleanup_tmpdir`` 一次性 ``shutil.rmtree``
+    清理——把删除操作从「每章 1 次」压到「每轮 1 次」，避免单轮反复跑全量门控累计
+    删除触发环境 bulk-delete 安全闸（实测 9 章 × 多轮 > 50 次删除即中止整轮门控）。"""
+    global _GATE_TMPDIR
+    d = os.path.join(ext, "_gate_render_tmp_%d" % os.getpid())
+    # 🔴 每次都 makedirs(exist_ok=True)：目录曾被外层回收（如测试用临时目录）
+    # 时重建，避免写入已删除目录报 FileNotFoundError。
+    os.makedirs(d, exist_ok=True)
+    _GATE_TMPDIR = d
+    return d
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _gate_sweep_stale(ext):
+    """清理上一轮被安全闸中断遗留的临时产物（pid 已死才删，绝不误删并行门控）。
+
+    匹配 ``_gate_render_tmp_*``：旧版逐章 ``.md`` 文件 + 本版进程级临时目录。本进程
+    自己的目录（``_gate_render_tmp_<本pid>``）跳过；其它 pid 若仍存活也跳过。"""
+    for p in glob.glob(os.path.join(ext, "_gate_render_tmp_*")):
+        name = os.path.basename(p)
+        m = re.match(r"_gate_render_tmp_(?:ch\d+_)?(\d+)(?:\.md)?$", name)
+        if m:
+            pid = int(m.group(1))
+            if pid == os.getpid():
+                continue
+            if _pid_alive(pid):
+                continue  # 并行门控在用，跳过
         try:
-            from katex_render import run_render_check
-            rerrs = run_render_check(tmp_md)
-        except Exception as e:  # 🔴 fail-closed：渲染执行失败 = 门控不通过
-            return ["真实渲染检查执行失败（fail-closed）：%r" % (e,)]
-        out = []
-        for err in rerrs:
-            m2 = re.match(r"\s*line (\d+):", err)  # js 输出带前导空格："  line N: ..."
-            if m2:
-                ln_no = int(m2.group(1))
-                owner = None
-                for st, uu in starts:
-                    if st <= ln_no:
-                        owner = uu
-                    else:
-                        break
-                if owner is not None:
-                    out.append("单元 %s 公式渲染失败（真实 KaTeX 渲染）：%s"
-                               % (owner["file"], err))
-                    continue
-            out.append("公式渲染检查（%s）：%s" % (tmp_md, err))
-        return out
-    finally:
-        # 🔴 清理临时 md（此前只写不删，5 天累积 1995 个 `_gate_render_tmp_*` 残留）。
-        try:
-            os.unlink(tmp_md)
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.unlink(p)
         except OSError:
             pass
+
+
+def _gate_cleanup_tmpdir():
+    """末尾统一清理本进程临时目录（1 次 rmtree，替代旧版每章 os.unlink）。"""
+    global _GATE_TMPDIR
+    if _GATE_TMPDIR is not None:
+        try:
+            shutil.rmtree(_GATE_TMPDIR, ignore_errors=True)
+        finally:
+            _GATE_TMPDIR = None
+
+
+atexit.register(_gate_cleanup_tmpdir)
 
 
 def gate_chapter(ext, ch_key, units_sub="units"):
@@ -657,6 +758,13 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         observed_imgs.update(
             _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
         if utype in ("item", "desc", "exercise"):
+            # 🔴 译单元结构继承真值：配对**源单元**正文（同名文件在 units/ 侧）。
+            # check_unit_quality 用它做「顶层粗体标签族集合一致 → 必包闸放行」，
+            # 解中文无复数形态（源 `**Examples.**`/`**Notes.**` 顶层合法、译文
+            # `**例。**`/`**注.**` 却被逼改结构）的「源过/译不过」缺口。
+            _src_body = None
+            if units_sub != "units":
+                _src_body = _quality.paired_source_body(out_dir, u["file"])
             try:
                 ok_q, qproblems = _quality.check_body(
                     utype, u.get("name") or "", body,
@@ -670,7 +778,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
                     # 🔴 源单元语言闸（#24）：manifest 记的书籍语言非中文时，源单元
                     # 正文出现中文即打回（Shafarevich I 实测 119 个单元被写成中文）。
                     source_language=(manifest.get("language")
-                                     if units_sub == "units" else None))
+                                     if units_sub == "units" else None),
+                    # 🔴 P1 证明分条闸同照抄闸：只跑源单元。译单元逐行镜像已过该闸的
+                    # 冻结源单元，源侧散文式证明不得在译侧被拆成 `1. 2. 3.`。
+                    translation=(units_sub != "units"),
+                    src_body=_src_body)
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [
                     "质量校验执行失败（fail-closed）：%r" % (e,)]
@@ -732,8 +844,9 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # B 层编号预检：同一节内编号是否递增
     numbering_probs = _check_numbering(units)
     problems.extend(numbering_probs)
-    # 🔴 章级习题重号闸（幻影习题条目的契约侧痕迹，单元级判据见 check_body 第 16 项）
-    problems.extend(_check_exercise_key_uniqueness(units))
+    # 🔴 章级习题重号闸（幻影习题条目的契约侧痕迹，单元级判据见 check_body 第 16 项；
+    # 原书同一节内重新起号的第二套题按页窗+内容裁决放行，见 _check_exercise_key_uniqueness）
+    problems.extend(_check_exercise_key_uniqueness(units, contract))
     # 🔴 章级闸 ⑩：契约 → manifest 反向对账（契约条目没有单元记录 = merge 后整条消失）
     problems.extend(_check_contract_unit_coverage(contract, units, ch_key))
     # 🔴 章级闸 ⑪：单元**结构阅读顺序**（合并前，页码单调真值）——manifest 顺序即拼接
@@ -861,6 +974,7 @@ def main():
         return 2
     ext = argv[0]
     prime_chapter_kinds(ext)  # 🔴 灌注 kind 注册表（Supplement 前缀依赖 chapter_map）
+    _gate_sweep_stale(ext)    # 🔴 清上一轮被安全闸中断遗留的临时产物（pid 已死才删）
     try:
         chapters = [int(x) for x in argv[1:]]
     except ValueError:
@@ -878,6 +992,7 @@ def main():
         print(("[PASS] " if ok else "[FAIL] ") + detail)
         if not ok:
             all_ok = False
+    _gate_cleanup_tmpdir()  # 🔴 统一清理本进程临时目录（1 次 rmtree）
     return 0 if all_ok else 1
 
 

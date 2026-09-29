@@ -82,6 +82,16 @@ python flows/extract/mm_repair/script/mm_repair_text_compare.py "<pdf>" "<_extra
 # （可选）重跑审计：模式 B 已修文字跳过，仅公式/deferred 重新标出交模式 A
 python flows/extract/mm_repair/script/mm_repair_audit.py      "<pdf>" "<_extract>" --src-dpi 200
 # Step 4：模式 A（仅 VISION=yes）—— agent 读 *_sheet.png + manifest 写 repairs.json（含 to_structured）；VISION=no 时跳过读图，deferred 如实记 unavailable
+#        （扇出时每个 agent 只写自己的分片 repairs_part_*.json / _frag_*.json，不碰 repairs.json）
+# Step 4b：合并分片（🔴 多 agent 扇出必走，且必须带 --base）
+cp "<_extract>/_mm_repair/repairs.json" "<_extract>/_mm_repair/repairs.modeB.json"   # 模式 B 候选留底当 base
+python data/repairs/repairs.py "<_extract>/_mm_repair" "<_extract>" --base "<_extract>/_mm_repair/repairs.modeB.json"
+#   不带 --base = 模式 B 的全部候选被分片覆盖丢失；带了 --base 时**分片裁决跨段优先**：
+#   agent 改判某条，该键会从其他段清除（apply 按 corrections>ok>to_structured>unavailable
+#   固定优先序读段，残留旧候选会静默压掉新裁决）。
+#   🔴 闸门全过（无缺裁决 / 无碰撞 / 模式 B 声明逐条已裁决）才**写 repairs.json**；
+#   任一门失败只写 _mm_repair/_merge_report.json（完整清单，stdout 截 40 条）并 exit 1，
+#   磁盘上若残留旧 repairs.json 那是 STALE 文件，Step 5 会因同一份报告拒绝 apply。
 # Step 5：应用写回
 python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 ```
@@ -92,6 +102,7 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 - **规则3 — 回写纪律**：确认后必须**写回 `page_*.json`**（保持 schema 不变、UTF-8、JSON 合法），不可只写进 md；回写后立即 `json.load` 复验。仅"写法差异含义相同"不视为修正，无需回写。
 - **规则4 — 职责边界**：MM Repair 只改 `page_*.json` 结构化数据，不动 `.md`；公式 / 文字的语义级"理解后重写"若发生在写作阶段则属另一阶段，与本节无关。
 - **规则5 — 模式 B「可信才用」死规则（🔴 不可违背）**：模式 B 的 `corrections` 来自 PDF 数字文本层，**不等于已验证正确**，文本层本身可抽花（数字文本层 ≠ 印刷页真值）。agent 必须严格遵守以下四条，优先级高于"尽快修完"：
+  - 🔴 **`ok` 也是判决，不是事实（同源假确证）**：模式 B 判 `ok` 的依据是「文本层与流水线 OCR 一致」。若书的内嵌文本层本身就是**老 OCR 产物**（扫描件常见：Acrobat 4.0 / Distiller 时代），两边**同源同错**，一致只说明「两遍读成了同一串乱码」。此类书必须把模式 B 的 `ok` 一并送模式 A 复核（Apostol IANT 实测：模式 A 区间内 `ok` 的推翻率 60/60、76/94）。合并器的 `MODE-B CANDIDATES LEFT UNREVIEWED` 报告同时覆盖 `corrections` 与 `ok`，**没被点名的 base 确证 = 未确证**。
   1. **仅可信才写回（apply）**：`corrections` 仅当数字文本层值与上下文语义一致、无乱码 / 无错位 / 无孤立字符堆砌、且与 OCR 能对应上时，才允许 `apply` 写回 `page_*.json`；
   2. **不可信一律不写回**：任何判定为不可信的 `corrections` 都**不得 `apply`**——宁可该条目暂时漏修，也绝不可用不可信值覆盖原始 OCR；
   3. **不可信交模式 A**：凡是不可信条目，必须保留 / 移入 `deferred`，后续交给**模式 A 视觉识别**读真实印刷页重新修正（若 `VISION = no`，则按 Step 4 如实记 `unavailable`），**绝不允许**用模式 B 的不可信值替代；
@@ -102,6 +113,8 @@ python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
   2. **拒绝后不重复询问**：不得因每个稳定批次 / 每章 / 每次审计再问「要不要视觉识别」；
   3. **恢复仅凭用户主动要求**：只有用户明确要求时才能临时启用模式 A，且只覆盖其要求范围；临时启用须在 `vision_decision.json` 备注，不得擅自扩大。
   4. `VISION = no` 时模式 B 无法可靠修复的条目（公式 / 文本层损坏）**如实记 `unavailable`**（无视觉识别即不可恢复），绝不编造修正值。
+- **规则7 — 合并必须机械走 `data/repairs/repairs.py`，且带 `--base`（🔴 规则5 的机械落地）**：模式 B 候选写在 `repairs.json` 本身上，扇出分片若直接覆盖该文件就等于把规则5 的成果全丢掉——所以先 `cp` 留底成 `repairs.modeB.json` 再 `--base` 折叠。合并器同时承担两件闸：① **跨段裁决**（agent 对某条改判 → 该键从其他段清除；否则 apply 的固定段优先序会让旧文本层候选压过新视觉裁决，正是规则5 要防的）；② **覆盖率**（manifest 每条都必须有裁决，`deferred` 不算；缺则 exit 1，禁止带着洞去 apply）。合并输出里的 `MODE-B CANDIDATES LEFT UNREVIEWED` = 模式 A 复核过该页却没点名的候选，**逐条落判（保留 / 按印面重写 / unavailable），沉默不等于确认**。
+- **规则8 — 闸门三段同源，`apply` 复用合并报告（🔴 检测趟与修复趟共用一个谓词）**：`repairs.py merge` 有三道 fail-closed 闸门——① **覆盖率**（manifest 每条须有裁决，`deferred` 不算）；② **碰撞**（同一条被两个分片裁决 → apply 只能按段优先序任意挑一个，故直接阻断）；③ **未裁决的模式 B 声明**（`base_unreviewed` = 视觉代理复核过该页却没点名的 `ok`/`corrections`；`base_unrevisited` = 没有任何代理到过的页）。任一失败 ⇒ **不写 `repairs.json`**、写 `_mm_repair/_merge_report.json`（完整清单 + 计数，机器可读，用于排波）并 `exit 1`。`mm_repair_apply.py` 开工先读**同一份** `_merge_report.json`（`open_verdict_gate`）：报告存在且不干净就拒绝写回，报告不存在（未走合并的老书）才放行。🔴 不要靠「先写出脏 repairs.json 再指望人记得」——闸门的存在意义是让脏中间产物根本不存在。判据测试：`data/repairs/tests/test_repairs_merge.py::TestCliGates` + `::TestApplyGate`。
 
 ## 出口条件
 - 🔴 **出口 = `apply` 已写回 `page_*.json`，不是 `repairs.json` 里有 resolved 条目，也不是 `manifest.status == "applied"`。** `page_*.json` 条目真正带上 `mm_repaired`/`mm_reviewed` 标记**才是唯一可靠信号**。`mm_repair_apply.py` 跑完会**无条件**把 `manifest.status` 设为 `"applied"`（与未 resolved 条目数无关），故 **`manifest.status == "applied"` 绝不能当完成判据**——会出现"已 applied 但仍有大量未修条目"的假绿（stochastic 实测：status=applied 但 2842 条目仅 979 resolved）。仅 `repairs.json` 含 resolved（由 `audit` + `text_compare` 产出）而未跑 `apply` 属**未完成**，config / structure / write-source 一律严禁启动。

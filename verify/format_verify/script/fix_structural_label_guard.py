@@ -38,6 +38,7 @@ from format_verify import (
     _H_UL_OPENERS, _H_UL_FOOTNOTE, _H_MISSING_BQ, _H_MISSING_BQ_FOOTNOTE,
     _H_NOTE_HEADING_RE,
     _h_ext_is_legit_bq, _h_ext_is_structural_bq, _h_ext_items,
+    inherited_structure_exemptions, read_pair_lines,
 )
 
 
@@ -278,7 +279,17 @@ def apply_fix(ctx) -> LayerFixResult:
     fix_dict['h'] = fix_h_structural_blockquote(md)
     fix_dict['h_stmt'] = fix_h_statement_in_blockquote(md)
     fix_dict['h_ul'] = fix_unlabeled_blockquotes(md)
-    fix_dict['h_mbq'] = fix_labels_missing_blockquote(md)
+    # 🔴 与 `FLayer.run` 的检测共用同一份「译本结构继承源本」判据：译本顶层标签族
+    # 与配对源本逐位一致 ⇒ h_mbq 整项不修。否则 `--fix --fix-force` 会把「照源本写法」
+    # 的中文标签（`**例.**` / `**注.**`）包进 `>`，主动制造源/译结构分歧，而 verify
+    # 根本不报这些行（检测已豁免）——修复趟比检测趟严 = 判据分叉。
+    # 前三项在 md 上做了改动，故此处按**当前内容**重读，与检测趟看到同一份文本。
+    _ex = set()
+    pair = getattr(ctx, 'src_pair_md', None)
+    if pair:
+        _ex = inherited_structure_exemptions(read_pair_lines(md), read_pair_lines(pair))
+    fix_dict['h_mbq'] = (0 if 'h_mbq' in _ex
+                         else fix_labels_missing_blockquote(md))
     return LayerFixResult(fix_dict=fix_dict)
 
 

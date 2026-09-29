@@ -89,5 +89,45 @@ class TestProofTitleExemption(unittest.TestCase):
                              "豁免行被 fix 改动了")
 
 
+class TestColonInsideBoldProofTitle(unittest.TestCase):
+    r"""冒号落在闭合 `**` **之内**的第三种体例（Apostol《解析数论导引》CN 实测 2026-09-29）。
+
+    ch7 四处 + ch12 一处：印面是 `> **Proof of Lemma 7.5.**`，译文按中文标点习惯写成
+    「> **引理 7.5 的证明：**」——冒号在粗体**里面**。既有豁免只允许 `**` 之前出现
+    `[。.．]`，于是这一形态被判成「被吞进块引用的结构性条目」，章级 verify 打回整章，
+    而**同一结构在英文侧合法**（`Proof of …` 开头不是条目词）= 又一处「源过/译不过」。
+    豁免只放宽「证明标题的收尾标点族」，不放宽条目本体。
+    """
+
+    def test_colon_inside_bold_is_exempt(self):
+        md = ("正文。\n\n"
+              "> **引理 7.5 的证明：**\n>\n"
+              "> 1. 从和式出发。\n\n"
+              "> **定理 12.8 的证明：**\n> 2. 分部积分。\n\n"
+              "> **命题 3.4 的证明（续）：**\n> 3. 同理。\n")
+        self.assertFalse(_hit(md), "「…的证明：**」是证明标题，必须豁免")
+
+    def test_bare_item_head_with_colon_inside_bold_still_flagged(self):
+        """反向：条目本体（不含「证明」）即使冒号在粗体内也照报。"""
+        md = "> **定理 12.8：**\n>\n> 设 $f$ 全纯。\n"
+        self.assertTrue(_hit(md), "「> **定理 N：**」是被吞进引用的条目，必须 FAIL")
+
+    def test_item_statement_ending_in_noun_not_exempt(self):
+        """反向：尾词不是「证明」的条目陈述（…有界性。**）不得借豁免逃逸。"""
+        md = "> **引理 7.5 有界性。**\n>\n> 内容。\n"
+        self.assertTrue(_hit(md))
+
+    def test_fix_keeps_colon_inside_bold_title_wrapped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.md"
+            src = "> **引理 7.5 的证明：**\n> 1. 关键步骤。\n"
+            p.write_text(src, encoding="utf-8")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                process_file(str(p), fix=True)
+            self.assertEqual(p.read_text(encoding="utf-8"), src,
+                             "豁免行被 fix 改动了")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

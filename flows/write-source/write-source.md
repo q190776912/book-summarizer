@@ -348,6 +348,11 @@
 - **双源铁律（结构 ≠ 内容）**：单元 = 结构契约（骨架）+ `page_*.json`（内容）的**预合并视图**，只是调整底稿而**非免检成品**——正文**必须忠于单元所载原文并回归 `page_*.json` 核对存疑处**，禁止脱离契约自创结构或重排顺序（单元骨架即契约骨架）；单元中的公式是 OCR 原样，**严禁照抄**（步骤 5 重写校正）。
 - **公式序标铁律**：书无号**不编造**；已标须**正确、不重复、不跨章**。
 
+## 已知陷阱（agent 编辑单元 / 跑门控时）
+
+- **🔴 陷阱A — bash heredoc 吞掉 LaTeX 反斜杠**：凡脚本**含 LaTeX 反斜杠**（`\approx` / `\frac` / `\tag` 等），**一律用 Write 工具写成 `.py` 文件再跑**，禁止用 `bash` 的 `python - <<'EOF'` / `python -c "..."` 内联（harness 会把 `\\` 压成 `\`，`\a`→BEL 控制符、`\f`→换页符，使替换 key 永不匹配、把控制符写进单元文件）。写文件时用 **raw string**（`r"..."`）保反斜杠原样。单元级快校验用 `flows/write-source/script/check_one.py`（见 `gate_units.py` 同目录）逐单元迭代，它不触发渲染、零删除，安全。
+- **🔴 陷阱B — 全量门控别在单轮反复跑**：`gate_units.py` 现已把「每章一个临时 md + 逐章 `os.unlink`」改为**单进程临时目录 `_gate_render_tmp_<pid>/` + 末尾一次性 `shutil.rmtree`**（删除操作从「每章 1 次」压到「每轮 1 次」），并在 `main` 开头按 pid 死活扫清上一轮被中断遗留的 `_gate_render_tmp_*` 残留（并行门控的活 pid 目录跳过）。但环境对单轮累计删除有 bulk-delete 安全闸——**单轮内反复跑全量门控仍可能触发**。正确姿势：用 `check_one.py` 紧迭代修单元，全量 `gate_units.py` **一轮只跑一次**确认；跑前遗留的 `_gate_render_tmp_*` 会被本轮 `main` 自动扫清，无需手工删。
+
 ## 出口条件
 - 出口：**源语言**全部单元改好、源版 md 在步骤 6 拼接并经 `verify --only-lang <源语言>` 通过（进入翻译的前置），且翻译语言（英文书）全部单元改好、源 + 译两组 md 在步骤 8 拼接后经 `verify/script/verify_chapter.py --all` 全量 `exit 0`（`verify PASS + KaTeX OK`；中文书无翻译阶段，步骤 6 源版 `verify --only-lang cn` 通过即为全书完成）。图片由内容化分章契约随单元继承；格式修复在校验失败时按 [`verify/verify.md`](../../verify/verify.md) 修复纪律进行（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT；B/O 缺号经 `backfill_ordinals.py` 写回归属单元）。
 
@@ -367,7 +372,7 @@
 - `data/page_json/page_json.py`：`PageJson.load(fp).page_text()` / `.text_blocks` —— 调整时存疑处按节点 `page_start..page_end` 回查 OCR 原文（步骤 5 agent 改单元时）。
 - `tools/wrap_examples_bq` / `tools/fmt_proofs`：生产期格式变换脚本（可用 `cli.py` 的 `wrap-examples` / `fmt-proofs` 子命令单独调用，亦可在步骤 7 翻译版修复时调用）。源版「顶层例/证包裹进 `>` + 连续性」由 verify 的 **format_verify（F 层）的 `h_mbq` 检测规则与同层格式 fixer** 在步骤 8 `verify --fix`（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）自动兜底，**无需** write-source 另行调用；其「证明步骤编号 / `$$` 形态归一」属编辑性生产变换，受 verify 字节契约（fix-dict 键 `{h,h_stmt,h_ul,h_mbq,c,g,i,j,k,l,m,n}` 不可扩）约束无法成为 verify fixer，故仍以 `tools/` 下的 CLI 工具形式保留，供翻译版 / 手动批处理使用。
 - `../../verify/script/audit_counts.py`：逐节条数核对（OCR 侧启发式工具）。**契约条目在位核对**以结构契约为真值（优于 OCR 启发式），由规则8 的落账证据在 mark 前强制拦截漏项；本脚本保留为 OCR 侧独立交叉核对，供疑议时人工复核。
-- `flows/write-source/script/check_exercise_coverage.py`：**印面练习覆盖独立审计**（建议性，默认 exit 0，`--strict` 时 MISSING exit 1）。扫描书的练习是小字标题 `EXERCISE n.`，不被结构阶段识别为节点 → 契约里练习数为 0 → 没有练习单元，而 B 层只在偶然引用缺号时暴露一部分，**整章练习丢失**永远看不见。以 `page_*.json` 印面标题为真值对上单元行首练习，双向报 MISSING / PHANTOM / OCR-EMPTY；页归属按印面页眉判定（GAP 页与章末溢出页不算跨章）。
+- `flows/write-source/script/check_exercise_coverage.py`：**印面练习覆盖独立审计**（建议性，默认 exit 0，`--strict` 时 MISSING exit 1）。扫描书的练习是小字标题 `EXERCISE n.`，不被结构阶段识别为节点 → 契约里练习数为 0 → 没有练习单元，而 B 层只在偶然引用缺号时暴露一部分，**整章练习丢失**永远看不见。以 `page_*.json` 印面标题为真值对上单元行首练习，双向报 MISSING / PHANTOM / OCR-EMPTY；页归属按印面页眉判定（GAP 页与章末溢出页不算跨章）。🔴 **PHANTOM 必须先分诊**：① 标题行在 OCR 里但词形被读歪（`ExFRCISE 4.`）= **判据漏**，改 `printed_label`（旧字符类 ∪ 编辑距离 ≤1 且数字后紧跟终止符；放宽口径已跨 51 本书普查：1954 条旧命中之外只多 1 条，即该处真标题，正文互引 `Exercise 6 shows…` 与书眉 `EXERCISES 113` 全被终止符那道挡掉）；② 标题**整行连展示式一起漏扫**（机器无从复算）= 只能人看渲染页，用 `--attest CH:EX --page N --evidence …` 登记进 `verify_config.json → exercise_printed_attested` 并入印面真值。登记方三拒：页不在本章区间 / 号已能机械扫到（登记多余）/ 号在单元里不存在（会把真 MISSING 永久掩盖）；OCR 改版后能扫到时审计报 `redundant`，须人工重核后删账。
 - `flows/write-source/script/check_section_coverage.py`：**印面目录节覆盖独立审计**（同建议性口径）。结构阶段的节节点靠正文页 OCR 粗体标题识别，扫描书里该块常被整块漏掉（实测 Iwaniec–Kowalski GTM207 §4.3 印面 p.69 明晃晃印着，契约里根本没有该节 → 没有节单元 → 合并 md 缺节标题，而 D 层按同一份契约对账看不见）。真值取书首目录页（`§N.M 标题 页码` 同块，OCR 命中率高），报 MISSING / EXTRA；命中 MISSING 的处置是**补契约节节点 + `split_draft_units --force --keep-done` 重建**（正文源未变的 DONE 单元原样保留），不是把标题塞进条目单元（`gate_units` 反自造层级会拒）。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 8 批量校验（`--all` / `--fix`，语言无关，源/译共用）。

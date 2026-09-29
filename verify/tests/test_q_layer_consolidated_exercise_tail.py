@@ -89,6 +89,31 @@ class TestTailPageDerivation(unittest.TestCase):
             self.assertTrue(src._in_exercise_tail(535))
             self.assertFalse(src._in_exercise_tail(534))
 
+    def test_per_section_exercises_keep_sec_keys_alive(self):
+        """谢启鸿《高等代数》ch4/7/8/9 形态：逐节「习题 N.S」块也标了
+        ``consolidated``，但它们全部**起始于最后一节覆盖范围之内** → 不是章末
+        尾块。此处候选池为空，判据必须走「无尾块」分支并**保留** ``_sec_keys``
+        （旧实现在这条分支引用了不存在的变量名 → NameError 被外层
+        ``except Exception`` 吞掉 → 整章 ``_sec_keys`` 静默清空，标题修复与尾块
+        剔除双双失效）。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            ext = os.path.join(d, "_extract")
+            _write_contract(ext, 4, [
+                {"key": "4.1", "type": "section", "name": "§4.1",
+                 "page_start": 10, "page_end": 14, "sub_sec": []},
+                {"key": "4.2", "type": "section", "name": "§4.2",
+                 "page_start": 15, "page_end": 25, "sub_sec": []},
+                _exercise("4.1.1", 12, True),
+                _exercise("4.2.1", 22, True),
+            ])
+            src = SourceFormulaIndex(ext, build_formula_patterns(1), True)
+            src._load_sec_keys(4)
+            self.assertIsNone(src._tail_exer_page)
+            self.assertFalse(src._in_exercise_tail(22))
+            # 🔴 关键：契约可读时 _sec_keys 必须仍在（未被 NameError 清空）
+            self.assertEqual(src._sec_keys, {"4.1", "4.2"})
+
     def test_no_consolidated_flag_means_no_exclusion(self):
         with tempfile.TemporaryDirectory() as d:
             ext = os.path.join(d, "_extract")

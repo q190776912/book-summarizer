@@ -358,6 +358,31 @@ class SectionedTocPageGateTest(unittest.TestCase):
                             ['(7)'])
         self.assertNotIn('7', built['_union'])
 
+    def test_duplicate_heading_forms_do_not_skip_page(self):
+        """签名按**去重后的节号**计数（2026-09-29 Apostol IANT ch5 p121 实测）。
+
+        该页是带 80 个显示公式块的纯正文页：OCR 把 §5.2 节头读成两遍（页顶书眉
+        `5.2:Residue classes…` + 正文 `5.2 Residue classes…`），再混入两条散文回指
+        （`5.7 If` / `5.8 We`）→ 旧写法数**块**凑满 4 而整页跳过。代价不是少收
+        几枚编号，而是节游标永远停在 §5.1（标题推进支只认紧邻下一节），全章 24 条
+        `\tag` 一律假 MISPLACED。真目录页列的是互不相同的节 → 上一条用例仍须跳过。
+        """
+        built = self._build(['5.2:Residue classes and complete residue systems',
+                             '5.7 If', '5.8 We',
+                             '5.2 Residue classes and complete residue'],
+                            ['(9)'])
+        self.assertIn('9', built['_union'],
+                      "去重后仅 3 个节号，不得再判目录页")
+
+    def test_four_distinct_sections_among_more_heads_still_skip(self):
+        # 4 个互不相同的节 + 同一节的重影 = 真目录页，照旧跳过
+        built = self._build(['2.1 Introduction to Series', '2.2 Power Series',
+                             '2.3 Radius of Convergence',
+                             '2.4 Convergence Tests',
+                             '2.4 Convergence Tests'],
+                            ['(7)'])
+        self.assertNotIn('7', built['_union'])
+
 
 class RegistryTest(unittest.TestCase):
     def test_q_registered_after_p(self):

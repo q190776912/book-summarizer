@@ -11,6 +11,12 @@
      image 按路径）。不一致 = 磁盘契约相对管线过期 / 被手改 → FAIL。
      ⚠️ 本项是**幂等自证**（同管线重算 vs 磁盘），只能发现"磁盘与管线不一致"，
      发现不了"管线本身漏抓"——后者必须靠下面的独立真值项。
+     🔴 **人工裁定必须是管线输入**：印面裁定（剔除 OCR 噪声 / 节题残块、把 `(C.N)`
+     挪回印面上的式）登记在 `verify_config.json` 的 `content_overrides`，由
+     `attach_content.build_chapter_contract` 在统计之前执行（`lib/content_overrides.py`）。
+     登记若命中 0 块（管线改版后块已不存在）→ **FAIL**「死登记」；登记若没落在磁盘
+     契约上（drop 后磁盘仍有该块 / retag 后 tag 不等于登记值）→ **FAIL**「登记失效」。
+     未登记的偏离照旧按缺块/多块 FAIL——账本不是豁免开关。
   2. **图片完整性（独立真值）**：`figure_index.json` 中落在该章页码区间内的每张图
      必须以 image 块出现在契约中（按路径多重集比对）→ 缺图 FAIL。
   2b. **公式序标完整性（独立真值）**：`page_*.json` 中**独立成块**的公式编号
@@ -279,7 +285,7 @@ _TRAIL_DIGITS_RE = re.compile(r"\d+$")
 _TRAIL_ELLIPSIS_RE = re.compile(r"(?:…|⋯|\.\.\.)\s*$")
 
 
-def _orphan_text_blocks(kept, contract):
+def _orphan_text_blocks(kept, contract, dropped=frozenset()):
     """②c 判据（纯函数）：管线「收集 + 噪声过滤」后保留的 text 块 vs 契约树。
 
     返回丢失块清单 `[(page, text), ...]`——契约里找不到同签名块、且不属于以下
@@ -287,6 +293,9 @@ def _orphan_text_blocks(kept, contract):
     缺失判 PASS，看不见这类丢失，故须独立真值。
 
     豁免：
+      * **人工裁定剔除的块**（``dropped`` = `content_overrides` 里 op=drop 的 match
+        集合）——噪声残块 / 折行节题残块由印面裁定不进契约，与 ① 共用同一份登记，
+        不得一边让 ① 通过一边被 ②c 判成「锚点分派漏挂」；
       * 归一化长度 < 40 的碎片（页码残迹 / 单字块）；
       * **块是契约节点 `name` 的子串**——OCR 把印刷标题打成
         `Lemma1.4Thegraph of…`，而 `name` 带键前缀（`引理1.4 Lemma1.4Thegraph…`），
@@ -350,6 +359,8 @@ def _orphan_text_blocks(kept, contract):
             if cnorm[nt] > 0:
                 cnorm[nt] -= 1
             continue
+        if dropped and _norm_text(t) in dropped:
+            continue                       # 人工裁定剔除（content_overrides，与 ① 同账）
         if len(t) < 40:
             continue
         if any(nt in nm for nm in names):
@@ -399,6 +410,35 @@ def check_chapter(ext, ch_node):
     with open(p, encoding="utf-8") as f:
         saved = json.load(f)
     saved_sig = _collect_contract_blocks(saved)
+
+    # 🔴 **人工裁定账本自证**：`built` 已由 `attach_content` 执行过
+    # `verify_config.content_overrides`（噪声块剔除 / `(C.N)` 印面挪位），所以 ① 的
+    # 比对两侧同口径。这里再反向查一遍**登记是否真的落在磁盘上**——管线改版让登记
+    # 失配时，宁可 FAIL 提示重核，也不让一条静默失效的登记把 ① 变成假绿。
+    from lib import content_overrides as _co
+    _ops = _co.ops_for(ext, ch_key)
+    _drop_norms = {_norm_text(str(op.get("match") or "")) for op in _ops
+                   if str(op.get("op") or "") == "drop"}
+    if _ops:
+        # 🔴 写入侧自证：一条登记必须在**重算结果**里命中 ≥1 块。零命中 = 登记已与
+        # 管线脱钩，而磁盘侧 `disk_audit` 对 drop 只会「无匹配 → 算已剔除」地假绿，
+        # 于是腐烂的登记把 ① 变成假 PASS → 必须 FAIL，逼后续会话重核。
+        _dead = list(stats.get("override_dead") or [])
+        if _dead:
+            ok = False
+            lines.append(f"  x content_overrides 死登记 {len(_dead)} 笔"
+                         f"（章 {ch_key}：重算结果里已无该块，须重核印面后改登记）：")
+            for _m in _dead[:6]:
+                lines.append(f"      - {_m!r}")
+        _rot = _co.disk_audit(saved, _ops)
+        if _rot:
+            ok = False
+            lines.append(f"  x content_overrides 登记失效 {len(_rot)} 笔"
+                         f"（章 {ch_key}，须重核印面后改登记）：")
+            for _p in _rot[:6]:
+                lines.append(f"      - {_p}")
+        elif not _dead:
+            lines.append(f"    content_overrides：{len(_ops)} 笔人工裁定已全部命中")
 
     missing = built_sig - saved_sig      # 管线有、磁盘无 → 丢失
     extra = saved_sig - built_sig        # 磁盘有、管线无 → 手改 / 过期
@@ -500,7 +540,8 @@ def check_chapter(ext, ch_node):
         _srcb, _ph = ac._collect_blocks(ext, _st, _en, ch=ch_key, page_dir=_pd)
         _kept = ac._filter_noise(_srcb, _ph, max(1, _en - _st + 1), _ncomp,
                                  letter=_letter)
-        orphans = _orphan_text_blocks(_kept, built)
+        orphans = _orphan_text_blocks(_kept, built,
+                                      dropped=_drop_norms)
         if orphans:
             ok = False
             lines.append(f"  ✗ 正文块丢失 {len(orphans)} 处（印面收集到、契约里没有——"

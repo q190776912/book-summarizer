@@ -193,6 +193,47 @@ def test_restart_numbered_misplaced_block_still_flagged():
     assert "例1" in probs[0] and "p25" in probs[0] and "p40" in probs[0]
 
 
+# --------------------------- 续接单元：一个契约节点拆成多条单元（2026-09-29 阿诺尔德）
+def _cu(t, ntype, key, cont=False):
+    u = _u(t, ntype, key)
+    if cont:
+        u["continuation"] = True
+    return u
+
+
+def test_continuation_unit_reuses_parent_anchor_and_earns_no_regression():
+    # 印刷字母小节材料化：父单元留前缀，字母正文单元沿用父键（节级编号覆盖对账按 key
+    # 取正文，换合成键就会被当成漏写）。一个节点可切出**多个**字母正文单元，而未标记的
+    # 第二条会落到该键锚点列表的第 2 项 = 另一节同键条目的页码，此后整章消费错位；
+    # 带 continuation 标记则复用父单元锚点且不动游标 ⇒ 0 问题。
+    c = _sec_contract([("section", "1.1", 24), ("example", "例4", 25),
+                       ("section", "1.2", 40), ("example", "例4", 41)])
+    units = [_u("section", "section", "1.1"),
+             _cu("item", "example", "例4"),
+             _cu("desc", "description", "例4", True),
+             _cu("desc", "description", "例4", True),
+             _u("section", "section", "1.2"),
+             _cu("item", "example", "例4"),
+             _cu("desc", "description", "例4", True)]
+    assert check_unit_order(c, units) == []
+
+
+def test_unmarked_duplicate_key_still_desyncs():
+    # 负向：continuation 标记不是装饰——同一条清单去掉标记，第二个字母正文单元会消费
+    # 该键的第 2 个锚点（下一节的 例4，p41），于是紧随其后的 §1.2（p40）被误判成倒退。
+    c = _sec_contract([("section", "1.1", 24), ("example", "例4", 25),
+                       ("section", "1.2", 40), ("example", "例4", 41)])
+    units = [_u("section", "section", "1.1"),
+             _u("item", "example", "例4"),
+             _u("desc", "description", "例4"),
+             _u("desc", "description", "例4"),
+             _u("section", "section", "1.2"),
+             _u("item", "example", "例4")]
+    probs = check_unit_order(c, units)
+    assert probs, "无标记的同键重复单元应消费到第 2 个锚点而错位"
+    assert "1.2" in probs[0]
+
+
 def test_contract_extras_do_not_lose_anchor():
     # 契约重数 > 单元重数（同键的节节点 + 习题块节点、V-I 省略块）：桶耗尽后退回首见页，
     # 不得因锚点缺失而让后续真错位漏检。

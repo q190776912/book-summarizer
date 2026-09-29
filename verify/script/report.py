@@ -116,9 +116,26 @@ def print_result(r):
         for k in r['mentioned_only']:
             print(f"  ~ {k}")
     if r['extra']:
-        print(f"\nEXTRA ({len(r['extra'])}): keys in .md but not detected by extractor (usually correctly-filtered cross-refs):")
-        for k in r['extra']:
-            print(f"  + {k}")
+        # 条目级 / 提及级分桶（判据与文案见 item_numbering_integrity.py 的
+        # `extra_entry` / `extra_mention` 注释）：旧报告把两类混在一行且文案写着
+        # "usually correctly-filtered cross-refs"，于是「契约漏登记的真条目」被
+        # 当成良性交叉引用放过（Apostol IANT ch9 例1 实测）。
+        _ee = r.get('extra_entry')
+        _em = r.get('extra_mention')
+        if _ee is None and _em is None:      # 老结果字典：沿用单行口径
+            _ee, _em = [], r['extra']
+        if _ee:
+            print(f"\nEXTRA-ENTRY ({len(_ee)}): .md carries a standalone bold entry head "
+                  f"but the contract registers no such item — check the print: real printed "
+                  f"entry → register it (contract node / manual_overrides_ch{{N}}.json); "
+                  f"unnumbered house-style head or a different key form in the contract → no action:")
+            for k in _ee:
+                print(f"  + {k}")
+        if _em:
+            print(f"\nEXTRA-MENTION ({len(_em)}): keys in .md prose/cross-refs only, not "
+                  f"detected by extractor (usually correctly-filtered cross-refs):")
+            for k in _em:
+                print(f"  ~ {k}")
     if r['blocking']:
         problems += 1
         print(f"\nB-LAYER BLOCKING ({len(r['blocking'])}): extraction may have missed items — resolve before writing:")
@@ -158,7 +175,8 @@ def print_result(r):
                     print(f"  ! fig-{k.encode('ascii', errors='replace').decode('ascii')}")
         if r['fig_extra']:
             print(f"\nE-LAYER FIGURE EXTRA ({len(r['fig_extra'])}): cropped label not found as a caption in OCR "
-                  f"(possible mislabel / duplicate caption pairing, review):")
+                  f"(possible mislabel / duplicate caption pairing, review; after confirming the crop is real "
+                  f"register it in ignore_fig_ch{r['ch']}.json):")
             for k in r['fig_extra']:
                 try:
                     print(f"  ~ {_fig_prefix}{k}")

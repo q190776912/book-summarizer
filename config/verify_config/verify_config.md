@@ -99,18 +99,20 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 {
   "ch":        { "ordinal": [...], ... },   // kind=1 正文章
   "appendix":  { "ordinal": [...], ... },   // kind=2 附录章（可选）
-  "supplement":{ "ordinal": [...], ... }    // kind=3 补篇章（可选）
+  "supplement":{ "ordinal": [...], ... },   // kind=3 补篇章（可选）
+  "_special_same_style": ["appendix"]       // 可选：make_config 已扫过该 kind 并判明「与正文同体例」
 }
 ```
 
 - **顶层带 `ordinal`（旧扁平格式）** → 视作只有正文；缺失的 appendix/supplement 回退主配置，行为与历史**完全一致（零回归）**。
 - **顶层是 map（含 `ch`）** → 按 kind 路由：kind=1→`ch`、kind=2→`appendix`、kind=3→`supplement`；某类缺省即回退 `ch`。
+- **`_special_same_style`（已裁决的回退）** → 值是 make_config **扫过其页区间**并判明编号首段仍是数字章号（即与正文同体例，无需独立子配置）的 kind 清单。`config_for_chapter` 对这些 kind 的回退**静默**（那是正确行为，不是错配）；没被扫过的 kind 仍发警告。Serre GTM42 实测：附录无字母章位编号，`--force` 重生成永远只会重复同一结论，因此警告的补救口径必须是"这条声明落账"，而不是"再跑一次 --force"。
 - **生成**：由 `make_config.py` 分别扫各 kind 的页区间半自动产出（同样打 `_provenance` 戳、同样过 `_extraction_done.json` 上游闸——**无手写侧门**）；检测偏差直接改 `verify_config.json` 本身即可（`make_config.py` 在文件已存在且非 `--force` 时跳过，不会覆盖手动修改）。
 - **校验**：`require_complete()` 对三类子配置套用**同一套闸门**（ordinal 必为合法数组、type∈合法码、section_types 角色码合法）。
 
 🔴 **缺子配置的回退不是无害的（Lee 2e 实测）**：书的附录条目印作 `Theorem A.1`（字母章位），回退到数字章号的正文配置后，`config_for_chapter` 的 chapter-first 数字比对把这些条目**全部判为跨章引用丢弃**——build_structure 抽出 0 条，整附录被塞进单个 description 节点（数万字符原始 OCR），而下游一切「照常运行」。因此：
-  * `ConfigLoader.config_for_chapter` 遇到缺省回退时发**一次性 stderr 警告**（`_warn_missing_special_config`，进程级去重）——看到它就说明该书的 verify_config.json 需要升级；
-  * `make_config.py`（非 `--force`）对已存在的外层 map 做**增量升级**：缺 `appendix`/`supplement` 键而书的章节映射确有该 kind 的章时，自动补写该键（既有键原样保留，`--force` 才整份重生成）。补写后必须**重跑 build_structure 重建这些章的契约**。
+  * `ConfigLoader.config_for_chapter` 遇到**未被裁决**的缺省回退时发**一次性 stderr 警告**（`_warn_missing_special_config`，进程级去重）——看到它就说明该书的 verify_config.json 需要升级；kind 已在 `_special_same_style` 里声明的则静默（同体例是结论，不是漏配）；
+  * `make_config.py`（非 `--force`）对已存在的外层 map 做**增量升级**：缺 `appendix`/`supplement` 键而书的章节映射确有该 kind 的章时，自动补写该键（既有键原样保留，`--force` 才整份重生成）；扫过后判明同体例的，补写的是 `_special_same_style` 声明。补写了子配置的必须**重跑 build_structure 重建这些章的契约**。
 
 ### 章类判定与路由（`ConfigLoader.chapter_kind` / `config_for_chapter`）
 

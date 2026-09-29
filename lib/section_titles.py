@@ -43,7 +43,10 @@ _ORDINAL_PREFIX = re.compile(r"^[§＄\$]?\s*")
 # 「词 + 个位数」收尾（Vakil 3e §19.8 'Curves of genus 4 and 5' 实测）——旧式 `\d{1,4}`
 # 把「 5」当页码剥掉，制造出以 and 收尾的假悬空题（负向用例见 test_section_titles）。
 _TRAIL_PAGE = re.compile(r"(?:[\s,，]\d{2,4}|\d{2,4})\s*$")
-_APOS = {"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\uff07": "'"}
+_APOS = {"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\uff07": "'",
+         # U+2032 PRIME 是导数记号的 Unicode 单码位（OCR/直接排印侧），与 ASCII 撇号、
+         # 以及 `\prime` 宏折出来的 `'` 必须同形（见 _SYMBOL_TEX["prime"] 注释）。
+         "\u2032": "'"}
 # 🔴 **连字符族**（U+2013 en / U+2014 em / U+2212 minus / U+2010-2011-2012/2015 /
 # U+2043 / 半角 `-`）在比对形里一律折成 `-`。抽题器与页 OCR 对同一个印刷连接符给出的
 # 码位不同（印刷排 en dash、抽取侧归一成半角），而**写手按印面把单元 H2 里的连接符写成
@@ -54,6 +57,9 @@ _APOS = {"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\uff07": "'"}
 # 只收**连字符族**码位（写成转义以免肉眼混淆）；中间点 `·`/`・` 不折——它不是连接符。
 _DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u2043\u2213-"
 _DASH_MAP = {ord(c): "-" for c in _DASHES}
+# 右括号族（半/全角圆括号、方括号、花括号、书名号右半）——`dangling_reason` 用它判
+# 「虚词在括号组内」，见该函数注释。
+_CLOSE_TAIL = (")", "]", "}", "\uff09", "\u3011", "\u300d", "\uff3d")
 _TRAIL_DOT = re.compile(r"[.．。]\s*$")
 
 # 🔴 **KaTeX 排版形 ↔ OCR 裸字符**在比对形里折成同一串（与上面折 dash 同一类，
@@ -95,6 +101,13 @@ _SYMBOL_TEX = {
     "dots": "\u2026", "ldots": "\u2026", "cdots": "\u22ef", "vdots": "\u22ee",
     "pm": "\u00b1", "mp": "\u2213", "cdot": "\u00b7", "bullet": "\u2219",
     "ast": "*", "star": "\u22c6", "circ": "\u2218",
+    # 🔴 导数撇号：写手在节题里写 `$\zeta ^ { \prime } ( s )$`（印面 ζ′(s) 的规范 KaTeX
+    # 写法）而 OCR/契约侧给 `ζ'(s)`。不收录 `\prime` 时宏名退化成裸词 `prime`，两侧
+    # **永不同形** → `norm_title` 判「互非前缀（一侧被 OCR 改写）」，`fix_section_name`
+    # 只能 REFUSE（它拒绝含 `\`/`$` 的 --name），于是要么闸把正确写法判死、要么逼写手
+    # 降级标题——同一类闸门 bug（Apostol《IANT》ch13 §13.4/§13.6 实测）。折成 **ASCII
+    # 撇号**，与 `_APOS` 把 U+2032 折到同一形配套。
+    "prime": "'",
     "le": "\u2264", "leq": "\u2264", "ge": "\u2265", "geq": "\u2265",
     "ne": "\u2260", "neq": "\u2260", "equiv": "\u2261", "cong": "\u2245",
     "approx": "\u2248", "sim": "\u223c", "simeq": "\u2243", "propto": "\u221d",
@@ -217,7 +230,17 @@ def dangling_reason(title, key=""):
     words = [w for w in re.split(r"\s+", t) if w]
     if not words:
         return None
-    last = words[-1].strip(".,;:!?()\u201c\u201d\u2018\u2019\u300c\u300d\uff08\uff09")
+    raw_last = words[-1].rstrip()
+    # 🔴 末 token 以**右括号**收尾 → 该虚词在括号组**内部**（数学变体 / 限定语），
+    # 不是折行悬空。印刷折行的续行被丢弃时，标题必然收在**裸虚词**上，绝不会带着
+    # 闭合括号收笔（带着右括号收笔说明这个括号组本身是完整的）。
+    # 跨书普查（2026-09-29，corpus 690 份契约 / 6517 个 section 名）：dangling 命中 165 条，
+    # 其中末 token 以右括号收尾的只有 **2 条**，均为印面真题——Apostol《IANT》
+    # §12.7 `Hurwitz's formula for ζ(s, a)`、§12.11 `Evaluation of ζ(-n, a)`（末 `a` 是
+    # Hurwitz zeta 的第二个变体，被当成冠词）。**零真截短被放过**。
+    if raw_last.endswith(_CLOSE_TAIL):
+        return None
+    last = raw_last.strip(".,;:!?()\u201c\u201d\u2018\u2019\u300c\u300d\uff08\uff09")
     if last.lower() in DANGLE_EN:
         return "以英文虚词「%s」收尾（印刷折行标题的续行被丢弃）" % last
     return None

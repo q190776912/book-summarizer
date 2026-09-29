@@ -333,12 +333,38 @@ class TestMetaExcuseAndHollowExerciseUnit(unittest.TestCase):
                                  key="1.2-4", content_blocks=2)
         self.assertTrue(ok, probs)
 
+    def test_cjk_bare_ordinal_head_counts_as_statement(self):
+        """Serre GTM42 译文层形态（2026-09-29 根治）：照印面写裸序标头
+        `6.2.（Plancherel 公式。）设 …`——序标后**紧跟全角括号**，无 ASCII 空格。
+        旧 `EXER_ITEM_BARE_RE` 要求 `[.)]` 之后是 `\\s`，于是同一份题面英文源认得出
+        （`6.2. (Plancherel`）、中文译文认不出 → 闸 ㉒ 只在译文层假阳，
+        ch6/0010 与 ch7/0014 被误判「无题面」逼写手篡改印刷形制。"""
+        for key, body in [
+            ("6.2", "6.2.（Plancherel 公式。）设 $u=\\sum u(s)s$ 与 $v=\\sum v(s)s$ 是 "
+                    "$\\mathbf{C}[G]$ 的两个元素，并令\n"),
+            ("7.1", "7.1.（诱导表示概念的推广。）设 $\\alpha \\colon \\mathbf{H} \\to "
+                    "\\mathbf{G}$ 为一个群同态。\n"),
+            ("5.1", "5.1. 证明：在 $\\mathbf{D}_{n}$ 中反射构成两个共轭类。\n"),
+        ]:
+            ok, probs = q.check_body(
+                "exercise", "Show that ...", body, key=key, content_blocks=1)
+            self.assertTrue(ok, "%s: %s" % (key, probs))
+
     def test_hollow_unit_still_fires_after_star_support(self):
         """负向：支持 `\\*` 头不得把真空心单元放过去——正文只有叙述句，无任何序标。"""
         ok, probs = q.check_body(
             "exercise", "*Exercise 1.2.4. Show that",
             "This exercise asks about conjugacy of circle rotations.\n",
             key="1.2-4", content_blocks=2)
+        self.assertFalse(ok)
+        self.assertTrue(any("认不出任何一条习题条目" in p for p in probs), probs)
+
+    def test_cjk_hollow_unit_still_fires(self):
+        """负向：放宽裸序标头**不得**放过中文空心单元——正文只有说明句、无契约键序标。"""
+        ok, probs = q.check_body(
+            "exercise", "Show that ...",
+            "本题要求读者验证上面定理里的公式，并讨论其推广。\n",
+            key="6.2", content_blocks=1)
         self.assertFalse(ok)
         self.assertTrue(any("认不出任何一条习题条目" in p for p in probs), probs)
 

@@ -112,7 +112,10 @@ _S = r'(?=[0-9A-Za-z]*[0-9](?:[\s.\-·，．:：\u4e00-\u9fff（(]|$))([0-9A-Za-
 # 标签后加负向预查 (?![A-Za-z一-龥])，避免把章节标题（"Examples"/"Exercises"）或
 # 语篇词（"例如"）误当成条目标签——它们是纯噪声，必须排除。
 _NA = r'(?![A-Za-z一-龥])'
-_LBL_CN = r'(定义|定理|引理|推论|命题|例|练习|习题|评注|注|公理|准则)'
+# 🔴 茆书 ch3 实测 2026-09-29：本书大量使用「性质N.M.K」条目体例，_LBL_CN
+# 原缺 性质 → 源侧扫描看不见 性质 条目 → 与契约（已按 property 落账）错位、
+# readable 假缺项。性质 → property 已在 TYPE_TO_LABEL_CN/_LABEL_CANON 在案。
+_LBL_CN = r'(定义|定理|引理|推论|命题|性质|例|练习|习题|评注|注|公理|准则)'
 _LBL_EN = (r'(Definition|Theorem|Lemma|Corollary|Proposition|Example|Exercise|Problem|'
            r'Remark|Axiom|Assertion|Conjecture|Algorithm|Assumption)')
 
@@ -349,6 +352,16 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                     # 条目——丢弃，否则回填出幻影项污染契约（Koopman 书实测）。
                     if primary_type == ORDINAL_TWO_LEVEL:
                         return False
+                    # 🔴 OCR 粘连幻影守卫（茆书 ch1 p51 实测 2026-09-29）：
+                    # 真条头「例1.3.13」与下一行行首数字 6 粘连成「例1.3.136」，
+                    # 末段 136 远超单节真实条目数（本书每节条目 ≤ 20 余），若放行
+                    # 会回填幻影 例1.3-136 并把 B 层序列空间撑到 136。抽取器
+                    # _add_match 本就有 `num > 50` 上限过滤，源侧扫描同口径补齐：
+                    # 末段 > 50 的 cn3_lf 命中一律丢弃（其他书条目 >50/节 的见
+                    # 冯琦注记——那条放宽只针对两级 lab_items 路径，三级书单节
+                    # 50+ 条目极罕见，真有再显式放宽此处）。
+                    if scheme == 'cn3_lf' and nums[2] > 50:
+                        continue
                     key = f"{nums[0]}.{nums[1]}-{nums[2]}"
                     canon = (nums[0], nums[1], nums[2])
                 else:

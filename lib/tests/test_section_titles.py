@@ -304,6 +304,39 @@ class TestTypesetFold(unittest.TestCase):
         self.assertNotEqual(norm_title("The average order of $\\varphi(n)$", ""),
                             norm_title("The average order of $\\psi(n)$", ""))
 
+    def test_prime_macro_folds_to_apostrophe(self):
+        r"""Apostol《IANT》ch13 §13.4/§13.6 实测：写手按印面写 `$\zeta ^ { \prime } ( s )$`，
+        契约/OCR 侧给 `ζ'(s)`（或 U+2032 的 `ζ′(s)`）。`\prime` 不在符号表里时宏名退化成
+        裸词 `prime` → 两侧永不同形 → `fix_section_name` 只能 REFUSE，闸把正确写法判死。"""
+        for lhs in (r"Upper bounds for $| \zeta ( s ) |$ and $| \zeta ^ { \prime } ( s ) |$",
+                    r"Upper bounds for $|\zeta(s)|$ and $|\zeta'(s)|$",
+                    "Upper bounds for |ζ(s)| and |ζ′(s)|"):
+            self.assertEqual(norm_title(lhs, ""),
+                             norm_title("Upper bounds for |ζ(s)| and |ζ'(s)|", ""), lhs)
+
+    def test_prime_fold_keeps_real_differences(self):
+        r"""负向：`\prime`（一阶导）不得与裸 `p`、也不得与 `\P`/双撇号折成同一形。"""
+        self.assertNotEqual(norm_title("Inequalities for $\\zeta^{\\prime}(s)$", ""),
+                            norm_title("Inequalities for $\\zeta(s)$", ""))
+        self.assertNotEqual(norm_title("Bounds for $f^{\\prime\\prime}(x)$", ""),
+                            norm_title("Bounds for $f^{\\prime}(x)$", ""))
+
+
+class TestDanglingBracketTail(unittest.TestCase):
+    def test_bracket_tail_math_variable_not_dangling(self):
+        """Apostol《IANT》实测假阳：`Hurwitz's formula for ζ(s, a)` 末尾的 `a` 是 Hurwitz
+        zeta 的第二个**变体**，被当成冠词判成「折行续行被丢弃」。带右括号收尾说明该括号组
+        本身完整，不是悬空。"""
+        self.assertIsNone(dangling_reason("12.7 Hurwitz's formula for ζ(s, a)", "12.7"))
+        self.assertIsNone(dangling_reason("12.11 Evaluation of ζ(-n, a)", "12.11"))
+        self.assertIsNone(dangling_reason("## §3.2 The function f (a)", "3.2"))
+
+    def test_bracket_tail_exemption_does_not_mask_real_truncation(self):
+        """负向：真折行截短（标题名里带括号、但**收在裸虚词上**）仍须报出来。"""
+        self.assertTrue(dangling_reason("## §6.2 A relation between f ( x ) and", "6.2"))
+        self.assertTrue(dangling_reason("## §1.2 Applications of", "1.2"))
+        self.assertTrue(dangling_reason("## §5.4 The set S (see Chapt-", "5.4"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

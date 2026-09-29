@@ -565,6 +565,27 @@ PROOF_OPEN_RE = re.compile(
     r'>\s*\*\*(?:证明|证明思路|证明梗概|证明概要|Proof|Proof sketch|Proof Sketch|'
     r'梗概|概要|解答|Solution)\b', re.I)
 
+
+def is_translated_md(md_file, source_language):
+    """本 md 是否为「非中文源书的中文译版」（步骤 6 产物），而非作者自撰文本。
+
+    🔴 译版豁免 Tier-3 证明分条闸的根据（Iwaniec–Kowalski 解析数论 ch7 0050 实测
+    2026-09-29）：`PROOF_OPEN_RE` 认中文 `证明`（含 `证明（梗概）`），却**不认**英文印面
+    写法 `**Sketch of proof.**`（表里只有 `Proof sketch`，词序相反）→ 同一段散文式证明
+    在**源单元过、译单元不过**。而译文按契约必须**逐行镜像**已冻结并已过 `verify --only-lang en`
+    的源单元：逼译者把源的散文式证明拆成 `1. 2. 3.` = 结构分叉 + 凭空地重排原书论证。
+    故本闸只管「自撰文本」，不管「译本」。与 P 层照抄闸只跑源单元同一取向。
+    """
+    if source_language in (None, "", "cn", "zh", "zh-cn", "zh_hans"):
+        return False          # 中文源书：md 就是自撰文本，闸门照常生效
+    b = os.path.basename(md_file or "")
+    # 按节拆分章的**合并临时视图**（verify_chapter._merged_temp_path）：语言已编进
+    # 文件名后缀 `_cn`/`_en`（旧名不带语言 → 中文侧节文件合并后失去译版身份，本豁免
+    # 形同失效，Iwaniec–Kowalski ch7/ch15 假阳实测 2026-09-29）。
+    if b.startswith("._verify_merged_"):
+        return b.endswith("_cn.md")
+    return b[:1] in ("第", "附", "补")     # 中文译版命名约定（与 verify_chapter._group_lang 同源）
+
 # 顶层长散文段的最小字符数（超过才进入「疑似照抄」观察区）
 # 注：含公式($...$/$$/\begin{})的段落视为「内容承载的描述性内容」，豁免本闸门
 # （忠实保留公式/概念的描述本就该较长，不应被误杀；见 SKILL.md Tier 2）。
@@ -794,13 +815,18 @@ def check_verbose_paragraphs(lines, ext_dir=None, ch=None, label_exempt=True,
     return out
 
 
-def check_verbose_proofs(lines):
+def check_verbose_proofs(lines, translation=False):
     """证明/注记/解答块引用过长且未分条（Tier 3 闸门）。
 
     ⚠️ 已用 `1. 2. 3. …` / `（1）（2）` / `(a)(b)` 等分条枚举的证明【步数不限】一律豁免——
     「1,2,3」只是示意，核心步骤按实际需数列出即可。只有「整段散文墙」式（无步骤标号且
     >700 字）的块才判违规。例 Example 的忠实陈述豁免，但其内 `> **解答/证明**：` 子块同样受约束。
+
+    `translation=True`（非中文源书的中文译版 / 步骤 6 译单元）→ 本闸整个跳过，
+    理由见 `is_translated_md`。
     """
+    if translation:
+        return []
     out = []
     n = len(lines)
     i = 0
@@ -901,7 +927,8 @@ class PLayer(VerifyLayer):
                                          cfg=ctx.config)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)
         verbose = check_verbose_paragraphs(lines, ctx.ext_dir, ctx.ch)
-        verbose_proof = check_verbose_proofs(lines)
+        verbose_proof = check_verbose_proofs(
+            lines, translation=is_translated_md(ctx.md_file, ctx.language))
         return LayerResult(code=self.code, metadata={
             'p_exer_block': exer,
             'p_noise': noise,

@@ -636,7 +636,13 @@ def scan_cn_heads(pages_dir):
                 # 71→73 实测），一律剔除。
                 pre = str(s)[:mm.start()]
                 if not re.fullmatch(r"[\d\s§]*", pre):
-                    continue
+                    # 🔴 OCR 噪声前缀（茆书 ch3 p148 实测 2026-09-29）：页眉块被
+                    # 带出前置竖线 `|第三章 …`，旧判据一票否决 → 该页零票、页眉
+                    # 连续段拦腰断裂、章起点错校（147→150，章扉页整段划出章外）。
+                    # pre 含任何字母/数字/CJK（str.isalnum 对 CJK 亦真）= 真交叉
+                    # 引用散文，照剔；只含标点/符号/空白装饰（| ! · 等）时仍认。
+                    if any(ch.isalnum() for ch in pre):
+                        continue
                 t = mm.group(1)
                 n = int(t) if t.isdigit() else CN_NUM.get(t)
                 if n:

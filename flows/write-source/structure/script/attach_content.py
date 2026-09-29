@@ -96,6 +96,7 @@ from lib.numbering import (ordinal_depth, resolve_ordinal_code,
                            formula_tag_number, formula_trailing_tag, formula_tag_re,
                            formula_tag_shape_ok, formula_tag_noise, folio_norm)
 from lib.page_dir import node_page_dir as _node_page_dir
+from lib import content_overrides
 
 OUT_DIR_NAME = "book_structure"
 
@@ -939,6 +940,81 @@ def _strip_header(blocks, name):
     return out
 
 
+# 🔴 **节题残块**（2026-09-29 Iwaniec–Kowalski 实测 8 处，① 复算闸的假「契约缺块」）：
+# 扫描书 OCR 会把印刷标题**重新转写**成与 `build_structure` 收割到的 `name` 不同的
+# 字形（`Q(VD)` vs `Q(√D)`、`A(9)(Ω)` vs `Λ^{(g)}(½)`、`D(s, x)` vs `D(s,χ)`），
+# `_strip_header` 只能吃掉能对上的那半行，剩下的半行就作为正文块挂进本节
+# description——印面上那一整行**就是本节标题**（题面已由节点 `name` 承载），留着
+# 等于正文重复标题，磁盘侧人工把它删掉后 ① 又按纯管线重算报缺块。
+_ORD_LEAD = re.compile(r"^(\d+(?:\.\d+)*)")
+
+
+def _heading_words(raw, ordinal):
+    """序数之后的前两个实词（≥3 字母）。🔴 必须在**原始文本**上取：`_norm` 连空格
+    一起剥掉，词边界消失（`A lower bound` → `alowerboundforno`），两个词就再也分不开了。"""
+    tail = re.sub(r"^\s*\d+(?:\.\d+)*[.、\s]*", "", raw or "")
+    return [w.lower() for w in re.findall(r"[A-Za-z]{3,}", tail)][:2]
+
+
+def _drop_heading_residue(stripped, originals, name):
+    """从本节自家标题行的残块中剔除「重抄标题」，正文散文一律保留。
+
+    🔴 印面上是**一行**标题，OCR 却常把它切成几块（行内公式 `$D(s,\\chi)$` 一被识别
+    就把那行断开：`9.7. Large values of D(s,` + `x).`），而 `build_structure` 收割
+    `name` 时用的是**另一套转写**（`$Q(\\sqrt{D})$` vs `Q(VD)`、`$\\Lambda^{(g)}(½)$`
+    vs `A(9)(Ω)`），`_strip_header` 只能吃掉能对上的一截，剩下的那截就成了正文。
+    判据在**按几何拼回的印刷行**上做，四道闸缺一不删（宁重复不误删。两版失败教训：
+    只按单块判序数时，序数 `5` 前缀匹配到条目行 `5.14 Theorem. …`，全书误删 60+ 块；
+    改按「相邻块拼接」而不按几何拼行时，标题行与紧随其后的正文行被并成一条候选，
+    于是**整句正文**成了候选的尾部 → 误删 15+ 块）：
+      1. 候选行 = 与该块**同一页、y 带重叠 >50% 字高**的文本块按 x 拼回的一行；
+      2. 候选行逐字以本节序数开头且分隔符后不是数字（`9.7.` ✓ / 序数 `5` 遇 `5.14`
+         不放行），整行 ≤70 归一化字符且含字母——是一行标题不是一段正文；
+      3. 候选行序数后的**首个实词**与 `name` 相同（`Large` ↔ `Large`）——只比一个词
+         是必要的：OCR 把标题里的数学重抄坏了（`A(9` ↔ `\\Lambda^{(g)}`），比两个词
+         恰好在正是本判据要救的场景上失灵；
+      4. 待删块是该行的**一段**（`x).` / `(VD).` / `(1,XD).` / `(Ω).` / `(T).` 是尾部，
+         `24.1. A lower bound for No` 是头部——同一行被切成头尾两块时两侧都是标题料）。
+    候选行整体已通过 1–3，所以「本行就是本节标题行」是先立的，块只是它的一个片段。
+    """
+    if not stripped or not originals:
+        return stripped
+    m = _ORD_LEAD.match((name or "").strip())
+    if not m:
+        return stripped
+    ordinal = m.group(1)
+    nw = _heading_words(name, ordinal)
+    if not nw:
+        return stripped                        # 标题无可比实词 → 判据不启用
+    head_re = re.compile(r"^\s*" + re.escape(ordinal) + r"\s*[.、]?\s*(?![\d.])")
+    geo = [b for b in originals
+           if isinstance(b, dict) and b.get("text")
+           and b.get("page") is not None and b.get("y") is not None]
+
+    def _printed_line(b):
+        y0, y1 = b["y"], b.get("bottom", b["y"])
+        h = max(y1 - y0, 1.0)
+        same = [c for c in geo if c["page"] == b["page"]
+                and min(y1, c.get("bottom", c["y"])) - max(y0, c["y"]) > 0.5 * h]
+        same.sort(key=lambda c: (c["y"], c.get("x") or 0.0))
+        return "".join(str(c.get("text") or "") for c in same)
+
+    keep = []
+    for b in stripped:
+        t = b.get("text") if isinstance(b, dict) else None
+        n_t = _norm(t or "")
+        dead = False
+        if n_t and b.get("page") is not None and b.get("y") is not None:
+            cand = _printed_line(b)
+            n_c = _norm(cand)
+            dead = bool(n_c) and len(n_c) <= 70 and n_t in n_c \
+                and bool(head_re.match(cand)) \
+                and _heading_words(cand, ordinal)[:1] == nw[:1]
+        if not dead:
+            keep.append(b)
+    return keep
+
+
 # ---------------------------------------------------------------------------
 # proof 子节点（证明）与 description 节点（与定理同级的描述信息）
 # ---------------------------------------------------------------------------
@@ -1322,7 +1398,8 @@ def build_chapter_contract(ext, node, page_dir=None):
         tgt = e[2]
         blk = _strip_header(buckets.get(id(tgt)) or [], tgt.get("name") or "")
         if tgt.get("type") in ("chapter", "section"):
-            own_blocks[id(tgt)] = blk
+            own_blocks[id(tgt)] = _drop_heading_residue(
+                blk, buckets.get(id(tgt)) or [], tgt.get("name") or "")
         elif tgt.get("type") in ("exercise", "problem"):
             # 练习/问题的「证明：…」是题干任务而非证明过程 → 题面即正文，不拆 proof
             # 但锚点分派对末锚点之后无上界：章尾标题「习题答案与提示」及其后全部
@@ -1371,8 +1448,24 @@ def build_chapter_contract(ext, node, page_dir=None):
 
     fill(node, _strip_header(preamble, node.get("name") or "") if preamble else None)
 
+    # 🔴 **人工裁定通道**（`verify_config.json` 的 `content_overrides`）：OCR 噪声残块
+    # 的剔除与 `(C.N)` 的印面挪位都是**印面裁定**，磁盘为真；但 ① 复算闸按纯管线重算，
+    # 会把它们报成「契约缺块 / 多块」假 FAIL。故把裁定登记成**管线输入**，在统计之前
+    # 执行——写入侧与复算侧同一函数同一谓词，「重算 = 磁盘」由构造成立（判据与
+    # `disk_audit` 见 `lib/content_overrides.py`）。未配置时零影响。
+    _co_ops = content_overrides.ops_for(ext, ch_key)
+    _co_hits = content_overrides.apply_overrides(node, _co_ops) if _co_ops else []
+    # 🔴 命中数为 0 的登记 = 管线改版后该块已不存在，登记与磁盘双双失配。此时磁盘侧
+    # 的反向审计只会「无匹配 → 视为已剔除」地假绿，① 会被一条腐烂的登记悄悄变成假
+    # PASS，所以把死登记随 stats 上抛，由 `check_content_completeness` 判 FAIL。
+    _co_dead = [content_overrides.norm(op.get("match"))[:60]
+                for op, hits in _co_hits if not hits]
+
     stats = {"text": 0, "formula": 0, "image": 0, "proof": 0,
-             "description": 0, "noise_dropped": n_noise[0]}
+             "description": 0, "noise_dropped": n_noise[0],
+             "overrides": len(_co_ops)}
+    if _co_dead:
+        stats["override_dead"] = _co_dead
 
     def _count(n):
         for c in n.get("sub_sec") or []:

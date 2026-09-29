@@ -46,6 +46,7 @@ from page_json import PageJson
 from lib.page_dir import resolve_page_dir
 
 import sys, os, json, glob, re
+from contextlib import contextmanager
 
 
 from verify_config import ConfigLoader, ConfigError, _norm_win
@@ -182,7 +183,14 @@ def chapter_md_groups(book_dir, ch):
             pats.append((f'Appendix{lab}_*.md', f'Appendix{lab}_*.md'))  # en appendix
         else:
             pats.append(('附录.md', '附录.md'))                          # 无编号附录（裸名）
+            pats.append(('附录_*.md', '附录_*.md'))
             pats.append(('Appendix.md', 'Appendix.md'))
+            pats.append(('Appendix_*.md', 'Appendix_*.md'))
+        # 🔴 无编号附录的**带标题中文形制**（`附录_XXX.md`，merge_units 按 manifest
+        #    `final_md` 写出，与 flows/_flow_contract.py::_md_group 的
+        #    `["附录.md", "附录_*.md", …]` 同源）必须一并识别：旧实现只认裸名
+        #    `附录.md`，于是这类中文版附录文件**整本不进 verify**（静默漏检，
+        #    Serre GTM42 实测 `--all` 报 39/39 而磁盘 40 个 md，2026-09-29 根治）。
     elif kind == 3:
         lab = chapter_ordinal(ch)
         if lab:
@@ -190,7 +198,9 @@ def chapter_md_groups(book_dir, ch):
             pats.append((f'Supplement{lab}_*.md', f'Supplement{lab}_*.md'))  # en supplement
         else:
             pats.append(('补篇.md', '补篇.md'))                           # 无编号补篇（裸名）
+            pats.append(('补篇_*.md', '补篇_*.md'))
             pats.append(('Supplement.md', 'Supplement.md'))
+            pats.append(('Supplement_*.md', 'Supplement_*.md'))
     for merged_pat, sec_pat in pats:
         merged = [f for f in glob.glob(os.path.join(book_dir, merged_pat))
                   if _section_num_from_filename(f) is None]
@@ -255,11 +265,80 @@ def _merge_section_files(section_files):
 
 
 def _merged_temp_path(book_dir, ch, section_files):
-    """Write merged chapter content to a temp file and return its path."""
-    tmp = os.path.join(book_dir, f'._verify_merged_{chapter_label(ch)}.md')
+    """Write merged chapter content to a temp file and return its path.
+
+    🔴 文件名必须携带**本组语言**（Iwaniec–Kowalski 解析数论 ch7/ch15 实测 2026-09-29）：
+    按节拆分的章会被并回一个临时文件再跑各层，而若干「译版豁免」判据
+    （`verbose_gates.is_translated_md`）读的就是文件名的中文侧前缀。旧名
+    `._verify_merged_ch{N}.md` 两侧共用、以 `.` 起头 → 中文侧节文件被并出的临时视图
+    失去「译版」身份，Tier-3 证明分条闸只对 EN 源侧跑过、却在 CN 合并视图上复活，
+    于是同一内容「源过 / 译不过」（本书 ch7 1 处、ch15 2 处 `**证明梗概。**` 假阳）。
+    """
+    lang = _group_lang(section_files)
+    suffix = f'_{lang}' if lang else ''
+    tmp = os.path.join(book_dir, f'._verify_merged_{chapter_label(ch)}{suffix}.md')
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(_merge_section_files(section_files))
     return tmp
+
+
+def _src_lang_group(grp, groups):
+    """本章**译组** `grp` 的源语言配对组 = 同章唯一的非中文组；缺失或歧义 → None。
+
+    三语书（原文 + 中 + 英）会有两个非中文组 → 不猜哪一个才是配对源，返回 None，
+    于是「结构继承源本」豁免一条都不生效（fail-closed）。
+    """
+    others = [g for g in groups if g is not grp and _group_lang(g) != 'cn']
+    return others[0] if len(others) == 1 else None
+
+
+@contextmanager
+def _src_pair_view(book_dir, ch, grp, groups):
+    """译组的源语言**整章配对视图**路径；无配对 → None（退出时清理自建临时视图）。
+
+    verify_all 消费的是合并后的章视图，配对侧也必须给章视图，两侧才在同一粒度比
+    顶层标签族 / 分隔线指纹。所有文档级「译本继承」判据只经此口读配对。
+    """
+    if _group_lang(grp) != 'cn':
+        yield None
+        return
+    pair = _src_lang_group(grp, groups)
+    if not pair:
+        yield None
+        return
+    if len(pair) > 1:
+        tmp = _merged_temp_path(book_dir, ch, pair)
+        try:
+            yield tmp
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return
+    yield pair[0]
+
+
+def source_pair_for_md(book_dir, ch, md_file):
+    """`--fix` 侧的配对解析（不建临时视图）：节文件 ↔ 同节序源文件，整章 ↔ 整章。
+
+    与 `_src_pair_view` 同一份「唯一非中文组」判据（`_src_lang_group`），因为检测趟
+    与修复趟必须共用同一配对口径——否则 verify 已豁免的写法会被 `--fix-force` 再
+    「修」成与源本分歧的结构。形制不对齐（一侧整章、一侧按节）时返回 None：
+    宁可不豁免，也不拿整章去比一节。
+    """
+    if not book_dir or ch is None:
+        return None
+    groups = chapter_md_groups(book_dir, ch)
+    me = next((g for g in groups if md_file in g), None)
+    if me is None or _group_lang(me) != 'cn':
+        return None
+    pair = _src_lang_group(me, groups)
+    if not pair:
+        return None
+    if len(pair) == len(me):
+        return pair[me.index(md_file)]
+    return pair[0] if len(pair) == 1 else None
 
 
 def _make_loader(ext, book_dir, extra_ignore=None):
@@ -295,15 +374,20 @@ def _make_loader(ext, book_dir, extra_ignore=None):
     return loader
 
 
-def verify_one(ch, start, end, md, ext, book_dir=None, extra_ignore=None):
+def verify_one(ch, start, end, md, ext, book_dir=None, extra_ignore=None,
+               src_pair_md=None):
     """Verify a single chapter. Returns the byte-compatible result dict.
 
     All configuration is read by a ConfigLoader built from <ext>/<book_dir>;
     no config is passed field-by-field.
+
+    `src_pair_md`：`md` 为**译本**时其同章源语言配对 md（F 层「结构继承源本」豁免的
+    唯一入口，由 `verify_all` 经 `_src_pair_view` 解析）。None = 解析不出配对 →
+    一条都不豁免（fail-closed）。
     """
     loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
     mgr = VerifyManager(LAYER_REGISTRY, loader)
-    return mgr.verify_one(ch, start, end, md, ext)
+    return mgr.verify_one(ch, start, end, md, ext, src_pair_md=src_pair_md)
 
 
 def _lookup_item_detail(key, items):
@@ -431,8 +515,12 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
         if not groups:
             print(f"{chapter_label(ch)}: SKIP — no .md file found")
             continue
+        # 🔴 配对解析始终用**未过滤**的全语言组：`--only-lang cn` 只影响「校哪些组」，
+        # 不能顺手抹掉译本的配对源（否则同一份译本 md 在带/不带 --only-lang 时结论
+        # 不同 → merge_source（only-lang=en）与 merge_translation（全覆盖）口径分叉）。
+        all_groups = groups
         if only_lang:
-            groups = [g for g in groups if _group_lang(g) == only_lang]
+            groups = [g for g in all_groups if _group_lang(g) == only_lang]
             if not groups:
                 print(f"{chapter_label(ch)}: SKIP — no [{only_lang}] .md file found")
                 continue
@@ -447,8 +535,9 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
                 md_display = (f"{os.path.basename(grp[0]).split('_')[0]}_"
                               f"合并{len(grp)}节")
             try:
-                r = verify_one(ch, start, end, md, ext, book_dir,
-                               extra_ignore=extra_ignore)
+                with _src_pair_view(book_dir, ch, grp, all_groups) as src_pair:
+                    r = verify_one(ch, start, end, md, ext, book_dir,
+                                   extra_ignore=extra_ignore, src_pair_md=src_pair)
             finally:
                 if len(grp) > 1:
                     try:
@@ -560,13 +649,17 @@ def _fences_balanced(md_file):
     return preflight_md(md_file)['balanced']
 
 
-def fix_all_layers(md_file, book_dir=None, force=False):
+def fix_all_layers(md_file, book_dir=None, force=False, ch=None):
     """Deprecated shim → VerifyManager.fix. Kept for backward-compatible callers
     (main / --fix). Returns the same change dict as the old fix_all_layers.
 
     🔒 前置守卫（2026-08 复盘落地）：`$$` 围栏不配对时**拒绝运行全部 fixer**
     （fail fast 优于静默污染），并返回 {'preflight_blocked': 1}。CLI 需显式
-    `--fix-force` 越过；编程调用传 force=True。"""
+    `--fix-force` 越过；编程调用传 force=True。
+
+    `ch` 已知时按 `_src_lang_group` 同一口径解析译本的源语言配对 md，交给 H 层
+    修复器做「结构继承源本」豁免——检测趟豁免、修复趟照包 = 判据分叉。
+    """
     if not force and not _fences_balanced(md_file):
         print(f"[PREFLIGHT] BLOCKED: {os.path.basename(md_file)} 的 $$ 围栏不配对，"
               f"已拒绝运行 --fix（按块作用域修复在错位配对下会污染正文）。"
@@ -576,7 +669,7 @@ def fix_all_layers(md_file, book_dir=None, force=False):
     book_dir = book_dir or os.path.dirname(md_file)
     loader = _make_loader(ext, book_dir)
     mgr = VerifyManager(LAYER_REGISTRY, loader)
-    return mgr.fix(md_file)
+    return mgr.fix(md_file, src_pair_md=source_pair_for_md(book_dir, ch, md_file))
 
 
 def _run_ignore_audit(ext, chapter=None):
@@ -643,7 +736,9 @@ def _main_impl():
                 book_dir_fix = os.path.dirname(ext_fix) if ext_fix else None
                 if _preflight_gate(md_file):
                     print(f"[FIX] Auto-correcting layers on {os.path.basename(md_file)}...")
-                    res = fix_all_layers(md_file, book_dir=book_dir_fix, force=True)
+                    from data.book_structure.book_structure import norm_chapter_key
+                    res = fix_all_layers(md_file, book_dir=book_dir_fix, force=True,
+                                         ch=norm_chapter_key(args_fix[0]))
                     parts = [f"{k}={v}" for k, v in res.items() if v > 0]
                     if parts:
                         print(f"[FIX] Applied: {', '.join(parts)}")
@@ -721,7 +816,8 @@ def _main_impl():
                     for grp in chapter_md_groups(book_dir, info.ch):
                         for md_file in grp:
                             res = fix_all_layers(md_file, book_dir=book_dir,
-                                                 force='--fix-force' in sys.argv)
+                                                 force='--fix-force' in sys.argv,
+                                                 ch=info.ch)
                             parts = [f"{k}={v}" for k, v in res.items() if v > 0]
                             if parts:
                                 print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
@@ -777,13 +873,15 @@ def _main_impl():
         if not _fix_requested(sys.argv):
             _fix_disabled_hint(md)
         elif _preflight_gate(md):
-            res = fix_all_layers(md, book_dir=book_dir_single, force=True)
+            res = fix_all_layers(md, book_dir=book_dir_single, force=True, ch=ch)
             parts = [f"{k}={v}" for k, v in res.items() if v > 0]
             if parts:
                 print(f"[FIX] {chapter_label(ch)}: {', '.join(parts)}")
         else:
             print("[FIX] 未执行：PREFLIGHT 门未通过。")
-    r = verify_one(ch, start, end, md, ext, book_dir_single, extra_ignore=extra_ignore)
+    r = verify_one(ch, start, end, md, ext, book_dir_single,
+                   extra_ignore=extra_ignore,
+                   src_pair_md=source_pair_for_md(book_dir_single, ch, md))
     status = print_result(r)
     # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
     suspect = _run_ignore_audit(ext, ch)

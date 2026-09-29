@@ -117,7 +117,12 @@ _LETTER_LED_RE = re.compile(
 _ITEM_LABEL_RE = re.compile(
     r'(definition|theorem|remark|example|proposition|corollary|'
     r'exercise|lemma|defnition|exercse|figure|fig|problem|section|'
-    r'equation|eq|chapter)\b', re.IGNORECASE)
+    r'equation|eq|chapter)\b'
+    # 谢启鸿《高等代数》2026-09-29：中文条目标签（定义/定理/…）与中文散文
+    # 交叉引用（「由推论3.6.5 可得」）此前不被识别，裸数字全部混入 S 制造
+    # 假 MISSING。中文词不加 \b（CJK 与数字/汉字相邻不存在 \w 边界）。
+    r'|(定义|定理|引理|推论|命题|例题|例|习题|注记|注|证明)',
+    re.IGNORECASE)
 # 形态③（左缘编号粘连，Apostol IANT 2026-09-28）：块首的 `(N)`，编号后可有可无
 # 空白（`(16)x(a) = …` 是 OCR 无空白粘连），但后面必须还有内容（纯编号走形态①）。
 _FORM3_HEAD_RE = re.compile(r'\s*[（(]\s*(\d+[a-zA-Z]?)\s*[）)]\s*[.。]?\s*(?=\S)')
@@ -126,6 +131,118 @@ _FORM3_HEAD_RE = re.compile(r'\s*[（(]\s*(\d+[a-zA-Z]?)\s*[）)]\s*[.。]?\s*(?
 # 刻意不含裸字母词——`(12) gives us` 这类散文回指必须留在门外。
 _FORM3_MATHISH_RE = re.compile(
     r'[=≤≥≠∑∫√∂∏±×÷\\^_]|[(（][^()（）\s][^()（）]{0,11}[)）]')
+# 🔴 形态② 的 **latex 侧**入口（2026-09-29 阿诺尔德《经典力学的数学方法》ch10
+# `(8)` 实测）：视觉/MM 修复把展示式**连同其右缘编号**一起识别成
+# `formulas[].latex`（`\|w\|_C < c_1, … (8)`），于是该印刷编号从未出现在
+# `text[]` 里。plain 路径的 Leading-number guard 只放行**开头**编号，
+# sectioned 路径此前根本不读 `formulas[]` → 两条抽取路都漏收真实印刷号，
+# 总结忠实的 `\tag{8}` 反被误判 FABRICATED。两条路改为共用下面这一个判据
+# （判据只此一份；收下后仍走各自的 形态② 尾号提取，块内其余括号数字不污染 S）。
+_LATEX_TAIL_NUM_RE = re.compile(r'[（(]\s*\d{1,3}[a-zA-Z]?\s*[）)]\s*[.。]?\s*$')
+_LATEX_HEAD_NUM_RE = re.compile(
+    r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]'
+    r'|^[（(]\s*[A-Z]\s*[.·]\s*\d{1,3}\s*[）)]')
+
+
+def _tail_pre_guard(raw_pre: str) -> bool:
+    r"""行尾 token 左侧守卫：区分「右缘印刷编号」与「数学内部的参数表」。
+
+    🔴 入参是**未剥尾随空白**的左邻原文——「括号左边有没有空格」本身就是判据，
+    剥掉就丢了这一维（Kreyszig 判据回归实测 2026-09-29：`a = 1 (1)` 与 `c_1(2)`
+    在剥空白的口径下不可区分，一刀切拒数字把整章右缘标签全判掉）。
+
+    拒收（不是标签）：
+      · 与括号**黏着**的左邻字符是字母/数字/CJK/`\`（`f(x)`、`c_1(2)`、`式(3)`、
+        `SO(3)`、`\sin(2)`）——印刷标签与式子之间必有空白；
+      · 剥空白后以 **CJK / `\`** 收尾（`见式 (3)` 型中文交叉引用）；
+      · 左侧是 **≥2 个连续的单大写字母 token**（`\boldsymbol { X }` 之类字体壳
+        按一个字母计）—— 那是 `S O ( 3 )` / `T S O ( 3 )` 型李群记号
+        （2026-09-29 阿诺尔德《经典力学的数学方法》ch8 + 附录E 实测：33 条以
+        群记号收尾的 latex 被收进 S，制造两处假 MISSING）。
+    放行：号与左侧**隔空白**的单个 token —— `f(x) \le M (9)`（单字母）、
+    `b = 2 (2)`（数字）都是合法的右缘标签。
+    🔴 取舍：latex **命令名**隔空白（`\phi ( 2 )`）也在放行侧——它与真空标签
+    `\quad (8)`、`\circ (3)` 形态不可分，而实测噪声（上面那 33 条）里没有这种
+    形态，故不为它加一张函数名白名单（命令**黏着**括号时由 ① 拒收）。
+    """
+    if not raw_pre or not raw_pre.strip():
+        return True
+    if raw_pre[-1] not in ' \t\u3000　':
+        return False
+    pre = raw_pre.rstrip()
+    if re.search(r'[\u4e00-\u9fff\\]$', pre):
+        return False
+    _run = 0
+    s = pre
+    while True:
+        m = re.search(r'(?:\\(?:boldsymbol|mathbf|mathit|mathrm|mathsf|mathtt|pmb|bm)'
+                      r'\s*\{\s*[A-Z]\s*\}|[A-Z])\s*$', s)
+        if not m:
+            break
+        _run += 1
+        s = s[:m.start()].rstrip()
+        if _run >= 2:
+            return False
+    return True
+
+
+def tail_label_match(txt: str):
+    r"""块尾那枚「印刷公式编号」的**唯一**判据（形态②，`text[]` 与 `formulas[].latex` 共用）。
+
+    两个条件缺一不可：
+
+    ① 剥掉尾随空白后，块以 `(N)`（可带句点）收尾；
+    ② 那对括号**不是函数/群的参数表**——见 ``_tail_pre_guard``（判据吃**未剥空白**
+       的左邻原文：`b = 2 (2)`、`f(x) \le M (9)` 这类「隔空白」的右缘标签放行，
+       `c_1(2)`、`SO(3)` 这类黏着形态与 `S O ( 3 )` 型多字母群记号一律拒收）。
+
+    返回 Match（span 覆盖 token，供调用方做 `_tail_only_span`）或 None。
+    """
+    s = (txt or '').rstrip()
+    m = _LATEX_TAIL_NUM_RE.search(s)
+    if not m:
+        return None
+    if not _tail_pre_guard(s[:m.start()]):
+        return None
+    return m
+
+
+def formula_latex_text(fblk) -> str:
+    """把一个 `formulas[]` 条目解包成 latex 字符串（嵌套块逐层取 text/latex/formula）。
+
+    提取趟里 `formulas[].latex` 可能是裸字符串，也可能是 `{"text": …}` 之类的
+    嵌套块；旧实现把这段解包代码写死在 plain 路径里，sectioned 路径没有它，
+    两处口径因此漂移。
+    """
+    lx = (fblk.get('latex') or fblk.get('formula') or '') \
+        if isinstance(fblk, dict) else ''
+    _unw = 0
+    while isinstance(lx, dict) and _unw < 4:
+        lx = (lx.get('text') or lx.get('latex') or lx.get('formula') or '')
+        _unw += 1
+    return (lx or '').strip()
+
+
+def latex_tail_token(ls: str):
+    """latex 串**结尾**那枚印刷编号 token（如 `… (8)` → `'(8)'`），无则 None。"""
+    m = tail_label_match(ls)
+    return m.group(0) if m else None
+
+
+def latex_label_candidates(ls: str) -> list:
+    r"""该 latex 串是否携带「被吞进公式串里的印刷编号」？返回可消费的候选串列表。
+
+    开头编号（Han–Lin `(4.3) \quad …`）交整条 latex（后续管线自行取号）；
+    结尾编号（阿诺尔德 `… (8)`）只交**尾部那一个 token**，避免把数学内部的
+    括号数字（`\varphi ( 2 )` 之类）混进 S。
+    """
+    if not ls:
+        return []
+    if _LATEX_HEAD_NUM_RE.match(ls):
+        return [ls]
+    tok = latex_tail_token(ls)
+    return [tok] if tok else []
+
 # Number token: 2 or 3 components (e.g. 1.17 / 11.1-1 / 3,4), optional trailing
 # letter suffix (e.g. 2.3a).
 _TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
@@ -329,6 +446,38 @@ def _section_match(cs: str, md_sections: List[str], cur: int) -> int:
     return cur
 
 
+def known_book_scopes(formula_cfg):
+    """``formula.known_book`` → ``{归一号: 登记章集合 or None}``（注入判据真值）。
+
+    登记入口 `register_formula.py` 要求逐号 `--chapter` + 印面证据，账本
+    ``known_book_audit`` 因此**知道这个号印在哪一章**。旧的注入判据只看「号的首段
+    == 章号」，对**编号按节重启**的书（首段是小节号，如丘维声《解析几何》ch1 §3 的
+    (3.11)）必然注错章：登记在 ch1 的真号被当成 ch3 的真编号去要求 → 假 MISSING，
+    运维只能把它塞进 ``ignore``（跨章污染）。
+    值为 ``None`` = 该号无账本可依（存量配置）→ 判据退回「首段 == 章号」旧行为。
+    """
+    out: Dict[str, Optional[Set[int]]] = {}
+    for x in ((formula_cfg or {}).get("known_book") or []):
+        n = SourceFormulaIndex.norm(str(x))
+        if n:
+            out.setdefault(n, None)
+    for e in ((formula_cfg or {}).get("known_book_audit") or []):
+        if not isinstance(e, dict):
+            continue
+        n = SourceFormulaIndex.norm(str(e.get("number") or ""))
+        try:
+            ch = int(e.get("chapter"))
+        except (TypeError, ValueError):
+            continue
+        if not n:
+            continue
+        if out.get(n) is None:
+            out[n] = {ch}
+        else:
+            out[n].add(ch)
+    return out
+
+
 class SourceFormulaIndex:
     """Builds the book-source formula-number set S for a chapter.
 
@@ -342,7 +491,7 @@ class SourceFormulaIndex:
                  ignore: Optional[Set[str]] = None,
                  ncomp: Optional[int] = None,
                  keep_cross_refs: bool = True,
-                 known_book: Optional[Set[str]] = None,
+                 known_book: object = None,
                  sections_global: bool = False) -> None:
         self.extract_dir = extract_dir
         self.patterns = [re.compile(p) for p in (patterns or [])]
@@ -376,11 +525,22 @@ class SourceFormulaIndex:
         # number must never be suppressed).  Mirrors the audit_ignore.py
         # "manual_overrides 补回真实缺项" recommendation.  Populated from
         # verify_config.json `formula.known_book` via the Q-layer run().
-        self._known_book = {
-            SourceFormulaIndex.norm(str(x))
-            for x in (known_book or [])
-            if SourceFormulaIndex.norm(str(x))
-        }
+        self._known_book = set()
+        # {号: 登记章集合}；缺登记章 → 退回「首段 == 章号」旧判据（见 known_book_scopes）
+        self._known_book_scopes: Dict[str, Set[int]] = {}
+        if isinstance(known_book, dict):
+            for _n, _chs in known_book.items():
+                if not _n:
+                    continue
+                self._known_book.add(_n)
+                if _chs:
+                    self._known_book_scopes[_n] = set(_chs)
+        else:
+            self._known_book = {
+                SourceFormulaIndex.norm(str(x))
+                for x in (known_book or [])
+                if SourceFormulaIndex.norm(str(x))
+            }
         # ncomp (depth) enables the Bug #18 source-noise gate in _scan_text:
         # only multi-component books (ncomp>=2) need it, because their bare
         # `N.N` pattern otherwise matches section headings / cross-references /
@@ -445,6 +605,7 @@ class SourceFormulaIndex:
         self._n_pages = {}
         self._label_pages = {}
         self._walk_last_page = 0
+        self._scan_label_nums: Set[str] = set()
         self._cur_heading = None
         self._load_sec_keys(ch)
         nums: Set[str] = set()
@@ -479,36 +640,19 @@ class SourceFormulaIndex:
                     continue
                 self._track_heading(txt)
                 self._scan_text(txt, nums, pg, y)
-                # 🔴 Leading-number latex guard（2026-09-09，Han–Lin (4.3) 实测）：
-                # OCR 有时把显示公式**连同其编号**捕获为 `formulas[].latex` 的开头
-                # token（如 "(4.3) \\quad |A(k,R)|..."）——此时编号从未出现在
-                # `text[]`，S 漏收该真实显示编号，总结忠实的 \\tag 反被误判
-                # FABRICATED。补救：仅当 latex **以括号包裹的 (C.N) 开头**时才把
-                # 该 latex 交给同一 `_scan_text` 管线（复用同一 pattern + 归一化）。
-                # 普通数学内容绝不会以 "(\\d+.\\d+)" 开头，故不会把代数噪声混进 S。
-                # letter-chapter-led `(A.3)` 开头同理放行（捕获仍由 patterns 决定，
-                # digit 书的 letter patterns 不存在 → 零回归）。
+                # 🔴 Number-in-latex guard（2026-09-09 Han–Lin / 2026-09-29 阿诺尔德）：
+                # OCR 有时把显示公式**连同其编号**一起捕获进 `formulas[].latex`，
+                # 此时编号从未出现在 `text[]`，S 漏收该真实显示编号，总结忠实的
+                # \tag 反被误判 FABRICATED。补救：判据统一在 `latex_label_candidates`
+                # （开头 `(C.N)` 交整条 latex，交给同一 `_scan_text` 管线复用同一
+                # pattern + 归一化；结尾 `(N)` 只交那一个 token）。普通数学内容
+                # 不会以 "(\d+.\d+)" 开头，也不会**只**以一枚裸括号数字收尾，
+                # 故代数噪声混不进 S。letter-chapter-led `(A.3)` 开头同理放行。
                 for fblk in data.get('formulas', []) or []:
-                    lx = (fblk.get('latex') or fblk.get('formula') or '') \
-                        if isinstance(fblk, dict) else ''
-                    # 本书等书的提取里 formulas[].latex 可能是**嵌套块**
-                    # （{"text": …} / {"latex": …}）而非裸字符串：逐层解包到
-                    # str，否则 (lx or '').strip() 会在 dict 上崩
-                    # （'dict' object has no attribute 'strip'）。串路径零改动。
-                    _unw = 0
-                    while isinstance(lx, dict) and _unw < 4:
-                        lx = (lx.get('text') or lx.get('latex')
-                              or lx.get('formula') or '')
-                        _unw += 1
-                    ls = (lx or '').strip()
-                    if not ls:
-                        continue
-                    if not (re.match(r'^[（(]\s*\d{1,3}(?:[.\-·,]\d{1,3})+\s*[）)]', ls)
-                            or re.match(r'^[（(]\s*[A-Z]\s*[.·]\s*\d{1,3}\s*[）)]', ls)):
-                        continue
-                    if self._in_exercise_tail(pg, None):
-                        continue  # latex 块无 y 可判：习题起始页一律不采
-                    self._scan_text(ls, nums, pg, None)
+                    for cand in latex_label_candidates(formula_latex_text(fblk)):
+                        if self._in_exercise_tail(pg, None):
+                            continue  # latex 块无 y 可判：习题起始页一律不采
+                        self._scan_text(cand, nums, pg, None)
         self._by_chapter[ch] = nums
         # 🔧 known_book supplement (2026-09-14): register genuine book formula
         # numbers the source scan missed, so Q-layer no longer false-FABRICATEs
@@ -517,7 +661,7 @@ class SourceFormulaIndex:
         if self._known_book:
             _kb = self._by_chapter.setdefault(ch, set())
             for _n in self._known_book:
-                if _n.split('.')[0] == str(ch):
+                if self._kb_applies(_n, ch, _n.split('.')[0] == str(ch)):
                     _kb.add(_n)
 
     def build_sectioned(self, ch: int, start: int, end: int,
@@ -540,6 +684,12 @@ class SourceFormulaIndex:
         self._n_pages = {}
         self._label_pages = {}
         self._walk_last_page = int(start)
+        # 🔴 谢启鸿《高等代数》2026-09-29：本书的显示公式**不另带编号**，公式
+        # 的「书编号」就是所属条目号（Newton 公式 = (5.9.1)，命题两个分支各
+        # 一条显示式）。条目标签的裸编号因此在 _label_pages 登记（出现证据）
+        # 的同时也属于 S——总结挂 \tag{5.9.1} 完全忠实。这里先记下扫描期间
+        # 收集的 item-label 编号（_scan_label_nums），build 结束后并入 union。
+        self._scan_label_nums: Set[str] = set()
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
@@ -571,7 +721,16 @@ class SourceFormulaIndex:
             # be skipped, making a faithful `\tag{5}` read as FABRICATED.  A real
             # contents entry has a prose title, never an item-type keyword, so
             # heads whose tail starts with one do not count toward the signature.
-            _titled_heads = 0
+            # 🔴 Apostol IANT ch5 p121 (2026-09-29)：签名必须**按去重后的节号**计数。
+            # 该页有 80 个显示公式块（纯正文页），却因 OCR 把同一个 §5.2 节头读成
+            # 两遍（`5.2:Residue classes…` 冒号形 + `5.2 Residue classes…`）再叠上
+            # 两条散文回指（`5.7 If` / `5.8 We`）而凑满 4 个「带标题短头」→ 整页被判
+            # 目录页跳过。真正的代价不是少收几个号，而是**节游标永远停在 §5.1**：
+            # 标题推进支只认「紧邻下一节」（防路线图/回指页把 cur 提前，见上 Bug #23），
+            # 于是错过唯一一次 0→1 推进后，后面每一节的节头都只能落回同一 bucket，
+            # `_sec_start_page` 只有首节 → 全章 24 条 `\tag` 一律 MISPLACED。
+            # 真目录页列的是**互不相同**的节，去重后仍 ≥4 → 判据强度不降。
+            _titled_secs = set()
             for _b0 in data.get('text', []) or []:
                 _txt = _b0.get('text', '') if isinstance(_b0, dict) else ''
                 if not _txt or len(_txt.strip()) >= 80:
@@ -582,9 +741,19 @@ class SourceFormulaIndex:
                     if _ITEM_LABEL_RE.match(_tail0):
                         continue
                     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', _tail0):
-                        _titled_heads += 1
-            _is_toc_page = _titled_heads >= 4
-            for block in data.get('text', []) or []:
+                        _titled_secs.add(_head_norm(_hm0.group(1)))
+            _is_toc_page = len(_titled_secs) >= 4
+            # 🔴 编号被吞进 formulas[].latex 的兜底（与 plain 路径共用
+            # `latex_label_candidates`，判据只此一份）：把「以印刷编号收尾」的
+            # latex 作为**等价文本块**追加到本页趟尾——正文趟已推进过 `cur`，
+            # 故该号归入它所属的节；随后走同一段 形态①/②/③ 门禁与四道守卫，
+            # 不在这里复制第二套判据。
+            _blocks = list(data.get('text', []) or [])
+            for _fb in data.get('formulas', []) or []:
+                _tok = latex_tail_token(formula_latex_text(_fb))
+                if _tok:
+                    _blocks.append({"text": _tok})
+            for block in _blocks:
                 txt = block.get('text', '') if isinstance(block, dict) else ''
                 if not txt or _is_toc_page:
                     continue
@@ -703,9 +872,8 @@ class SourceFormulaIndex:
                         # 只放行块尾那一个匹配（_tail_only_span），块内部的括号
                         # 数字（因子/生成元记号等）仍被拒绝，不污染 S。
                         _rtxt = txt.rstrip()
-                        _m_tail = (re.search(
-                            r'[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?$', _rtxt)
-                            if self._block_has_math(txt) else None)
+                        _m_tail = (tail_label_match(_rtxt)
+                                   if self._block_has_math(txt) else None)
                         if _m_tail is not None:
                             _tail_only_span = (_m_tail.start(), _m_tail.end())
                         else:
@@ -730,6 +898,21 @@ class SourceFormulaIndex:
                                 continue
                             _tail_only_span = (_m_head.start(), _m_head.end())
                 elif not self._block_has_math(txt):
+                    # 🔴 谢启鸿《高等代数》2026-09-29：纯散文块里的条目标签
+                    # 「定义5.9.1设…」也是一次印刷编号出现，须登记进
+                    # _label_pages（按当前节分桶）供 label_limit 放宽重复检测；
+                    # 只是不进 S（非公式号）。与 plain 路径 patch 同口径。
+                    if self._ncomp is None or self._ncomp >= 2:
+                        for _pat_lbl in self.patterns:
+                            for _m_lbl in _pat_lbl.finditer(txt):
+                                if not self._is_strong_signal(_m_lbl.group(0)):
+                                    _pre_lbl = txt[max(0, _m_lbl.start() - 24):_m_lbl.start()]
+                                    if _ITEM_LABEL_RE.search(_pre_lbl):
+                                        _n_lbl = self.norm(_m_lbl.group(1))
+                                        if (_n_lbl and _n_lbl not in self.ignore
+                                                and self._plausible(_n_lbl, _m_lbl.group(1))):
+                                            self._count_label(_n_lbl, pg, sec)
+                                            getattr(self, '_scan_label_nums', set()).add(_n_lbl)
                     continue
                 # extract formula numbers and attach to the current section
                 for pat in self.patterns:
@@ -753,6 +936,15 @@ class SourceFormulaIndex:
                         # 路径同口径）：
                         _pre = txt[max(0, mm.start() - 24):mm.start()]
                         if _ITEM_LABEL_RE.search(_pre):
+                            # 🔴 谢启鸿《高等代数》2026-09-29：条目标签
+                            # 「命题 5.9.1(Newton 公式)」的裸编号不进 S（不是公
+                            # 式号），但原书确实在此印刷了该编号；同一编号同章
+                            # 多处分印时，总结按书逐处挂 \tag 忠实，须登记「真
+                            # 标签出现」供 label_limit 放宽（与 plain 路径同口径）。
+                            _n_lbl = self.norm(mm.group(1))
+                            if (_n_lbl and _n_lbl not in self.ignore
+                                    and self._plausible(_n_lbl, mm.group(1))):
+                                self._count_label(_n_lbl, pg, sec)
                             continue  # ① 条目词前缀（Proposition 1.3.3 / (cf. Definition 1.9.3)）
                         _rest = txt[mm.end():mm.end() + 48]
                         if re.match(
@@ -788,7 +980,7 @@ class SourceFormulaIndex:
                         _pk = (sec, n)
                         if not self._embedded_ref(txt, mm.start(), mm.end()):
                             _pp = self._pos_sec.get(_pk)
-                            if _pp is None or (pg, y) < _pp:
+                            if _pos_better((pg, y), _pp):
                                 self._pos_sec[_pk] = (pg, y)
                         self._n_pages.setdefault(n, set()).add(pg)
                         if pg > self._walk_last_page:
@@ -872,11 +1064,28 @@ class SourceFormulaIndex:
                         _kb_secs.add(_m.group(1))
             for _n in self._known_book:
                 _lead = _n.split('.')[0]
-                if (not _kb_multi) or _lead == str(ch) or (
-                        self._sections_global and _lead in _kb_secs):
+                if self._kb_applies(_n, ch, (not _kb_multi) or _lead == str(ch) or (
+                        self._sections_global and _lead in _kb_secs)):
                     union.add(_n)
                     self._by_chapter.setdefault(ch, set()).add(_n)
+        # 🔴 谢启鸿《高等代数》2026-09-29：条目标签编号（_scan_label_nums，
+        # 如 Newton 公式 (5.9.1)）是本书对显示公式自身的编号——并入 union，
+        # 使总结忠实的 \tag 不被误判 FABRICATED；同时 MISSING 语义保持一致
+        # （书印了编号而总结整条公式未写 → 仍应报 MISSING）。
+        for _n in getattr(self, '_scan_label_nums', set()) or set():
+            union.add(_n)
+            self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}
+
+    def _kb_applies(self, num: str, ch, legacy_ok: bool) -> bool:
+        """known_book 号是否该注入本章 S：登记章优先，无账本则用旧判据。"""
+        chs = self._known_book_scopes.get(num)
+        if chs:
+            try:
+                return int(ch) in chs
+            except (TypeError, ValueError):
+                return False
+        return legacy_ok
 
     def numbers_for_chapter(self, ch: int) -> Set[str]:
         return set(self._by_chapter.get(ch, set()))
@@ -957,8 +1166,26 @@ class SourceFormulaIndex:
             with open(fp, encoding='utf-8') as f:
                 tree = json.load(f)
             keys: Set[str] = set()
-            tail: Optional[int] = None
-            tail_names: Set[str] = set()
+            # (page_start, norm_name) of every consolidated node.
+            cons: List[tuple] = []
+            # Last page covered by ANY section of this chapter: a consolidated
+            # node qualifies as the chapter-end tail block ONLY if it begins
+            # strictly beyond every section's coverage.  谢启鸿《高等代数》
+            # 2026-09-29: some contracts mark the PER-SECTION "习题 N.S" blocks
+            # consolidated too (scattered through the chapter); taking
+            # min(page_start) over ALL of them amputated the whole chapter body
+            # from S from the first mid-chapter exercise page onward -> mass
+            # false FABRICATED.  A page_start threshold alone is still too
+            # eager: ch4/7/8/9 per-section exercise pages start after the last
+            # section's page_start yet INSIDE the section flow (contract page
+            # ranges overlap section bodies) and carry real printed formulas
+            # ((9.10.4) etc).  Compare against the last section's page_END
+            # (fall back to its page_start): only blocks starting beyond every
+            # section's coverage are chapter-end tails.  Mid-chapter
+            # consolidated nodes are therefore never tail candidates (old
+            # pre-tail-gate behaviour = no exclusion).  With no section nodes
+            # at all, keep the legacy min-over-all behaviour.
+            last_sec_end: Optional[int] = None
             stack = [tree]
             while stack:
                 node = stack.pop()
@@ -966,17 +1193,29 @@ class SourceFormulaIndex:
                     continue
                 if node.get('type') == 'section' and node.get('key'):
                     keys.add(str(node['key']))
+                    _p0 = node.get('page_start')
+                    _pe = node.get('page_end')
+                    _pe = _pe if isinstance(_pe, int) else (
+                        _p0 if isinstance(_p0, int) else None)
+                    if _pe is not None and (last_sec_end is None
+                                            or _pe > last_sec_end):
+                        last_sec_end = _pe
                 if node.get('consolidated'):
                     p = node.get('page_start')
                     if isinstance(p, int):
-                        if tail is None or p < tail:
-                            tail = p
-                            tail_names = set()
-                        if p == tail:
-                            _nm = _norm_anchor(node.get('name'))
-                            if _nm:
-                                tail_names.add(_nm)
+                        cons.append((p, _norm_anchor(node.get('name'))))
                 stack.extend(node.get('sub_sec') or [])
+            tail: Optional[int] = None
+            tail_names: Set[str] = set()
+            _cand = [c for c in cons
+                     if last_sec_end is None or c[0] > last_sec_end]
+            _pool = _cand if (_cand or last_sec_end is not None) else cons
+            for _p, _nm in _pool:
+                if tail is None or _p < tail:
+                    tail = _p
+                    tail_names = set()
+                if _p == tail and _nm:
+                    tail_names.add(_nm)
             self._sec_keys = keys or None
             self._tail_exer_page = tail
             # 🔴 尾块锚点按**块**而非按**页**界定（Apostol IANT 2026-09-28 实测）：
@@ -1082,34 +1321,14 @@ class SourceFormulaIndex:
         return h
 
     def _record_pos(self, n: str, pg, y) -> None:
-        """Record the earliest (page, y) occurrence of `n` (its definition site)."""
-        if n not in self._primary_pos:
+        """Record the earliest (page, y) occurrence of `n` (its definition site).
+
+        「None = 页级/无锚点证据」的处理与 `_pos_sec` 写路径共用 `_pos_better`
+        一个判据（原内联的分支表与它等价，此处收敛以免再出现「一处修 None、
+        另一处照旧裸比较元组」的漏网）。
+        """
+        if _pos_better((pg, y), self._primary_pos.get(n)):
             self._primary_pos[n] = (pg, y)
-            return
-        old_pg, old_y = self._primary_pos[n]
-        # Handle None values: treat None as "unknown/undefined"
-        # If both are None, they're equal - don't update
-        # If one is None, the defined one is "earlier" (more useful)
-        if pg is None and old_pg is None:
-            return  # Both unknown, keep existing
-        if pg is None:
-            return  # New is unknown, keep existing (which is defined)
-        if old_pg is None:
-            self._primary_pos[n] = (pg, y)  # Old is unknown, replace with defined
-            return
-        # Both pg values are defined - compare normally
-        if pg < old_pg:
-            self._primary_pos[n] = (pg, y)
-        elif pg == old_pg:
-            # Same page - compare y values (handle None y)
-            if y is None and old_y is None:
-                return  # Both unknown on same page
-            if y is None:
-                return  # New y unknown, keep existing
-            if old_y is None:
-                self._primary_pos[n] = (pg, y)  # Old y unknown, replace
-            elif y < old_y:
-                self._primary_pos[n] = (pg, y)
 
     def _update_pos(self, n: str, pg, y) -> None:
         """Record earliest position AND anchor the book-side section to the
@@ -1137,8 +1356,7 @@ class SourceFormulaIndex:
                     r'\s*[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?\s*', _t):
                 _m_tail = None
                 if self._block_has_math(_t):
-                    _m_tail = re.search(
-                        r'[（(]\s*\d+[a-zA-Z]?\s*[）)]\s*[.。]?$', _t)
+                    _m_tail = tail_label_match(_t)
                 if _m_tail is None:
                     return
                 # 只放行块尾这一个匹配：把它的原始 txt 坐标区间记下来。
@@ -1163,10 +1381,28 @@ class SourceFormulaIndex:
                         and m.end() <= _tail_only_span[1]):
                     continue
                 span = m.group(0)
+                raw = m.group(1)
+                # 🔴 谢启鸿《高等代数》2026-09-29（ItemLabelExampleExemption
+                # 同源）：条目标签「命题 5.9.1(Newton 公式)」「定义5.9.1设…」的
+                # 裸编号不进 S（不是公式号），但**原书确实在此印刷了该编号**——
+                # 同一编号在同章多处分印（Newton 公式 k≤n-1 / k≥n 两个分支各印
+                # 一次）时，总结按书逐处挂 \tag 是忠实的，须把条目标签本身登记
+                # 为一次「真标签出现」，label_limit 才会放宽到印刷次数；否则第二
+                # 个 \tag 被误判 INCONSISTENT。判定先于 has_math 门禁：条目标签
+                # 行的余文常是纯散文（无数学记号），先被数学门禁吞掉就连「标签
+                # 出现过」都登记不上。未知即 1 的严格度不变。
+                if not self._is_strong_signal(span):
+                    _pre = txt[max(0, m.start() - 24):m.start()]
+                    if _ITEM_LABEL_RE.search(_pre):
+                        _n_lbl = self.norm(raw)
+                        if (_n_lbl and _n_lbl not in self.ignore
+                                and self._plausible(_n_lbl, raw)):
+                            self._count_label(_n_lbl, pg)
+                            getattr(self, '_scan_label_nums', set()).add(_n_lbl)
+                        continue
                 if need_gate and not has_math and (
                         not self.keep_cross_refs or not self._is_strong_signal(span)):
                     continue
-                raw = m.group(1)
                 # Root fix (2026-08-16): a figure sub-caption label such as
                 # "Figure 1.1.1b" / "Fig. 2.2A" matches the lettered-sub-equation
                 # pattern but is NOT a numbered formula.  Real formula sub-
@@ -1183,10 +1419,6 @@ class SourceFormulaIndex:
                 # hits immediately preceded by an item-label keyword are skipped
                 # so they do not pollute S (and thus do not force a spurious
                 # `\tag` in the summary — the "false green" the user forbids).
-                if not self._is_strong_signal(span):
-                    _pre = txt[max(0, m.start() - 24):m.start()]
-                    if _ITEM_LABEL_RE.search(_pre):
-                        continue
                 n = self.norm(raw)
                 if not n or n in self.ignore or not self._plausible(n, raw):
                     continue
@@ -1475,6 +1707,59 @@ def _first_component(n: str) -> str:
     return n.split('.')[0] if '.' in n else n
 
 
+_EVID_TAIL_ANY_RE = re.compile(
+    r'[（(]\s*(\d{1,4}(?:\s*[.,，\-·]\s*\d{1,4})*)\s*[）)]\s*[.。]?\s*$')
+_EVID_STANDALONE_RE = re.compile(
+    r'^\s*[（(]\s*\d{1,4}(?:\s*[.,，\-·]\s*\d{1,4})*\s*[）)]\s*[.。]?\s*$')
+
+
+def agnostic_label_evidence(ext_dir: str, ch, start, end, nums) -> bool:
+    """``nums``（agnostic 并集探测到的号）里有没有一枚**印在公式编号位置上**？
+
+    预检判据①「配置抽不到 + agnostic 抽得到 = depth/scope 配错」依赖 agnostic 的
+    并集模式，而该并集含**裸 N.M**形态（`bare_number` 默认开），于是 OCR 粘连串
+    （`p2j-1926-2+…` → 1926.2）、坐标 / 参数表（`(1,0)`、`(5,9g`）都会被记成
+    「编号」。2026-09-29 阿诺尔德《经典力学的数学方法》附录F/J 实测：F 的 3 个
+    命中里唯一的真印刷号 `(2)` 黏在数学行**中间**（`c=∑∑(2j- 1)n,(2) +`），J 的
+    5 个命中全是噪声——两侧都抽不到标签形态的号时，Q 层本该走「S 为空降级」
+    （结构检查照跑 + WARN 请人工对账），却因噪声被抬成阻断 ERROR。
+
+    位置门与抽取侧同一口径（形态① 独立标签块 / 形态② 数学块行尾，行尾守卫共用
+    ``_tail_pre_guard``），块中间的括号数字一律不算证据。
+    """
+    want = {str(n) for n in (nums or set())}
+    if not want:
+        return False
+    _pdir = resolve_page_dir(ext_dir, ch)
+    for pg in range(int(start), int(end) + 1):
+        fp = os.path.join(_pdir, f'page_{pg:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = PageJson.load(fp).data
+        except Exception:
+            continue
+        blocks = [((b.get('text') if isinstance(b, dict) else '') or '')
+                  for b in (data.get('text') or [])]
+        blocks += [formula_latex_text(fb) for fb in (data.get('formulas') or [])]
+        for t in blocks:
+            ts = (t or '').strip()
+            if not ts or SourceFormulaIndex._is_figure_caption(ts):
+                continue
+            cand = []
+            if _EVID_STANDALONE_RE.fullmatch(ts):
+                cand.append(ts)
+            elif SourceFormulaIndex._block_has_math(ts):
+                m = _EVID_TAIL_ANY_RE.search(ts)
+                if m and _tail_pre_guard(ts[:m.start()]):
+                    cand.append(m.group(0))
+            for c in cand:
+                n = SourceFormulaIndex.norm(c)
+                if n and n in want:
+                    return True
+    return False
+
+
 def _validate_formula_config(ctx, formula, ncomp, patterns):
     """Pre-flight sanity check of the `formula` map against the actual book.
 
@@ -1590,6 +1875,13 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # 公式、而 configured 又一无所获时，才存在"配错导致无法校验"的风险。
         # 无 tag 的章按 SSOT「S 为空降级」放行（结构检查照常，不判 FAIL）。
         if not _summary_has_tags(ctx.md_file):
+            return None
+        # 🔴 噪声门（Arnold 附录F/J 实测 2026-09-29，见 agnostic_label_evidence）：
+        # agnostic 并集含裸 N.M 形态，坐标 `(1,0)` / OCR 粘连 `1926.2` 都会命中。
+        # 命中里没有一枚站在印刷标签位置（独立标签块 / 数学块行尾）时，本判据
+        # 的「书里明明有编号」前提不成立 → 不阻断，交后面的 S-empty 降级出 WARN。
+        if not agnostic_label_evidence(ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
+                                       agnostic_nums):
             return None
         _ft = formula.get('type')
         try:
@@ -2082,6 +2374,41 @@ def _pos_before(a, b):
     return ya < yb
 
 
+def _pos_better(a, b):
+    """记录锚点判据：``a`` 是否应取代 ``b`` 成为 ``(page, y)`` 记录位。
+
+    与 `_pos_before` **同一个谓词**（先后结论由它给出），只补两条记录侧专属约定：
+    证据不足时「已知」优于「未知」——缺页侧让位，同页缺 y 侧让位，两边都缺则保留
+    既有（不抖动）。
+
+    🔴 根治（Apostol IANT 2026-09-29 实测）：`build_sectioned` 的 `_pos_sec` 写路径
+    当年是手搓的裸元组比较 ``if _pp is None or (pg, y) < _pp``。formulas 通道合成的
+    标签块（`_blocks.append({"text": _tok})`）**没有 poly**，于是 ``y=None``；同页已
+    有一条带 y 的记录时比较退化成 ``None < 560.0`` → TypeError，merge 后的
+    ``verify --all`` 整趟崩在 Q 层。2026-09-28 只在**读侧**（`_pos_before`）修了同一
+    形态，写侧漏网 = 检测趟与记录趟没共用谓词。现两处（`_record_pos` 与本函数调用方）
+    一律走此判据。测试 `verify/tests/test_q_layer_order_pos_y_none.py`。
+    """
+    if a is None:
+        return False
+    if b is None:
+        return True
+    verdict = _pos_before(a, b)
+    if verdict is not None:
+        return verdict
+    pa, ya = a
+    pb, yb = b
+    if pa is None:
+        return False
+    if pb is None:
+        return True
+    if ya is None:
+        return False
+    if yb is None:
+        return True
+    return False
+
+
 def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                                  ignore: Optional[Set[str]] = None,
                                  reset_on_section: bool = True,
@@ -2096,9 +2423,16 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
       the order window resets on each new ``## §N.M`` so the repeated numbers
       across sections don't false-positive; when False (chapter / book scope,
       globally-unique numbers) the window spans sections so cross-section
-      inversions are also caught.
+      inversions are also caught.  A number the book **reprints** (same label
+      typeset twice, e.g. a restated identity) is exempt from the inversion
+      test on its 2nd..limit-th summary occurrence — the exemption ceiling is
+      the same ``label_limit`` ledger the duplicate check relaxes against.
     * MISPLACED: a summary formula's enclosing ``## §N.M`` section must equal
       the book-source formula's definition section (``book_section``).
+      Both paths are **evidence-driven**: absence of placement evidence (no
+      page span recorded for that summary section, or no page recorded for
+      that number anywhere in the book source) means "cannot tell", NOT
+      "misplaced" — such tags are skipped, exactly like the ORDER path above.
 
     Returns ``(om_list, mp_list)``; each row:
         ``{'number', 'status', 'summary_latex'(<=60), 'source_text': ''}``.
@@ -2112,6 +2446,10 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
     mp: List[Dict[str, str]] = []
     seen_om: Set[str] = set()
     seen_mp: Set[str] = set()
+    # per-bucket running count of how often the SUMMARY emitted each number
+    # (key = (sec, n) for sectioned books, n for chapter-scoped) — feeds the
+    # reprint exemption in the ORDER branch below.
+    _occ: Dict = {}
 
     union = src.source_numbers()
     prev_sec = None
@@ -2143,7 +2481,25 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             cur = getattr(src, '_pos_sec', {}).get((sec, n))
         else:
             cur = src.primary_pos(n)
-        if cur is not None:
+        # 🔴 原书**重印同一编号**时，第二次出现不得回指该号的首次位置
+        # （2026-09-29 Apostol IANT ch3 §3.11 实测）：印面 (16)(17)(18) 之后，
+        # Theorem 3.13 的推导结尾又原样重排 identity (17) 并**再次印出右缘
+        # `(17)`**（物理页 79 = 印面 67，fitz 300dpi 目视 + `page_079.json`
+        # block 9 独立标签块确证），总结忠实挂两个 `\tag{17}`（重复检测已由
+        # `label_limit` 放宽，故 Q:0/0/0）。旧顺序支把第二枚 17 与**首次**位置
+        # （页 78 block 8）比较，游标此时已推进到 (18)（页 78 block 26）→
+        # 必然倒挂 → 一条 ORDER_MISMATCH 假阳。
+        # 判据复用重复支的同一谓词 `_dup_beyond_source`（= 同一 `label_limit`
+        # 账，检测与放宽永不漂移）：仅当「本章节内该号的出现次序 ≤ 书里印过的
+        # 不同页数」时视为印面确有其事，跳过次序比较**且不回退游标**。
+        # 无重印记录的书 `label_limit` 返回 1 → 第二次出现仍按原严格度比较，
+        # 逐字节行为不变（本改动只可能少报，不可能多报）。
+        _ok = (sec, n) if reset_on_section else n
+        _occ[_ok] = _occ.get(_ok, 0) + 1
+        _reprint = (_occ[_ok] > 1
+                    and not _dup_beyond_source(src, _occ, _ok, n,
+                                               sec if reset_on_section else None))
+        if cur is not None and not _reprint:
             if _pos_before(cur, prev_pos):
                 if n not in seen_om:
                     seen_om.add(n)
@@ -2166,12 +2522,27 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         # Evidence gate: flag only when the book recorded `(n)` NOWHERE inside
         # sec's own page span `[start(sec), start(next)-1]`; any in-range hit
         # proves correct placement.
+        # 🔴 「无证据不判」（2026-09-29，与上方 ORDER 支同一约定）：证据有两种缺法——
+        #   ① `rng is None`：节游标从未推进到该节（OCR 节头不匹配/该页被判目录），
+        #      该节的页跨根本未知；
+        #   ② `npages` 为空：该号在书中只作为**回指/行内**出现（或来自
+        #      `formula.known_book` 白名单——人工登记的真号，抽取器查无载体页），
+        #      没有任何位置记录可比。
+        # 两者都属「无法证明放错」而非「证明放错」，一律**跳过不判**。旧写法把它
+        # 当成 `not in_range = True` 直接开报，于是节游标一卡就整章刷屏（Apostol ch5
+        # 24/24、Lee ch7 16/16 全为此类假 MISPLACED）。plain 支早就是同款约定
+        # （`bsec is not None` 才判），本节级支是唯一的例外，现已对齐。
         flagged = False
         if reset_on_section:
             rng = _section_page_range(src, sec)
             npages = getattr(src, '_n_pages', {}).get(n) or set()
-            in_range = bool(rng) and any(rng[0] <= p <= rng[1] for p in npages)
-            flagged = not in_range
+            # ①最强证据：趟本身把 (n) 归在 sec 这一桶（块序 + 节头推进，能分辨
+            #   「节在页中间起头」）→ 书与总结同判，谈不上放错。
+            # ②回退：标签被 OCR 并进公式行而漏记 (sec, n) 时，用整页页跨宽松核。
+            # ③两者都无 → 无证据不判（见上）。
+            if getattr(src, '_pos_sec', {}).get((sec, n)) is None:
+                if rng is not None and npages:
+                    flagged = not any(rng[0] <= p <= rng[1] for p in npages)
         else:
             bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
             flagged = (bsec is not None
@@ -2191,14 +2562,22 @@ def _section_page_range(src: 'SourceFormulaIndex',
                         sec: str) -> Optional[tuple]:
     """Page span ``(first, last)`` of summary-section `sec` from the walk's
     own bookkeeping (`_sec_start_page` / `_walk_last_page`).  Sections entered
-    on the same page share it; the span ends where the NEXT distinct section
-    start begins."""
+    on the same page share it; the span ends on the page where the NEXT
+    distinct section start begins (**inclusive**).
+
+    🔴 尾页含下一节的起始页（2026-09-29 Apostol IANT ch5 实测）：页跨是
+    **整页**粒度，而节可以在页中间起头——Apostol 每页页顶还印「`5.4: 节名`」
+    形式的**书眉**（奇数页给节名、偶数页给章名），书眉在块序上先于本节最后的
+    显示公式，于是 §5.3 的 (8) 印在 §5.4 起始页（物理页 125）的上半部，
+    旧写法 `hi = min(later) - 1` 把它判成越界。书眉抢先推进的精确盲区由
+    `_pos_sec[(sec, n)]`（按块序推进的节桶）兜底，页跨只作**回退**证据，
+    回退证据应当宽松：边界页一律算在跨内。"""
     starts = getattr(src, '_sec_start_page', None)
     if not starts or sec not in starts:
         return None
     lo = starts[sec]
     later = [p for p in starts.values() if p > lo]
-    hi = min(later) - 1 if later else getattr(src, '_walk_last_page', lo)
+    hi = min(later) if later else getattr(src, '_walk_last_page', lo)
     return (lo, hi)
 
 
@@ -2295,7 +2674,7 @@ class QLayer(VerifyLayer):
         # 🔧 known_book (2026-09-14): genuine book formula numbers the source
         # scan missed, registered as real (not hidden behind ignore).  Wired
         # from verify_config.json `formula.known_book`.  See SourceFormulaIndex.
-        fknown = set(formula.get('known_book') or [])
+        fknown = known_book_scopes(formula)
         scope = formula.get('scope', 2)
         # Per-section formula numbering (Kreyszig: every section restarts at
         # (1)).  FABRICATED/INCONSISTENT are checked section-locally; the

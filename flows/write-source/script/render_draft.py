@@ -122,11 +122,22 @@ def _chapter_heading(node, language):
     注册表（由 chapter_map 灌注），最后回退旧形态判据。
     """
     name = (node.get("name") or "").strip()
+    kind = node.get("kind")
+    # 🔴 无编号附录/补篇（章键 == kind 前缀词 → 印刷序标归空）：H1 **就是印刷标题本身**，
+    # 不得从标题首词猜序标。实测 Shafarevich BAG1 附录标题 "Algebraic Appendix" 走旧的
+    # 名称首词判据被切成 "# Appendix Algebraic: Appendix"（把 "Algebraic" 当成序标）。
+    _key = node.get("key")
+    if _key is not None:
+        try:
+            from book_structure import chapter_ordinal as _co
+        except Exception:
+            _co = None
+        if _co is not None and _co(_key, kind) == "":
+            return "# " + name
     m = _CH_NAME.match(name)
     if not m:
         return "# " + name
     num, rest = m.group(1), m.group(2).strip()
-    kind = node.get("kind")
     if kind is None:
         try:
             from book_structure import chapter_kind

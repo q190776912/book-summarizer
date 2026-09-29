@@ -63,6 +63,13 @@ VERIFY_CONFIG_NAME = 'verify_config.json'
 MAP_KEY_CH = 'ch'
 MAP_KEY_APPENDIX = 'appendix'
 MAP_KEY_SUPPLEMENT = 'supplement'
+# 🔴 「与正文同体例」的**已裁决**声明（make_config 扫过该 kind 的页区间、判明
+# 其条目编号首段就是数字章号 ⇒ 不需要独立子配置）。缺子配置本身有两种截然不同的
+# 含义：① 从没判过（老配置/半成品）→ 静默回退可能是 Lee 2e 式全灭错配，必须警告；
+# ② 判过且结论就是"同体例"→ 回退是**正确行为**，再警告就是无法被补救的假警报
+# （Serre GTM42 实测：附录按正文体例编号，`--force` 重生成永远消不掉这条警告）。
+# 故 make_config 在①/②之间做出结论时把 kind 记在本键里，加载器据此闭嘴。
+MAP_KEY_SPECIAL_SAME_STYLE = '_special_same_style'
 # 历史遗留：旧书可能仍是扁平 verify_config.json + 独立 appendix_verify_config.json。
 # 仅当 verify_config.json 为扁平格式且本名存在时作 appendix 回退读（零回归）；
 # 新书一律走 map 内的 "appendix" 键，不再写独立文件。
@@ -201,7 +208,19 @@ _LEGACY_ORDINAL_STR = {
 _SPECIAL_FALLBACK_WARNED: Set[str] = set()
 
 
-def _warn_missing_special_config(kind_key: str, ch: Any) -> None:
+def _warn_missing_special_config(kind_key: str, ch: Any,
+                                 declared: bool = False) -> None:
+    """Appendix/supplement chapter routed to a sub-config the map does not carry.
+
+    `declared=True` means make_config **scanned that kind's page range** and
+    recorded it under ``_special_same_style`` — the appendix/supplement shares
+    the body's numbering convention, so falling back to the ``"ch"`` config is
+    the adjudicated correct behaviour and stays silent.  An *undeclared* miss
+    (pre-2026-09 config, or a kind whose pages were never scanned) keeps the
+    warning: that is exactly the Lee 2e silent-total-loss path.
+    """
+    if declared:
+        return
     mark = "%s:%s" % (kind_key, str(ch))
     if mark in _SPECIAL_FALLBACK_WARNED:
         return
@@ -215,7 +234,9 @@ def _warn_missing_special_config(kind_key: str, ch: Any) -> None:
         "[CONFIG]   若该章条目编号首段不是数字章号（如 Theorem A.1），回退配置会让"
         "抽取全部落空、整章被塞进单个 description。补救："
         "python config/verify_config/make_config.py <extract_dir> --force"
-        "（会自动补写缺失的 appendix/supplement 子配置）。", file=sys.stderr)
+        "（会重扫该 kind 的页区间：检出字母章位编号则补写 %r 子配置；判明与正文同"
+        "体例则把 %r 记入 _special_same_style，本警告自此消失）。"
+        % (kind_key, kind_key), file=sys.stderr)
 
 # --- section role codes = ORDINAL-DEPTH codes for the nested `## §` hierarchy -
 # The code stored in `section_types` is NOT a "chapter/section/subsection"
@@ -1059,6 +1080,9 @@ class ConfigLoader:
         self.supplement_config_path: Optional[str] = None
         self.appendix_has_ordinal: bool = False
         self.supplement_has_ordinal: bool = False
+        # make_config 已裁决「与正文同体例」的 kind（'appendix'/'supplement'）。
+        # 在这些 kind 上回退正文配置是正确行为，不再发静默回退警告。
+        self.special_same_style: Set[str] = set()
         self._load_verify_config()
         self.chapters = self._load_chapter_map()
         # 🔴 灌注进程级 kind 注册表（chapter_map 的显式 kind）。`chapter_label` /
@@ -1149,6 +1173,11 @@ class ConfigLoader:
                 self.supplement_book = BookConfig.from_dict(su)
                 self.supplement_config_path = hit
                 self.supplement_has_ordinal = self._has_ordinal(su)
+            # 已裁决「与正文同体例」的 kind 清单（只有 make_config 扫过该 kind
+            # 的页区间并判明非字母章位编号才会写这里）。
+            sss = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
+            if isinstance(sss, (list, tuple, set)):
+                self.special_same_style = {str(k) for k in sss}
         else:
             # ---- legacy flat format ----
             self.book = BookConfig.from_dict(data if isinstance(data, dict) else {})
@@ -1439,10 +1468,14 @@ class ConfigLoader:
             if self.supplement_book is not None:
                 base = self.supplement_book
             else:
-                _warn_missing_special_config("supplement", ch)
+                _warn_missing_special_config(
+                    "supplement", ch,
+                    declared="supplement" in self.special_same_style)
         elif kind == KIND_APPENDIX:
             if self.appendix_book is not None:
                 base = self.appendix_book
             else:
-                _warn_missing_special_config("appendix", ch)
+                _warn_missing_special_config(
+                    "appendix", ch,
+                    declared="appendix" in self.special_same_style)
         return replace(base, ignore=list(self.ignore_for_chapter(ch)))

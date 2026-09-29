@@ -40,6 +40,10 @@ _LABEL_MAP = [
     # precise/concise/equations/derrick 等正常词（mid-word 无边界，不触发）。
     (r'练习|习题|exercise|\bcise\b|\bexes\b|\bexer\b', '练习'),
     (r'例|example|\bmple\b|\bxample\b|\bexamp\b', '例'),
+    # 🔴 茆书 ch3 实测 2026-09-29：本书条目大量使用「性质3.4.6」体例，
+    # _LABEL_MAP 原缺 性质 → 最近类型词判定失败 → 条目落 uncat，与三级小节头
+    # /公式引用混入同一 uncat 序列 → B 层假缺号+假乱序 BLOCKING。
+    (r'性质|property', '性质'),
     (r'定义|definition', '定义'),
     (r'定理|theorem', '定理'),
     (r'引理|lemma', '引理'),
@@ -70,7 +74,7 @@ def _first_label_pos(s):
     return best[1] if best else None
 
 
-def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re):
+def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re, known_sec_keys=None, known_sec_titles=None):
     """Helper: process a regex match and append to raw_matches if valid."""
     ch_num = int(m.group(1))
     if ch_num != chapter:
@@ -89,7 +93,7 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
     # can exempt genuine headings.  The English "N.S-N Lemma" form (label AFTER
     # the number) leaves `before` free of these tokens and is not affected.
     _glued_before = re.search(
-        r'(定义|定理|引理|推论|命题|注|例)\s*[（(]?\s*$', before)
+        r'(定义|定理|引理|推论|命题|性质|注|例)\s*[（(]?\s*$', before)
     _glued = bool(_glued_before) and m.start() <= 4
 
     key_esc = re.escape(m.group())
@@ -255,6 +259,64 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
             if next_label and at_head:
                 label = _label_from_raw(next_label.group())
 
+    # 🔴 三级小节头幻影守卫（茆书 ch1 §1.3 实测 2026-09-29）：本书每节印有
+    # 三级小节头 `1.3.1 概率的可加性`，通用三段正则把它当 `1.3-1` uncat 条目
+    # 抓进契约，与例/性质条目共用节内数字空间 → B 层 uncat 窗「小节头号 +
+    # 条目号」互相占用 → 假缺号+假乱序 BLOCKING。判据：label 仍为 uncat 且
+    # 三段号恰为**已锚定小节号**（build_structure 传入的 sec_pages 键集合，
+    # 如 "1.3.4"）→ 此命中是节头不是条目，丢弃。fail-open：未传集合时跳过。
+    if (label == 'uncat' and known_sec_keys
+            and f"{ch_num}.{sec}.{num}" in known_sec_keys):
+        return
+
+    # 🔴 小节标题被当成条目（茆书 ch4 定理4.4.4 / ch8 例8.1.2、例8.1.5 实测
+    # 2026-09-29）：小节头行 `4.4.4独立不同分布下的中心极限定理` 没有条目标签，
+    # 标签是从相邻块继承来的，于是被当成 theorem/property/例 条目并抢占该号，
+    # 把**真条目**（p241 `定理4.4.4(李雅普诺夫…)`、p400 `例8.1.2采用…`）挤掉
+    # → B 层假乱序 BLOCKING。判据：编号未粘标签（`_glued` 为假）**且**号码之后
+    # 的正文与该三段号对应的小节标题同起头 → 是节头不是条目。真条头要么带粘标签
+    # （`定理4.4.2（棣莫弗…）`），要么正文与节标题不同（`例7.2.1从甲地发送…`）。
+    if known_sec_titles and not _glued:
+        _t = known_sec_titles.get(f"{ch_num}.{sec}.{num}")
+        if _t:
+            _norm = lambda s: re.sub(r'[\s·.…\u3000]+', '', s)[:8]
+            _tn, _rn = _norm(_t), _norm(txt[m.end():])
+            if _tn and _rn and (_tn == _rn or _tn.startswith(_rn) or _rn.startswith(_tn)):
+                return
+
+    # 🔴 编号 0 恒非条目号（茆书 ch1 `1.000 0` / `=1-0.1x0.2=0.98` OCR 碎片
+    # 实测 2026-09-29）：三段正则从算式里切出 1.0 / 1.0.0 → key 1.0-0 / 1.0-1，
+    # 混进 uncat 窗制造假乱序。
+    if sec == 0 or num == 0:
+        return
+    _head = txt[:m.start()]
+    _gap = _head[len(_head.rstrip()):]
+    _pre = _head.rstrip()
+    # 🔴 图/表注幻影（茆书 ch2 图2.1.7 / ch3 图3.4.2例… / ch8 表8.1.7 实测
+    # 2026-09-29）：号码紧邻前面是 图/表/Fig/Table → 这是**图/表编号**不是
+    # 条目号；抓进来会与例/性质共用同一节内数字空间 → 假缺号+假乱序 BLOCKING。
+    # 图片/表格由 figure 管线（figure_index.json）独立核账，此处丢弃。只认
+    # 紧邻（≤2 个空白）以避免误伤同块里恰好以 图/表 收尾的正常条目行。
+    if len(_gap) <= 2 and re.search(r'(图|表|Fig\.?|Figure|Table)$', _pre, re.IGNORECASE):
+        return
+    # 🔴 括号内公式回指（茆书 (3.3.13)式 / （4.3.5)式 / (6.3.9) 实测）：
+    # 正文引用公式号，非条目。
+    if label == 'uncat' and len(_gap) <= 2 and _pre.endswith(('(', '（')):
+        return
+    # 🔴 紧跟「式」= 公式号（`8.1.16式通常称为总平方和分解式`）。
+    if label == 'uncat' and re.match(r'\s*式', txt[m.end():m.end() + 4]):
+        return
+    # 🔴 裸数字块（`4. 2. 10` / `6. 3. 6` / `8.1.12`）：块内除三段号与分隔符
+    # 无任何正文 → OCR 把公式号排成了独立行。
+    if label == 'uncat' and re.fullmatch(r'[\s\d.．\-—－]*', txt):
+        return
+    # 🔴 长数字串里的伪三段号（茆书 ch7 p355 `s²=0.272 9` 被切成 7.2.9 实测
+    # 2026-09-29）：号码紧邻前一个字符仍是数字/小数点/连字符 → 它是某个更长
+    # 数字串（小数、公式号、日期）的一段，不是独立条目号。真条目号前面必是
+    # 标签（`例`/`定理`）、括号（`(7.2.9)`）或行首。
+    if m.start() > 0 and (txt[m.start() - 1].isdigit()
+                          or txt[m.start() - 1] in '.．-–—'):
+        return
     text_preview = txt[max(0, m.start()-5):m.end()+80].replace('\n', ' ')
     raw_matches.append({'key': key, 'page': p, 'label': label,
                         'text': text_preview, 'mstart': m.start(),
@@ -290,7 +352,7 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
     # chapter_first=False（节基书，如数学物理方程）时首数为节号，不做章过滤。
     # 例(?!如)：钟玉泉《复变函数论》等书例题亦用两级号（例1.1）；排除「例如」
     # 误匹配（"例如 2.714…" 这类小数会被当成 例2.71 条目）。
-    lab_re = re.compile(r'(定义|定理|引理|推论|命题|注|例(?![如]))\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
+    lab_re = re.compile(r'(定义|定理|引理|推论|命题|性质|注|例(?![如]))\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
     # 交叉引用守卫（谷超豪《数学物理方程》实测）：正文提及他章/他节条目时，
     # 提及点前紧邻「第X章」「…中的」「不满足」「推出」「利用」等引用语境词
     # （"如果初始资料不满足定理3.1中的正则性要…"、"可立即推出第一章中的引理3.1"）。
@@ -442,7 +504,7 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
     return items, [], []
 
 from item_dedup import dedup_items
-def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, cfg=None):
+def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=None, cfg=None, known_sec_keys=None, known_sec_titles=None):
     # `cfg` is the BookConfig (grouping source of truth).  Dispatch on the
     # PRIMARY group's style code.  When omitted, fall back to a default
     # single three-level uncat group (back-compat for direct callers).
@@ -561,7 +623,8 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
         # Step 4: find all number patterns (primary 3-group N.S-i)
         for m in num_re.finditer(txt):
             _add_match(m, txt, p, i, all_blocks, raw_matches,
-                       active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re)
+                       active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re,
+                       known_sec_keys=known_sec_keys, known_sec_titles=known_sec_titles)
 
         # Step 4b: fallback 2-group pattern for garbled "21_7" → 2.1-7
         m2 = fallback_re.search(txt)
@@ -579,7 +642,8 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
                     after_garbled = txt[m2.end():].strip()
                     if len(after_garbled) >= 8 and any('\u4e00' <= ch <= '\u9fff' or ch.isalpha() for ch in after_garbled[:12]):
                         _add_match(m2, txt, p, i, all_blocks, raw_matches,
-                                   active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re)
+                                   active_section_label, chapter, label_re, cite_re, cite_re_tail, num_re,
+                                   known_sec_keys=known_sec_keys, known_sec_titles=known_sec_titles)
 
         # ---- Pass: two-level 练习 (R3) ----
         # CN three-level books number 练习 per chapter.section (e.g. 练习 4.1),

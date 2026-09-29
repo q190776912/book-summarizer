@@ -1313,8 +1313,8 @@ def _nf_dedup_items(items):
     return [it for _, it in sorted(best.values(), key=lambda t: t[0])]
 
 
-def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
-                   sec_windows=None):
+def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None, sec_keys=None,
+                   sec_windows=None, sec_titles=None):
     primary = book.primary_type
     _dir = page_dir or ext
     if getattr(book, "gm_bare_numbered", False):
@@ -1410,7 +1410,8 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         # normkey 输出同形，下游 B/D/Q 无感。同键的真条头/交叉引用碰撞由
         # _nf_dedup_items 择一（唯一键不丢）。
         items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual,
-                                    cfg=book)
+                                    cfg=book, known_sec_keys=sec_keys,
+                                    known_sec_titles=sec_titles)
         return _nf_dedup_items(items)
 
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
@@ -1470,7 +1471,8 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None,
         items, _, _ = extract_items_vakil(_dir, ch, start, end, manual_overrides=manual)
         return items
     # three_level / two_level 全部走 extract_items（内部按 ordinal 选路）
-    items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual, cfg=book)
+    items, _, _ = extract_items(_dir, ch, start, end, manual_overrides=manual, cfg=book,
+                                known_sec_keys=sec_keys, known_sec_titles=sec_titles)
     return items
 
 
@@ -1514,6 +1516,33 @@ def _toc_band_bottom(ys, gap=_TOC_LINE_GAP):
             break
         bottom = y
     return bottom
+
+
+def _compute_opener_pages(first_hit, opener_k=3):
+    """章首目录页集合：首现命中 ≥ opener_k **且**全部落进同一条目录带。
+
+    旧判据只数命中数（≥3 即目录页）。2026-09-29 茆诗松《概率论与数理统计教程
+    第三版》ch8 实测：章首**正文页** p395 上 §8.1(y628)/§8.1.1(y774)/§8.1.2
+    (y1833) 三个节号首现同页——命中数达标但散布全页（774→1833 空隙 1059 ≫
+    _TOC_LINE_GAP）。该页被误判目录页后真节头当目录污染回扫：§8.1 锚到 p411
+    （习题页裸号碎片）、§8.4 锚到 p425 → 节序 8.2(p407) 排到 8.1(p395) 之前
+    → ANCHOR-SANITY 拒绝落盘。目录页的命中挤在一条行距 ≤ _TOC_LINE_GAP 的
+    带内；正文页的节头散布全页、带外必有命中。判据 = 命中数达标 **且**
+    `_toc_band_bottom(ys)` 覆盖全部带 y。全页无 y（md 派生行）无法核带 →
+    fail-open 维持旧行为（认作目录页）。
+    """
+    cnt = {}
+    for _num, row in first_hit.items():
+        cnt[row[0]] = cnt.get(row[0], 0) + 1
+    out = set()
+    for p, c in cnt.items():
+        if c < opener_k:
+            continue
+        ys = sorted(float(r[4]) for r in first_hit.values()
+                    if r[0] == p and r[4] is not None)
+        if not ys or _toc_band_bottom(ys) >= ys[-1] - 1e-6:
+            out.add(p)
+    return out
 
 
 def _opener_continuation_pages(first_hit, opener_pages, top_y=350.0):
@@ -1599,8 +1628,14 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None,
         以外**的裸节号块 = 它是那个号的标题，不是本节的 → 弃。真·无号节头
         （ch11 场景）旁边没有别的裸号块，零回归。
     """
+    # 🔴 2026-09-29 茆书 ch8 实测：中文书的节头是 `8.1 方差分析`（编号后接
+    # 汉字），旧 title 模式只认拉丁字母 → 回扫对中文书整体失明，只能撞上
+    # 习题页的裸号碎片（§8.1 锚到 p411）。CJK 节头纳入 title 候选；后置
+    # rest 字母数过滤（≥2）已含 CJK 区段，中文标题同样受「编号后至少两个
+    # 标题字符」约束。
     pat = re.compile(
-        r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?:[\.．:：]|[\s\u00a0]+)\s*[A-Za-z]')
+        r'^[\*§8Ss$]?\s*' + re.escape(str(num))
+        + r'(?:[\.．:：]|[\s\u00a0]+)\s*[A-Za-z\u4e00-\u9fff]')
     pat_glue = re.compile(r'^[\*§8Ss$]?\s*' + re.escape(str(num)) + r'(?=[A-Za-z])')
     pat_bare = re.compile(r'^[\*§]?\s*' + re.escape(str(num)) + r'\s*[\.．:：]?\s*$')
     pat_foreign_bare = re.compile(r'^[\*§]?\s*(\d+(?:[\.\-·]\d+)+)[\.\-·:：]?\s*$')
@@ -2057,11 +2092,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     _first_hit = {}
     for row in dedup_sec:
         _first_hit.setdefault(row[2], row)
-    _page_first_cnt = {}
-    for _num, _row in _first_hit.items():
-        _p = _row[0]
-        _page_first_cnt[_p] = _page_first_cnt.get(_p, 0) + 1
-    _opener_pages = {p for p, c in _page_first_cnt.items() if c >= _OPENER_K}
+    # 🔴 2026-09-29 茆书 ch8 p395 实测：命中数达标不一定是目录页——章首正文页
+    # 也会首现多个节号（§8.1 及其子节头）。加「目录带紧密」条件，见
+    # _compute_opener_pages（带外有散布命中 = 正文页，不免疫）。
+    _opener_pages = _compute_opener_pages(_first_hit, _OPENER_K)
     # 🔴 目录跨页续排（2026-08-26 Ross ch9 实测）：章首目录主体在扉页（≥3 个
     # 节号首现），末尾条目（9.4）续排到次页页顶（y≈103）——该首现命中不在
     # 扉页上，逃过上面的判据。补则：紧随某目录页之后的一页，若其全部首现
@@ -2146,6 +2180,89 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 print(f"[build_structure] ch{ch} 小节白名单剔除幻影节 "
                       f"{len(_dropped)} 处：{sorted(_dropped)}")
 
+    # 🔴 节序锚点修复（茆书 ch2 §2.5.5 实测 2026-09-29）：契约里同父小节的先后
+    #     按 `_doc_sort_key` = (锚点页, 页内标题 y, 自然键) 定。§2.5.5 的 SEC 首现
+    #     行是 p124 上的**图注碎片** `2.5.5示意其间关系.`（y 比 §2.5.4 真节头
+    #     `2.5.4伽马分布` 还小），真节头 `2.5.5贝塔分布` 在 p126 → 排序把 5 摆到
+    #     4 之前 → 步骤3「节序逆序」BLOCKING。判据（只在**锚点页并列**时才动手，
+    #     真·同页起节靠 y 大小自然放行，零回归）：号大的那节在同页上的标题 y 反
+    #     而更小 = 它的锚点页来得太早 → 从号小那节的下一页起回扫真节头；扫不到
+    #     保持原值，仍由闸门报出，绝不静默错锚。
+    def _sec_nums_tuple(key):
+        try:
+            return tuple(int(x) for x in re.findall(r"\d+", str(key or "")))
+        except ValueError:
+            return None
+
+    def _rescan_head(num, lo, hi):
+        """在 [lo, hi] 找 `<num><分隔符?><标题>` 行（编号与汉字标题可直接粘连）。
+
+        `_find_numbered_heading_page` 的 title 模式要求编号后有分隔符、glue 模式
+        要求编号后是拉丁字母，故对 `2.5.5贝塔分布`（OCR 把空格丢了的中文节头）
+        三类候选全灭。此处只服务于下方的节序锚点修复，返回 (页, 标题)。
+        """
+        _re = re.compile(
+            r'^[\*§]?\s*' + re.escape(str(num))
+            + r'(?:[\.．:：]|[\s\u00a0]+)?'
+            + r'(?=[A-Za-z\u4e00-\u9fff])'
+            + r'([A-Za-z\u4e00-\u9fff].{1,66})$')
+        _dir = page_dir or ext
+        for p in range(int(lo), int(hi) + 1):
+            fp = os.path.join(_dir, 'page_%03d.json' % p)
+            if not os.path.exists(fp):
+                continue
+            try:
+                d = scan_skeleton.PageJson.load(fp).data
+            except Exception:
+                continue
+            for b in (d.get('text', []) if isinstance(d, dict) else []):
+                if not isinstance(b, dict):
+                    continue
+                for ln in blk_text(b).split('\n'):
+                    ln = ln.rstrip('$').strip()
+                    if not ln or len(ln) > 70 or ln.endswith((',', ';')):
+                        continue
+                    m = _re.match(ln)
+                    if m:
+                        return p, clean_title(m.group(1).strip(), str(num))
+        return None, None
+
+    _groups = {}
+    for _n in sec_pages:
+        _t = _sec_nums_tuple(_n)
+        if not _t or len(_t) < 2:
+            continue
+        _groups.setdefault(_t[:-1], []).append((_t, _n))
+    for _g in sorted(_groups.values(), key=lambda v: v[0][0]):
+        _g.sort()
+        for _idx, ((_ta, _a), (_tb, _b)) in enumerate(zip(_g, _g[1:])):
+            if _tb <= _ta:
+                continue
+            _pg = sec_pages[_a]
+            if sec_pages[_b] != _pg:
+                continue
+            _ya = _numbered_heading_y(ext, _a, _pg, page_dir=page_dir)
+            _yb = _numbered_heading_y(ext, _b, _pg, page_dir=page_dir)
+            if _ya is None or _yb is None or _yb >= _ya:
+                continue
+            # 上界：不得越过再往后的同父小节锚点页（防止把号大的节挪到下一节之后）
+            _hi = end
+            for _tc, _c in _g[_idx + 2:]:
+                if sec_pages.get(_c, _pg) > _pg:
+                    _hi = min(_hi, sec_pages[_c] - 1)
+                    break
+            if _hi < _pg + 1:
+                continue
+            _rep, _ttl = _rescan_head(_b, _pg + 1, _hi)
+            if _rep:
+                sec_pages[_b] = _rep
+                sec_pos[_b] = (_rep, 0.0)
+                if _ttl:
+                    sec_titles[_b] = _ttl
+                print(f"[build_structure] ch{ch} 节序锚点修复：§{_b} 由 p{_pg} "
+                      f"改锚到 p{_rep}（同页标题 y 倒挂，回扫真节头 "
+                      f"{_ttl!r}）")
+
     # 🔴 字母子块窗口（Arnold《经典力学的数学方法》体例，config role 5）：
     # 节内印有小写字母块标题（§8 C. 微分形式 / D. 外微分 …），而例/问题/系
     # 一类计数器**在每个字母块内从 1 起重**。只把 §N 当窗口时，后一个字母块
@@ -2189,14 +2306,18 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     #    Example/Definition 条目，造成重复键、错类型、乱序。
     raw_items = _extract_items(ext, ch, start, end, book, manual=manual,
                                page_dir=page_dir,
-                               sec_windows=_item_windows)
+                               sec_keys=set(str(n) for n in sec_pages),
+                               sec_windows=_item_windows,
+                               sec_titles=sec_titles)
     if _bd_tail_dir:
         # 尾带条目补扫（同 rows 的尾带补扫，见 1) 处注释）：Theorem 2.26 / 4.75
         # 这类**印在下章起始页页首**的条目，按整页归属时对两章都不可见。
         raw_items = list(raw_items) + _extract_items(
             ext, ch, _bd_tail_page, _bd_tail_page, book, manual=manual,
             page_dir=_bd_tail_dir,
-            sec_windows=_item_windows)
+            sec_keys=set(str(n) for n in sec_pages),
+            sec_windows=_item_windows,
+            sec_titles=sec_titles)
     ex_start = _ex_region          # 同一次扫描结果（见 1) 习题行去重处）
 
     # 3a) 标签在前 EN3 书（如 Brin & Stuck）的 "Exercise C.S.N" 条目：抽取器

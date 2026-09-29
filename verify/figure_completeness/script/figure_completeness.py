@@ -23,7 +23,9 @@ figure_completeness.py — E-LAYER (order 5): unified FIGURE layer.
 Checks performed (all on chapter-filtered index entries):
   * completeness (was E): caption labels referenced in chapter OCR but absent
     from figure_index.json -> `fig_missing` (blocking FAIL); extracted labels
-    with no OCR caption -> `fig_extra` (WARN only).
+    with no OCR caption -> `fig_extra` (WARN only).  `ignore_fig` (per-chapter
+    `ignore_fig_ch{N}.json`) exempts a label from BOTH sides of that
+    reconciliation.
   * validity (was F): each cropped PNG decoded via cv2 (np.fromfile+imdecode to
     survive Unicode paths); missing/undecodable/too-small -> `fig_invalid`
     (blocking FAIL); near-blank low-variance crop -> `fig_invalid_warn` (WARN).
@@ -234,6 +236,18 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
     for e in ch_entries:
         if e.get('label'):
             extracted.add(normfig(e['label']))
+    # 🔴 全局整数编号书（components==1）：号在**全书内唯一**，所以「本章 OCR 提到
+    # 的号在别的章已裁剪入库」= 正文里的**跨章图引用**，不是丢图。旧实现只拿
+    # 本章 entry 作对照，于是每一次「（图207）」式回指都报 blocking MISSING
+    # （Arnold《经典力学的数学方法》附录J 引 ch9 的 图207、附录O 引 ch1 的 图2
+    # 实测 2026-09-29；裁剪文件 figure/ch09_fig207.png 一直在账）。
+    # 全书号集只做 missing 的减项（extra / 有效性检查仍按本章），因此「全书都
+    # 没有这个号」的真丢图照旧 FAIL。章/节编号书（components 2/3）号带章前缀，
+    # 天然不会串章，维持原判据。
+    extracted_bookwide = set()
+    for e in idx or []:
+        if isinstance(e, dict) and e.get('label'):
+            extracted_bookwide.add(normfig(e['label']))
     caption = set()
     cap_re = fig_cap_re(ext)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
     components = load_fig_components(ext)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
@@ -270,8 +284,21 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
                     parts = num.split('.')
                     if len(parts) >= 2 and int(parts[0]) == ch:
                         caption.add(normfig(num))
-    missing = sorted(caption - extracted - ignore_fig, key=sortkey)
-    extra = sorted(extracted - caption, key=sortkey)
+    _known = extracted | (extracted_bookwide if components == 1 else set())
+    missing = sorted(caption - _known - ignore_fig, key=sortkey)
+    # 🔴 豁免必须**双向**生效（2026-09-29 Apostol IANT 附录前置章 ch0 根治）。
+    # `ignore_fig_ch{N}.json` 是「图片级噪声豁免键」，本层子流程文档
+    # （figure_completeness.md 人工对账第 5 条）明写「E-LAYER FIGURE EXTRA …
+    # 必要时加 `ignore_figure`」，但旧实现只在 missing 一侧减项，于是人工核完
+    # 裁剪图确认为判据假阳后**没有任何正规通道**消掉这条 WARN——只能留着污染
+    # 收官报告，或（更糟）去改书侧 figure_index 数据迁就判据。
+    # 实测触发形态：无章号的引言章（Historical Introduction）印面图题是罗马
+    # 章位 `Figure I.1/I.2/I.3`，OCR 把 I 读成 1 → 标签归一为 `1.1`，而下方
+    # 题面 harvest 要求 `int(parts[0]) == ch`（ch=0），该式对任何带数字前缀的
+    # 标签恒不成立 → 两张**真实存在**的裁剪图必然落进 extra。
+    # 语义保持：只放宽「已登记豁免的号」，未登记的 extra 照旧上报
+    # （判据测试 verify/tests/test_e_layer_ignore_fig_both_directions.py）。
+    extra = sorted(extracted - caption - ignore_fig, key=sortkey)
 
     # --- validity (was F) ---
     errors, warns = [], []

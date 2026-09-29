@@ -123,7 +123,16 @@ def _final_md_name(ch_key, language, chapter_name, name_en=""):
     """
     ordinal = ""
     rest = ""
-    m = _CH_NAME.match(chapter_name or "")
+    # 🔴 无编号附录/补篇（章键 == kind 前缀词 → 序标归空）：文件名一律裸名
+    # （Appendix.md / 附录.md / Supplement.md / 补篇.md），**不拼标题 slug**，
+    # 更不得从标题首词猜序标（实测 "Algebraic Appendix" 旧行为产出
+    # "AppendixAlgebraic_Appendix.md"）。与 SKILL.md 附录命名总则、Serre
+    # 《Linear Representations》已收官形态一致。
+    try:
+        _bare = chapter_ordinal(ch_key) == ""
+    except Exception:
+        _bare = False
+    m = None if _bare else _CH_NAME.match(chapter_name or "")
     if m:
         tok, rest = m.group(1), m.group(2).strip()
         # name 若以占位键开头（无号附录契约名 "appendix …"）→ 序标归空

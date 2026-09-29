@@ -142,6 +142,11 @@ from format_verify import (
     check_proof_after_list,            # K: 列表末项后直接接新块无空行
     check_excessive_bq_empty_lines,    # N: 连续空 `>` 行
     check_displaymath_gt,              # M: `$$` 块内泄 `>`
+    # 🔴 译本结构继承豁免的**判据本体**住在 format_verify，与文档级 `FLayer.run` 同一份
+    # 实现（族多重集 / 分隔线指纹 / 标记常量）；本模块只补「配对源单元」这一件事。
+    inherited_structure_exemptions,    # 源/译结构继承判据 → 可豁免标记集合
+    MBQ_ERR_MARK,                      # 必包判据消息标记
+    ISEP_ERR_MARK,                     # I 层分隔线判据消息标记
 )
 
 # ── 本模块专有：OCR 公式残留（verify 不覆盖）──────────────────────────────
@@ -233,8 +238,9 @@ _META_EXCUSE_RE = re.compile(
 #   ① 标题去残留后以 `a)` / `b.` 等**子题标号**起头 = 原书分小题习题的合法
 #      条目（题面本身就是 "(a) Show that…"），不是句中续行；
 #   ② content_blocks==0 但题面其实**已落地单元正文**（name 非句中起头时）：
-#      契约 name 自带完整题面（≥6 个词元，如组标题 "Interactions between
-#      adjoint functors and limits"）；或正文**加粗标签**里写出本条目编号
+#      契约 name 自带完整题面（信息量 ≥6：CJK 逐字、拉丁词逐词，见 `_statement_weight`，
+#      如组标题 "Interactions between adjoint functors and limits"）；或正文**加粗标签**
+#      里写出本条目编号
 #      （"Exercises 4.3.15 Prove Lemma 4.3.8" 这类短题面，正文 `**4.3.15**`
 #      即落地证明；Katok 残渣 "for fows." 句中起头 → 两条均不适用，照旧拦）。
 #      两条豁免都要求正文非空（空正文照常 FAIL，防措辞掩盖）。
@@ -253,11 +259,43 @@ _LABEL_KEYWORD_RE = re.compile(
 # 词元（字母词，含中日韩），用于判 name 是否「自带题面」而非两三词残渣
 _WORD_TOKEN_RE = re.compile(r"[^\W\d_]+")
 _NAME_STATEMENT_MIN_WORDS = 6
+# 🔴 CJK 按**字**计，不按「一个连续串 = 一个词元」计（Arnold 中文书 ch7/appendixD
+#   实测 2026-09-29）：`问题2 证明实轴上每个 1-微分形式都是某函数的微分` 在旧计法下
+#   只有 3 个词元（数字与连字符把汉字串切成三段），远低于阈值 6 → 印面真习题
+#   （PDF p.137 逐字可查）被判「契约习题节点不含任何内容块 = OCR 切片残渣」。
+#   汉语语素基本单音节，一个汉字即一个语料单位，故汉字逐字计数、拉丁词仍逐词计数。
+#   残渣照旧拦：Katok 类 `for fows.` / 「的量」之类仍不足 6。
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\u31f0-\u31ff]")
+
+
+def _statement_weight(text):
+    """题面信息量：CJK 逐字计数 + 非 CJK 拉丁词逐词计数。"""
+    s = str(text or "")
+    cjk = len(_CJK_CHAR_RE.findall(s))
+    latin = len([t for t in _WORD_TOKEN_RE.findall(s) if not _CJK_CHAR_RE.search(t)])
+    return cjk + latin
 
 
 def _name_carries_statement(name):
-    """契约 name 是否自带完整题面（≥6 个词元的实质文字而非切片残渣）。"""
-    return len(_WORD_TOKEN_RE.findall(str(name or ""))) >= _NAME_STATEMENT_MIN_WORDS
+    """契约 name 是否自带完整题面（信息量 ≥6 而非切片残渣）。"""
+    return _statement_weight(name) >= _NAME_STATEMENT_MIN_WORDS
+
+
+def node_has_statement(name, content_blocks=0):
+    """契约习题节点是否**带可核对的题面**（跨闸共用谓词）。
+
+    两条独立证据任一成立即算：① 节点子树含内容块（text/formula/image）；② 契约
+    ``name`` 自带完整题面——中文短题常整行进 name 而不生成 text 子块（Arnold ch7
+    ``问题2 证明实轴上每个1-微分形式都是某函数的微分``，PDF p.137 印面可查）。
+    🔴 本章级重号闸与幻影习题闸必须用**同一个**谓词：否则一边「name 带题面 = 放行」、
+    另一边「content==0 = 碎片必报」，同一节点两种结论，写手无从两全（2026-09-29 实测）。
+    """
+    try:
+        if int(content_blocks or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _name_carries_statement(name)
 
 
 def _key_ordinal(key):
@@ -514,10 +552,61 @@ _FV_UNIT_CHECKS = (
 )
 
 
-def _run_format_verify_unit_checks(line_list):
+# ── 译单元「顶层标签继承源侧」豁免：判据住在 format_verify（SSOT），本模块只负责配对 ──
+# 为什么必须有：英文源顶层 `**Examples.**` / `**Notes.**`（复数集体小标题）经
+# `_H_MISSING_BQ` 的 `Example(?![\w\-])` **天然不命中**，留在顶层并过源闸；中文没有复数
+# 形态，译者照结构写成顶层 `**例。**` / `**注.**` 却命中必包表 → 同一结构「源过 / 译不过」，
+# 闸门只剩两条坏出路（改印面结构 / 自撰替代词）。I 层分隔线同族缺陷（英文关键词后置证明头
+# 不开块）。根治口径 = 以源单元为结构真值：族多重集 / 分隔线指纹处数与源单元相等 ⇒ 译者
+# 逐位镜像了源侧选择 ⇒ 该条对译文放行；多拆/多包/漏分隔线即失衡 ⇒ 照旧 FAIL。
+# 🔴 谓词（`top_label_families` / `bq_label_block_then_prose` / 标记常量）**只在
+# `verify/format_verify/script/format_verify.py` 定义一份**，与文档级 verify 的 `FLayer.run`
+# 共用；本模块只保留「配对源单元正文」这一件 flows 侧的事（`paired_source_body`）。
+
+
+_UNIT_MARK_LINE_RE = re.compile(r"^<!-- book-summarizer (?:DRAFT|DONE) unit:[^\n]*?-->\r?\n?")
+
+
+def paired_source_body(units_dir, unit_file):
+    """译单元目录 → 配对**源单元**正文（结构继承真值）；非译目录 / 源缺失 → None。
+
+    🔴 路径推导只此一份：`gate_units.gate_chapter`（权威 CLI）与
+    `_flow_contract._units_gate_ok`（落账证据趟）此前各推各的，后者根本没推，
+    于是「顶层标签族继承 / 分隔线指纹继承」两条译文豁免在落账趟无法生效 →
+    权威 CLI 15 章 exit 0、`flow_runner verify` 却报 ch2/0077 必包 FAIL
+    （Apostol《解析数论导引》实测 2026-09-29）。检测趟与修复趟共用谓词的延伸：
+    **两条消费趟也必须共用这一份配对读取**。
+
+    `units_dir` = `<ex>/book_structure/units-translate/<章目录>`；源侧同章同文件名。
+    正文按各消费趟既有口径剥首行标记（`_read_unit` / shadow 的 mark_re 同形）。
+    """
+    if not units_dir or not unit_file:
+        return None
+    _abs = os.path.abspath(units_dir)
+    if os.path.basename(os.path.dirname(_abs)) != "units-translate":
+        return None
+    src_path = os.path.join(os.path.dirname(os.path.dirname(_abs)),
+                            "units", os.path.basename(_abs), unit_file)
+    if not os.path.exists(src_path):
+        return None
+    try:
+        with open(src_path, encoding="utf-8") as f:
+            raw = f.read()
+    except Exception:
+        return None
+    m = _UNIT_MARK_LINE_RE.match(raw)
+    body = raw[m.end():] if m else raw
+    return body.lstrip("\r\n").rstrip("\n")
+
+
+def _run_format_verify_unit_checks(line_list, src_line_list=None):
     """把单元正文写临时 .md，复用 format_verify 的单元级检查，返回问题字符串列表。
 
     复用而非复制：与 verify FLayer 同一份逻辑，杜绝「三份分叉」。行号即单元内行号。
+
+    ``src_line_list``：配对**源单元**正文行（`units-translate` 的两条消费趟都经
+    `paired_source_body` 取得）。非 None 时启用「结构继承」豁免——判据与文档级
+    `FLayer.run` 同一个函数 `inherited_structure_exemptions`，杜绝「两份分叉」。
     """
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".md",
@@ -534,6 +623,12 @@ def _run_format_verify_unit_checks(line_list):
                 msgs = res or []
             for m in msgs:
                 problems.append("[F/H-unit] " + m.strip())
+        if src_line_list is not None:
+            _ex = inherited_structure_exemptions(line_list, src_line_list)
+            if 'h_mbq' in _ex:
+                problems = [p for p in problems if MBQ_ERR_MARK not in p]
+            if 'i_prose_sep' in _ex:
+                problems = [p for p in problems if ISEP_ERR_MARK not in p]
         return problems
     finally:
         try:
@@ -844,7 +939,8 @@ def exercise_run_gap_problems(utype, body):
 
 def check_body(utype, name, body, expected_tags=None, allow_extra=None,
                expected_images=None, content_blocks=None, source_text=None,
-               key=None, ext_dir=None, ch=None, source_language=None):
+               key=None, ext_dir=None, ch=None, source_language=None,
+               translation=False, src_body=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
@@ -879,6 +975,9 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     ``source_language``：本书**源语言**（manifest 的 `language`，如 `en`）。非中文时
     启用**源单元语言闸**（见 #24 / `source_language_problems`）：源单元正文不得出现
     中文；None / 中文 = 不跑（CN 书源正文本就是中文）。
+    ``translation``：本单元是否为**步骤 6 中文译单元**（`units-translate/`）。True 时
+    跳过 P1 证明分条闸（译本逐行镜像已过该闸的源单元，拆条＝结构性分叉），
+    与 ``ext_dir=None`` 关掉照抄闸同一取向。
     """
     if utype not in ("item", "desc", "exercise"):
         return True, []
@@ -948,7 +1047,10 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     # ── P 层 ──────────────────────────────────────────────────────────
 
     # P1) 证明过长（>700 字符无步骤枚举）
-    errs = check_verbose_proofs(line_list)
+    # 🔴 `translation=True`（步骤 6 中文译单元）跳过本闸：译本必须逐行镜像已过
+    # 同一闸的冻结源单元，源侧的散文式证明若在译侧被拆成 `1. 2. 3.` 就是结构性
+    # 分叉。同 P 层照抄闸（ext_dir=None）的取向；判据见 verbose_gates.is_translated_md。
+    errs = [] if translation else check_verbose_proofs(line_list)
     if errs:
         all_problems.extend(e.strip() for e in errs)
 
@@ -1043,7 +1145,9 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     # verify F 层原只在合并后的整章 md 才查这些 intra-unit 结构；现前移到单元门控，
     # 让「重修单元」时即暴露，而非漏到合并后才被 verify 抓（合并脚本不负责重排正文）。
     # 文档级专属（`---`/标题上下文）检查不在此列，孤立单元查会误报。
-    errs = _run_format_verify_unit_checks(line_list)
+    errs = _run_format_verify_unit_checks(
+        line_list,
+        src_line_list=(src_body.split('\n') if src_body else None))
     if errs:
         all_problems.extend(errs)
 

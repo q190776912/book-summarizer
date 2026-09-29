@@ -223,4 +223,7 @@
 4. **单元拆分**（write-source 步骤 4）：`split_draft_units <extract_dir> [ch ...]` →
    `units/ch{N}/`（附录章 `units/appendix{X}/`；每 item 一单元 + `manifest.json`）。
 5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
-   图片真值 + 证明覆盖审计），FAIL 严禁拆分。
+   图片真值 + 证明覆盖审计），FAIL 严禁拆分。复算与磁盘之间的**人工印面裁定**走
+   管线输入 `verify_config.json → content_overrides`（`lib/content_overrides.py`；
+   写入方 `config/verify_config/register_content_override.py`，登记即校验「落在磁盘 +
+   重算仍活」，两样都不满足直接 REFUSE）；未登记的偏离照旧 FAIL。

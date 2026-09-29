@@ -35,6 +35,17 @@
    （原始键含连字符，归一前判定）一律跳过，不推进也不受限于页码游标。
 5. 解析不到页码的单元（契约无该键 / 幻影 / 老键形对不上）→ **跳过**（既不当问题也不
    重置游标），避免因锚点缺失产生连锁误报。
+6. **续接单元（manifest 记录带 ``"continuation": true``）**复用「同键最近一次正常消费
+   的锚点」，**不推进**该键锚点列表的游标（键也解析不到时退回正常消费）。
+   为什么需要：一个契约节点的正文可以被**合法地**拆成多条单元——印刷字母小节
+   （``letter_subs``，节内 A./B./C. 子块）材料化时，父单元只留前缀，每个字母生成
+   「标题单元 + 正文单元」，而正文单元必须沿用父键，否则节级编号覆盖对账
+   （``lib/problem_coverage.coverage_problems`` 按「单元 key ∈ 该节契约子树键集」取正文）
+   会把拆出去的那半段看成漏写。沿用父键 ⇒ 该键在 manifest 里出现两次；条目号逐节重启
+   的书（``例4`` 一章两次 → 锚点列表长 2）里，第二条会消费第 2 个锚点 = **另一节**那条
+   的页码，于是从这一条起整章的锚点消费错位，一次性假报数十处跨页倒退
+   （2026-09-29 阿诺尔德《经典力学的数学方法》ch3/4/5/7 实测）。续接标记由拆单元的一方
+   写明，判据只在此模块认，别处不必再实现。
 
 调用方（gate_units 合并前 / verify 层合并后）负责取到 ``contract``（分章契约 dict）与
 **有序** ``units``（manifest 的 ``units`` 数组，或合并 md 反推出的单元序），两者共用本
@@ -129,6 +140,7 @@ def check_unit_order(
         return []
 
     consumed: Dict[int, int] = {}
+    follow: Dict[str, Tuple[int, int]] = {}
     problems: List[str] = []
     max_page = -1
     max_order = -1
@@ -141,7 +153,13 @@ def check_unit_order(
         raw_key = u.get("key")
         if is_dash_problem(raw_key):        # 章末习题：豁免，不推进游标
             continue
-        anchor = _unit_page(raw_key, u, multi, anytype, consumed)
+        nk = norm_secnum(raw_key)
+        if u.get("continuation") and nk in follow:
+            anchor = follow[nk]             # 续接单元：复用父单元锚点，不消费列表
+        else:
+            anchor = _unit_page(raw_key, u, multi, anytype, consumed)
+            if anchor is not None:
+                follow[nk] = anchor
         if anchor is None:                   # 锚点缺失：跳过，不重置游标
             continue
         page, order = anchor

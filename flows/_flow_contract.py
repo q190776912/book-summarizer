@@ -142,6 +142,28 @@ RUN_COMMANDS = {
 # 按节拆分。阈值与 split_chapters.DEFAULT_THRESHOLD 保持一致。
 MERGED_MD_CHAR_LIMIT = 60000
 
+
+def _contract_unit_orphans(contract_path, manifest_path, ch_key):
+    """契约晚于清单时，用**权威判据**判定单元是否真的过期（返回问题列表，非空 = 过期）。
+
+    判据不另起炉灶：直接调 `gate_units` 的章级闸 ⑩（契约 → manifest 反向对账，
+    按「习题 / 结果项」分桶 + `sec_ordinals` 序标归一），检测趟与修复趟共用同一个
+    谓词。🔴 fail-closed：契约 / 清单读不到、或 ⑩ 判据载不进来，一律按「真过期」
+    处理——本函数唯一的放行对象是**已对账一致**的写源后定点修补。
+    """
+    try:
+        import json as _json
+        with open(contract_path, encoding="utf-8") as f:
+            contract = _json.load(f)
+        with open(manifest_path, encoding="utf-8") as f:
+            man = _json.load(f)
+        units = (man.get("units") if isinstance(man, dict) else man) or []
+        from gate_units import _check_contract_unit_coverage
+    except Exception:
+        return ["<契约/清单或闸⑩判据不可读，按过期处理>"]
+    return _check_contract_unit_coverage(contract, units, ch_key) or []
+
+
 # --------------------------------------------------------------------------
 # 物理证据检查：只看磁盘产物，不依赖账本
 # --------------------------------------------------------------------------
@@ -398,7 +420,7 @@ class physical_evidence:
         keys = _chapter_map_keys(ex)
         if not keys:
             return False, "缺 chapter_map.json（config 步未完成）"
-        missing, stale = [], []
+        missing, stale, repaired = [], [], []
         for k in keys:
             fname = chapter_label(k) + ".json"
             jp = os.path.join(sub, fname)
@@ -411,12 +433,28 @@ class physical_evidence:
                 continue
             # 新鲜度：manifest 必须晚于契约（attach 重跑后必须重拆，否则单元过期）
             if os.path.getmtime(mp) < os.path.getmtime(jp):
-                stale.append(k)
+                # 🔴 mtime 只是**代理**，真不变量是「契约里每个应成单元的节点在
+                # manifest 都有记录」。写源后的**定点修补**（SKILL.md「结构修复」：
+                # 单元已写毕的旧契约不许重建，只在契约里把节点插回正确位置 +
+                # 同步搬 manifest 记录）天然会「先改清单、后改契约」，方向与
+                # attach 相反 ⇒ 纯 mtime 判据把这类修补一律判成过期，
+                # 而 `mark` 会因此拒绝落账（Arnold《经典力学的数学方法》ch10 §51
+                # 互换 系1/系2 实测 2026-09-29：契约 03:32 / 清单 03:26，节点集合
+                # 与顺序两方一致，gate_units ⑩ 与 verify 全绿，只有本代理报警）。
+                # 故报警前先跑**权威判据**（gate_units 章级闸 ⑩，判据只此一份）：
+                # 无孤儿节点 = 定点修补，放行并如实记数；有孤儿 = 真过期，照旧拒。
+                if _contract_unit_orphans(jp, mp, k):
+                    stale.append(k)
+                else:
+                    repaired.append(k)
         if missing:
             return False, f"缺内容化分章契约 / 单元 manifest: {missing[:4]}"
         if stale:
-            return False, f"单元 manifest 早于契约（attach 后未重拆）: {stale[:4]}"
-        return True, f"{len(keys)} 章内容化契约 + 单元拆分齐备且新鲜"
+            return False, (f"单元 manifest 早于契约且契约有孤儿节点（attach 后未重拆）: "
+                           f"{stale[:4]}")
+        note = (f"；{len(repaired)} 章为写源后定点修补（契约晚于清单，"
+                f"闸⑩ 对账无孤儿节点）" if repaired else "")
+        return True, f"{len(keys)} 章内容化契约 + 单元拆分齐备且新鲜{note}"
 
     @staticmethod
     def _count_md(book_dir, prefix):
@@ -562,8 +600,17 @@ class physical_evidence:
         return list(out)
 
     @staticmethod
-    def _missing_contract_names(contract, ntext, ignore_set=None):
+    def _missing_contract_names(contract, ntext, ignore_set=None,
+                               check_sections=True):
         """契约中未在最终 md 在位的 section 名 / 编号项名列表。
+
+        ``check_sections``（默认 True，保持既有行为）：仅当被核对的 md 组与契约**同源
+        语言**时才核对 `section` 节点。译本 md 的节标题是译文（`### 10. 例：按相对定额
+        捕获`），而结构契约的 section `name` 是原书语言（`1.10 Example: Harvesting…`），
+        用原书标题子串去匹配译文标题在结构上必然落空——Arnold ODE（EN→CN）实测全书 5 章
+        仅译文组假报 81 个 section「不在位」。译本版块完整性已由 ``check_translate_parity``
+        （#1 单元 id/type/key/name/file 1:1、#4 节号一致）机械保证，故译文组跳过 section 名
+        核对不构成放宽。**编号项**（定义 / 定理 / …）两语都核对：其数字条题在两版渲染一致。
 
         匹配键三级回退（容忍 OCR 污染与排版差异，全部经归一化包含判断）：
           ① 节点 `key`（如 `定义1.1` / `Theorem 2.1` —— 契约的干净编号键）；
@@ -578,8 +625,20 @@ class physical_evidence:
             t = str(el.get("type", ""))
             # chapter 容器：章标题呈现形态差异大（# 第N章 / # Chapter N: …），不核对；
             # 派生节点（description/proof）与习题（consolidated 省略）非编号项。
+            # 🔴 `uncat` 同豁免（Arnold《经典力学的数学方法》附录K 系91 实测
+            # 2026-09-29）：它是 `TYPE_TO_LABEL.get(type, 'uncat')` 的**兜底族**——
+            # 配置分组表没认领的号（图/表题号、OCR 把「坐标 系91，…」里的“系”+
+            # 误读数字当成条目头）都落在这里。写作规则要求这类号**只在散文里引用**、
+            # 不做 `**…**` 条头，故 B/M 层一直按 `label != 'uncat'` 把它们排除在
+            # 「须成条目」之外（`item_numbering_integrity` 的 `extracted_raw`）。本闸
+            # 此前不认这一豁免，于是要求 md 给一个书里根本不存在的条头——**闸逼代理
+            # 编造条目**。判据与 B/M 层同源：内容在位由覆盖闸⑩（契约manifest）与
+            # 内容完整性闸门保证，本处只免「条头必须出现」这一项。
             if t in ("chapter",) or t in physical_evidence._GATE_DERIVED_TYPES \
-                    or t in ("exercise", "problem"):
+                    or t in ("exercise", "problem", "uncat"):
+                continue
+            # 译本 md：跳过 section 名核对（原书语言标题匹配不到译文标题，见 docstring）。
+            if t == "section" and not check_sections:
                 continue
             name = str(el.get("name") or "").strip()
             key = str(el.get("key") or "").strip()
@@ -667,9 +726,16 @@ class physical_evidence:
         return miss
 
     @staticmethod
-    def _units_gate_ok(units_dir, manifest, ch_key=None):
+    def _units_gate_ok(units_dir, manifest, ch_key=None, translation=False):
         """单元门控核心判定（内联，避免 import 耦合）：每单元文件存在、首行
         DONE、**质量校验通过**（写对，非仅重写）。返回 (ok, problems)。
+
+        🔴 `translation=True`（译单元目录）必须与 `gate_units.gate_chapter` 的
+        `translation=(units_sub != "units")` 同源（Iwaniec–Kowalski 解析数论
+        translate_chapters 落账被拒实测 2026-09-29）：Tier-3 证明分条闸只管自撰
+        文本，译单元逐行镜像已过该闸的冻结源单元；本 shadow 曾漏传 → 权威 CLI
+        `gate_units --units-dir units-translate` 全 27 章 exit 0，落账证据趟却按
+        源侧判据罚译单元的散文式证明，两趟判据分叉。
 
         🔴 **fail-closed**：质量校验执行失败（import / 运行异常）按「未达标」
         处理并记入 problems——绝不能因校验崩溃而放行（否则未审阅单元会整体
@@ -840,7 +906,13 @@ class physical_evidence:
                         u["type"], u.get("name") or "", body,
                         expected_tags=expected, allow_extra=known,
                         expected_images=exp_imgs, content_blocks=exp_content,
-                        source_text=src_text, key=str(u["key"]))
+                        source_text=src_text, key=str(u["key"]),
+                        translation=translation,
+                        # 🔴 与 gate_units 同一份配对读取：译文的两条结构继承豁免
+                        # （顶层标签族 / 分隔线指纹）都要源单元正文。此前本趟不传 →
+                        # 权威 CLI 全绿而落账被拒（Apostol ch2/0077 实测 2026-09-29）。
+                        src_body=(_quality.paired_source_body(
+                            units_dir, u["file"]) if translation else None))
                 except Exception as e:
                     # 🔴 fail-closed：校验崩溃 = 该单元不合格，绝不放行
                     ok_q, qp = False, ["质量校验执行失败（fail-closed）：%r" % (e,)]
@@ -968,7 +1040,9 @@ class physical_evidence:
             except Exception:
                 gate_fail.append((k, "units-translate manifest 非法 JSON"))
                 continue
-            ok_g, gprob = physical_evidence._units_gate_ok(tdir, tmanifest, ch_key=k)
+            ok_g, gprob = physical_evidence._units_gate_ok(tdir, tmanifest,
+                                                           ch_key=k,
+                                                           translation=True)
             if not ok_g:
                 gate_fail.append((k, gprob[0] if gprob else "翻译单元门控未通过"))
                 continue
@@ -1078,8 +1152,9 @@ class physical_evidence:
         return out
 
     @staticmethod
-    def _contract_names_missing(ex, k, md_files):
-        """结构契约骨架节 + 编号项在 md 组中的在位核对；返回缺失名列表。"""
+    def _contract_names_missing(ex, k, md_files, check_sections=True):
+        """结构契约骨架节 + 编号项在 md 组中的在位核对；返回缺失名列表。
+        ``check_sections``：见 ``_missing_contract_names``——译文组须传 False。"""
         contract_path = os.path.join(
             ex, "book_structure", chapter_label(k) + ".json")
         if not os.path.exists(contract_path):
@@ -1107,7 +1182,8 @@ class physical_evidence:
             except Exception:
                 pass
         return physical_evidence._missing_contract_names(
-            contract, physical_evidence._norm_text(text), ignore_set)
+            contract, physical_evidence._norm_text(text), ignore_set,
+            check_sections=check_sections)
 
     @staticmethod
     def _merge_present_ok(book_dir, ex, keys, want_tgt):
@@ -1133,7 +1209,8 @@ class physical_evidence:
                 ov = physical_evidence._oversized_merged_md(md_files)
                 if ov:
                     oversized.append((k, lang, ov))
-                miss = physical_evidence._contract_names_missing(ex, k, md_files)
+                miss = physical_evidence._contract_names_missing(
+                    ex, k, md_files, check_sections=(lang == src_lang))
                 if miss:
                     missing_names.append((k, lang, miss))
             unpaired.extend(physical_evidence._split_form_pairing_problems(

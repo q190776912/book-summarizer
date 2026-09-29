@@ -142,6 +142,32 @@ def insert_text_by_position(texts, new_t):
     texts.insert(lo, new_t)
 
 
+def open_verdict_gate(mm_dir):
+    """Refuse to apply while the merge reported unruled manifest/mode-B entries.
+
+    data/repairs/repairs.py (检测趟) writes _merge_report.json; this趟 (修复趟)
+    reads the SAME file instead of re-implementing the predicate.  An unruled
+    mode-B `ok` is not a confirmation — it only says the embedded text layer
+    matches our own OCR, and apply would still stamp it mm_reviewed.
+    Books that never ran the merging step have no report file and pass.
+    """
+    path = os.path.join(mm_dir, "_merge_report.json")
+    if not os.path.isfile(path):
+        return True, ""
+    try:
+        rep = json.load(open(path, encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return False, "MM_APPLY: _merge_report.json unreadable (%s) — re-run the merge" % exc
+    open_q = {k: len(rep.get(k) or []) for k in
+              ("missing", "base_unreviewed", "base_unrevisited")}
+    bad = {k: n for k, n in open_q.items() if n}
+    if bad or rep.get("collisions"):
+        return False, ("MM_APPLY: merge left %s (+%d collision(s)) — repairs.json on disk is "
+                       "STALE; settle these with a visual wave, re-merge, then apply."
+                       % (open_q, len(rep.get("collisions") or [])))
+    return True, ""
+
+
 def apply(extract_dir, dry=False, repairs_path=None):
     mm_dir = os.path.join(extract_dir, REPAIR_DIRNAME)
     manifest_path = os.path.join(mm_dir, "manifest.json")
@@ -152,6 +178,10 @@ def apply(extract_dir, dry=False, repairs_path=None):
         return 1
     if not os.path.isfile(repairs_path):
         print("MM_APPLY: no repairs.json — agent must produce it first (or it's empty)")
+        return 1
+    allowed, why = open_verdict_gate(mm_dir)
+    if not allowed:
+        print(why)
         return 1
 
     manifest = mm_repair_manifest.MmRepairManifest.load(manifest_path).data

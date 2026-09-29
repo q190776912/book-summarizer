@@ -170,6 +170,9 @@ def fixable_ordered_fixers():
 DEFAULT_RESULT: Dict[str, Any] = {
     'ch': None, 'md': '', 'status': 'PASS',
     'truly_missing': [], 'mentioned_only': [], 'extra': [],
+    # B 层 `extra` 的两桶重述（并集仍是 `extra`，pass/fail 不受影响）：
+    # entry = md 有独立加粗条头而契约无条目（契约漏登记信号），mention = 仅正文提及。
+    'extra_entry': [], 'extra_mention': [],
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
     'long_formula_rows': [],   # F 层：超长显示公式行（tag 重叠风险，WARN 非阻断）
@@ -222,7 +225,8 @@ class VerifyContext:
     """
 
     def __init__(self, ch, start, end, md_file, ext_dir, config: BookConfig,
-                 figure_index=None, manual_overrides=None, ignore_fig=None):
+                 figure_index=None, manual_overrides=None, ignore_fig=None,
+                 src_pair_md=None):
         self.ch = ch
         self.start = start
         self.end = end
@@ -232,6 +236,10 @@ class VerifyContext:
         self.figure_index = figure_index
         self.manual_overrides = manual_overrides
         self.ignore_fig = ignore_fig or set()
+        # 译本的**源语言配对 md**（同一章另一语言组，由 `verify_chapter.verify_all` 解析）。
+        # F 层「结构继承源本」豁免判据的唯一入口（见 format_verify 同名小节）：None = 没有
+        # 配对（中文原书 / 三语歧义 / 单语言组）→ 一条都不豁免。
+        self.src_pair_md = src_pair_md
 
         # --- derived (populated by EXTRACT provider + B layer) ---
         # EXTRACT 供水：items / entry_keys / all_keys / label_warns
@@ -285,13 +293,17 @@ class VerifyManager:
         self.loader = loader
 
     # ------------------------------------------------------------------ run
-    def verify_one(self, ch, start, end, md_file, ext_dir) -> Dict[str, Any]:
+    def verify_one(self, ch, start, end, md_file, ext_dir,
+                   src_pair_md=None) -> Dict[str, Any]:
         """Run all layers in `order` and merge their metadata (last-writer-wins
         by insertion order via dict.update) into the byte-compatible dict.
 
         Every layer ALWAYS runs (the old `disable` mechanism is gone).  Suppression
         of known noise is via the unified `ignore` set, surfaced as a WARNING
         gate rather than by skipping a layer.
+
+        `src_pair_md`：本 md 为**译本**时其源语言配对 md（供 F 层结构继承豁免）；
+        无配对传 None。
         """
         cfg = self.loader.config_for_chapter(ch)
         manual = self.loader.manual_for_chapter(ch)
@@ -300,6 +312,7 @@ class VerifyManager:
             config=cfg,
             figure_index=self.loader.figure_index,
             manual_overrides=manual,
+            src_pair_md=src_pair_md,
         )
         merged: Dict[str, Any] = {}
         for layer in self.registry.all_ordered():
@@ -320,17 +333,21 @@ class VerifyManager:
         return final
 
     # ------------------------------------------------------------------ fix
-    def fix(self, md_file) -> Dict[str, int]:
+    def fix(self, md_file, src_pair_md=None) -> Dict[str, int]:
         """Run every auto-fix in `fix_order`, returning the byte-compatible
         change dict {h, h_stmt, h_ul, h_mbq, g, i, j, k, l, m, n}.
 
         修复实现主体位于独立的 `fix_<snake>.py` 模块（经 FIXERS 注册）。当 FIXERS 为空
         时，回退到各层的 `layer.fix`（旧路径），保证 --fix 不回归。
+
+        `src_pair_md`：译本 md 的源语言配对 md，透传给需要它的修复器（H 层「结构继承
+        源本」豁免）；None = 无配对 → 修复器按原行为工作。
         """
         cfg = self.loader.book
         ctx = VerifyContext(
             ch=None, start=None, end=None, md_file=md_file, ext_dir=None,
             config=cfg, figure_index=self.loader.figure_index,
+            src_pair_md=src_pair_md,
         )
         result: Dict[str, int] = {}
         if FIXERS:

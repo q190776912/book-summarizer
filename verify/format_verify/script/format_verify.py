@@ -230,6 +230,211 @@ def check_i_prose_separator(md_file):
         i = j
     return out
 
+# ===========================================================================
+# 译本「结构继承源本」豁免谓词（SSOT：单元门控与文档级 verify 共用同一份判据）
+# ===========================================================================
+# 现象（Apostol《解析数论导引》ch2/ch4/ch9/ch11 实测 2026-09-29）：英文源顶层的复数集体
+# 小标题 `**Examples.**` / `**Notes.**` 因 `_H_MISSING_BQ` 的 `Example(?![\w\-])` 负向前瞻
+# **天然不命中**（复数尾 s），于是留在顶层并过源闸；中文没有复数形态，译者照结构写成顶层
+# `**例。**` / `**注.**` 却命中必包表 → 同一结构「源过 / 译不过」。中文里 `例子` 是
+# 2026-09-29 已裁的豁免词，但 `Notes` **没有任何豁免同位词**（注 / 注记 / 说明 全命中必包
+# 表），于是闸门只剩两条坏出路：把印面结构改掉（塞进 `>`，与已过闸的源侧分叉）或自撰替代
+# 词 = 「闸逼代理自撰」型判据缺口（与 2026-09-27/28 的 Note/Notes、Remark/评注 同族）。
+# I 层同一族缺陷：英文「关键词不在首位」的证明头（`> **Alternate proof.**`）不被
+# `G_ITEM_BQ_HEAD_RE` 认出 → 源侧不开块 → 不追分隔线，中文侧（`> **另一证明。**`）开块
+# → 要求插入一条源里没有的 `---`，两版结构分叉。
+# 根治口径 = **以源本为结构真值**（源先于译硬闸已保证源整体过闸）：
+#   * 译文顶层粗体标签的**族多重集**与源本相等 ⇒ 译者逐位镜像了源侧「顶层 vs 包 `>`」的
+#     选择 ⇒ 必包判据对译文放行；
+#   * 「`>` 粗体标签块 → 顶层散文缺 `---`」的**处数**与源本相等 ⇒ 分隔线缺失是照抄源结构
+#     ⇒ I 层该条对译文放行。
+# 🔴 安全性关键：每条被报的必包违规行本身就是一个**已映射族**的顶层粗体标签（证明/例/注/
+# 说明/解答/评注…），它必然进入译文多重集；源本若没有同族的顶层标签，两集必不相等 → 豁免
+# 不成立。所以「译者凭空把附属块提到顶层」不可能被本豁免放过，盲区不扩大。
+# 两条消费趟共用本节的谓词：单元级 = `flows/write-source/script/check_unit_quality`
+# （按配对**源单元**逐单元比较，配对读 `paired_source_body`）；文档级 = 本文件 `FLayer.run`
+# （按配对**源语言章 md** 整章比较，配对路径由 `verify_chapter.verify_all` 解析并经
+# `ctx.src_pair_md` 带入；解析不出配对 = 不豁免，fail-closed）。
+
+# 未映射词的族名桶（语言无关）。🔴 不能退回「用词本身作族名」：中英两侧的**主题式**顶层
+# 粗体小标题（`**Goldbach's conjecture.**` ↔ `**哥德巴赫猜想。**`）必然用词不同，逐词作族名
+# 会让任何译了主题头的章永远判「不等」→ 豁免对本章整体失效，复数 Examples 一类合法继承
+# 又被逼改结构（Apostol ch8/ch14 实测）。主题头不属于必包表的附属块族，落进同一 'other'
+# 桶后仍然要求**两侧处数相等**，保护力度不降。
+_OTHER_FAMILY = 'other'
+
+# `_H_MISSING_BQ` 实际会报出来的附属块族（证明/例/注/说明/注记/解答/评注 + 对应英文词）。
+# 结构继承指纹只对**这些族**敏感，其余标签一律并入 'other' 桶，见 `_label_family`。
+_REPORTABLE_FAMILIES = {'example', 'note', 'proof', 'solution', 'remark'}
+
+_FAMILY_CN = {
+    '例子': 'example', '例': 'example',
+    '注记': 'note', '注': 'note', '说明': 'note',
+    '证明思路': 'proof', '证明': 'proof', '证': 'proof',
+    '解答': 'solution', '解': 'solution',
+    '评注': 'remark',
+    '练习': 'exercise', '习题': 'exercise',
+    # 条目类标签（定义/定理/引理…）本身不会被 `_H_MISSING_BQ` 报，经 `_label_family`
+    # 的「只保留可报族」过滤后与主题头同落 'other' 桶；此处仍登记，是因为中英**同一**
+    # 标签必须映射到同一族（Apostol ch2/0077 实测：源 `**Definition.**`+`**Examples.**`
+    # vs 译 `**定义.**`+`**例.**`），族名一致时桶位自然一致，处数比较才有意义。
+    '定义': 'definition', '定理': 'theorem', '引理': 'lemma',
+    '推论': 'corollary', '命题': 'proposition', '猜想': 'conjecture',
+    '记号': 'notation', '问题': 'problem', '算法': 'algorithm',
+    '答案': 'answer',
+    # 🔴 后置中心词形（「导出模的定义」↔ `Definition of induced modulus`，Apostol ch8 实测；
+    # 「定理 4.2 的证明」↔ `Proof of Theorem 4.2`）：中文习惯把限定语放前面、标签名词收尾，
+    # 前缀查表必然落空 → 该族判定与英文分叉。中心词按**后缀**再查一次同一张表（值集合，
+    # 非新表），中英同族。
+}
+
+_FAMILY_EN = {
+    'example': 'example', 'examples': 'example',
+    'note': 'note', 'notes': 'note', 'explanation': 'note',
+    'proof': 'proof', 'proofs': 'proof',
+    'solution': 'solution', 'solutions': 'solution',
+    'remark': 'remark', 'remarks': 'remark',
+    'exercise': 'exercise', 'exercises': 'exercise',
+    'definition': 'definition', 'definitions': 'definition',
+    'theorem': 'theorem', 'theorems': 'theorem',
+    'lemma': 'lemma', 'lemmas': 'lemma',
+    'corollary': 'corollary', 'corollaries': 'corollary',
+    'proposition': 'proposition', 'propositions': 'proposition',
+    'conjecture': 'conjecture', 'conjectures': 'conjecture',
+    'notation': 'notation', 'notations': 'notation',
+    'problem': 'problem', 'problems': 'problem',
+    'algorithm': 'algorithm', 'algorithms': 'algorithm',
+    'answer': 'answer', 'answers': 'answer',
+}
+
+_FAMILY_CN_HEAD_NOUNS = sorted({k for k, v in _FAMILY_CN.items() if len(k) >= 2},
+                               key=len, reverse=True)
+
+_INHERIT_TOKEN_RE = re.compile(r'^([一-鿿]+|[A-Za-z]+)')
+_BQ_ANY_BOLD_HEAD_RE = re.compile(r'^\s*>\s*\*\*[^*]+\*\*')
+
+MBQ_ERR_MARK = "should be inside `>`"
+ISEP_ERR_MARK = "missing `---`"
+
+
+def _label_family(token):
+    """标签首词（或中文首/尾词）→ 语言无关族名；查不到 → `_OTHER_FAMILY` 桶。
+
+    🔴 只有**必包表真会报的族**（`_REPORTABLE_FAMILIES`）才保留族名，其余一律落
+    `_OTHER_FAMILY`。指纹的全部作用是「被报的违规行必然进指纹」，而 `**Definition.**` /
+    `**定理 3.1**` 这类顶层标签永远不可能被 `_H_MISSING_BQ` 报出来——给它们单独族名
+    只会引入中英不对称（`**Goldbach's conjecture.**` 首词是专名 → other，而中文
+    `**哥德巴赫猜想。**` 走后缀支 → conjecture，Apostol ch14 实测），把该章整体豁免打掉。
+    收进 other 桶后**处数依旧逐位相等**，保护力度不降。
+    """
+    fam = _label_family_raw(token)
+    return fam if fam in _REPORTABLE_FAMILIES else _OTHER_FAMILY
+
+
+def _label_family_raw(token):
+    """标签首词（或中文首/尾词）→ 附属块族名；查不到 → `_OTHER_FAMILY`。"""
+    if token.isascii():
+        return _FAMILY_EN.get(token.lower(), _OTHER_FAMILY)
+    for n in (3, 2, 1):
+        if token[:n] in _FAMILY_CN:
+            return _FAMILY_CN[token[:n]]
+    for noun in _FAMILY_CN_HEAD_NOUNS:
+        if token.endswith(noun):
+            return _FAMILY_CN[noun]
+    return _OTHER_FAMILY
+
+
+def top_label_families(line_list):
+    """顶层粗体标签行的**族多重集**（按标签首词映射，中英同族合并）。
+
+    只数「顶层粗体标签行」：非 `>`、非标题、非显示式围栏内、以 `**…**` 粗体 run 起头。
+    源/译两趟与检测/豁免两趟共用本函数，杜绝「三份分叉」。
+
+    🔴 顶层 `{…}` 行单独计一族（`_H_MISSING_BQ_FOOTNOTE` 的必包形）：它不是粗体标签，
+    若不进指纹，「豁免成立时凭空加一行顶层 `{`」就查不出来，安全论证（被报的违规行必然
+    进入译文指纹）会留一个缺口。两侧都有 = 照抄源结构 = 该豁免；只有一侧有 = 不等 = 不豁免。
+    """
+    fams = []
+    in_math = False
+    for raw in line_list:
+        s = raw.strip()
+        if s in ('$$', '> $$'):
+            in_math = not in_math
+            continue
+        if in_math or not s or s.startswith('>') or s.startswith('#'):
+            continue
+        if s.startswith('{'):
+            fams.append('brace')
+            continue
+        if not s.startswith('**'):
+            continue
+        end = s.find('**', 2)
+        if end < 2:
+            continue
+        m = _INHERIT_TOKEN_RE.match(s[2:end].lstrip())
+        fams.append(_label_family(m.group(1)) if m else 'blank')
+    return fams
+
+
+def bq_label_block_then_prose(line_list):
+    """数「`> **标签** …` 引用块结束后紧跟顶层散文（中间无 `---`）」的处数。
+
+    与 `check_i_prose_separator` 同一份行走逻辑、同一份 `_NON_PROSE_START` 谓词，但块头
+    按**任意粗体 run** 认（语言无关）：英文关键词后置的证明头在 I 层不开块，若指纹照抄
+    I 层的开吻词表，源侧计数恒为 0，豁免就只剩「译文也必须不开块」一条坏出路。
+    """
+    n = len(line_list)
+    cnt = 0
+    i = 0
+    while i < n:
+        if not _BQ_ANY_BOLD_HEAD_RE.match(line_list[i]):
+            i += 1
+            continue
+        j = i + 1
+        body = False
+        while j < n and line_list[j].startswith('>'):
+            if line_list[j].strip() not in ('>', '> '):
+                body = True
+            j += 1
+        if not body:
+            i = j
+            continue
+        k = j
+        while k < n and line_list[k].strip() == '':
+            k += 1
+        if k < n and not _NON_PROSE_START.match(line_list[k]):
+            cnt += 1
+        i = j
+    return cnt
+
+
+def inherited_structure_exemptions(md_lines, src_lines):
+    """译文 md 相对**源语言 md** 的结构继承判据 → 可豁免的判据标记集合。
+
+    `src_lines` 为 None（解析不出配对 / 本书无译本）→ 空集 = 一条都不豁免（fail-closed）。
+    返回 {'h_mbq', 'i_prose_sep'} 的子集，由 `FLayer.run` 用来丢掉对应判据的报告。
+    """
+    out = set()
+    if not src_lines:
+        return out
+    if sorted(top_label_families(src_lines)) == sorted(top_label_families(md_lines)):
+        out.add('h_mbq')
+    if bq_label_block_then_prose(src_lines) == bq_label_block_then_prose(md_lines):
+        out.add('i_prose_sep')
+    return out
+
+
+def read_pair_lines(md_file):
+    """配对源本 md 的行（读不到 = None，调用方据此不豁免）。"""
+    if not md_file:
+        return None
+    try:
+        with open(md_file, encoding='utf-8-sig') as f:
+            return f.read().split('\n')
+    except Exception:
+        return None
+
+
 def check_nested_blockquotes(md_file):
     """Detect nested blockquotes (> > **证明/例** or > > **例**) — the OLD format.
     Examples and their proofs must use the SAME single `>` level."""
@@ -338,10 +543,26 @@ def check_example_blockquote(md_file):
 # ===========================================================================
 # H-LAYER: structural label / blockquote audit (4 sub-checks)
 # ===========================================================================
+# 🔴 开吻白名单新增 `答`（Arnold《经典力学的数学方法》ch7 实测 2026-09-29）：
+#   该书题后**直接印 `答 …`**（PDF p.130「答 C；下面将给出一个基底.」、p.137
+#   「答dx|(1,0)(ξ) = 0, dy|(1,0)(ξ) = 1.」），写手据印面写成 `> **答** …`。旧表只有
+#   `解答?` → 整块判「unlabeled blockquote」，块内每一行 `> **答**` / `> $$` 连带重复
+#   报错（ch7 四单元 12 处），逼出的两条坏出路都不可接受：把印面解答拆出 `>`（破坏
+#   V-F 附属块规则），或删掉印面答案（= 制造缺失）。
+#   本表**只放宽检测**（放行合法开吻），不进 `_H_MISSING_BQ`：印面顶层 `**答** …`
+#   同样是本书合法形态（ch2 0034 的问题/答对），不得反过来逼作者包块。
+#   修复趟 `fix_unlabeled_blockquotes` import 同一正则，检测/修复天然对称。
+#   🔴 开吻白名单再补 `练习|习题`（Iwaniec–Kowalski《解析数论》ch18 0006 译单元实测
+#   2026-09-29）：英文源印 `> **Exercise 1.** …` 且已过本闸（表内历来有 `Exercise`），
+#   中文译版照印面写 `> **练习1。** …` 却被判「unlabeled blockquote」——同一结构
+#   「源过 / 译不过」，译者只剩「把练习题头改成注/说明」或「拆出 `>`」两条自撰出路。
+#   与 2026-09-27/28 的 Note/Notes、Remark/评注、Examples/例子 同族缺口。
+#   **只**放宽本表：`_H_MISSING_BQ`（必包表）不含 Exercise，故也不含 练习/习题，
+#   顶层 `**习题 3.**` 仍按印面留在顶层（不反向逼作者包块）。
 _H_UL_OPENERS = re.compile(
     r'^\s*>\s*\*\*(?:'
     r'(?:\d{1,3}[.．]\s*)?(?:'
-    r'(?:证明|证|解答?|例|评注|注|说明|算法'
+    r'(?:证明|证|解答?|答|例|评注|注|说明|算法|练习|习题'
     r'|Proof|Example|Solution|Note|Remark|Algorithm'
     r'|Definition|Theorem|Lemma|Corollary|Proposition|Exercise)'
     r')'
@@ -351,7 +572,17 @@ _H_UL_OPENERS = re.compile(
     # bold-led catch-all: any `>**Label...**` is an intentional (English/number) label
     # block — e.g. Kreyszig `**Solution (core steps).**`, `**Crucial distinction.**`,
     # `**3.7-1 Legendre polynomials.**`. Avoids mis-flagging legit proof/example blocks.
-    r'|[A-Z0-9].*?\*\*'
+    # 🔴 同分支补 CJK 首字（Apostol《解析数论导引》ch4/0010 + ch9/0038 译单元实测
+    # 2026-09-29）：英文侧 `> **Alternate proof.**`、`> **Proof of the reciprocity
+    # law.**` 这类「关键词不在首位」的证明头经本 catch-all 放行，而其中文同位写法
+    # `> **另一证明。**`、`> **互反律的证明。**` 因首字是汉字既不入关键词表也不入
+    # catch-all → 整块判「unlabeled blockquote」，块内每一行 `> $$` 连带重复报错
+    # （ch4 一处标签引出 4 条 FAIL，ch9 同）。译者只剩「改词规避」或「拆掉 `>`」两条
+    # 自撰出路，两版结构分叉——与 2026-09-29 的 答 / 练习|习题 / 评注 同族缺口。
+    # **只放宽检测**：不进 `_H_MISSING_BQ`（必包表），故不会反过来逼作者包裹。
+    # 散文续行从不以 `**` 粗体 run 起头（`_h_ext_is_legit_bq` 同款论证，跨 corpus
+    # 标定 0 新增报告）。
+    r'|[A-Z0-9一-鿿].*?\*\*'
     r')'
 )
 
@@ -369,7 +600,13 @@ _H_MISSING_BQ = re.compile(
     # the CN translation (Robinson ch2/ch7 实测 2026-09-27, 根治 2026-09-27).
     # SSOT = format_verify.md 第29/230 条「证明、例、注、说明等附属块一律 `>` 包裹」。
     r'|Proof|Example|Solution|Note|Remarks?)(?![\w\-])'
-    r'|例(?:\s*\d[\d.]*)?'           # 例 / 例1 / 例 1  (then content)
+    # 🔴 `例` 后必须排除复数尾 `子`（Iwaniec–Kowalski 解析数论 ch4 0012 实测 2026-09-29）：
+    # 英文侧 `Example(?![\w\-])` 使 `**Examples.**` **天然不命中**（跨书普查 69,403 个源单元
+    # 里 22 处顶级粗体 Examples，分布于 8 本已收官书，全部按印面留在顶层并过闸），
+    # 而中文同位写法 `**例子。**` 却命中 → 同一结构「源过 / 译不过」，译者只能把合法
+    # 顶层标签塞进 `>` 或改词规避，两版结构分叉（与 2026-09-27/28 的 Note/Notes、
+    # Remark/评注 同族）。带编号或单数的例子块照旧必包：`**例。**`/`**例 3.**`。
+    r'|例(?!子)(?:\s*\d[\d.]*)?'      # 例 / 例1 / 例 1  (then content)
     r'|注(?:\s*\d[\d.]*)?'           # 注 / 注1
     # 评注 = `Remark` 的标准译名（Weibel / do Carmo 黎曼几何 全书用此形）。
     # 补 `Remarks?` 时必须同步补它，否则不对称只是换了个方向。
@@ -1017,6 +1254,18 @@ class FLayer(VerifyLayer):
         katex_errors, katex_lines = check_katex(ctx.md_file)
         with open(ctx.md_file, encoding='utf-8-sig') as _f:
             _md_lines = _f.read().split('\n')
+        h_mbq = check_labels_missing_blockquote(ctx.md_file)
+        i_prose = check_i_prose_separator(ctx.md_file)
+        # 🔴 译本结构继承豁免（只在调用方解析出**源语言配对 md** 时生效，见本节上方注释）：
+        # 译文照抄源侧的「顶层 vs 包 `>`」与分隔线选择时，这两条对译文放行；解析不出配对
+        # （中文原书 / 三语书歧义 / 文件缺失）→ 一条不豁免。
+        if h_mbq or i_prose:
+            _ex = inherited_structure_exemptions(
+                _md_lines, read_pair_lines(getattr(ctx, 'src_pair_md', None)))
+            if 'h_mbq' in _ex:
+                h_mbq = []
+            if 'i_prose_sep' in _ex:
+                i_prose = []
         return LayerResult(code=self.code, metadata={
             'katex_errors': katex_errors,
             'katex_lines': katex_lines,
@@ -1028,9 +1277,9 @@ class FLayer(VerifyLayer):
             'h_structural_bq': check_h_structural_blockquote(ctx.md_file),
             'h_stmt_bq': check_h_statement_in_blockquote(ctx.md_file),
             'h_ul_bq': check_unlabeled_blockquotes(ctx.md_file),
-            'h_mbq': check_labels_missing_blockquote(ctx.md_file),
+            'h_mbq': h_mbq,
             'i_sep_gaps': check_i_separators(ctx.md_file),
-            'i_prose_sep': check_i_prose_separator(ctx.md_file),
+            'i_prose_sep': i_prose,
             'j_header_dash': check_item_header_dash(ctx.md_file),
             'k_proof_list': check_proof_after_list(ctx.md_file),
             'l_sep_blanks': check_separator_blank_lines(ctx.md_file),

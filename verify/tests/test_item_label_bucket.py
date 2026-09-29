@@ -85,11 +85,11 @@ class TestWindowArithmeticResolve(unittest.TestCase):
     def test_ch6_candidate_stays_content_when_ex_window_complete(self):
         # ex 窗 6.6 已有 {1,2,3}（真习题头），候选（内容窗 2 号）不回补。
         entries = [
-            ("0:ex:6.6", 1, "6.6-1", "Exercise", "6.6"),
-            ("0:ex:6.6", 2, "6.6-2", "Exercise", "6.6"),
-            ("0:ex:6.6", 3, "6.6-3", "Exercise", "6.6"),
-            ("0:6.6", 1, "6.6-1", "uncat", "6.6"),
-            ("0:6.6", 2, "6.6-2", "uncat", "6.6"),   # ← 候选 idx=4
+            ("0:ex:6.6", 1, "6.6-1", "Exercise", "6.6", False),
+            ("0:ex:6.6", 2, "6.6-2", "Exercise", "6.6", False),
+            ("0:ex:6.6", 3, "6.6-3", "Exercise", "6.6", False),
+            ("0:6.6", 1, "6.6-1", "uncat", "6.6", False),
+            ("0:6.6", 2, "6.6-2", "uncat", "6.6", False),   # ← 候选 idx=4
         ]
         ini._resolve_demoted_entries(entries, [(4, 0, "6.6", 2)])
         self.assertEqual(entries[4][0], "0:6.6")
@@ -97,16 +97,16 @@ class TestWindowArithmeticResolve(unittest.TestCase):
     def test_ch10_candidate_restored_when_ex_window_gaps(self):
         # ex 窗 10.9 = {1,3,4} 缺 2 → 候选回补进 ex 窗。
         entries = [
-            ("0:ex:10.9", 1, "10.9-1", "Exercise", "10.9"),
-            ("0:ex:10.9", 3, "10.9-3", "Exercise", "10.9"),
-            ("0:ex:10.9", 4, "10.9-4", "Exercise", "10.9"),
-            ("0:10.9", 2, "10.9-2", "uncat", "10.9"),   # ← 候选 idx=3
+            ("0:ex:10.9", 1, "10.9-1", "Exercise", "10.9", False),
+            ("0:ex:10.9", 3, "10.9-3", "Exercise", "10.9", False),
+            ("0:ex:10.9", 4, "10.9-4", "Exercise", "10.9", False),
+            ("0:10.9", 2, "10.9-2", "uncat", "10.9", False),   # ← 候选 idx=3
         ]
         ini._resolve_demoted_entries(entries, [(3, 0, "10.9", 2)])
         self.assertEqual(entries[3][0], "0:ex:10.9")
 
     def test_no_ex_window_at_all_stays_content(self):
-        entries = [("0:6.6", 2, "6.6-2", "uncat", "6.6")]
+        entries = [("0:6.6", 2, "6.6-2", "uncat", "6.6", False)]
         ini._resolve_demoted_entries(entries, [(0, 0, "6.6", 2)])
         self.assertEqual(entries[0][0], "0:6.6")
 

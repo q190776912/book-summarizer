@@ -16,6 +16,7 @@
 四类输出（见「字节契约键」）：
 - `blocking`：严格模式下 md 内部首项/连续性缺口 + 提取侧查漏（整类首项缺失、OCR over-mark 守卫），（硬 FAIL，`auto_fixable=False`）。
 - `truly_missing` / `mentioned_only` / `extra`：整章完整性（B 层职责）。`truly_missing`=书有而 md 全宇宙无 → 阻断；`mentioned_only`=仅正文/引用出现、非独立条目 → 仅复核；`extra`=md 有而提取未检出（多为合法交叉引用）→ 仅参考。EXTRACT 供水时经 `keys_in_md(..., chapter=ch)` 把「带显式异章限定词」（of Chap. X / 第X章…，X≠本章）的正文提及排除在 all_keys 之外，故此类跨章引用不再进入 EXTRA（条目标签不受影响；实现见 `lib/key_parse.py::_is_foreign_chapter_ref`）。
+- 🔴 **`extra` 必须再分两桶打印**（`_split_extra`，2026-09-29 Apostol IANT ch9 例1 根治）：`extra_entry` = 并集 ∩ `entry_keys`，即 **md 里有独立加粗条头而契约无该条目** = 契约漏登记印面条目的信号；`extra_mention` = 其余，才是「正确过滤的交叉引用」。旧版两类混在一行、文案写着 "usually correctly-filtered cross-refs"，于是真漏登记被读成良性噪声（Apostol ch9 §9.6 印面确有 `EXAMPLE 1`，fitz 300dpi 目视物理页 199；OCR 把条头粘进句子 `ExAMPLE1Determinewhether219…` → 抽取器无条目 → 该行被一路判成「交叉引用，无需处置」）。**处置口径**：条目级逐条回印面判读 —— 印面确有条目 → 登记（契约节点 / `manual_overrides_ch{N}.json`；正文已在相邻 desc 单元里逐字交付时，登记**零内容节点**即可，`unit_node_entries` 只对 `node_content_count>0` 的节点索要单元，故不新增单元、不动翻译 1:1 同构）；无号体例条头（如 `**例**`）或契约用另一种键形 → 无需处置。**为何不升级为阻断**：跨 51 书普查（脚本 `Apostol 书 _extract/_census_entry_extra.py`）显示条目级 EXTRA 分布于 ≥6 书、数十章，绝大多数是体例（statistical-inference 契约两段键 vs md 三段条头；Lie 代数 ch1 无号 `**例**`/`**定义**`），一律阻断会打爆已收官书 → **只改可读性与判读文案，`extra` 仍是并集，pass/fail 逐字节不变**（判据测试 `verify/tests/test_b_layer_extra_bucketing.py`）。
 - `warnings`：非阻断（含 over-mark 守卫的误标提示、OCR 漏检复核等）。
 - `b_gap_warnings`：非严格模式（`strict:false`）下 md 内部首项/连续性缺口，降级为非阻断警示。
 - `b_tail_warnings`：尾部校验，始终非阻断。
@@ -70,8 +71,8 @@
   3. `ignored_hit` 第二段 suppression：遍历 `blocking`，若某条引用键全部 ∈ `ignore_keys`，把 `bkeys` 并入 `ctx.ignored_hit` 并从 `blocking` 剔除（最终 `ignored_hit` 完全由 B 层在本层内计算，EXTRACT 仅提供 `ctx.items` 数据源）。
   4. 算 MD 侧 `_md_gap_blocking` -> `(md_blocking, md_warnings, present_md, md_tail)`。
   5. 对提取侧 `blocking` 做「MD 存在性过滤」：被报缺的键 ∈ `present_md` 则抑制（消息号已带前导 `-`，拼接用 `sec + n`）。
-  6. 合并 `blocking = filtered_extraction + md_blocking`；返回 `metadata={'blocking','warnings','b_gap_warnings','b_tail_warnings','ignored_hit','truly_missing','mentioned_only','extra'}`。
-- `b_tail_warnings` 由 `report.py` 在 `B-LAYER TAIL CHECK` 段非阻断打印；`b_gap_warnings` 在 `B-LAYER NUMBERING GAP CHECK` 段打印；`truly_missing`/`mentioned_only`/`extra` 在 `TRULY MISSING` / `MENTIONED-ONLY` / `EXTRA` 段打印（B 层打印段）。
+  6. 合并 `blocking = filtered_extraction + md_blocking`；返回 `metadata={'blocking','warnings','b_gap_warnings','b_tail_warnings','ignored_hit','truly_missing','mentioned_only','extra','extra_entry','extra_mention'}`。
+- `b_tail_warnings` 由 `report.py` 在 `B-LAYER TAIL CHECK` 段非阻断打印；`b_gap_warnings` 在 `B-LAYER NUMBERING GAP CHECK` 段打印；`truly_missing`/`mentioned_only`/`extra` 在 `TRULY MISSING` / `MENTIONED-ONLY` / `EXTRA-ENTRY`+`EXTRA-MENTION` 段打印（B 层打印段；`extra` 并集本身仍挂在 `r['extra']`，两桶为 `r['extra_entry']`/`r['extra_mention']`）。
 
 ## 子流程
 无独立子脚本；核心算法 `_md_gap_blocking` / `_source_item_comps_label` 在本层脚本内。
@@ -101,4 +102,6 @@ ignored_hit
 truly_missing
 mentioned_only
 extra
+extra_entry
+extra_mention
 ```

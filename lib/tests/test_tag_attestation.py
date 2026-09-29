@@ -395,6 +395,64 @@ class TestLetterChapterAnchors(unittest.TestCase):
         self.assertEqual(strip_unattested(tree, loader(pages)), ["0,1", "83,3"])
 
 
+class TestSymbolOnlyAnchors(unittest.TestCase):
+    """**无数字头**的符号编号 `(*)`：印刷锚点识别（Arnold《经典力学的数学方法》实测）。
+
+    动因 = 该书 §52（印刷 p.231）的展示式 ṗ = −∂H/∂q, q̇ = ∂H/∂q 印作 `(*)`，而编号
+    主体 SSOT `formula_num_core` 以 `\\d+` 开头 → `_PAREN_LABEL_RE` / `_BARE_LABEL_RE`
+    双双查无锚点 → 契约里回填的 tag `*` 判「疑似 OCR 噪声」，写手照印面 `\\tag{*}`
+    判编造、删掉判漏写（两头堵）。
+    负向用例锁住放宽的边界：**只**认括号形态，裸排星号（脚注号 / 乘号 / OCR 火星）
+    一律不算锚点。
+    """
+
+    def test_parenthesized_star_anchor_attests(self):
+        tree = contract([str(n) for n in range(1, 10)] + ["*"], lo=226, hi=249)
+        pages = {p: ["(%d)" % n for n in range(1, 10)] for p in range(226, 250)}
+        pages[246] = list(pages[226]) + ["(*)"]
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+        self.assertEqual(strip_unattested(tree, loader(pages)), [])
+        self.assertIn("*", [n for _k, n in collect_contract_tags(tree)])
+
+    def test_star_detected_as_formula_attests(self):
+        """`(*)` 被 MFD 当**公式**检测出来（`( * )` 带空格）时同样算锚点。"""
+        tree = contract(["*"], lo=246, hi=247)
+        pages = {246: ["( * )"], 247: ["prose"]}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_star_without_printed_anchor_still_condemned(self):
+        """负向：页窗里没印过 `(*)` 时 tag `*` 照旧判毒（放宽不是免检）。"""
+        tree = contract([str(n) for n in range(1, 10)] + ["*"], lo=226, hi=228)
+        pages = {p: ["(%d)" % n for n in range(1, 10)] for p in range(226, 229)}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("*", probs[0])
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["*"])
+
+    def test_bare_star_is_not_an_anchor(self):
+        """负向：裸排 `*`（脚注星号 / 乘号 / OCR 火星）与编号无形态区别 → 不采信。"""
+        tree = contract(["*"], lo=246, hi=247)
+        pages = {246: ["*", "**"], 247: ["a * b = c"]}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertTrue(any("*" in p for p in probs), probs)
+
+    def test_double_star_attests(self):
+        tree = contract(["**"], lo=10, hi=11)
+        pages = {10: ["(**)"], 11: ["prose"]}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_digit_head_poison_verdicts_unaffected(self):
+        """放宽不得顺手放过**有数字头**的实测毒 tag（Kreyszig 小数尾巴 / 波长）。"""
+        tree = contract([str(n) for n in range(1, 23)] + ["22", "18751A", "*"],
+                        lo=10, hi=12)
+        pages = {p: ["(%d)" % n for n in range(1, 22)] + ["(*)"] for p in range(10, 13)}
+        probs = "\n".join(tag_attestation_problems(tree, loader(pages)))
+        self.assertIn("22", probs)
+        self.assertIn("18751A", probs)
+        self.assertNotIn("契约编号 * ", probs)
+        self.assertEqual(strip_unattested(tree, loader(pages)), ["22", "18751A"])
+
+
 class TestUnharvestedAnchors(unittest.TestCase):
     """闸门 ⑭ 的**对偶**：印面 `(N)` 锚点在契约里在档、其展示式却没登记 tag（收割漏号）。
 

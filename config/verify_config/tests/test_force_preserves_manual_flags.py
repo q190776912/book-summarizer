@@ -150,6 +150,27 @@ class TestForceKeepsFlagsEndToEnd(unittest.TestCase):
         ch = cfg.get("ch", cfg)
         self.assertNotIn("chapter_local_numbering", ch)
 
+    def test_print_attestation_ledgers_survive_force(self):
+        """两本**印面目视确证账**（list-of-dict）不许被 `--force` 洗掉。
+
+        一洗掉就翻脸：`content_overrides` 丢了 → ① 复算闸把已按印面剔掉的噪声块重报
+        「契约缺块」；`exercise_printed_attested` 丢了 → 练习审计把印面确有、OCR 整行
+        漏扫的练习重报 PHANTOM。两本账探测器都无从重建（判据是「人看了渲染页」）。
+        """
+        overrides = [{"ch": "1", "op": "retag", "kind": "formula",
+                      "match": "E ( x ) = \\sum f ( p )", "tag": "1.104",
+                      "page": 35, "evidence": "fitz 渲染 p35 目视：(1.104) 印在该式右缘"}]
+        attested = [{"ch": "1", "ex": 2, "page": 29,
+                     "evidence": "fitz 渲染 p29 目视：EXERCISE 2. 标题确在印面",
+                     "registered_at": "2026-09-29 13:59:18"}]
+        cfg = self._run({"ch": {"ordinal": [{"type": 2, "name": ["Theorem"],
+                                             "scope": 2}],
+                                "language": "en",
+                                "content_overrides": overrides,
+                                "exercise_printed_attested": attested}})
+        self.assertEqual(cfg["ch"].get("content_overrides"), overrides)
+        self.assertEqual(cfg["ch"].get("exercise_printed_attested"), attested)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

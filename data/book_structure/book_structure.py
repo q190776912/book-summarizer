@@ -463,6 +463,51 @@ def unit_node_entries(root: Dict[str, Any]) -> List[Tuple[str, str]]:
     return [(k, key) for k, key in out if key]
 
 
+def exercise_node_windows(root: Dict[str, Any]) -> List[Tuple[str, Any, Any, int, str]]:
+    """契约里**成为习题单元**的节点，按文档顺序返回 ``[(key, ps, pe, ncontent, name), …]``。
+
+    选取判据与 ``split_draft_units.walk_container`` 一字对应（只对 section 下钻；
+    exercise / problem 节点出一个单元且**不再下钻**；``consolidated`` 成堆块不出
+    也不下钻；proof 是条目内部附属；裸内容块兜底成 desc），因此本清单与 manifest
+    里的 exercise 记录**同序等长**，可逐项配对。
+
+    为什么要带页窗、内容块数与 name：章级「习题键唯一」闸原先假定同键两节点必为抽取器
+    把 OCR 续行碎片切成的幻影条目（Rosen 重号练习组、Katok 空壳单元即此形态），
+    但**原书在同一节后段重新起号**时该假定不成立——Arnold《经典力学的数学方法》
+    §8 实测：印刷 p.27–28 有问题 1–6，印刷 p.32 中译者注的补充讨论之后又印着
+    问题 1–3（各带完整题面与解）。判据：两套页窗**不相交**（后者起始页 > 前者
+    结束页）且**各自带题面** = 重新起号，放行；同页/紧邻或任一方无题面 = 碎片，
+    照报。页窗缺失（None）无法证明不相交 → 照报（fail-closed）。
+    「带题面」= 内容块 >0，**或** 契约 ``name`` 自带完整题面（中文书短题常整行进
+    name 而无 text 子块，Arnold ch7 ``问题2`` 实测；判据与幻影闸同源，见
+    ``check_unit_quality.node_has_statement``）。
+    """
+    out: List[Tuple[str, Any, Any, int, str]] = []
+
+    def _is_block(n: Dict[str, Any]) -> bool:
+        return any(k in n for k in ("text", "formula", "image"))
+
+    def _w(container: Dict[str, Any]) -> None:
+        for c in container.get("sub_sec") or []:
+            if not isinstance(c, dict) or _is_block(c):
+                continue
+            t = c.get("type")
+            if t == "section":
+                _w(c)
+                continue
+            if t in ("exercise", "problem"):
+                if c.get("consolidated"):
+                    continue
+                out.append((str(c.get("key") or ""), c.get("page_start"),
+                            c.get("page_end") or c.get("page_start"),
+                            node_content_count(c), str(c.get("name") or "")))
+            # 其余类型（description / item 家族 / proof）不出习题单元，也不下钻
+
+    if isinstance(root, dict):
+        _w(root)
+    return [e for e in out if e[0]]
+
+
 def unit_node_keys(root: Dict[str, Any]) -> List[str]:
     """契约里**应当成为单元**的节点键清单（门控反向对账真值：契约 → manifest）。
 

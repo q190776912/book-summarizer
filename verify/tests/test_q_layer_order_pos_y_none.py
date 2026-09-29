@@ -13,6 +13,10 @@ formulas 通道无 poly / text 块缺 poly）。同页两点一旦有 ``y=None``
   1. 同页 + y=None → 不崩、不报 ORDER_MISMATCH；
   2. 真倒序（页更小 / 同页 y 更小）仍报（不得因修崩而放行真错）；
   3. 正序不报。
+
+🔴 2026-09-29 追加（Apostol IANT 实测）：同一 None-y 形态在**写路径**（`build_sectioned`
+的 `_pos_sec` 记录、`_record_pos`）仍裸比较元组，把 `verify --all` 崩在 Q 层。现读写两侧
+收敛到 `_pos_better`（内部调 `_pos_before`）一个判据，见 `TestPosBetterWritePath`。
 """
 import os
 import sys
@@ -31,7 +35,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
-from formula_tag import _compute_order_and_section, _pos_before
+from formula_tag import _compute_order_and_section, _pos_before, _pos_better
 
 
 class _Tag:
@@ -116,6 +120,57 @@ class TestOrderMismatchNoCrash(unittest.TestCase):
         om, mp = _run({"5.1": (160, 90.0), "5.2": (160, 100.0)},
                       ["5.1", "5.2"])
         self.assertEqual(om, [])
+
+
+class TestPosBetterWritePath(unittest.TestCase):
+    r"""写路径（记录锚点）与读路径共用一个判据（Apostol IANT 2026-09-29 根治）。
+
+    旧代码：`build_sectioned` 里 ``if _pp is None or (pg, y) < _pp`` 是手搓的裸元组
+    比较。formulas 通道合成的标签块没有 `poly` → ``y=None``，同页已有一条带 y 的
+    记录时比较退化成 ``None < 560.0`` → TypeError，`verify --all` 整趟崩在 Q 层
+    （2026-09-28 只在读侧修了同形态，写侧漏网）。
+    """
+
+    def test_old_raw_tuple_compare_reproduces_the_crash(self):
+        """负向锚点：确认本夹具正是当年崩的那一组输入。"""
+        with self.assertRaises(TypeError):
+            (156, None) < (156, 560.0)
+
+    def test_y_none_new_does_not_crash_and_keeps_anchored(self):
+        self.assertIs(_pos_better((156, None), (156, 560.0)), False)
+
+    def test_y_none_old_is_replaced_by_defined(self):
+        self.assertIs(_pos_better((156, 560.0), (156, None)), True)
+
+    def test_earlier_page_still_wins(self):
+        self.assertIs(_pos_better((155, None), (156, 560.0)), True)
+        self.assertIs(_pos_better((157, 1.0), (156, None)), False)
+
+    def test_same_page_smaller_y_wins(self):
+        self.assertIs(_pos_better((156, 100.0), (156, 560.0)), True)
+        self.assertIs(_pos_better((156, 600.0), (156, 560.0)), False)
+
+    def test_missing_page_side_yields(self):
+        self.assertIs(_pos_better((None, 1.0), (156, 1.0)), False)
+        self.assertIs(_pos_better((156, 1.0), (None, 1.0)), True)
+        self.assertIs(_pos_better((None, None), (None, None)), False)
+
+    def test_first_record_always_written(self):
+        self.assertIs(_pos_better((156, None), None), True)
+        self.assertIs(_pos_better(None, (156, 1.0)), False)
+
+    def test_record_pos_matches_the_predicate(self):
+        """`_record_pos` 收敛到同一判据后，原分支表的行为逐条不变。"""
+        from formula_tag import SourceFormulaIndex
+        idx = SourceFormulaIndex.__new__(SourceFormulaIndex)
+        idx._primary_pos = {}
+        for n, pg, y in (("1", None, None), ("1", 156, 560.0), ("1", 156, None),
+                         ("2", 156, 560.0), ("2", 155, None), ("2", 156, 100.0),
+                         ("3", 156, None), ("3", 156, None)):
+            idx._record_pos(n, pg, y)
+        self.assertEqual(idx._primary_pos["1"], (156, 560.0))
+        self.assertEqual(idx._primary_pos["2"], (155, None))
+        self.assertEqual(idx._primary_pos["3"], (156, None))
 
 
 if __name__ == "__main__":

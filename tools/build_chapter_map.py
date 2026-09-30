@@ -398,6 +398,87 @@ def _in_window(page, claimed_start, claimed_end, max_dev):
     return (claimed_start - max_dev) <= page <= (hi + max_dev)
 
 
+# ── Mode B 命中判据：附录带前缀章头 ──────────────────────────────────────────
+# 形态证据（Evans《PDE》2ed 实测 2026-09-30）：书后有一页 "APPENDICES" 把五个附录
+# 标题逐行列出（``A. Notation`` / ``B. Inequalities`` / ``C. Calculus`` …），随后同页
+# 即印真章头 ``APPENDIX A: NOTATION``（带前缀）。Mode B 只比裸标题：列表行带序标前缀
+# （"BINEQUALITIES"）、真章头也带前缀（"APPENDIXANOTATION"），两者都命不中本章，
+# 于是附录起点全靠别处的偶然命中 → 起点不递增、end<start → 整本 SUSPECT，只能人工补页码。
+# 判据（机械、跨书通用）：附录章比对时**额外**试「剥掉 APPENDIX/附录 + 序标」的形式
+# （kind="head"），让真章头成为起点证据；数字章不给该形式（不得靠剥前缀蹭附录章头）。
+# 🔴 曾另加「同页 ≥2 章裸标题命中 → 整页作废」的目录/分隔页闸，实测**已删除**：它对
+# Evans 毫无贡献（只留 head 判据即得 A706/B714/C719/D728/E738，与人工核验值逐页相同），
+# 却会毁掉中文书的真开页——``norm_title`` 抹掉 CJK 后章名只剩零散拉丁词
+# （微分遍历论实测：ch5「Pesin集及其结构」→ "PESIN"、ch1→"LYAPUNOV"），正文续行
+# 「等式，Pesin等式」「Lyapunov指数通过切映射的…」与它们精确相等，同页即凑出「两章
+# 命中」，把 ch4 印在 p86 的真开页整页作废、起点挤到 p87（整章首页被切给上一章）。
+# 该书闸在 a-first-course-in-abstract-algebra 上把 4 个 SUSPECT 归零（确有收益），但
+# SUSPECT 是 fail-closed 信号（拒绝落账、要人工判断），噪声看得见；而假阳的代价是**静默**
+# 把对的页码改成错的——用后者换前者不值。目录页形态已有 `_b_shape_ok` 的 "Contents"
+# 首行判据覆盖（Apostol IANT 实测），无需靠「多章同页」这种弱信号猜。
+APPENDIX_HEAD_RE = re.compile(
+    r"(?i)^\s*(?:appendices|appendix|附录)\s*[.:、]?\s*"
+    r"(?:([A-Za-z]{1,2}\b|\d{1,2}\b|[IVXLCD]+\b)\s*[.:、\-]?\s*)?(.*)$")
+
+
+def _is_appendix_record(c):
+    return bool(c.get("appendix")) or c.get("kind") in (2, 3) \
+        or not str(c.get("ch")).isdigit()
+
+
+def appendix_head_norm(raw):
+    """附录章头（"APPENDIX C: CALCULUS" / "附录C 记号"）→ 剥前缀后的归一裸标题；
+    非该形态或剥完没有实质标题则返回 None。"""
+    m = APPENDIX_HEAD_RE.match(raw or "")
+    if not m:
+        return None
+    rest = (m.group(2) or "").strip()
+    if len(re.sub(r"[^A-Za-z\u4e00-\u9fff]", "", rest)) < 3:
+        return None
+    return norm_title(rest) or None   # 中文题名 norm_title 归一为空 → 不适用本形态
+
+
+def _b_shape_ok(tl):
+    """Mode B 候选行的形态闸：近顶部、非目录页、非「1.1 …」小节头。"""
+    if tl["line_idx"] > 6:
+        return False
+    # Skip table-of-contents pages: a title listed on a "Contents" page
+    # is a TOC entry, not a chapter start.
+    if re.match(r"^(table of )?contents?$", tl.get("page_first") or "", re.I):
+        return False
+    # avoid matching a section heading like "1.1 Complexes ..."
+    if re.match(r"^\d+(\.\d+)*\s", tl.get("raw") or ""):
+        return False
+    return True
+
+
+def _b_score(tl, target, is_appendix=False):
+    """Mode B 裸标题命中分：形态不合或未过阈（0.9）返回 None，否则返回分数。
+
+    ``is_appendix`` 为真时额外比对「剥掉 APPENDIX/附录 + 序标」的章头形式
+    （:func:`appendix_head_norm`），让 ``APPENDIX C: CALCULUS`` 这类真章头成为起点证据。
+    """
+    if not _b_shape_ok(tl):
+        return None
+    best = 0.0
+    # Best over the single line AND its progressive concat candidates —
+    # a large-font opener title split across lines matches the full
+    # title only after concatenation (see scan_headings).
+    for cn in (tl.get("norms") or [tl.get("norm")]):
+        if not cn:
+            continue
+        sim = title_similarity(cn, target)
+        if sim > best:
+            best = sim
+    if is_appendix:
+        head = appendix_head_norm(tl.get("raw") or "")
+        if head:
+            best = max(best, title_similarity(head, target))
+    if best < 0.9:
+        return None
+    return round(best, 3)
+
+
 def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
                   cn_head_start=None, candidates=None):
     """Return {ch: (pdf_page, confidence)} for confidently detected chapters.
@@ -409,7 +490,9 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
     Mode A — "Chapter N" 页眉，其捕获标题与本章 ``name_en``/``name`` 相似。TOC
     条目、正文提及（"Chapter N discusses ..."）与窗口外的页均被排除。
 
-    Mode B（回退）— 对 A0/A 都定不了的章，在窗口内找裸标题作为近顶部行。
+    Mode B（回退）— 对 A0/A 都定不了的章，在窗口内找裸标题作为近顶部行。附录章额外
+    认「APPENDIX X: 标题」这类带前缀章头（:func:`appendix_head_norm`，Evans《PDE》
+    书后 "APPENDICES" 列表页实测：列表行与真章头都带前缀，只比裸标题则五章全无证据）。
 
     🔴 `candidates`（可选，调用方传入空 dict）会被填成 ``{ch: [(page, score, mode), ...]}``
     ——本章**全部**过阈候选，不只是当选者。章序单调修复（:func:`repair_monotonic_starts`）
@@ -525,23 +608,9 @@ def detect_starts(chapters, headings, title_lines, max_dev=35, openers=None,
         for tl in title_lines:
             if not _in_window(tl["page"], claimed_start, claimed_end, max_dev):
                 continue
-            if tl["line_idx"] > 6:
+            score = _b_score(tl, target, _is_appendix_record(c))
+            if score is None:
                 continue
-            # Skip table-of-contents pages: a title listed on a "Contents" page
-            # is a TOC entry, not a chapter start.
-            if re.match(r"^(table of )?contents?$", tl["page_first"] or "", re.I):
-                continue
-            # avoid matching a section heading like "1.1 Complexes ..."
-            if re.match(r"^\d+(\.\d+)*\s", tl["raw"]):
-                continue
-            # Best over the single line AND its progressive concat candidates —
-            # a large-font opener title split across lines matches the full
-            # title only after concatenation (see scan_headings).
-            cands = tl.get("norms") or [tl["norm"]]
-            sim = max(title_similarity(cn, target) for cn in cands if cn)
-            if sim < 0.9:
-                continue
-            score = sim
             # Running-head penalty: a title immediately followed by a standalone
             # page number (e.g. "APPENDIX A: NOTATION" / "615") is the repeated
             # page header, not the genuine chapter heading. The real heading is
@@ -770,39 +839,38 @@ def build_report(recs, starts, ends, statuses, detected, max_page, repairs=None)
     return "\n".join(lines)
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="一步从 OCR 生成正确的 chapter_map.json 页码 + 起飞前报告")
-    ap.add_argument("extract_dir", help="book _extract dir (holds chapter_map.json + page_*.json)")
-    ap.add_argument("--no-write", action="store_true",
-                    help="只打印报告、不写盘（dry-run 预览）")
-    ap.add_argument("--max-deviation", type=int, default=35,
-                    help="检测窗口容差（默认 35 页）")
-    ap.add_argument("--verbose", action="store_true", help="打印检测器候选池")
-    args = ap.parse_args()
+def scan_evidence(ex, quiet=False):
+    """扫全书 OCR 一次 → 检测链要用的证据包（headings/title_lines/openers/中文页眉）。
 
-    ex = args.extract_dir
-    cmap_path = os.path.join(ex, "chapter_map.json")
-    if not os.path.exists(cmap_path):
-        sys.exit("chapter_map.json not found: %s" % cmap_path)
-    recs = load_chapter_records(cmap_path)
-    if not recs:
-        sys.exit("chapter_map.json has no chapter records")
-
+    单独成函数是为了让跨书回归普查只付一次全量扫描的代价、同一份证据跑新旧两判据
+    （见 :func:`compute_ranges`）。
+    """
     headings, title_lines = scan_headings(ex)
     openers = scan_openers(ex)
     # 🔴 Mode C 兜底：中文页眉「第N章」真值序列（不受申报窗口 max_dev 限制）。
     # 仅在 Mode A0/A/B 均失败时启用，避免抢掉高置信的英文开页/页眉命中。
     cn_heads = scan_cn_heads(ex)
     cn_start = cn_head_starts(cn_heads) if cn_heads else {}
-    if cn_start:
+    if cn_start and not quiet:
         print("[build_chapter_map] 检出中文页眉序列（第N章）：%d 页命中，%d 章定位"
               % (len(cn_heads), len(cn_start)))
+    return {"headings": headings, "title_lines": title_lines, "openers": openers,
+            "cn_start": cn_start, "max_page": _max_page(ex)}
+
+
+def compute_ranges(ex, recs, max_dev=35, quiet=False, evidence=None):
+    """跑完整检测链 → ``(starts, ends, statuses, detected, repairs, max_page)``。
+
+    main()（写盘）与跨书回归 census（只比对页码）共用同一份判据——🔴 判据不得两处各写
+    一遍，否则回归普查验的就不是生产链。``statuses`` 取值见 build_report。
+    """
+    ev = evidence or scan_evidence(ex, quiet=quiet)
+    headings, title_lines = ev["headings"], ev["title_lines"]
+    openers, cn_start, max_page = ev["openers"], ev["cn_start"], ev["max_page"]
     cand_pool = {}
     detected = detect_starts(recs, headings, title_lines,
-                             max_dev=args.max_deviation, openers=openers,
+                             max_dev=max_dev, openers=openers,
                              cn_head_start=cn_start, candidates=cand_pool)
-    max_page = _max_page(ex)
 
     # ── start：检测值优先；未检出则保留 agent 值，仍无则留空 ──
     starts, statuses = {}, {}
@@ -856,6 +924,30 @@ def main():
         if ends.get(ch) is not None and ends[ch] < s:
             statuses[ch] = "SUSPECT"
         prev = s
+    return starts, ends, statuses, detected, repairs, max_page
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="一步从 OCR 生成正确的 chapter_map.json 页码 + 起飞前报告")
+    ap.add_argument("extract_dir", help="book _extract dir (holds chapter_map.json + page_*.json)")
+    ap.add_argument("--no-write", action="store_true",
+                    help="只打印报告、不写盘（dry-run 预览）")
+    ap.add_argument("--max-deviation", type=int, default=35,
+                    help="检测窗口容差（默认 35 页）")
+    ap.add_argument("--verbose", action="store_true", help="打印检测器候选池")
+    args = ap.parse_args()
+
+    ex = args.extract_dir
+    cmap_path = os.path.join(ex, "chapter_map.json")
+    if not os.path.exists(cmap_path):
+        sys.exit("chapter_map.json not found: %s" % cmap_path)
+    recs = load_chapter_records(cmap_path)
+    if not recs:
+        sys.exit("chapter_map.json has no chapter records")
+
+    starts, ends, statuses, detected, repairs, max_page = compute_ranges(
+        ex, recs, max_dev=args.max_deviation)
 
     # ── 报告 ──
     report = build_report(recs, starts, ends, statuses, detected, max_page,

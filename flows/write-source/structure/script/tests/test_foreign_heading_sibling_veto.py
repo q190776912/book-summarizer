@@ -143,5 +143,59 @@ class TestOpenerBandHit(unittest.TestCase):
         self.assertFalse(_hit_below_toc_band(None, 693.0))
 
 
+class TestRunningHeadOnlyBook(unittest.TestCase):
+    """Evans《PDE》2ed 体例（2026-09-30 实测）：章首印目录带（`1.3 Strategies for
+    studying PDE`），真节头是**大写带号**行（p24 `1.3. STRATEGIES FOR STUDYING PDE`），
+    而该书把节标题逐字印成后续各页的**页眉**（p25/p27 同文）。旧「同文 ≥2 页 = 页眉，
+    弃」把唯一的真节头一起否掉 → 回扫 None → 锚点退回章首目录页 p19 → 12 章全部
+    ANCHOR-SANITY 拒绝落盘。判据：候选全为重复文时取**最早**那页（页眉不可能早于本节）。
+    """
+
+    EVANS = {
+        19: [("Chapter 1", 120), ("INTRODUCTION", 160),
+             ("1.1  Partial differential equations", 220),
+             ("1.2 Examples", 250), ("1.3 Strategies for studying PDE", 280),
+             ("1.4 Overview", 310), ("1.5 Problems", 340),
+             ("1.1. PARTIAL DIFFERENTIAL EQUATIONS", 700),
+             ("A partial differential equation (PDE) is an equation", 760)],
+        21: [("1.2. EXAMPLES", 95), ("1.2. EXAMPLES", 640),
+             ("Consider the initial-value problem", 700)],
+        24: [("6", 90), ("1.2.2. Systems of partial differential equations.", 400),
+             ("1.3. STRATEGIES FOR STUDYING PDE", 1500),
+             ("We discuss here some general strategies", 1560)],
+        25: [("1.3. STRATEGIES FOR STUDYING PDE", 90),
+             ("1.3.1. Well-posed problems, classical solutions.", 400)],
+        27: [("1.4. OVERVIEW", 90), ("1.3.3. Typical difficulties.", 400),
+             ("1.4. OVERVIEW", 900)],
+    }
+
+    def _find(self, num, lo, min_y=None, title_text=None):
+        with tempfile.TemporaryDirectory() as d:
+            _mk(d, self.EVANS)
+            return _find_numbered_heading_page(d, num, lo, 32, min_y=min_y,
+                                               page_dir=d, title_text=title_text)
+
+    def test_heading_that_also_runs_as_header_anchors_its_own_page(self):
+        self.assertEqual(self._find("1.3", 19, min_y=280.0), 24)
+
+    def test_heading_on_the_opener_page_itself(self):
+        """§1.1 真在扉页起始：min_y 挡住目录行后，仍取扉页下方那条。"""
+        self.assertEqual(self._find("1.1", 19, min_y=220.0), 19)
+
+    def test_section_starting_on_its_header_page(self):
+        """§1.2 的真节头与页眉同页（p21 两条），最早页即正确页。"""
+        self.assertEqual(self._find("1.2", 19, min_y=250.0), 21)
+
+    def test_no_candidate_still_returns_none(self):
+        """负向：区间里根本没有该节号（不得凭目录带里的行编造锚点）。"""
+        self.assertIsNone(self._find("1.9", 19, min_y=340.0))
+
+    def test_foreign_numbered_line_is_not_claimed(self):
+        """负向：§1.5 的行只在 p30 之后出现（本夹具里没有）→ None；
+        而 §1.4 必须取 p27（真节头），不得取 p24/p25 的 §1.3 页眉。"""
+        self.assertEqual(self._find("1.4", 19, min_y=310.0), 27)
+        self.assertIsNone(self._find("1.5", 19, min_y=340.0))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

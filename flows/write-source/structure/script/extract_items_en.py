@@ -509,9 +509,39 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                         pass
                     else:
                         continue
+                # 🔴 字母计数器保留（Ross《A First Course in Probability》实测
+                # 2026-09-30）：scope==3（按节重置计数器）的书里，"Example 2b"
+                # 的尾字母是**真计数器**（§1.2 的例 b），不是 OCR 形近数字——
+                # OCR_DIGIT 把 b→8 / e→3 折成 `例28/例23`、无映射的 a/c/d 整条
+                # 丢弃，一节的例子全军覆没，B 层随即报「序列 2..38 不连续」。
+                # 判据三重（宁缺毋滥）：① token = 数字段 + **单个小写字母**；
+                # ② 该标签 ∈ restart_per_section 标签集（只有 scope 3 组才传，
+                # 其他书为空集 → 行为逐字不变，零回归）；③ 号后紧跟非字母字符
+                # （粘连回退 "9Determine" 形态不适用）。键保留尾字母（`例2b`），
+                # 单调守卫比较键扩为 (数字, 字母序)。
+                _sfm = re.fullmatch(r'(\d+)([a-z])', _tok_adj or '')
+                _rst_lbl_on = bool(_rst_labels) and \
+                    str(label).strip().lower() in _rst_labels
+                _sfx = None
+                if _sfm and _rst_lbl_on:
+                    _nxt_c = txt[_mend:_mend + 1]
+                    if not (_nxt_c.isascii() and _nxt_c.isalpha()):
+                        _sfx = _sfm.group(2)
+                if not _sfx and _rst_lbl_on:
+                    # 🔴 字母在 EN_OCR_NUM 字符类**之外**的形态（'a'/'c' 无形近
+                    # 数字映射，正则只吃到数字，"Example 2a" 整条被散文守卫拒掉）：
+                    # 数字后**紧贴**单个小写字母、其后非字母数字 = 真计数器后缀，
+                    # 把游标推进过该字母（键 `例2a`），后续守卫读到的即是后缀之后
+                    # 的正文（大写标题词起头，照常通过）。
+                    _m2 = re.match(r'([a-z])(?![A-Za-z0-9])',
+                                   txt[_mend2:_mend2 + 2])
+                    if _m2:
+                        _sfx = _m2.group(1)
+                        _mend = _mend2 = _mend2 + 1
                 # Normalize OCR-tolerant numeric tokens (letter↔digit confusions
                 # like l→1, O→0) so the contract carries the canonical number.
-                n1 = _ocr_int_glue(_tok_adj, txt[_mend2:_mend2 + 1])
+                _numtok = (_sfm.group(1) if _sfm else _tok_adj) if _sfx else _tok_adj
+                n1 = _ocr_int_glue(_numtok, txt[_mend2:_mend2 + 1])
                 if n1 is None:
                     continue
                 # 🔴 Section-scoped books (chapter_first=False, e.g. Hilton &
@@ -536,6 +566,8 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     if n2 is None:
                         continue
                     key = f"{label} {n1}.{n2}"
+                elif _sfx:
+                    key = f"{label} {n1}{_sfx}"
                 else:
                     key = f"{label} {n1}"
                 # Reject single-level "Label N" matches that are actually prose
@@ -595,7 +627,8 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                         else (_lab_norm,)
                     if _rst_on:
                         _bucket = _bucket + (_rb,)
-                    _comp = (n1, n2) if (not single and m.group(3) is not None) else (n1,)
+                    _comp = (n1, n2) if (not single and m.group(3) is not None) \
+                        else ((n1, ord(_sfx) - 96) if _sfx else (n1,))
                     if _comp <= _max_per_label.get(_bucket, (-(1 << 30),)):
                         continue
                     _max_per_label[_bucket] = _comp

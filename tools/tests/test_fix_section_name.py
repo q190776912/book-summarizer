@@ -182,5 +182,66 @@ class FixSectionNameTest(unittest.TestCase):
                               extra=["--allow-bare"]), 0)
 
 
+class SupplementChapterTest(unittest.TestCase):
+    """补篇章键（`S`）：旧 `contract_path` 一刀切 `appendix%s.json`、单元目录算成
+    `appendixS` → 补篇每个节都报「找不到契约/manifest」而拒绝修名（Katok supplementS
+    实测）。路径判据必须按**磁盘物理证据**在 ch/appendix/supplement 三候选里取实际存在者。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.E = self._td.name
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _mk_sup(self, dirs=("supplementS",)):
+        bs = os.path.join(self.E, "book_structure")
+        tree = {"chapter_key": "S",
+                "sub_sec": [{"key": "S.2", "type": "section", "name": "S.2",
+                             "page_start": 661, "page_end": 662, "sub_sec": []}]}
+        os.makedirs(os.path.join(bs))
+        with io.open(os.path.join(bs, "supplementS.json"), "w", encoding="utf-8",
+                     newline="\n") as f:
+            json.dump(tree, f, ensure_ascii=False, indent=2)
+        for side in ("units", "units-translate"):
+            for nm in dirs:
+                d = os.path.join(bs, side, nm)
+                os.makedirs(d)
+                with io.open(os.path.join(d, "manifest.json"), "w", encoding="utf-8",
+                             newline="\n") as f:
+                    json.dump({"chapter_key": "S", "units": [
+                        {"id": "0002", "file": "0002_section.md", "type": "section",
+                         "key": "S.2", "name": "S.2", "tags": [], "images": [],
+                         "content": 3, "hash": "x"}]}, f, ensure_ascii=False, indent=2)
+                with io.open(os.path.join(d, "0002_section.md"), "w", encoding="utf-8",
+                             newline="\n") as f:
+                    f.write("<!-- book-summarizer DONE unit: id=0002 type=section "
+                            "key=S.2 name=S.2 -->\n\n## §S.2 Lyapunov exponents\n\nbody\n")
+
+    def test_supplement_section_name_fixed(self):
+        self._mk_sup()
+        rc = fsn.main([self.E, "S", "S.2", "--name", "S.2 Lyapunov exponents",
+                       "--evidence", "印面 p682 节题 'S.2. Lyapunov exponents'（契约只有裸序标）",
+                       "--apply"])
+        self.assertEqual(rc, 0)
+        tree = json.load(io.open(os.path.join(self.E, "book_structure", "supplementS.json"),
+                                 encoding="utf-8"))
+        self.assertEqual(tree["sub_sec"][0]["name"], "S.2 Lyapunov exponents")
+        man = json.load(io.open(os.path.join(self.E, "book_structure", "units",
+                                             "supplementS", "manifest.json"),
+                                encoding="utf-8"))
+        self.assertEqual(man["units"][0]["name"], "S.2 Lyapunov exponents")
+
+    def test_ambiguous_unit_dir_refused(self):
+        """同键下 `appendixS/` 与 `supplementS/` 并存 = 章型歧义 → 拒绝，不猜。"""
+        self._mk_sup(dirs=("supplementS", "appendixS"))
+        rc = fsn.main([self.E, "S", "S.2", "--name", "S.2 Lyapunov exponents",
+                       "--evidence", "印面 p682 节题 'S.2. Lyapunov exponents'", "--apply"])
+        self.assertEqual(rc, 2)
+        tree = json.load(io.open(os.path.join(self.E, "book_structure", "supplementS.json"),
+                                 encoding="utf-8"))
+        self.assertEqual(tree["sub_sec"][0]["name"], "S.2")
+
+
 if __name__ == "__main__":
     unittest.main()

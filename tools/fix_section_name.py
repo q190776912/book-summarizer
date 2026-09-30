@@ -57,6 +57,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot  # noqa: E402
 _boot.setup()
 
+from data.book_structure.book_structure import (  # noqa: E402
+    prime_chapter_kinds, resolve_chapter_json_path, unit_dir_name)
 from lib.section_titles import norm_title  # noqa: E402
 
 _DEC = json.JSONDecoder()
@@ -68,12 +70,36 @@ class Refuse(Exception):
 
 
 def contract_path(extract_dir, ch_key):
-    bs = os.path.join(extract_dir, "book_structure")
-    name = ("appendix%s.json" % ch_key) if not str(ch_key).isdigit() else ("ch%s.json" % ch_key)
-    p = os.path.join(bs, name)
-    if not os.path.isfile(p):
-        raise Refuse("分章契约不存在：%s" % p)
+    """分章契约路径：按**磁盘物理证据**解析（ch / appendix / supplement 三种前缀）。
+
+    🔴 旧写法 `appendix%s.json` 一刀切，补篇（键 `S`）永远读不到契约 → 该章每个节都报
+    「找不到契约」而拒绝修名（Katok supplementS 实测）。判据与 `unit_dir_name` 同源。
+    """
+    prime_chapter_kinds(extract_dir)
+    p = resolve_chapter_json_path(extract_dir, ch_key)
+    if not p or not os.path.isfile(p):
+        raise Refuse("分章契约不存在：%r（章键 %r）" % (p, ch_key))
     return p
+
+
+def unit_dir(extract_dir, ch_key, side="units"):
+    """单元目录：同样按物理证据在 ch/appendix/supplement 三候选里取实际存在的那个。"""
+    bs = os.path.join(extract_dir, "book_structure")
+    cands = []
+    try:
+        cands.append(unit_dir_name(ch_key))
+    except Exception:
+        pass
+    cands += ["%s%s" % (pre, ch_key) for pre in ("ch", "appendix", "supplement")]
+    hits = []
+    for nm in cands:
+        d = os.path.join(bs, side, nm)
+        if os.path.isdir(d) and d not in hits:
+            hits.append(d)
+    if len(hits) > 1:
+        raise Refuse("%s 侧同时存在 %s 两个该章单元目录（章键 %r 章型歧义），拒绝猜"
+                     % (side, ", ".join(os.path.basename(h) for h in hits), ch_key))
+    return hits[0] if hits else None
 
 
 def _find_name_after_key(raw, sec_key, label):
@@ -143,9 +169,10 @@ def plan(extract_dir, ch_key, sec_key, new_name, evidence, allow_bare=False):
 
     manifests = []
     for side in ("units", "units-translate"):
-        mp = os.path.join(extract_dir, "book_structure", side,
-                          ("ch%s" % ch_key) if str(ch_key).isdigit() else ("appendix%s" % ch_key),
-                          "manifest.json")
+        d = unit_dir(extract_dir, ch_key, side)
+        if not d:
+            continue
+        mp = os.path.join(d, "manifest.json")
         if os.path.isfile(mp):
             manifests.append((side, mp))
     unit_file = None

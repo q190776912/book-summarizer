@@ -68,8 +68,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot  # noqa: E402
 _boot.setup()
 
-from data.book_structure.book_structure import (chapter_json_path, node_tags,  # noqa: E402
-                                                unit_dir_name)
+from data.book_structure.book_structure import (node_tags, prime_chapter_kinds,  # noqa: E402
+                                                resolve_chapter_json_path, unit_dir_name)
 from lib.tag_attestation import (collect_contract_tags, glued_anchor_tags,  # noqa: E402
                                  numbering_gaps, unharvested_anchor_tags)
 
@@ -338,7 +338,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     try:
-        cpath = chapter_json_path(a.extract_dir, a.ch_key)
+        # 🔴 先灌注该书的 chapter_map kind（补篇/附录前缀判据），否则 `unit_dir_name('S')`
+        # 会算成 `appendixS` → 该章单元目录「找不到」→ 第②③本账静默跳过（与
+        # `tools/deregister_formula_tags.py` 同源缺陷，判据见其 `unit_dirs` 注释）。
+        prime_chapter_kinds(a.extract_dir)
+        cpath = resolve_chapter_json_path(a.extract_dir, a.ch_key)
         if not cpath or not os.path.isfile(cpath):
             raise Refuse("找不到分章契约（%s）" % cpath)
         tree, craw = load_strict(cpath)

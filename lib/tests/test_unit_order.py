@@ -32,7 +32,8 @@ import lib.boot as b
 b.setup()
 
 from lib.unit_order import (check_contract_anchors, check_section_key_page_order,
-                            check_unit_order, is_dash_problem, _anchor_tables)
+                            check_unit_order, is_dash_problem, iter_unit_nodes,
+                            resolve_unit_anchors, _anchor_tables)
 
 
 def _contract(nodes):
@@ -145,10 +146,15 @@ def test_is_dash_problem_raw_before_normalization():
 def test_build_page_anchor_first_occurrence_wins():
     # 旧「键 → 首见页」单值表已删（逐节重启号的书会批量假报），改为按类型分桶 +
     # 按出现序消费；_anchor_tables 的桶表是本判据的真值来源。
-    multi, anytype = _anchor_tables(_contract([("11.1", 20), ("11.1", 30)]))
-    # 条目 = (page_start, 契约前序号)，前序号让「页码相同但登记序倒退」也能被抓到
-    assert multi[("item", "11.1")] == [(20, 0), (30, 1)]
-    assert anytype["11.1"] == [(20, 0), (30, 1)]
+    multi, anytype, exact = _anchor_tables(_contract([("11.1", 20), ("11.1", 30)]))
+    # 锚点 = (page_start, 契约前序号, 归一键, 节点type, 契约原始键)；前序号让「页码相同但
+    # 登记序倒退」也能被抓到，尾两项让修复类工具（tools/sync_manifest_order.py）拿到节点本体
+    assert [a[:2] for a in multi[("item", "11.1")]] == [(20, 0), (30, 1)]
+    assert [a[:2] for a in anytype["11.1"]] == [(20, 0), (30, 1)]
+    assert [a[:2] for a in exact["11.1"]] == [(20, 0), (30, 1)]
+    assert multi[("item", "11.1")][1] == (30, 1, "11.1", "item", "11.1")
+    assert [(d["page"], d["key"]) for d in iter_unit_nodes(
+        _contract([("11.1", 20), ("11.1", 30)]))] == [(20, "11.1"), (30, "11.1")]
 
 
 # ------------------------------------------------- 逐节重启条目号（2026-09-26 Rosen 8e）
@@ -239,9 +245,9 @@ def test_contract_extras_do_not_lose_anchor():
     # 不得因锚点缺失而让后续真错位漏检。
     c = _sec_contract([("section", "10.2", 708), ("exercise", "10.2", 712),
                        ("section", "10.3", 720), ("exercise", "10.3", 730)])
-    multi, _any = _anchor_tables(c)
-    assert [p for p, _o in multi[("section", "10.2")]] == [708]
-    assert [p for p, _o in multi[("exercise", "10.2")]] == [712]
+    multi, _any, _exact = _anchor_tables(c)
+    assert [an[0] for an in multi[("section", "10.2")]] == [708]
+    assert [an[0] for an in multi[("exercise", "10.2")]] == [712]
     assert check_unit_order(c, [_u("section", "section", "10.2"),
                                 _u("exercise", "exercise", "10.2"),
                                 _u("section", "section", "10.3"),
@@ -392,3 +398,110 @@ def test_section_key_page_order_no_contract_returns_empty():
     assert check_section_key_page_order({"key": "9", "type": "chapter"}) == []
 
 
+
+
+# --------------------------------------------------- resolve_unit_anchors（修复类工具用的同源解析）
+def test_resolve_returns_contract_node_body():
+    """解析结果须交出**契约节点本体**（原始键 + 名），修复工具据此复位陈旧键。"""
+    c = {"key": "6", "type": "chapter", "name": "6", "page_start": 260, "page_end": 290,
+         "sub_sec": [{"key": "推论6.2.5", "type": "corollary",
+                      "name": "推论6.2.5 6.2.5", "page_start": 262, "page_end": 262},
+                     {"key": "引理6.2.6", "type": "lemma",
+                      "name": "引理6.2.6 6.2.6", "page_start": 263, "page_end": 263}]}
+    got = resolve_unit_anchors(c, [{"type": "item", "key": "6.2-5"},
+                                   {"type": "item", "key": "引理6.2.6"}])
+    assert [g["node"]["key"] for g in got] == ["推论6.2.5", "引理6.2.6"]
+    assert [g["order"] for g in got] == [1, 2]   # 0 = 章根本身也入前序表
+    assert got[0]["dash"] is True          # 旧连字符键形：判据照样解析（豁免的是页码倒退）
+    assert got[0]["node"]["name"] == "推论6.2.5 6.2.5"
+
+
+def test_resolve_chapter_record_skipped_and_unresolvable_is_none():
+    c = _sec_contract([("section", "1.1", 24), ("example", "例1", 25)])
+    got = resolve_unit_anchors(c, [{"type": "chapter", "key": "1"},
+                                   {"type": "item", "key": "例1"},
+                                   {"type": "desc", "key": "D9"}])
+    assert got[0]["skip"] == "chapter" and got[0]["node"] is None
+    assert got[1]["node"]["key"] == "例1"
+    assert got[2]["node"] is None          # 契约查无此内容：交调用方按邻域取证
+
+
+# ---------------- 裸号键与带前缀键同章混用（2026-09-30 高等代数 ch3/7/9 普查命中）
+def _mixed_key_chapter():
+    """高等代数 ch7 §7.7 实测形态：契约里 ``定理/定义/引理7.7.1`` 带体例前缀，
+    ``例7.7.1`` 的节点键却是裸号 ``7.7.1``；manifest 记录键与契约键**逐字相同**。"""
+    return _ch([_node("section", "7.7", 342),
+                _node("theorem", "定理7.7.1", 343),
+                _node("definition", "定义7.7.1", 344),
+                _node("example", "7.7.1", 345),
+                _node("theorem", "定理7.7.2", 345),
+                _node("lemma", "引理7.7.1", 346)])
+
+
+def test_bare_and_prefixed_keys_in_one_chapter_do_not_cross_steal():
+    c = _mixed_key_chapter()
+    units = [{"type": "section", "key": "7.7"},
+             {"type": "item", "key": "定理7.7.1"},
+             {"type": "item", "key": "定义7.7.1"},
+             {"type": "item", "key": "7.7.1"},
+             {"type": "item", "key": "定理7.7.2"},
+             {"type": "item", "key": "引理7.7.1"}]
+    # 契约侧尾号回退一旦把 ``定理7.7.1`` 也登记进裸号桶，裸号记录就从桶首吃到 p343，
+    # 于是假报「item「7.7.1」(p343) 排在「定义7.7.1」(p344) 之后」。原始键全等档在前 ⇒ 0。
+    assert check_unit_order(c, units) == []
+    got = resolve_unit_anchors(c, units)
+    assert [g["node"]["key"] for g in got] == ["7.7", "定理7.7.1", "定义7.7.1",
+                                               "7.7.1", "定理7.7.2", "引理7.7.1"]
+    assert [g["page"] for g in got] == [342, 343, 344, 345, 345, 346]
+
+
+def test_bare_key_record_real_regression_still_flagged():
+    # 负向：上一条的修法不得把真错位一起放过——把裸号 例7.7.1（p345）整条挪到章末。
+    c = _mixed_key_chapter()
+    units = [{"type": "section", "key": "7.7"},
+             {"type": "item", "key": "定理7.7.1"},
+             {"type": "item", "key": "定义7.7.1"},
+             {"type": "item", "key": "定理7.7.2"},
+             {"type": "item", "key": "引理7.7.1"},
+             {"type": "item", "key": "7.7.1"}]
+    probs = check_unit_order(c, units)
+    assert len(probs) == 1 and "7.7.1" in probs[0] and "p345" in probs[0]
+
+
+# ---------------- 旧连字符键 + 同号章末习题（2026-09-29 Katok ch6 实测）
+def _katok_like_chapter():
+    """Katok ch6 形态：条目节点键带前缀（``推论6.2.5``），章末习题块里另有一个
+    **裸号同号**节点 ``6.2.5``（type=exercise，p280）；拆分当时的清单写成 ``6.2-5``。"""
+    return _ch([_node("section", "6.2", 260),
+                _node("corollary", "推论6.2.5", 262),
+                _node("lemma", "引理6.2.6", 263),
+                _node("exercise", "6.2.5", 280)])
+
+
+def test_legacy_dash_item_key_resolves_to_prefixed_item_not_same_number_exercise():
+    c = _katok_like_chapter()
+    units = [{"type": "section", "key": "6.2"},
+             {"type": "item", "key": "6.2-5"},          # 陈旧连字符键：无原始键全等档
+             {"type": "item", "key": "引理6.2.6"},
+             {"type": "exercise", "key": "6.2.5"}]
+    got = resolve_unit_anchors(c, units)
+    # 尾号别名把 ``推论6.2.5`` 也放进裸号桶，按前序消费：条目单元拿条目节点，
+    # 单元类型在前的习题单元拿同号习题节点。旧契约侧无别名表时第 2 条会拿到 p280。
+    assert [g["node"]["key"] for g in got] == ["6.2", "推论6.2.5", "引理6.2.6", "6.2.5"]
+    assert [g["page"] for g in got] == [260, 262, 263, 280]
+    assert check_unit_order(c, units) == []
+
+
+def test_legacy_dash_item_key_after_exercise_sibling_keeps_item_anchor():
+    # 负向兜底：同号裸号**习题**节点排在前面时，陈旧连字符条目记录仍须拿条目节点
+    # （习题记录走 (类型,键) 桶、不动别名桶游标），且真跨页错位的记录仍要报错。
+    c = _katok_like_chapter()
+    swapped = [{"type": "section", "key": "6.2"},
+               {"type": "exercise", "key": "6.2.5"},
+               {"type": "item", "key": "6.2-5"},
+               {"type": "item", "key": "引理6.2.6"}]
+    got = resolve_unit_anchors(c, swapped)
+    assert [g["page"] for g in got] == [260, 280, 262, 263]
+    # 连字符键按设计豁免页码单调（章末习题体例），但习题块插到条目之前仍被其它记录暴露
+    probs = check_unit_order(c, swapped)
+    assert len(probs) == 1 and "引理6.2.6" in probs[0] and "p263" in probs[0]

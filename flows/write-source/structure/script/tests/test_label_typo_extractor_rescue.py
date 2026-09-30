@@ -48,11 +48,11 @@ def _mk(d, pages):
             json.dump({"text": blocks, "formulas": []}, fh)
 
 
-def _keys(pages):
+def _keys(pages, **kw):
     with tempfile.TemporaryDirectory() as d:
         _mk(d, pages)
         items = ee.extract_items_en(d, 1, len(pages), want_examples=True,
-                                    section_scoped=False)
+                                    section_scoped=False, **kw)
     return sorted(it["key"] for it in items), [(it["key"], it["page"]) for it in items]
 
 
@@ -79,6 +79,57 @@ class TestTypoHeadIsExtracted(unittest.TestCase):
         pages = [["theoremt 2.6 Dirichlet multiplication is associative here."]]
         keys, _ = _keys(pages)
         self.assertIn("Theorem 2.6", keys, "%s" % keys)
+
+
+class TestSplitWordHeadIsExtracted(unittest.TestCase):
+    """断词型（Evans 附录 C p720 实测 2026-09-30）：条头类型词被 OCR 从中间断开。
+
+    印刷「THEOREM 1 (Gauss-Green Theorem)」读成「THEO REM 1 (Gauss-Green Theorem}」，
+    正字正则整体失配 → 附录只剩定理 2..8，B 层报「缺号 1」而源侧差集为空，闸门
+    FAIL 无从回填。同一 `lib/label_typo` 判据补一条断词通道。
+    """
+
+    def test_split_head_rescued_with_dotted_ordinal(self):
+        pages = [["THEO REM 2.7 For all f we have I * f = f * I = f."]]
+        keys, _ = _keys(pages)
+        self.assertIn("Theorem 2.7", keys, "%s" % keys)
+
+    def test_split_head_rescued_with_bare_ordinal(self):
+        # Evans 附录体例：条内计数器裸单号（THEOREM 1 / THEOREM 2 …）。
+        pages = [["THEO REM 1 (Gauss-Green Theorem}. (i) Suppose u is in C1(U)."],
+                 ["THEOREM 2 (Integration by parts formula). Let u, v be given."]]
+        keys, _ = _keys(pages, single=True)
+        # 断词补救写正字大小写、原样条头保留 OCR 大写，键在 type 映射处归一，
+        # 故此处按大小写无关比对（判的是「条目在不在账」，不是印刷大小写）。
+        _up = {k.upper() for k in keys}
+        self.assertIn("THEOREM 1", _up, "裸单号断词条头须自愈入约：%s" % keys)
+        self.assertIn("THEOREM 2", _up, "%s" % keys)
+
+
+class TestSplitWordGuardsHold(unittest.TestCase):
+    """断词型负向：只容**一次**断点、首词已是正字不改、其后无序标不改。"""
+
+    def test_first_token_already_canonical_is_untouched(self):
+        keys, _ = _keys([["Theorem REM 3.1 is not how the head is printed."]])
+        self.assertEqual([], [k for k in keys if k.startswith("Theorem")], "%s" % keys)
+
+    def test_double_split_is_not_rescued(self):
+        keys, _ = _keys([["TH EO REM 2.7 only one breakpoint is tolerated."]])
+        self.assertEqual([], keys, "%s" % keys)
+
+    def test_split_word_without_ordinal_is_not_rescued(self):
+        keys, _ = _keys([["THEO REM mark that sentence is plain prose here."]])
+        self.assertEqual([], keys, "%s" % keys)
+
+    def test_helper_returns_none_for_correct_label(self):
+        self.assertIsNone(label_typo_normalize("Theorem 2.7 Real head text.",
+                                               ee.EN_LABELS))
+
+    def test_helper_rewrites_split_word_to_canonical(self):
+        got = label_typo_normalize("THEO REM 1 (Gauss-Green Theorem}.",
+                                   ee.EN_LABELS)
+        self.assertEqual("Theorem 1 (Gauss-Green Theorem}.", got)
+
 
 
 class TestGuardsHold(unittest.TestCase):

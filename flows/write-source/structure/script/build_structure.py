@@ -1031,13 +1031,23 @@ def _exercise_block_pos(ext, ch, start, end, headings, page_dir=None):
 
 
 def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=None,
-                                last_sec_pos=None):
+                                last_sec_pos=None, exercise_headings=None):
     """章末**集中习题块**的起始页：本章最后一个真节头**之后**首个习题块标题页，无则 None。
 
     判据是**位置**而非措辞（`scan_skeleton.EXER_HEADING` 全行锚定，含
     ``EXERCISES`` / ``EXERCISES FOR CHAPTER N`` / ``Exercises``）：只有出现在全部真节
     之后的块，才在文档序上晚于所有节正文。节末块（do Carmo 每节末 EXERCISES，其后
     还有新节）不属本形态 → 返回 None，行为零回归。
+
+    🔴 `exercise_headings`（config `exercise_region_headings`，opt-in）：有的书的章末
+    习题块头不叫 "Exercises"（Ross《A First Course in Probability》实测 2026-09-29
+    ——章末三块印 ``Problems`` / ``Theoretical Exercises`` / ``Self-Test Problems and
+    Exercises``，`EXER_HEADING` 一个都不匹配 → `_tail_ex_start=None`，章末题号
+    `8.1`（末段=章内题号）经 `_section_of_exer` 撞进真节 §8.1（块页 p660 晚于后继节
+    p617），ANCHOR-SANITY 8 章 48 处拒绝落盘）。声明了标题词的书，块头判据扩为
+    ``EXER_HEADING OR _exercise_headings_re(headings)``（同一全行锚定 + 页眉碎屑前缀
+    语义，复用 `scan_skeleton._exercise_headings_re`）；未声明的书 `_cfg_re=None`
+    行为不变，零回归。
 
     `last_sec_pos=(page, y)` 是最后一个节头在自身页上的 y：**同页形态**（Serre
     《Linear Representations of Finite Groups》ch12 实测 2026-09-27——p106 顶部
@@ -1057,6 +1067,9 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
     if not last_sec_page:
         return None
     _dir = page_dir or ext
+    _cfg_re = None
+    if exercise_headings:
+        _cfg_re = scan_skeleton._exercise_headings_re(exercise_headings)
     _last_pg = int(last_sec_page)
     _last_y = None
     if last_sec_pos is not None:
@@ -1086,7 +1099,8 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
                 continue  # 页眉带复本不是块头，见 scan_skeleton._HEAD_BAND_Y
             for ln in blk_text(b).split('\n'):
                 ln = ln.rstrip('$').strip()
-                if ln and scan_skeleton.EXER_HEADING.match(ln) \
+                if ln and (scan_skeleton.EXER_HEADING.match(ln)
+                           or (_cfg_re and _cfg_re.match(ln))) \
                         and not ln.rstrip('. ．·').islower():
                     if _last_y is not None and int(p) == _last_pg:
                         _y = y if y is not None else 0.0
@@ -1096,7 +1110,7 @@ def _chapter_end_exercise_start(ext, ch, start, end, last_sec_page, page_dir=Non
     return None
 
 
-def _exercise_region_start(ext, ch, start, end, page_dir=None):
+def _exercise_region_start(ext, ch, start, end, page_dir=None, exercise_headings=None):
     """习题块头 'EXERCISES FOR CHAPTER <ch>' 的位置 (page, y)，无则 None。
 
     用于把习题区内的页从 ITEM 合同剔除，避免习题题号（如 Strogatz `3.1.1`）被
@@ -1115,8 +1129,20 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
     （该页真身是 Theorem 7.10）全部落在「习题区」内被 ITEM 剔除。改为按
     `scan_skeleton.is_running_head` 跳过页眉带候选，落点取区内的真块头；本页只有
     页眉复本时继续向后页找（返回 (p, 0.0) 会吞掉整页正文）。
+
+    🔴 `exercise_headings`（config `exercise_region_headings`，opt-in）：有的书的
+    习题区头不叫 "EXERCISES FOR CHAPTER n"（Ross《A First Course in Probability》
+    实测 2026-09-29——章末块头印 ``Problems`` / ``Theoretical Exercises`` 等，旧版
+    整章扫不到 → 返回 None，习题区起点未知：ITEM 剔除失效事小，尾带补扫的
+    「页 ≥ 区起点」SEC 过滤失效事大——尾带半页上的本章自测题被通用节检测误判成
+    幽灵小节 §3.36/§8.13，把 `_last_sec_page` 拖过章末块头页，全部章末习题按键
+    派生撞进真节，ANCHOR-SANITY 拒绝落盘）。声明了标题词的书，块头判据扩为
+    ``head OR _exercise_headings_re(headings)``（行级全行锚定 + 页眉碎屑前缀，复用
+    `scan_skeleton._exercise_headings_re`）；未声明的书行为不变，零回归。
     """
     head = re.compile(r'EXERCISES\s*FOR\s*CHAPTER\s*(\d+)', re.IGNORECASE)
+    cfg_re = (scan_skeleton._exercise_headings_re(exercise_headings)
+              if exercise_headings else None)
     pat = str(ch)
     _dir = page_dir or ext
     for p in range(start, end + 1):
@@ -1131,21 +1157,33 @@ def _exercise_region_start(ext, ch, start, end, page_dir=None):
         txt = " ".join(blk_text(b) if isinstance(b, dict) else str(b)
                        for b in blocks)
         m = head.search(txt)
-        if not (m and m.group(1) == pat):
+        if not (m and m.group(1) == pat) and cfg_re is None:
             continue
         left, span = scan_skeleton.page_x_extent(blocks)
         top = scan_skeleton.page_top_y(blocks)
         has_dict = False
+        _cfg_y = None
         for b in blocks:
             if not isinstance(b, dict):
                 continue
             has_dict = True
-            if head.search(blk_text(b) or ''):
+            bt = blk_text(b) or ''
+            if head.search(bt):
                 x, y = scan_skeleton.block_xy(b.get('poly') or [])
                 if scan_skeleton.is_running_head(x, y, left, span, top):
                     continue  # 页眉复本不作区界
                 return (p, y if y is not None else 0.0)
-        if not has_dict:
+            if cfg_re is not None and _cfg_y is None:
+                for ln in bt.split('\n'):
+                    ln = ln.rstrip('$').strip()
+                    if ln and cfg_re.match(ln):
+                        x, y = scan_skeleton.block_xy(b.get('poly') or [])
+                        if not scan_skeleton.is_running_head(x, y, left, span, top):
+                            _cfg_y = y if y is not None else 0.0
+                        break
+        if _cfg_y is not None:
+            return (p, _cfg_y)
+        if not has_dict and (m and m.group(1) == pat):
             return (p, 0.0)
     return None
 
@@ -1369,9 +1407,25 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None, sec_ke
                 if _nm and _nm not in extra and \
                         _nm.rstrip(".") not in _non_text_stripped:
                     extra.append(_nm)
+        # 🔴 scope==3 组的标签 + 节窗口同样下传两级 EN 抽取器（Ross《A First
+        # Course in Probability》实测 2026-09-30）：其例题按节重起且计数器是
+        # **字母**（§1.2 印 Example 2a..2e），extract_items_en 需经
+        # restart_per_section 知道「该标签按节重置」，才会在字母后缀分支保留
+        # 真计数器（键 `例2b`）而不按 OCR 形近折叠（`例28`）。无 scope==3 组 /
+        # 无窗口时行为逐字不变，零回归。
+        _en2_rst = []
+        if sec_windows and not book.section_scoped:
+            for _g in getattr(book, "ordinal", []) or []:
+                if getattr(_g, "scope", None) == 3:
+                    for _nm in getattr(_g, "name", []) or []:
+                        if _nm and _nm.lower() not in _en2_rst:
+                            _en2_rst.append(_nm.lower())
         items = extract_items_en(_dir, start, end, want_examples=True,
                                  section_scoped=book.section_scoped,
-                                 extra_labels=extra)
+                                 extra_labels=extra,
+                                 restart_per_section=(
+                                     set(_en2_rst), list(sec_windows or []))
+                                 if _en2_rst else None)
         kept = []
         for it in items:
             lab, _, num = it["key"].partition(" ")
@@ -1519,17 +1573,26 @@ def _toc_band_bottom(ys, gap=_TOC_LINE_GAP):
 
 
 def _compute_opener_pages(first_hit, opener_k=3):
-    """章首目录页集合：首现命中 ≥ opener_k **且**全部落进同一条目录带。
+    """章首目录页集合：首现命中 ≥ opener_k **且**目录带内挤着 ≥ opener_k 条命中。
 
-    旧判据只数命中数（≥3 即目录页）。2026-09-29 茆诗松《概率论与数理统计教程
+    旧旧判据只数命中数（≥3 即目录页）。2026-09-29 茆诗松《概率论与数理统计教程
     第三版》ch8 实测：章首**正文页** p395 上 §8.1(y628)/§8.1.1(y774)/§8.1.2
     (y1833) 三个节号首现同页——命中数达标但散布全页（774→1833 空隙 1059 ≫
     _TOC_LINE_GAP）。该页被误判目录页后真节头当目录污染回扫：§8.1 锚到 p411
     （习题页裸号碎片）、§8.4 锚到 p425 → 节序 8.2(p407) 排到 8.1(p395) 之前
-    → ANCHOR-SANITY 拒绝落盘。目录页的命中挤在一条行距 ≤ _TOC_LINE_GAP 的
-    带内；正文页的节头散布全页、带外必有命中。判据 = 命中数达标 **且**
-    `_toc_band_bottom(ys)` 覆盖全部带 y。全页无 y（md 派生行）无法核带 →
-    fail-open 维持旧行为（认作目录页）。
+    → ANCHOR-SANITY 拒绝落盘。
+
+    🔴 但「**全部**命中都落在带内」过严（2026-09-30 Evans《PDE》2ed ch6 实测）：
+    章扉页在目录带**之下**就起正文——p325 带 = `6.1 Definitions`..`6.7 References`
+    (y889..1171)，其后同页紧跟真节头 `6.1. DEFINITIONS`(y1439) / `6.1.1.`(y1508)。
+    带外这两条把整页判成正文页 → 扉页免疫整体失效 → §6.2…§6.7 的 sec_pages 全
+    锚在扉页 p325，而其**子节** §6.1.2(p327)/§6.2.3(p334) 锚点正确 →
+    ANCHOR-SANITY「小节号更晚而页码更早」10 处矛盾、ch6 拒绝落盘。
+    判据改为**数带内命中**：目录带的定义就是「行距 ≤ _TOC_LINE_GAP 的最长连续前缀」，
+    该前缀内首现 ≥ opener_k 条 = 目录页；带**之下**的命中不是目录行，而是本节起始页
+    上的真节头——交给 `_hit_below_toc_band` 原位采用（正是该机制的设计场景）。
+    茆书 p395 在新判据下仍不免疫：带内只有 628/774 两条 < 3。
+    全页无 y（md 派生行）无法核带 → fail-open 维持旧行为（认作目录页）。
     """
     cnt = {}
     for _num, row in first_hit.items():
@@ -1540,7 +1603,11 @@ def _compute_opener_pages(first_hit, opener_k=3):
             continue
         ys = sorted(float(r[4]) for r in first_hit.values()
                     if r[0] == p and r[4] is not None)
-        if not ys or _toc_band_bottom(ys) >= ys[-1] - 1e-6:
+        if not ys:
+            out.add(p)
+            continue
+        _in_band = [y for y in ys if y <= _toc_band_bottom(ys) + 1e-6]
+        if len(_in_band) >= opener_k:
             out.add(p)
     return out
 
@@ -1713,7 +1780,17 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None,
              if len(_pages_of.get(c[2], ())) < 2
              and (_hbound is None or c[0] <= _hbound)]
     if not _kept:
-        return None
+        # 🔴 「页眉禁令」只用于**降级**页眉候选，不得把唯一的证据一起否掉。
+        # Evans《PDE》2ed 实测：该书把**节标题本身**印成页眉（p24 下半页真节头
+        # `1.3. STRATEGIES FOR STUDYING PDE`，p25/p27 页顶逐字重复），于是真节头与
+        # 页眉同文、出现在 ≥2 页 → 全部 title 候选被判页眉剔除，而本书节头一律带号
+        # （无 bare/text 候选可退）→ 回扫返回 None → 调用方退回章首目录页，
+        # §1.3/§1.4/… 全锚到 p19，ANCHOR-SANITY 12 章全部拒绝落盘。
+        # 页眉只可能出现在本节内容所在页，故「同文重复」候选里**最早**那一页就是本节
+        # 起始页（节自扉页起始时 min_y 已滤掉目录行，不会倒退到扉页）。Rosen 那类
+        # 「真节头无号、只有页眉带号」的书同样受益：最早页眉页 = 无号节头所在页
+        # （实测 p816 页顶印 `11.2 Applications of Trees 793`、正文节头在同页 y=1401）。
+        _kept = cands
     for _kind in ('title', 'bare', 'text'):
         _pk = [c for c in _kept if c[3] == _kind]
         if _kind == 'text':
@@ -1918,6 +1995,22 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                         and isinstance(r[4], (int, float)) and r[4] < _bd_head)]
     _bd_tail = chapter_boundary.tail_band(ext, page_dir or ext, ch)
     _bd_tail_dir = _bd_tail_page = None
+    # 🔴 习题区起点提前至此（Ross《A First Course in Probability》ch3/ch8 实测
+    # 2026-09-29）：章边界尾带补扫（下方 `_tr`）是**独立一次 scan**，闩锁状态
+    # 不延续——主扫描里 "Problems"@660 起的章末习题区粘滞闩锁，在只含尾带半页
+    # 的补扫里不存在，于是尾带中的习题行（本章自测题印到下一章扉页标题之上，
+    # "3.36 In a 4 player tournament…"）被通用节检测误判成 SEC 行 → 幽灵小节
+    # §3.36/§8.13 挤进 sec_pages，把 `_last_sec_page` 拖到尾带页，习题块头检测
+    # 因此错过章末块头、全部章末习题按键派生撞进真节 → ANCHOR-SANITY 拒绝落盘。
+    # 判据：习题区起点之后不可能再有真节（章末习题区按定义粘滞到章末），故尾带
+    # 行中「页 ≥ 习题区起点」的 SEC 行一律弃（EXER/PROB 行保留，它们正是尾带
+    # 要收的习题）。无习题区声明的书 `_ex_region=None` → 不过滤，Etingof 尾带
+    # 真 §2.10 等形态零回归。`_ex_region_page` 供下方同键习题复本取舍复用。
+    _ex_region = _exercise_region_start(ext, ch, start, end, page_dir=page_dir,
+                                        exercise_headings=getattr(
+                                            book, 'exercise_region_headings',
+                                            None) or None)
+    _ex_region_page = _ex_region[0] if _ex_region else None
     if _bd_tail:
         _bd_tail_page, _bd_tail_hi = _bd_tail
         _clip = chapter_boundary.clip_page(
@@ -1942,6 +2035,10 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                         book, 'chapter_local_numbering', False),
                     language=getattr(book, 'language', 'cn'),
                     section_whitelist=_wl_scan)
+            if _ex_region_page is not None:
+                _tr = [r for r in _tr
+                       if not (r[1] == "SEC"
+                               and int(r[0] or 0) >= int(_ex_region_page))]
             rows = list(rows) + list(_tr)
     ex_rows = [r for r in rows if r[1] in ("EXER", "PROB")]
     # 同键习题行**首现保留**（scan 按页升序 → 首现即真习题条头）。全书通用守卫，
@@ -1956,8 +2053,7 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
     # 真习题 9.1.3（块内 p391）出现，纯「首现保留」会把真题丢掉、只留幻影。
     # 判据取**位置**：``EXERCISES FOR CHAPTER n`` 块头之后 = 区内；区外复本仅在
     # 「区内无同号行」时兜底保留（ch6 的续行与真头同在区内 → 仍取首现，零回归）。
-    _ex_region = _exercise_region_start(ext, ch, start, end, page_dir=page_dir)
-    _ex_region_page = _ex_region[0] if _ex_region else None
+    # （`_ex_region` 已在上方尾带合并前求出，见彼处注释。）
     _best_ex = {}
     for _i, _er in enumerate(ex_rows):
         _cur = _best_ex.get(_er[2])
@@ -2713,7 +2809,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                     _last_sec_pos = (int(_p), float(_y))
     _tail_ex_start = _chapter_end_exercise_start(
         ext, ch, start, end, _last_sec_page, page_dir=page_dir,
-        last_sec_pos=_last_sec_pos)
+        last_sec_pos=_last_sec_pos,
+        exercise_headings=getattr(book, 'exercise_region_headings', None) or None)
     for row in ex_rows:
         p, num, title = row[0], row[2], row[3]
         name = (title if title else num)

@@ -457,7 +457,13 @@ def _canon_key(primary_type, key):
             c = c + (int(m.group(3)),)
         return c
     if primary_type == ORDINAL_THREE_LEVEL:
-        m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', key)
+        # 🔴 与其余分支同源，先剥内嵌类型标签再判三段数字：build_structure 会把标签
+        # 内嵌进契约键（`命题1.1.2` / `定理1.1.1` / `例1.2.1`），旧实现只认裸数字，
+        # 于是整批契约条目在 contract_items 里蒸发，扫描到的同一真身被判 readable
+        # 假缺项、闸门永 FAIL（Katok 实测 822 键 / 点集拓扑 458 键 old=0 / 高等代数
+        # 513 键；跨 15 本 THREE_LEVEL 书普查：本改动 gained≥0 且 lost=0）。
+        s = _LABEL_RE.sub('', key).strip()
+        m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', s)
         return tuple(int(x) for x in m.groups()) if m else None
     if primary_type in (ORDINAL_TWO_LEVEL,):
         s = _LABEL_RE.sub('', key).strip()

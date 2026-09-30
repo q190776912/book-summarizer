@@ -25,7 +25,7 @@ import lib.boot as boot  # noqa: E402
 boot.setup()
 
 from data.book_structure.book_structure import (  # noqa: E402
-    list_chapter_keys, prime_chapter_kinds, unit_dir_name)
+    list_chapter_keys, prime_chapter_kinds, resolve_chapter_json_path, unit_dir_name)
 
 MARK_RE = re.compile(
     r"^<!--\s*book-summarizer\s+(DONE|DRAFT)\s+unit:\s*"
@@ -34,10 +34,14 @@ TPL = "<!-- book-summarizer %s unit: id=%s type=%s key=%s name=%s -->"
 
 
 def contract_names(ext, ch):
-    """该章契约里所有节点的 `name` 集合（真值锚点）。"""
-    p = os.path.join(ext, "book_structure", "ch%s.json" % ch)
-    if not os.path.exists(p):
-        p = os.path.join(ext, "book_structure", "appendix%s.json" % ch)
+    """该章契约里所有节点的 `name` 集合（真值锚点）。
+
+    🔴 契约路径必须走 `resolve_chapter_json_path`（按磁盘物理证据解析章型）：旧的
+    手写候选只有 `ch{N}` / `appendix{X}`，**补篇 `supplement{S}.json` 永远读不到**
+    → `names` 为空 → 该章每个单元都被判成「manifest 与契约脱账」而跳过复位
+    （Katok supplementS 实测 41 个单元全部误跳）。
+    """
+    p = resolve_chapter_json_path(ext, ch)
     names = set()
     if not os.path.exists(p):
         return names
@@ -80,9 +84,7 @@ def contract_unit_types(ext, ch):
     `type=description`，同书 568 个同类单元的 manifest 都已归一成 `desc`，唯独这条
     manifest 仍写 `description` → **错的一侧是 manifest**，按 manifest 复位首行会把对的改成错的。
     """
-    p = os.path.join(ext, "book_structure", "ch%s.json" % ch)
-    if not os.path.exists(p):
-        p = os.path.join(ext, "book_structure", "appendix%s.json" % ch)
+    p = resolve_chapter_json_path(ext, ch)
     out = {}
     if not os.path.exists(p):
         return out

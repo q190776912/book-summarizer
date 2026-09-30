@@ -101,7 +101,8 @@ def _block_sig(b):
 
 
 def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
-                         letter=False, bare=True, page_dir=None):
+                         letter=False, bare=True, page_dir=None,
+                         section_scoped=False):
     """书源独立公式编号块（独立真值，不经 attach 管线）。
 
     遍历页区间内 ``page_*.json`` 的 ``text``，取**整块恰为一个编号**的块，返回
@@ -131,10 +132,18 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     图像化，源真值若不剔除图区块 → 源/契约不对称 → 假 FAIL
     （微分遍历论 ch1 p13 图1.2 内坐标 ``(1,2)`` 实测：被误报“公式编号丢失”）。
     判据：文本块 poly 中心落在 ``figure_index.json`` 该页任一图 bbox 内 → 跳过。
+
+    🔴 **与契约侧同源的两条不对称修正**（Evans《PDE》附录B 实测 2026-09-30，详见
+    函数体内注释）：① **编号列几何闸**——本章若学得出 `(N)` 编号列，列**外**的裸排
+    数字块判为公式内部残渣（契约侧闸门 ⑭ 的 `bare-only` 已把它剔除，此处不收，否则
+    「源有契约无」= 假丢失）；② **噪声形态** ``formula_tag_noise``（`(0)`/`(00)`/
+    前导零，及节内重置书的 ≥3 位纯数字）与 attach 侧同判据、同口径。
     """
     from page_json import PageJson
     from lib.numbering import (formula_tag_number, formula_paren_tag_re,
+                               formula_tag_re, formula_tag_noise,
                                page_number_furniture, folio_norm)
+    from lib.tag_attestation import number_column
     _dir = page_dir or ext
     lo, hi = int(start), int(end)
 
@@ -158,7 +167,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         pass
 
     # 第一遍：收集原始文本块 + 本区间页高（与 _filter_noise 同口径：max bottom）
-    raw = []                                   # (page, y, bottom, text, xc, yc)
+    raw = []                                   # (page, y, bottom, text, xc, yc, x0)
     for p in range(lo, hi + 1):
         fp = os.path.join(_dir, "page_%03d.json" % p)
         if not os.path.exists(fp):
@@ -175,7 +184,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
                 continue
             poly = t.get("poly") or []
             y = bottom = 0.0
-            xc = yc = None
+            xc = yc = x0 = None
             if len(poly) >= 8:
                 try:
                     _xs = [float(poly[i]) for i in (0, 2, 4, 6)]
@@ -183,21 +192,22 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
                     y, bottom = _ys[0], max(_ys)
                     xc = (min(_xs) + max(_xs)) / 2.0
                     yc = (min(_ys) + max(_ys)) / 2.0
+                    x0 = min(_xs)
                 except (TypeError, ValueError):
                     y = bottom = 0.0
-                    xc = yc = None
+                    xc = yc = x0 = None
             # 图区排除：中心落在任一图 bbox 内 → 图内标签，非公式编号
             if xc is not None and p in _fig_boxes:
                 if any(fx0 <= xc <= fx1 and fy0 <= yc <= fy1
                        for fx0, fy0, fx1, fy1 in _fig_boxes[p]):
                     continue
-            raw.append((p, y, bottom, s.strip(), xc, yc))
-    page_height = max((b for _p, _y, b, _t, _xc, _yc in raw), default=0.0)
+            raw.append((p, y, bottom, s.strip(), xc, yc, x0))
+    page_height = max((b for _p, _y, b, _t, _xc, _yc, _x0 in raw), default=0.0)
     n_pages = max(1, hi - lo + 1)
 
     # 页边距家具统计（同 _filter_noise：跨页边缘重复 / 全章过半页重复）
     edge_pages, all_pages = {}, {}
-    for p, y, bottom, s, _xc, _yc in raw:
+    for p, y, bottom, s, _xc, _yc, _x0 in raw:
         n = _norm_text(s).replace(" ", "")
         if len(n) < 4:
             continue
@@ -219,10 +229,44 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     # 早已把它当噪声丢弃 → 源/契约不对称 → `CONTENT GATE: FAIL 公式编号丢失 ['386']`。
     _furn = page_number_furniture(
         [(p, y, bottom, folio_norm(s))
-         for p, y, bottom, s, _xc, _yc in raw], page_height)
+         for p, y, bottom, s, _xc, _yc, _x0 in raw], page_height)
+
+    # 🔴 **编号列几何闸**（2026-09-30 Evans《PDE》附录B 实测）：本章印面编号带括号
+    # （`(1)…(18)` 全部排在左缘同一列），而 OCR 把**公式内部**的数字切成独立裸块
+    # ——`b^q/q` 读成 `69`（p715 x0=1067）、`b²/4ε` 读成 `62`（p715 x0=612）、`η(0)`
+    # 读成 `0`（p717 x0=688）。契约侧闸门 ⑭（`lib.tag_attestation._condemned` 的
+    # `bare-only` 理由码）据此把 `69` 从契约里剔掉（判「裸数字块是公式碎片不是编号
+    # 列」），而本函数**另起一套**只看文本形态的判据照收不误 → 源/契约不对称 →
+    # `CONTENT GATE: FAIL 公式编号丢失 ['69']`，拆分被假 FAIL 阻断。
+    # 根治 = 两处共用同一条**几何**证据：先从本章页窗里**整块恰为 `(N)`** 的高可信
+    # 锚点学出「编号列」（`lib.tag_attestation.number_column`，样本 <3 时返回 None =
+    # 不出结论），再把**列外的裸排**候选判为公式内部残渣。
+    # 🔴 保守性（为何不会把真编号筛掉）：① 只作用于**无括号**的裸排候选，带括号的
+    # 锚点永不受影响（它们是学列的种子）；② 列学不出来（纯裸排编号的书，实测语料近
+    # 半数）→ 本闸完全不生效，行为与既往逐字一致；③ 列与正文可分性是 `number_column`
+    # 自带的簇统计，右缘编号的书会自然学到右缘那一簇；④ 真编号**被 OCR 漏读括号**仍
+    # 留在列内（判据是几何而非形态），杀不掉。
+    # 跨语料标定（`tools/census_source_formula_tags.py`，51 书 / 515 份契约，两条新判据
+    # 关掉 vs 打开对拍）：剔除候选 676 个，其中「契约也无档」的 652 个逐书抽检——
+    # Evans 附录B `69`=b^q/q、`62`=b²/4ε、`8`=∞、`93`=g₃；Strogatz ch5 `12`、ch6 `30`
+    # =矩阵元素，ch10 `4 8 16 32`=分岔图轴标，ch13 `16`=分数 3/16；Elliptic PDE ch2
+    # `2.24`=散文里「Lemma 2.24」交叉引用；Koopman `10-2`=科学计数、`0-100`=图轴标；
+    # 数值分析/高代 的 `2.0`/`0.25`=数表单元；各书 3 位以上纯数字=页脚页码（如 Evans
+    # ch3 p107 的 `91`）。**无一例真印编号被误杀**。
+    _paren_re = formula_tag_re(ncomp, bare=False, letter=letter)
+    _col_seeds = []
+    for p, _y, _b, s, _xc, _yc, x0 in raw:
+        if x0 is None:
+            continue
+        _pm = _paren_re.match(s.strip())
+        if _pm:
+            _num = formula_tag_number(s, ncomp, letter=letter, bare=False)
+            if _num:
+                _col_seeds.append((_num, p, x0, _y))
+    _num_col = number_column(_col_seeds, {str(t[0]) for t in _col_seeds})
 
     out = set()
-    for p, y, bottom, s, _xc, _yc in raw:
+    for p, y, bottom, s, _xc, _yc, x0 in raw:
         n = _norm_text(s).replace(" ", "")
         if not n:
             continue
@@ -248,6 +292,14 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
             continue
         key = formula_tag_number(s, ncomp, letter=letter, bare=bare)
         if key is None:
+            continue
+        # 噪声形态与 attach 侧同判据（`(0)` / `(00)` / 前导零 / 节内重置书的 ≥3 位）
+        if formula_tag_noise(key, section_scoped=section_scoped):
+            continue
+        # 编号列几何闸：列外裸排块 = 公式内部残渣（判据与出处见上方注释块）
+        if (_num_col and x0 is not None and key
+                and not _paren_re.match(s.strip())
+                and not (_num_col[0] <= x0 <= _num_col[1])):
             continue
         if ch_prefix and re.split(r'[.\-·,]', key)[0] != ch_prefix:
             continue
@@ -507,7 +559,8 @@ def check_chapter(ext, ch_node):
         want_tags = _source_formula_tags(ext, ch_node.get("page_start"),
                                          ch_node.get("page_end"), prefix, ncomp,
                                          letter=f_letter, bare=f_bare,
-                                         page_dir=_node_page_dir(ext, ch_node))
+                                         page_dir=_node_page_dir(ext, ch_node),
+                                         section_scoped=(scope == 3))
 
         def _ord(k):
             return [int(y) for y in re.split(r'[.\-·,]', k) if y.isdigit()]

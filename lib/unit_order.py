@@ -85,17 +85,17 @@ def is_dash_problem(raw_key: Any) -> bool:
     return bool(_DASH_PROBLEM_RE.fullmatch(str(raw_key).strip()))
 
 
-def _iter_anchor_entries(contract: Optional[Dict[str, Any]]):
-    """前序遍历契约树，产出 ``(归一键, 节点 type, page_start, 前序序号)``。
+def iter_unit_nodes(contract: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """前序遍历契约里**会成单元**的节点 → 有序 list，下标即门控 ⑪ 的 `order`（契约登记前序号）。
 
-    跳过无 ``key`` / 无 ``page_start`` / 键归一后为空的节点，以及 ``proof`` 子节点
-    （``例3.P1`` 这类证明块按设计**不单独成单元**，若计入会与真单元的重数错位）。
-
-    前序序号（父先于子、子按 ``sub_sec`` 列表序）是**契约自己的登记序**：页码只能证明
-    「谁在原书更靠后」，序号才能证明「契约把这条内容排在前面」——两者一起用才分得开
-    「契约排序错」与「单元次序跟丢了契约」（见模块头判据 2/2b）。
+    过滤规则与旧的 :func:`_iter_anchor_entries` 一致：无 ``key`` / 无 ``page_start`` /
+    键归一后为空 / ``proof`` 子节点都不入列（证明块按设计不单独成单元，计入会与真单元
+    重数错位）。带 ``name`` 一起交出，是为了让**修复类**工具（清单归位、陈旧键复位）拿到
+    节点本体而不必再自建一份「键直比索引」——那份自建索引正是 Katok 实测的翻车点：契约
+    条目键带体例前缀（``推论6.2.5``），清单里是拆分当时的旧键（``6.2-5``），直比整章拒归位，
+    而门控按 (类型,键)+尾号回退照样解析通过，两侧判据从此各说各话。
     """
-    order = [0]
+    out: List[Dict[str, Any]] = []
 
     def _walk(node: Any):
         if not isinstance(node, dict):
@@ -107,18 +107,27 @@ def _iter_anchor_entries(contract: Optional[Dict[str, Any]]):
             nk = norm_secnum(key)
             if nk:
                 try:
-                    yield nk, ntype, int(ps), order[0]
+                    page = int(ps)
                 except (TypeError, ValueError):
                     pass
                 else:
-                    order[0] += 1
+                    out.append({"key": str(key), "nk": nk, "type": ntype,
+                                "name": str(node.get("name") or ""), "page": page})
         for sub in (node.get("sub_sec") or []):
-            for got in _walk(sub):
-                yield got
+            _walk(sub)
 
     if isinstance(contract, dict):
-        for got in _walk(contract):
-            yield got
+        _walk(contract)
+    return out
+
+
+def _iter_anchor_entries(contract: Optional[Dict[str, Any]]):
+    """前序遍历契约树，产出 ``(归一键, 节点 type, page_start, 前序序号, 原始键)``。
+
+    列与序号都由 :func:`iter_unit_nodes` 单一定义给出（判据只此一份）。
+    """
+    for i, d in enumerate(iter_unit_nodes(contract)):
+        yield d["nk"], d["type"], d["page"], i, d["key"]
 
 
 def check_unit_order(
@@ -135,8 +144,8 @@ def check_unit_order(
     """
     if not isinstance(contract, dict) or not units:
         return []
-    multi, anytype = _anchor_tables(contract)
-    if not multi:
+    tables = _anchor_tables(contract)
+    if not tables[0]:
         return []
 
     consumed: Dict[int, int] = {}
@@ -157,12 +166,12 @@ def check_unit_order(
         if u.get("continuation") and nk in follow:
             anchor = follow[nk]             # 续接单元：复用父单元锚点，不消费列表
         else:
-            anchor = _unit_page(raw_key, u, multi, anytype, consumed)
+            anchor = _unit_page(raw_key, u, tables, consumed)
             if anchor is not None:
                 follow[nk] = anchor
         if anchor is None:                   # 锚点缺失：跳过，不重置游标
             continue
-        page, order = anchor
+        page, order = anchor[0], anchor[1]
         label = u.get("type") or "单元"
         if page < max_page:
             problems.append(
@@ -331,9 +340,26 @@ _TYPE_ALIAS = {"desc": "description", "exercise": "exercise",
 
 
 def _anchor_tables(contract):
-    """一次遍历建两张出现序表：``{(节点type, 键): [(页, 前序号)…]}`` 与 ``{键: [(页, 前序号)…]}``。
+    """一次遍历建三张出现序表：``{(节点type, 键): [锚点…]}``、``{归一键: [锚点…]}``、``{契约原始键: [锚点…]}``。
 
-    两表的页都按契约**前序**（= 阅读顺序）排列，故「第 k 次出现」在两种查法下一致。
+    锚点元组 = ``(页, 前序号, 归一键, 节点type, 契约原始键)``；三表的页都按契约**前序**
+    （= 阅读顺序）排列，故「第 k 次出现」在三种查法下一致。
+
+    🔴 契约侧同样做**尾号回退**（``推论6.2.5`` 额外登记在 ``6.2.5`` 名下），与单元侧的尾号
+    回退对称（Katok ch6 实测的必要修正）：条目键带体例前缀时只登记全称，于是清单里
+    ``6.2-5``（拆分当时的旧键，归一即 ``6.2.5``）会命中**同号的章末习题节点** ``6.2.5``，
+    拿到晚 18 页的锚点——门控 ⑪ 由此既看不见这条的真实次序，又把后续一片正常单元误报成
+    「早页内容排在晚页之后」。同一列表里多类型按前序共存，靠「第 k 次出现」消费天然分开
+    （先出现的条目单元消费条目节点，后出现的习题单元消费习题节点）。
+
+    🔴 但尾号回退会**污染**「裸号键与带前缀键在同一章混用」的书（2026-09-30 跨书普查命中
+    高等代数 ch3/ch7/ch9）：ch7 契约里 ``定理7.7.1``(o72,p343)/``定义7.7.1``(o73,p344)/
+    ``7.7.1``=例(o74,p345)/``引理7.7.1``(o78,p346) 四节点共存，清单键与契约键**逐字相同**；
+    带前缀的三条各按全称消费，裸号那条却从别名桶 ``7.7.1`` 的第 1 项（= ``定理7.7.1``）
+    开始吃，锚点早了 2 页 ⇒ 假报「阅读顺序倒退」。判据 = 补第三张**原始键全等**表，
+    消费次序改为「类型桶 → 原始键全等 → 归一键（含尾号别名）」：越具体的证据越先用。
+    Katok 的 ``6.2-5`` 在原始键表里全等无门（契约只有 ``推论6.2.5`` 与同号习题 ``6.2.5``），
+    仍落到别名桶按前序拿到条目节点——两本书同时正确。
 
     为什么按 ``(type, key)`` 分桶而不是只按 ``key``（Rosen 8e 实测教训）：同一归一键会
     合法重复——``例1`` 是**逐节重启**的条目号（一章可出现 8 次），``10.2`` 既是节节点
@@ -342,12 +368,23 @@ def _anchor_tables(contract):
     闸门等于失效）。按 (类型, 键) 桶 + 出现序消费后，重启号书与键全书唯一的书都得到
     正确锚点（后者桶长恒为 1，行为与旧表一致）。
     """
-    multi: Dict[Tuple[Any, str], List[Tuple[int, int]]] = {}
-    anytype: Dict[str, List[Tuple[int, int]]] = {}
-    for nk, ntype, page, order in _iter_anchor_entries(contract):
-        multi.setdefault((ntype, nk), []).append((page, order))
-        anytype.setdefault(nk, []).append((page, order))
-    return multi, anytype
+    multi: Dict[Tuple[Any, str], List[Tuple]] = {}
+    anytype: Dict[str, List[Tuple]] = {}
+    exact: Dict[str, List[Tuple]] = {}
+    for nk, ntype, page, order, raw in _iter_anchor_entries(contract):
+        anchor = (page, order, nk, ntype, raw)
+        exact.setdefault(str(raw).strip(), []).append(anchor)
+        for k in _key_variants(nk):
+            multi.setdefault((ntype, k), []).append(anchor)
+            anytype.setdefault(k, []).append(anchor)
+    return multi, anytype, exact
+
+
+def _key_variants(nk: str) -> List[str]:
+    """归一键本身 + 尾号（``推论6.2.5`` → ``['推论6.2.5', '6.2.5']``；无尾号只返回本身）。"""
+    tail = re.search(r"(\d+(?:\.\d+)+)$", nk or "")
+    return [nk] + ([tail.group(1)] if tail and tail.group(1) != nk else [])
+
 
 
 def _consume(entries, consumed):
@@ -361,20 +398,100 @@ def _consume(entries, consumed):
     return entries[i] if i < len(entries) else entries[0]
 
 
-def _unit_page(raw_key, unit, multi, anytype, consumed):
-    """该单元的 ``(契约页, 契约前序号)``；先按 ``(节点类型, 归一键)`` 桶，再退回不分类型。"""
+def _unit_page(raw_key, unit, tables, consumed):
+    """该单元的 ``(契约页, 契约前序号)``；查表次序见 :func:`_unit_anchor`。"""
+    a = _unit_anchor(raw_key, unit, tables, consumed)
+    return a[:2] if a else None
+
+
+def _unit_anchor(raw_key, unit, tables, consumed, nodes=None):
+    """该单元消费的**锚点元组**（``(页, 前序号, 归一键, 节点type, 契约原始键)``）。
+
+    判据与 :func:`_unit_page` 同一份实现（页码单调闸与修复工具不可能各说各话）；
+    传 ``nodes``（:func:`iter_unit_nodes` 的列）时把命中的**契约节点本体**一并附上。
+
+    查表次序 = 证据强度次序：``(节点类型, 键)`` 桶（最具体，能分开 ``10.2`` 的节节点与
+    习题块节点）→ **契约原始键全等**（清单键与契约键逐字相同 = 拆分当时的登记，最强）→
+    归一键（含尾号别名，兜住 ``6.2-5`` 这类旧键形）。
+    """
+    multi, anytype, exact = tables
     nk = norm_secnum(raw_key)
-    tail = re.search(r"(\d+(?:\.\d+)+)$", nk)   # 带标签键的尾号（例5.1 -> 5.1）
-    keys = [nk] + ([tail.group(1)] if tail else [])
+    keys = _key_variants(nk)                 # 与契约侧同一份尾号回退
+    entry = None
     for t in (unit.get("ntype"), _TYPE_ALIAS.get(str(unit.get("type")))):
         if not t:
             continue
         for k in keys:
             entries = multi.get((t, k))
             if entries:
-                return _consume(entries, consumed)
-    for k in keys:
-        entries = anytype.get(k)
+                entry = _consume(entries, consumed)
+                break
+        if entry:
+            break
+    if entry is None:
+        entries = exact.get(str(raw_key or "").strip())
         if entries:
-            return _consume(entries, consumed)
-    return None
+            entry = _consume(entries, consumed)
+    if entry is None:
+        for k in keys:
+            entries = anytype.get(k)
+            if entries:
+                entry = _consume(entries, consumed)
+                break
+    if entry is None:
+        return None
+    if nodes is not None:
+        node = nodes[entry[1]]
+        if node["key"] != entry[4]:            # 列与锚点表同源，不一致即内部错误
+            raise AssertionError("锚点序号 %d 指向 %r，与表内原始键 %r 不符"
+                                 % (entry[1], node["key"], entry[4]))
+        return tuple(list(entry) + [node])
+    return entry
+
+
+def resolve_unit_anchors(
+    contract: Optional[Dict[str, Any]],
+    units: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按门控 ⑪ **同源**判据把每条单元记录解析到契约节点（供修复类工具复用）。
+
+    → 与 ``units`` 等长的 dict 列表，字段：
+      ``index`` 记录下标、``key`` 记录原始键、``type`` 记录类型、
+      ``node`` 命中的契约节点 dict（``key/nk/type/name/page``）或 ``None``、
+      ``order`` 契约登记前序、``page`` 原书页码、``dash`` 是否章末连字符习题键、
+      ``skip`` 非空 = 该记录本身不参与页码单调判定（目前只有 ``chapter``）。
+
+    与 :func:`check_unit_order` 的差别**只有一点**：这里连 dash 习题也解析（判据要的是
+    「这条内容在契约里的位置」，豁免的是页码倒退而非锚点本身），``type=chapter`` 记为
+    ``skip`` 供调用方跳过。出现序消费同样按传入顺序进行，故同一清单跑两次结果一致。
+    """
+    tables = _anchor_tables(contract)
+    nodes = iter_unit_nodes(contract)
+    consumed: Dict[int, int] = {}
+    follow: Dict[str, tuple] = {}
+    out: List[Dict[str, Any]] = []
+    for i, u in enumerate(units):
+        raw_key = u.get("key") if isinstance(u, dict) else None
+        rec = {"index": i, "key": raw_key,
+               "type": u.get("type") if isinstance(u, dict) else None,
+               "node": None, "order": None, "page": None,
+               "dash": is_dash_problem(raw_key), "skip": ""}
+        if rec["type"] in _SKIP_TYPES:
+            rec["skip"] = "chapter"
+            out.append(rec)
+            continue
+        nk = norm_secnum(raw_key)
+        anchor = None
+        if u.get("continuation") and nk in follow:
+            anchor = follow[nk]                # 续接单元复用父锚点，不消费列表
+        else:
+            anchor = _unit_anchor(raw_key, u, tables, consumed, nodes)
+            if anchor:
+                follow[nk] = anchor
+        if anchor:
+            rec["node"] = anchor[5]
+            rec["order"] = anchor[1]
+            rec["page"] = anchor[0]
+        out.append(rec)
+    return out
+

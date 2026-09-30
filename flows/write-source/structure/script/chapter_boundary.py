@@ -126,7 +126,18 @@ def _is_title(norm_block, ch_key, phrase):
         return False
     k = norm_text(ch_key)
     # 序标必须出现在行首（"3 representations of finite groups…"）；字母附录同理。
-    if k and not re.match(r"^%s(\b|[^a-z0-9])" % re.escape(k), norm_block):
+    # 🔴 两处修正（Ross《A First Course in Probability》ch5 实测 2026-09-29）：
+    #  * 允许「chapter/chap./第/章 + 序标」前缀：印刷标题印作
+    #    "Chapter 5 Continuous Random Variables"，旧式只认裸序标 → 真标题
+    #    （y972）不被判为标题，head_floor 退化为别处命中；
+    #  * 序标后不得再跟「（可选点）+ 数字」："5.2 Expectation … of Continuous
+    #    Random Variables" 是 §5.2 的目录行而非章标题，旧 `[^a-z0-9]` 把 "5."
+    #    放行，且该行正文恰含章名三词探针 → 目录行被误判成章标题（max y 比
+    #    真标题还靠下），章首保留下限错、上一章尾带裁剪窗口被拖大到吞掉目录带。
+    #    `(?!\.?\d|\s+\d)` 只拒「序标紧连下一段数字」（norm_text 把 "5.2" 归一成
+    #    "5 2"，空白分隔的数字同样要拒），"5."/"5:"/"5 Continuous" 均放行，零回归。
+    if k and not re.match(r"^(?:chapter|chap\.?|第|章)?\s*%s(?!\.?\d|\s+\d)(\b|[^a-z0-9])"
+                          % re.escape(k), norm_block):
         return False
     words = phrase.split()
     if not words:

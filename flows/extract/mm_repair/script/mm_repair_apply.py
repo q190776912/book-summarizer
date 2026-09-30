@@ -118,6 +118,26 @@ def insert_formula_by_position(formulas, new_f):
     formulas.insert(lo, new_f)
 
 
+def route_misfiled_segments(corr, tf_map, key, log=None):
+    """把误投进 ``corrections`` 的非字符串值改道到 ``to_structured``，返回是否改道。
+
+    分段列表（``[{"type":"text",...},{"type":"formula",...}]``）的归宿是
+    ``to_structured`` —— 只有那条路径会把一段行拆成 text[]/formulas[] 新条目。
+    代理把它写在 ``corrections`` 里时，原样落盘会让 ``page_*.json`` 的
+    ``text`` / ``latex`` 字段变成 **list**，而所有按字符串消费页 JSON 的读取方
+    （``build_chapter_map`` 的页行扫描、``scan_skeleton``、``dump_chapter_ocr``）
+    当场崩（Evans《PDE》实测：p274 text:7 / p276 text:16 让 chapter_map 构建
+    AttributeError）。改道后的语义与代理本意一致，故不丢弃内容、只纠投递口。
+    """
+    val = corr.get(key)
+    if key not in corr or isinstance(val, str):
+        return False
+    tf_map[key] = corr.pop(key)
+    if log is not None:
+        log.append(f"  [FORMAT] {key}: 非字符串写在 corrections → 按 to_structured 处理")
+    return True
+
+
 def bbox_to_poly(bbox):
     """把 [x0,y0,x1,y1] 包围盒转成 OCR 的 poly（4 角点扁平 [x0,y0,x1,y0,x1,y1,x0,y1]）。"""
     if not bbox or len(bbox) < 4:
@@ -228,6 +248,7 @@ def apply(extract_dir, dry=False, repairs_path=None):
             key = e["key"]
             kind = e["type"]
             idx = e["index"]
+            route_misfiled_segments(corr, tf_map, key, log)
             if key in corr:
                 new_val = corr[key]
                 if kind == "text" and idx < len(texts):

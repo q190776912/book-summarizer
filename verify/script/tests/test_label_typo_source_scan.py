@@ -117,6 +117,18 @@ def test_helper():
             "already-correct label left untouched (zero regression on clean books)")
     _assert(n("2.7 For all f we have I * f") is None,
             "number-first text has no leading word to fix")
+    # 断词型（Evans《PDE》2ed 附录 C p720 实测 2026-09-30）：印刷「THEOREM 1」被
+    # OCR 从词中间断开成「THEO REM 1」，同一共用判据须一并补救（裸单号允许）。
+    _assert(n("THEO REM 1 (Gauss-Green Theorem}.").startswith("Theorem 1"),
+            "split label word 'THEO REM 1' normalized to 'Theorem 1'")
+    _assert(n("the orem 2.7 lowercase split too").startswith("Theorem 2.7"),
+            "split rescue is case-insensitive")
+    _assert(n("Theorem REM 3.1 first token is already a label") is None,
+            "split rescue never fires when the first token is itself a label")
+    _assert(n("TH EO REM 2.7 two breakpoints are not tolerated") is None,
+            "only a single breakpoint is rescued")
+    _assert(n("THEO REM many cases were checked") is None,
+            "split word without an ordinal after it is not rewritten")
     _assert(n("") is None and n(None) is None,
             "empty input returns None (fail-open)")
 

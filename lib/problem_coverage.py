@@ -38,7 +38,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 __all__ = ["contract_run_lengths", "unit_run_length", "coverage_problems",
-           "consolidated_cut", "is_consolidated_head",
+           "consolidated_cut", "is_consolidated_head", "tail_reference_cut",
            "page_problem_floors", "page_floor_problems",
            "exercise_item_numbers", "exercise_runs", "exercise_run_gaps",
            "chapter_exercise_problems", "exercise_statements",
@@ -272,6 +272,44 @@ def consolidated_cut(texts: List[Any]) -> Optional[int]:
     return None
 
 
+# 章末**书目 / 致谢 / 索引**标题（整行只有标题，可带 `>` 前缀或列表符号）。
+# 判据刻意只认**独立成行**的标题：散文句（``see the references in [3]``）里
+# "references" 不在行首独占一行，不会被切。
+_TAIL_REF_WORDS = (r"References?|Bibliography|Literature\s+Cited|"
+                   r"Works?\s+Cited|Acknowledg\w*|Index|"
+                   r"参考文献|引用文献|书目|致谢|索引")
+_TAIL_REF_HEAD_RE = re.compile(
+    r"^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*(?:" + _TAIL_REF_WORDS + r")"
+    r"\s*[.:：·—–\-]*\s*$", re.IGNORECASE)
+
+
+def tail_reference_cut(texts: List[Any]) -> Optional[int]:
+    """契约文本块里「章末书目 / 致谢 / 索引」起始块的下标（无则 None）。
+
+    为什么需要它（2026-10-01 Koopman Operator 实测）：本书每章以
+    ``Conclusion`` 收尾、其后紧跟 ``Acknowledgements`` + ``References``，而抽取期把
+    整个书目块灌进了章末节 description 节点的文本流（ch1 D32 p52-55 共 181 块，
+    第 14 块就是裸标题 ``References``，其后 ``1. Abraham…`` 一直到 ``79.``）。
+    本闸的契约侧于是把书目条目数 ``1..79`` 当成「节内连续编号内容」，20 章里
+    18 章各报一条「缺 43/56/79… 项，须逐项分行补全」——**逼写手把参考文献抄进笔记**。
+    而 skill 自己的覆盖工具 ``tools/coverage_gate.py`` 早把 references/bibliography
+    列进源侧剔除词表（第 180 行），两侧口径必须一致：受版权与篇幅约束，书目从来
+    不是总结内容。
+
+    与 ``consolidated_cut`` 同族判据：①只认**整行独占**的标题（含被 OCR 竖排切成
+    ``Referen`` + ``ces`` 的短块拼接）；②**早切 = 保守**，切在标题处只会压低契约侧
+    下限（少报），绝不可能凭空造出缺失。真习题页另有 ``page_floor_problems`` 的
+    页侧下限兜底（它要求页窗内出现 ``Problems`` 标题），本函数不会让它失明。
+    """
+    for i, t in enumerate(texts):
+        if isinstance(t, str) and _TAIL_REF_HEAD_RE.match(t):
+            return i
+        for cand in _glue_candidates(texts, i):
+            if len(cand) > 1 and _TAIL_REF_HEAD_RE.match(cand):
+                return i
+    return None
+
+
 _LATEX_MARK_RE = re.compile(r'[_}{\\]')
 
 
@@ -321,9 +359,10 @@ def contract_run_lengths(root: Dict[str, Any]) -> List[Tuple[str, int, Tuple[str
             continue
         n = 0
         for texts in _node_text_bundles(s):
-            cut = consolidated_cut(texts)
-            if cut is not None:
-                texts = texts[:cut]
+            cuts = [c for c in (consolidated_cut(texts), tail_reference_cut(texts))
+                    if c is not None]
+            if cuts:
+                texts = texts[:min(cuts)]
             nums = []
             for t in texts:
                 if _is_formula_fragment(t):
@@ -537,7 +576,13 @@ _SECTION_HEAD_RE = re.compile(r"^\s*#{1,3}\s", re.M)
 # 🔴 两体都吃**区间号** ``Exercises 2-4.`` / ``12-15)``：原书把同型的几道题合并成一条
 # 题干（Rosen 8e ch10 §10.6 印「Exercises 2–4. Find the length of a shortest path…」），
 # 区间**覆盖**的每一号都算写了。只认首号会让 3、4 被报成缺号（实测假阳）。
-_EXER_RANGE = r"(\d{1,3})(?:\s*[.\u2013\u2014-]\s*(\d{1,3}))?"
+# 🔴 **点号不是区间分隔符**（Lee ISM ch12/ch16 实测假阳）：``**Exercise 12.31.**`` 是
+# 「章.题」点分序标，把 ``.`` 当区间会把 12..31 全部当成已写——真区间只可能用
+# 连字符形态。标签体整个序标**一次捕获**再解析（``_label_values``）：点分段取尾号
+# （``12.31``→31、Robinson ``1.2.4``→4），字母尾（Vakil ``23.1.C``）对数字号流**不贡献**
+# （㉒ 的「题面在位」另有契约键判据兜底），两段连字符才是区间（Rosen ``2-4``→2,3,4，
+# 跨度异常 = OCR 粘连只认首号，Lee ``Problem 16-1`` 类章-题键维持旧语义认首号）。
+_EXER_RANGE = r"(\d{1,3})(?:\s*([.\u2013\u2014-])\s*(\d{1,3}))?"
 # 🔴 尾随分隔符必须同时吃**空白**与**非 ASCII 字符**：Serre GTM42 的中文译文照印面把
 #   题写成 ``6.2.（Plancherel 公式。）设…``——序标后紧跟全角括号，旧体只认 ``\s`` 而
 #   英文源 ``6.2. (Plancherel`` 有空格，于是同一份题面源侧认得出、译侧认不出，
@@ -549,8 +594,27 @@ EXER_ITEM_BARE_RE = re.compile(
 #   「认不出任何一条习题条目」（2026-09-27 实测 4 例）。`\s*` 吞掉 `**` 与该星。
 EXER_ITEM_LABEL_RE = re.compile(
     r"^\s*(?:>\s*)?\*{1,2}\s*(?:\\?\*\s*)?(?:exercises?|problems?|习题|练习|Exercises?)\s*"
-    + _EXER_RANGE + r"\b", re.M | re.I)
+    r"((?:\d{1,3}\s*[.\u2013\u2014-]\s*)*[0-9A-Za-z]{1,3})(?![.\u2013\u2014-][0-9A-Za-z])",
+    re.M | re.I)
 _RANGE_SPAN_MAX = 30      # 区间跨度上限：超过它多半是两个不相干数字被粘住
+_ORD_TOK_RE = re.compile(r"[.\u2013\u2014-]")
+
+
+def _label_values(ordinal: str) -> List[int]:
+    """标签体捕获的**整个序标** → 号流贡献值（语义见 EXER_ITEM_LABEL_RE 上注）。"""
+    toks = re.split(r"\s*[.\u2013\u2014-]\s*", ordinal.strip())
+    if len(toks) == 1:
+        return [int(toks[0])] if toks[0].isdigit() else []
+    last = toks[-1]
+    if not last.isdigit():
+        return []                       # 字母尾（23.1.C）：题号是整串，不是任何数字
+    if _ORD_TOK_RE.findall(ordinal)[-1] == '.':
+        return [int(last)]              # 点分「章.题 / 章.节.题」→ 尾号
+    if len(toks) == 2 and toks[0].isdigit():
+        lo, hi = int(toks[0]), int(last)
+        return list(range(lo, hi + 1)) \
+            if hi > lo and hi - lo <= _RANGE_SPAN_MAX else [lo]
+    return [int(last)]
 
 
 def printed_ordinal_heads(text: str) -> List[str]:
@@ -577,17 +641,20 @@ def norm_ordinal(key: str) -> str:
 def exercise_item_numbers(text: str) -> List[int]:
     """按出现顺序摊平一段文本里的习题题号（两体各匹配一次，同一位置不重复计数）。
 
-    区间号 ``2-4`` 摊成 ``2, 3, 4``（顺序与首号一致，不影响切段判定）。
+    裸号体维持旧语义（``2-4`` 摊成 ``2, 3, 4``）；标签体按整个序标解析
+    （``_label_values``）：``Exercise 12.31`` → ``31``、``23.1.C`` → 无、
+    ``Exercises 2-4`` → ``2, 3, 4``。
     """
     got = []
-    for rx in (EXER_ITEM_BARE_RE, EXER_ITEM_LABEL_RE):
-        for m in rx.finditer(text):
-            lo = int(m.group(1))
-            hi = int(m.group(2)) if m.group(2) else lo
-            vals = [lo]
-            if hi > lo and hi - lo <= _RANGE_SPAN_MAX:
-                vals = list(range(lo, hi + 1))
-            got.append((m.start(), vals))
+    for m in EXER_ITEM_BARE_RE.finditer(text):
+        lo = int(m.group(1))
+        hi = int(m.group(3)) if m.group(3) else lo
+        vals = [lo]
+        if hi > lo and hi - lo <= _RANGE_SPAN_MAX:
+            vals = list(range(lo, hi + 1))
+        got.append((m.start(), vals))
+    for m in EXER_ITEM_LABEL_RE.finditer(text):
+        got.append((m.start(), _label_values(m.group(1))))
     seen: set = set()
     out: List[int] = []
     for pos, vals in sorted(got):
@@ -641,13 +708,17 @@ def chapter_exercise_problems(ordered_units, min_run: int = 3) -> List[str]:
     返回问题字符串列表（空 = 通过）。每条报：习题集标题、缺号数、号段、缺失题号 +
     **洞之后第一题所在的单元文件**（补写就打开那个文件，把缺的各题插在它前面）。
 
-    判据边界（四条都是为「少误伤」设计）：
+    判据边界（五条都是为「少误伤」设计）：
     ① 号流**只由习题单元开段**（manifest ``type == exercise``，即契约在账的习题条目；
       该单元没印集标题时也开，段名退回文件名）——散文/条目单元里的 ``1. 2. 3.`` 列举与
       它们顺带抄到的集中习题块（V-I 认可省略）都不开段；
     ② 段一旦开开，后续单元（含 desc/item 接力单元）的题号继续累积，直到下一个集标题 /
       下一个习题单元 / 新的 ``##``–``###`` 小节边界结算——一集 68 题分散在 20 个单元里
       是 Rosen 这类书的常态，这正是本闸相对单元级判据 20 的**唯一增量**；
+    ②' 🔴 但**接力只属于印了集标题的段**（Lee ISM ch12/ch16 实测假阳）：契约逐题登记、
+      单元内**无**集标题（段名退回文件名）的 fallback 段，「跨单元连续」根本不是这类书
+      的体例事实——题号分散在命题/定理单元的 ``> 1. > 2.`` 证明列举里，接力会把它们
+      卷进号流拼出假号段。fallback 段只认**本单元**自己的题号；
     ③ 号回退也切段（章末「Supplementary Exercises」等重新起号不算前一集缺号）；
     ④ 短段（< ``min_run``）不判。
     合起来仍拦得住「同一集内部跳号」——那正是写手只抄代表性题目的形态。
@@ -656,6 +727,7 @@ def chapter_exercise_problems(ordered_units, min_run: int = 3) -> List[str]:
     head = ""
     seg: List[Tuple[int, str]] = []
     opened = False          # 是否已进入某个（契约在账的）习题集
+    own_only = False        # 当前段 = fallback（无印刷集标题）→ 不接力
 
     def flush():
         if not seg:
@@ -678,10 +750,11 @@ def chapter_exercise_problems(ordered_units, min_run: int = 3) -> List[str]:
             for v in exercise_item_numbers(text):
                 seg.append((v, fname))
 
-    def open_at(title):
-        nonlocal opened, head
+    def open_at(title, fallback):
+        nonlocal opened, head, own_only
         flush()
         head, opened = title, True
+        own_only = fallback
 
     for item in ordered_units:
         fname, body = item[0], item[1]
@@ -689,20 +762,24 @@ def chapter_exercise_problems(ordered_units, min_run: int = 3) -> List[str]:
         if opened and _SECTION_HEAD_RE.search(body):
             flush()                      # 进入新的小节 = 上一集到此为止
             opened = False
+            own_only = False
         if not is_exercise:
-            # 非习题单元：只可能是在**接力**上一集（V-I 认可的集中块散抄不开新段）
-            take(body, fname)
+            # 非习题单元：只可能是在**接力**上一集（V-I 认可的集中块散抄不开新段）；
+            # fallback 段（②'）不接——它只对自己的题号负责。
+            if not own_only:
+                take(body, fname)
             continue
         cuts = [m.start() for m in EXER_SET_HEAD_RE.finditer(body)]
         if not cuts:
-            open_at("（%s：单元内无习题集标题）" % fname)
+            open_at("（%s：单元内无习题集标题）" % fname, True)
             take(body, fname)
             continue
         bounds = [0] + cuts + [len(body)]
         for k in range(1, len(bounds) - 1):
-            take(body[bounds[k - 1]:bounds[k]], fname)   # 标题之前 = 上一集续段
-            open_at(body[bounds[k]:bounds[k] + 70].splitlines()[0].strip().strip("*"))
-        take(body[bounds[-2]:], fname)
+            if not own_only:
+                take(body[bounds[k - 1]:bounds[k]], fname)  # 标题之前 = 上一集续段
+            open_at(body[bounds[k]:bounds[k] + 70].splitlines()[0].strip().strip("*"), False)
+        take(body[bounds[-2]:], fname)   # 末段属于本单元刚开的（非 fallback）段
     flush()
     return problems
 

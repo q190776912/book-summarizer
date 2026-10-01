@@ -23,7 +23,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 from problem_coverage import (consolidated_cut, coverage_problems,
                               longest_run_from_one,
                               page_floor_problems, page_problem_floors,
-                              unit_run_length)
+                              tail_reference_cut, unit_run_length)
 
 
 def txt(t, line_start=True):
@@ -350,6 +350,74 @@ class TestCJKIndentItems(unittest.TestCase):
                         "　　（3）举例反驳。"])
         self.assertEqual(
             coverage_problems(root, [unit("3.27", md)], _read({"3.27": md})), [])
+
+
+class TestTailReferenceCut(unittest.TestCase):
+    """章末**书目 / 致谢 / 索引**块的契约侧切断（2026-10-01 Koopman Operator 实测）。
+
+    缺陷形态：每章 ``Conclusion`` 之后的 ``Acknowledgements`` + ``References`` 被灌进
+    章末节 description 文本流，书目 ``1..79`` 被当成「节内连续编号内容」，20 章里
+    18 章各报一条「缺 N 项，须逐项分行补全」= 逼写手抄参考文献。
+    正向 = 裸标题（含 OCR 竖排拆分）必须开切；负向 = 真习题列举、标题**之前**的编号
+    内容、句中散文引用都不得被新判据吞掉。
+    """
+
+    def cut(self, *blocks):
+        return tail_reference_cut(list(blocks))
+
+    def test_bare_reference_heading_cuts(self):
+        for head in ("References", "Bibliography", "参考文献", "Literature Cited",
+                     "ACKNOWLEDGMENTS", "Index", "> References", "■ References",
+                     "References."):
+            self.assertEqual(self.cut("conclusion prose", head, "1. Abrams",
+                                      "2. Brunner"), 1, head)
+
+    def test_prose_mention_does_not_cut(self):
+        # 句中/带正文的 "references" 不是独立标题行 → 不开切（否则把该写的判成不必写）
+        self.assertIsNone(self.cut("see the references in [3] for details"))
+        self.assertIsNone(self.cut("1. first item", "2. second item"))
+
+    def test_numbered_content_before_heading_still_counted(self):
+        # 标题**之前**的编号内容仍是下限：切在标题处，不掩盖真缺口
+        blocks = [txt("%d. item" % i) for i in range(1, 6)]
+        blocks += [txt("References"), txt("1. Abrams"), txt("2. Brunner")]
+        root = chapter(node("section", "18.6", blocks))
+        md = "\n".join(["1. item", "2. item", "3. item"])
+        problems = coverage_problems(root, [unit("18.6", md)], _read({"18.6": md}))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("缺 2 项", problems[0])
+
+    def test_reference_list_no_longer_fires(self):
+        # Koopman 实测形态：结论正文 + 裸 References + 79 条书目，单元一概不写书目
+        blocks = [txt("The Koopman operator is a powerful tool."),
+                  txt("References")]
+        blocks += [txt("%d. Author, T.: Title. Journal (201%d)" % (i, i % 10))
+                   for i in range(1, 80)]
+        root = chapter(node("section", "1.7", blocks))
+        md = "结论：Koopman 算子可在全局范围线性化非线性系统。"
+        self.assertEqual(
+            coverage_problems(root, [unit("1.7", md)], _read({"1.7": md})), [])
+
+    def test_exercise_list_without_heading_still_fires(self):
+        # 负向：真习题块（没有 References 标题）必须照旧报缺失
+        blocks = [txt("%d. Solve." % i) for i in range(1, 13)]
+        root = chapter(node("section", "3.9", blocks))
+        md = "1. Solve."
+        problems = coverage_problems(root, [unit("3.9", md)], _read({"3.9": md}))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("缺 11 项", problems[0])
+
+    def test_earliest_cut_wins(self):
+        # Exercises 块在前：沿用 consolidated_cut 的旧行为（习题块处切）
+        raw = ["body", "1. item", "EXERCISES 4", "1. problem", "References",
+               "1. Abrams"]
+        self.assertEqual(consolidated_cut(raw), 2)
+        self.assertEqual(tail_reference_cut(raw), 4)
+        blocks = [txt(t) for t in raw]
+        root = chapter(node("section", "9.1", blocks))
+        md = "1. item"
+        problems = coverage_problems(root, [unit("9.1", md)], _read({"9.1": md}))
+        self.assertEqual(problems, [])   # 契约下限 = 标题前的 1..1 → 无缺失
 
 
 if __name__ == "__main__":

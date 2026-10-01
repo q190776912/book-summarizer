@@ -684,7 +684,9 @@ def gate_chapter(ext, ch_key, units_sub="units"):
     # 歧义情形交给章级覆盖闸兜底（契约任一图全无单元嵌入 = FAIL）。
     contract_imgs = chapter_images(contract) if contract is not None else None
     img_units_by_key = {}
+    units_by_key = {}                      # tags 回退的歧义判据（含全部单元类型）
     for u in units:
+        units_by_key.setdefault(str(u["key"]), []).append(u["file"])
         if u["type"] in ("item", "desc", "exercise"):
             img_units_by_key.setdefault(str(u["key"]), []).append(u["file"])
     observed_imgs = set()
@@ -729,10 +731,15 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         # 符合写作要求（拦"瞎改就标 DONE"）。
         # 🔴 序标真值**按单元所属契约节点**取（manifest.tags，拆分时写入）：
         # 同节内定义/定理/推论共用 key，按 key 聚合会要求「定义」单元写出
-        # 「定理」单元的编号公式（假缺号）。老 manifest 缺 tags 时退回 key 映射。
+        # 「定理」单元的编号公式（假缺号）。老 manifest 缺 tags 时退回 key 映射，
+        # 但**仅当该 key 在本章只对应一个单元**时才退回（同上面图片回退的判据）——
+        # Koopman ch12 实测：契约里 `定理12.5` 是 p343 / p344 两个节点（前者携带
+        # (12.42)），按 key 聚合后两个单元都被要求写出 \tag{12.42}，后者恒假缺号。
+        # 歧义情形交给章级 Q 层（`verify/formula_tag/` 按契约 tag 集合对账）兜底。
         exp = u.get("tags")
         if not isinstance(exp, list):
-            exp = tag_map.get(str(u["key"])) if tag_map else None
+            exp = tag_map.get(str(u["key"])) if (
+                tag_map and len(units_by_key.get(str(u["key"]), [])) == 1) else None
         if exp:
             # 契约/manifest 里遗留的 OCR 噪声编号（`0`/`00`/`07`，来自「< ∞」被读成
             # 编号列）不作真值：既不再**要求**单元写 `\tag{00}`，单元里真写了就按

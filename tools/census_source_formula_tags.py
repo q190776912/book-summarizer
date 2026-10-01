@@ -74,14 +74,16 @@ def _tags_of(node):
     return got
 
 
-def _both(ext, node, key, ncomp, scope, letter, bare, page_dir):
+def _both(ext, node, key, ncomp, scope, letter, bare, page_dir, lead=None):
     prefix = ""
     if scope == 2:
         if key.isdigit():
             prefix = key
-        elif letter and len(key) == 1 and key.isalpha():
+        elif (letter or lead == 'letter') and len(key) == 1 and key.isalpha():
             prefix = key
-    kw = dict(letter=letter, bare=bare, page_dir=page_dir,
+        elif lead == 'roman' and key.isalpha():
+            prefix = key
+    kw = dict(letter=letter, bare=bare, lead=lead, page_dir=page_dir,
               section_scoped=(scope == 3))
     new = ccc._source_formula_tags(ext, node.get("page_start"),
                                    node.get("page_end"), prefix, ncomp, **kw)
@@ -124,11 +126,11 @@ def main():
                 print("  !! %s/%s 读约失败：%r" % (os.path.basename(bk), f, e))
                 continue
             key = str(node.get("key") or "")
-            ncomp, scope, letter, bare = ac.formula_cfg(ext, key)
+            ncomp, scope, letter, bare, lead = ac.formula_cfg(ext, key)
             if ncomp is None:
                 continue                       # 未配 formula（Q 层 opt-in）→ 闸门不比对
             old, new = _both(ext, node, key, ncomp, scope, letter, bare,
-                             ccc._node_page_dir(ext, node))
+                             ccc._node_page_dir(ext, node), lead=lead)
             n_ch += 1
             dropped = old - new
             if not dropped:

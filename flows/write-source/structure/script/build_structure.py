@@ -1786,11 +1786,28 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None,
         # 页眉同文、出现在 ≥2 页 → 全部 title 候选被判页眉剔除，而本书节头一律带号
         # （无 bare/text 候选可退）→ 回扫返回 None → 调用方退回章首目录页，
         # §1.3/§1.4/… 全锚到 p19，ANCHOR-SANITY 12 章全部拒绝落盘。
-        # 页眉只可能出现在本节内容所在页，故「同文重复」候选里**最早**那一页就是本节
-        # 起始页（节自扉页起始时 min_y 已滤掉目录行，不会倒退到扉页）。Rosen 那类
-        # 「真节头无号、只有页眉带号」的书同样受益：最早页眉页 = 无号节头所在页
-        # （实测 p816 页顶印 `11.2 Applications of Trees 793`、正文节头在同页 y=1401）。
-        _kept = cands
+        # 🔴 但恢复必须**只认正文带位置**的那次出现：页眉恒印在各页**页顶**（同一
+        # 文本在每页的 y 都≈同一极小值），真节头则落在正文带（y 明显更大）。判据：
+        # 对「同文 ≥2 页」的 running head 文本，取各次出现的 y，仅当某次 y 严格大于
+        # 该文本的最小 y + _RUNNING_HEAD_BAND（= 正文带，非页顶）时才恢复，且页码须
+        # ≤ _hbound（节头不晚于自身页眉）。
+        #   * Evans 1.3：同文出现在 p24(y=1500,正文) 与 p25(y=90,页顶)，min_y=90 →
+        #     p24 的 1500 > 90+60 → 恢复 p24 ✓；
+        #   * Rosen 2.1：同文仅在 p2/p3 各以 y=95 出现（纯页顶），min_y=95 →
+        #     95 ≯ 95+60 → **不恢复** → 返回 None（退回扉页 p1，§2.1 实际起点）✓；
+        #   * Rosen 2.1 faraway：page9 "Introduction" 为单页 loose text（<2 页），
+        #     本就不属 running head 恢复范畴，且页 9 > _hbound=2 → 维持剔除 → None ✓。
+        _RUNNING_HEAD_BAND = 60.0
+        _ys_of = {}
+        for _pp, _yy, _tt, _kk in cands:
+            if _yy is not None:
+                _ys_of.setdefault(_tt, []).append(_yy)
+        _kept = [c for c in cands
+                 if len(_pages_of.get(c[2], ())) >= 2          # 仅 running head 文本
+                 and c[1] is not None
+                 and _ys_of.get(c[2])
+                 and c[1] > min(_ys_of[c[2]]) + _RUNNING_HEAD_BAND   # 正文带位置
+                 and (_hbound is None or c[0] <= _hbound)]     # 不晚于自身页眉
     for _kind in ('title', 'bare', 'text'):
         _pk = [c for c in _kept if c[3] == _kind]
         if _kind == 'text':

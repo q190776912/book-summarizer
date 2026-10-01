@@ -214,7 +214,9 @@ def print_result(r):
         elif r.get('fig_unembedded'):
             print(f"\nE-LAYER FIGURE PARTIAL COVERAGE ({len(r['fig_unembedded'])}): "
                   f"detected figure(s) not embedded in the markdown (non-blocking — "
-                  f"the note does not cite them; embed-when-referenced rule):")
+                  f"the note does not cite them; embed-when-referenced rule; "
+                  f"确认有意省略者（如章末习题配图而习题不收录）登记到 "
+                  f"ignore_fig_ch{r['ch']}.json（label 或裁剪文件名 + 理由）后豁免）:")
             for n in r['fig_unembedded']:
                 print(f"  ~ {n}")
 
@@ -532,14 +534,17 @@ def print_result(r):
                 print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
         q_ll = r.get('q_letter_led', []) or []
         if q_ll:
-            # NON-BLOCKING WARN (per formula_tag.md SSOT): the layer cannot yet
-            # validate letter/Roman-led numbering, so it downgrades to a WARN and
-            # asks for human reconciliation via formula_audit.md.  Does NOT count
-            # toward `problems`, so it never forces a FAIL.
+            # NON-BLOCKING WARN (per formula_tag.md SSOT): the source carries
+            # letter/Roman-led equation numbers but this book's formula config
+            # did NOT select the matching lead (the probe only runs for digit-
+            # configured books), so those numbers went unvalidated.  Downgrade to
+            # a WARN asking the operator to pick the lead and/or reconcile via
+            # formula_audit.md.  Does NOT count toward `problems`, never FAILs.
             print(f"\nQ-LAYER FORMULA LETTER-LED ({len(q_ll)}) [WARN, non-blocking]: "
-                  f"书源含字母/罗马开头公式编号 (A.3)/(I.2)，但 Q 层公式序标校验逻辑"
-                  f"（norm()/build_formula_patterns()）尚未实现「可选首段字母/罗马前缀」支持"
-                  f"——该部分公式序标**降级为 WARN、不阻断**，请人工核对 formula_audit.md。")
+                  f"书源含字母/罗马开头公式编号 (A.3)/(I.2)/(II.5)，但本书 formula 配置"
+                  f"未选用对应编号家族——字母章位请设 \"letter_ch\": true（或 type 15），"
+                  f"罗马章位请设 \"type\": 16（lead=roman）后重跑 verify；该部分公式序标"
+                  f"**降级为 WARN、不阻断**，并请人工核对 formula_audit.md。")
             for row in q_ll:
                 print(f"  ~ {row if isinstance(row, str) else row.get('source_text', '')}")
         q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)

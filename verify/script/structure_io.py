@@ -220,13 +220,23 @@ def read_structure_items(ext_dir, ch, primary_type=None):
                             'text': n.name,
                         })
                         continue
-                if '-' in num_raw:
-                    # Three-level: emit bare dash form ('1.1-1'), no label.
-                    _canon = _normalize_threelevel(num_raw)
-                else:
-                    _num = re.search(r'\d+(?:\.\d+)*', num_raw)
-                    _number = _num.group(0) if _num else ''
-                    _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
+        if '-' in num_raw:
+            # Three-level: emit the BARE dash form ('1.1-1').  keys_in_md also
+            # emits this same bare form (via KEY_RE), so the B-layer
+            # truly-missing / extra comparison intersects 1:1 on the numeric
+            # path.  The md additionally carries labeled heads (**定义1.1.1**);
+            # those are reconciled against the bare contract key by the
+            # label-tolerant comparison in item_numbering_integrity.run, NOT by
+            # emitting a second labeled contract key here (which would surface
+            # contract type/label mismatches as false truly-missing).
+            _bare = _normalize_threelevel(num_raw)
+            _lbl = TYPE_TO_LABEL.get(n.type, 'uncat')
+            items.append({'key': _bare, 'label': _lbl,
+                          'page': n.page_start, 'text': n.name})
+            continue
+        _num = re.search(r'\d+(?:\.\d+)*', num_raw)
+        _number = _num.group(0) if _num else ''
+        _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _number
         items.append({
             'key': _canon,
             'label': TYPE_TO_LABEL.get(n.type, 'uncat'),

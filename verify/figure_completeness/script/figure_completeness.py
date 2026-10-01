@@ -26,6 +26,12 @@ Checks performed (all on chapter-filtered index entries):
     with no OCR caption -> `fig_extra` (WARN only).  `ignore_fig` (per-chapter
     `ignore_fig_ch{N}.json`) exempts a label from BOTH sides of that
     reconciliation.
+  * embed coverage: figures detected in figure_index.json but never embedded
+    as <img> -> `fig_unembedded` (WARN "PARTIAL COVERAGE"); zero labeled
+    figures embedded -> `fig_zero_embed` (blocking).  `ignore_fig` ALSO
+    exempts the unembedded side when the figure's label or crop filename is
+    explicitly registered with a justification (典型：章末习题配图、章末习题
+    按 writing-rules 不收录) — see check_figure_coverage.
   * validity (was F): each cropped PNG decoded via cv2 (np.fromfile+imdecode to
     survive Unicode paths); missing/undecodable/too-small -> `fig_invalid`
     (blocking FAIL); near-blank low-variance crop -> `fig_invalid_warn` (WARN).
@@ -338,7 +344,25 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
 _IMG_EMBED_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]*)"')
 
 
-def check_figure_coverage(md_file, ch_entries):
+def _unembedded_exempt(entry, ig_norm, ig_raw, ig_stems):
+    """True when a figure entry is EXPLICITLY REGISTERED as intentionally
+    unembedded (figure_completeness.md 完整性 · unembedded 豁免): either by its
+    figure label (`normfig`-compared, same namespace as missing/extra) or by
+    its crop file basename / stem (unnamed detect-crops carry no label).
+    Registration lives in `ignore_fig_ch{N}.json` with a justification."""
+    lbl = entry.get('label')
+    if lbl and normfig(lbl) in ig_norm:
+        return True
+    base = os.path.basename(entry.get('file') or '')
+    if not base:
+        return False
+    if base in ig_raw:
+        return True
+    stem = os.path.splitext(base)[0]
+    return stem in ig_stems
+
+
+def check_figure_coverage(md_file, ch_entries, ignore=None):
     """Return ``(embedded, unembedded)`` for this chapter's figures.
 
     ``embedded`` = set of crop basenames referenced by ``<img src=".../X.png">``
@@ -346,6 +370,14 @@ def check_figure_coverage(md_file, ch_entries):
     ``figure_index.json`` (and whose file is present on disk) but are NOT
     embedded in the md. This closes the false-green where the E-layer reported
     PASS for a chapter whose source figures were detected but never placed.
+
+    ``ignore`` (the chapter's merged `ignore_fig` namespace) ALSO exempts the
+    unembedded side: a figure whose label or crop filename is explicitly
+    registered (with justification — 典型：章末习题配图、而章末习题按
+    writing-rules 习题收录规则不收录，宿主条目不存在) is dropped from
+    ``unembedded``. Unregistered figures are still reported. The ``embedded``
+    set and the blocking `fig_zero_embed` gate are NOT affected — a blanket
+    "embed was never run" remains a hard FAIL even with registrations present.
     """
     names = []
     for e in ch_entries:
@@ -357,7 +389,18 @@ def check_figure_coverage(md_file, ch_entries):
         with open(md_file, encoding='utf-8') as fh:
             for m in _IMG_EMBED_RE.finditer(fh.read()):
                 embedded.add(os.path.basename(m.group(1)))
-    unembedded = [n for n in names if n not in embedded]
+    ig_norm = ig_raw = ig_stems = frozenset()
+    if ignore:
+        ig_norm = {normfig(k) for k in ignore}
+        ig_raw = {str(k).strip() for k in ignore}
+        ig_stems = {os.path.splitext(x)[0] for x in ig_raw}
+    unembedded = [
+        os.path.basename(e['file'])
+        for e in ch_entries
+        if e.get('file')
+        and os.path.basename(e['file']) not in embedded
+        and not _unembedded_exempt(e, ig_norm, ig_raw, ig_stems)
+    ]
     return embedded, unembedded
 
 
@@ -382,7 +425,7 @@ class ELayer(VerifyLayer):
         idx = load_figure_index(ctx.ext_dir)
         if idx is not None:
             ch_entries = _chapter_entries(idx, ctx.ch)
-        embedded, unembedded = check_figure_coverage(ctx.md_file, ch_entries)
+        embedded, unembedded = check_figure_coverage(ctx.md_file, ch_entries, ctx.ignore)
         embeddable = [e for e in ch_entries if e.get('file')]
         # Blocking zero-embed only counts genuinely captioned figures: an
         # unnamed detect-crop the note never cites is legitimately omitted

@@ -53,7 +53,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot  # noqa: E402
 _boot.setup()
 
-from lib.numbering import ordinal_depth, resolve_ordinal_code  # noqa: E402
+from lib.numbering import (resolve_formula_type,  # noqa: E402
+                           FORMULA_LEAD_LETTER)
 from formula_tag import (SourceFormulaIndex, build_formula_patterns  # noqa: E402
                          )
 
@@ -108,18 +109,22 @@ def _provenance_ok(cfg, holder):
 def _source_numbers(ext, formula, chapter):
     """Numbers the extractor CAN harvest for this chapter (plain ∪ sectioned).
 
-    Mirrors the Q layer's own derivation (`QLayer.run`): depth from `type`,
-    patterns from depth + `bare_number` + `letter_ch`.
+    Mirrors the Q layer's own derivation (`QLayer.run`): the token shape
+    `(lead, ncomp)` is resolved via `resolve_formula_type(type, letter_ch)` (the
+    single entry point — the formula-only Roman code 16 / letter code 15 live
+    outside ORDINAL_DEPTH, so `ordinal_depth` would crash on them), then the
+    patterns come from `ncomp` + `bare_number` + `lead`.
     """
     from data.chapter_map.chapter_map import find_chapter
     rec = find_chapter(ext, chapter)
     start, end = rec.get("start"), rec.get("end")
     if not isinstance(start, int) or not isinstance(end, int):
         _die(f"chapter_map 里章 {chapter} 无页区间，无法核对书源集合 S")
-    ncomp = ordinal_depth(resolve_ordinal_code(formula.get("type")))
+    lead, ncomp = resolve_formula_type(
+        formula.get("type"), letter_ch=bool(formula.get("letter_ch")))
     patterns = build_formula_patterns(
         ncomp, allow_bare=bool(formula.get("bare_number", True)),
-        letter=bool(formula.get("letter_ch")))
+        letter=(lead == FORMULA_LEAD_LETTER), lead=lead)
     fignore = {SourceFormulaIndex.norm(str(k))
                for k in (formula.get("ignore") or [])}
     fignore = {k for k in fignore if k}

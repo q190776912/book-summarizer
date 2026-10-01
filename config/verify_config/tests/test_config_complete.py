@@ -206,7 +206,9 @@ class TestRequireComplete(unittest.TestCase):
     # --- (d) file present + legal ordinal array -> no raise ---------------
     def test_valid_array_ordinal_3_no_raise(self):
         loader = _loader_with_config(
-            {"ordinal": [{"type": 3, "scope": 2}]})
+            {"ordinal": [{"type": 3, "scope": 2}],
+             "strict": True, "chapter_first": True, "section_scoped": False,
+             "language": "cn"})
         loader.require_complete()  # must not raise
         self.assertEqual(loader.book.primary_type, 3)
         self.assertEqual(len(loader.book.ordinal), 1)
@@ -221,7 +223,9 @@ class TestRequireComplete(unittest.TestCase):
         # `section_types` must be accepted, and the derived `section_depths`
         # property must equal [1, 2, 3, 4].
         cfg = {"ordinal": [{"type": 2, "scope": 2}],
-               "section_types": [1, 2, 3, 4]}
+               "section_types": [1, 2, 3, 4],
+               "strict": True, "chapter_first": True, "section_scoped": False,
+               "language": "cn"}
         loader = _loader_with_config(cfg)
         loader.require_complete()  # must not raise
         self.assertEqual(loader.book.primary_type, 2)
@@ -331,7 +335,9 @@ class TestRequireComplete(unittest.TestCase):
         # R6 override: a config declaring groups with NO uncat group must be
         # accepted by both from_dict and require_complete. from_dict must NOT
         # auto-append an uncat; uncat_group() falls back to ordinal[0].
-        cfg = {"ordinal": [{"type": 3, "name": ["定理"], "scope": 2}]}
+        cfg = {"ordinal": [{"type": 3, "name": ["定理"], "scope": 2}],
+               "strict": True, "chapter_first": True, "section_scoped": False,
+               "language": "cn"}
         bc = BookConfig.from_dict(cfg)
         self.assertEqual([g.name for g in bc.ordinal], [["定理"]])
         self.assertEqual(bc.uncat_group().name, ["定理"])  # fallback to ordinal[0]
@@ -348,17 +354,19 @@ class TestRequireComplete(unittest.TestCase):
         # raise.  `section_depths` is NOT a config field (depth is derived from
         # each role via SECTION_TYPE_DEPTH); a stale `section_depths` key is
         # ignored.  Each variant below is sanitized to a legal config -> no raise.
+        _bools = {"strict": True, "chapter_first": True, "section_scoped": False,
+                  "language": "cn"}
         bad_variants = [
-            {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2]},                       # valid after sanitize
-            {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2, 9]},                    # role 9 dropped -> [1, 2]
-            {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2, 3]},                    # valid
-            {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [1, 2]},                       # valid (no depths key)
-            {"ordinal": [{"type": 3, "scope": 2}],
-             "section_types": [2, 2]},                       # head coerced -> [1, 2]
+            dict({"ordinal": [{"type": 3, "scope": 2}],
+                  "section_types": [1, 2]}, **_bools),              # valid after sanitize
+            dict({"ordinal": [{"type": 3, "scope": 2}],
+                  "section_types": [1, 2, 9]}, **_bools),           # role 9 dropped -> [1, 2]
+            dict({"ordinal": [{"type": 3, "scope": 2}],
+                  "section_types": [1, 2, 3]}, **_bools),           # valid
+            dict({"ordinal": [{"type": 3, "scope": 2}],
+                  "section_types": [1, 2]}, **_bools),              # valid (no depths key)
+            dict({"ordinal": [{"type": 3, "scope": 2}],
+                  "section_types": [2, 2]}, **_bools),              # head coerced -> [1, 2]
         ]
         for bad in bad_variants:
             loader = _loader_with_config(bad)
@@ -370,6 +378,101 @@ class TestRequireComplete(unittest.TestCase):
                 self.fail("require_complete raised on %r; current code "
                           "sanitizes section configs instead of raising "
                           "per spec/docs." % bad)
+
+
+# --------------------------------------------------------------------------
+# Part A2 — main-config required fields are NO-DEFAULT (2026-10-01)
+# --------------------------------------------------------------------------
+_MAIN_REQUIRED = {"strict": True, "chapter_first": True, "section_scoped": False,
+                  "language": "cn"}
+
+
+class TestMainRequiredNoDefault(unittest.TestCase):
+    """`require_complete` 强制**主配置**显式声明 strict/chapter_first/section_scoped/language。
+
+    这四项直接决定整本书如何被解析（含正文主体语言），旧文档「默认 True/False/cn」＝
+    静默兜底，一律禁止——缺失即 exit 2。用 `declared_fields` 区分「缺字段」与「字段
+    在场但恰等于旧默认」。appendix/supplement 覆盖段「省略 = 继承正文」，**不受此约束**；
+    文件缺失走自己的 allow_absent 语义，也不受在场门影响。"""
+
+    def test_missing_all_required_raises(self):
+        loader = _loader_with_config({"ordinal": [{"type": 3, "scope": 2}]})
+        with self.assertRaises(ConfigError) as ctx:
+            loader.require_complete()
+        msg = str(ctx.exception)
+        self.assertIn("[CONFIG]", msg)
+        for k in ("strict", "chapter_first", "section_scoped", "language"):
+            self.assertIn(k, msg)
+        self.assertIn("no-default", msg)
+
+    def test_partial_missing_required_raises(self):
+        loader = _loader_with_config(
+            {"ordinal": [{"type": 3, "scope": 2}], "strict": True})
+        with self.assertRaises(ConfigError) as ctx:
+            loader.require_complete()
+        msg = str(ctx.exception)
+        self.assertIn("chapter_first", msg)
+        self.assertIn("section_scoped", msg)
+        self.assertIn("language", msg)
+        self.assertNotIn("'strict'", msg)  # strict 已声明，不该出现在缺失清单里
+
+    def test_all_required_declared_no_raise(self):
+        loader = _loader_with_config(
+            {"ordinal": [{"type": 3, "scope": 2}], **_MAIN_REQUIRED})
+        loader.require_complete()  # must not raise
+
+    def test_bool_value_equal_to_old_default_still_accepted(self):
+        # 关键：判据是「在不在场」而非「取值是否等于旧默认」。chapter_first=False
+        # （节基书真实判定）、strict=False、section_scoped=True、language="cn"（=
+        # 旧默认）都是合法显式声明，必须被接受。
+        loader = _loader_with_config({
+            "ordinal": [{"type": 3, "scope": 2}],
+            "strict": False, "chapter_first": False, "section_scoped": True,
+            "language": "cn"})
+        loader.require_complete()  # must not raise
+        self.assertFalse(loader.book.chapter_first)
+        self.assertFalse(loader.book.strict)
+        self.assertTrue(loader.book.section_scoped)
+        self.assertEqual(loader.book.language, "cn")
+
+    def test_absent_file_not_hit_by_required_gate(self):
+        # 文件缺失走 allow_absent 自己的 warn/raise 语义，不该被必填在场门误伤。
+        loader = _loader_with_config(None)
+        with self.assertWarns(UserWarning):
+            loader.require_complete(allow_absent=True)  # warns, no raise
+
+    def test_appendix_override_may_omit_required(self):
+        # 外层 map：ch 声明全部必填字段，appendix 覆盖段省略它们（含 language，
+        # = 继承正文）→ 通过。
+        cfg = {
+            "ch": {"ordinal": [{"type": 2, "scope": 2}], **_MAIN_REQUIRED},
+            "appendix": {"ordinal": [{"type": 1, "name": ["uncat"], "scope": 2}]},
+        }
+        loader = _loader_with_config(cfg)
+        loader.require_complete()  # must not raise
+
+    def test_main_map_missing_required_raises(self):
+        # 外层 map 的 ch 段缺必填字段 → 主配置门报错（哪怕 appendix 段带全了）。
+        cfg = {
+            "ch": {"ordinal": [{"type": 2, "scope": 2}]},
+            "appendix": {"ordinal": [{"type": 1, "name": ["uncat"], "scope": 2}],
+                         **_MAIN_REQUIRED},
+        }
+        loader = _loader_with_config(cfg)
+        with self.assertRaises(ConfigError):
+            loader.require_complete()
+
+    def test_missing_language_only_raises(self):
+        # 三个布尔都在场、唯独缺 language → 主配置门必须报错（language 现已是
+        # REQUIRED_MAIN_FIELDS 之一，不再静默回落 'cn'）。
+        loader = _loader_with_config({
+            "ordinal": [{"type": 3, "scope": 2}],
+            "strict": True, "chapter_first": True, "section_scoped": False})
+        with self.assertRaises(ConfigError) as ctx:
+            loader.require_complete()
+        msg = str(ctx.exception)
+        self.assertIn("language", msg)
+        self.assertIn("no-default", msg)
 
 
 # --------------------------------------------------------------------------

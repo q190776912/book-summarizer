@@ -41,7 +41,7 @@
    - **机制**：Q 层 `_BLOCK_RE = \$\$(.*?)\$\$` 为顺序非贪婪配对——一个落单 `\$\$` 会使其后所有块的奇偶归属整体翻转，`\\tag` 全部被挤出块外；此时邻接启发式 fixer（G 层等）按错误的块图“修复”会静默污染正文（2026-08 实测两起：Ch1 顶层正文被吞进引用块、Ch6 补围栏越补 OUTSIDE 越多 12→18）。
    - **三数不变量**：`fences`（须偶）/ `blocks`（配对块数）/ `tags in vs OUTSIDE`（\\tag 应全部在块内）。OUTSIDE 非空时先以公式行/`\\tag` 为锚点**整体确定性重建**公式块（引用块内保留 `> ` 前缀），禁止逐处补围栏。
    - **CLI 守卫（🔴）**：**全层 `--fix` 默认禁用**——裸 `--fix` 只输出禁用提示，不运行任何 fixer（防止内容未归位时 G 层等邻接启发式修复污染正文，2026-08 Ch1/Ch6 事故）。确需整章自动修复时用 `--fix --fix-force`：仍须先过 PREFLIGHT 门（围栏配对且无块外 `\tag`，任一不满足即使 force 也拒绝）；G 层 fixer 另有独立内置守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）双保险。
-1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 4`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
+1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 2`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
 2. 批量校验：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过

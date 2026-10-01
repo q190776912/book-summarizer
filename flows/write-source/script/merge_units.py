@@ -31,6 +31,13 @@ agent 绕过门控直接 merge。仅调试可传 ``require_gate=False``（本脚
   * ``chapter`` 章标题在最前，无前置分隔；
   * 拼接后再用 render_draft 的 ``_tidy_separators`` 合并堆叠 ``---``、保证上下空行。
 
+merge:false（在账但不进最终 md，2026-10-01）
+-------------------------------------------------------------
+manifest 单元记录可带 ``"merge": false``：该单元仍受 gate 全套门控（⑦文件对账 /
+⑩反向对账 / DONE / 质量校验），但拼接时**跳过**——用于「章末集中习题块」类内容：
+writing-rules V-I 规定集中习题块在最终总结中一律省略，而修书方可同时要求习题在
+单元层保留（习题单元 + 习题节壳单元打此标记，两侧 manifest 均须携带以保 parity）。
+
 用法
 ----
     python flows/write-source/script/merge_units.py <extract_dir> <ch> [-o <out_md>]
@@ -191,6 +198,13 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
     lines, owners = [], []
     prev = None          # heading / desc / item
     for u in manifest.get("units") or []:
+        if u.get("merge") is False:
+            # 🔴 在账但**按书写要求不进最终 md** 的单元（writing-rules V-I 习题收录
+            # 规则：章末集中习题块一律省略）——单元层保留（gate ⑩ 反向对账照常
+            # 要求其存在、DONE、质量过关），只在拼接时跳过；分隔线状态机视同
+            # 不存在（prev 不变）。记录级开关由修书方写入 manifest，两侧（源/译）
+            # 均须携带以保 parity。
+            continue
         up = os.path.join(out_dir, u["file"])
         if not os.path.exists(up):
             raise SystemExit("[merge_units] %s 缺单元文件 %s（须先 gate_units 门控）。"

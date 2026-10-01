@@ -172,8 +172,16 @@ F_CN_EQ_RE = re.compile(r'式\s*[（(]?\s*(\d+\.\d+)')
 # Letter-chapter-led formula number `(A.3)` / `（B.12）` (Lee ISM appendices):
 # single capital letter + dot/interpunct + digits, parenthesised.  The single-
 # letter requirement keeps reference words out (`(Fig. 19)` — `F` is followed
-# by `i`, not a separator); multi-letter / Roman prefixes (`II.5`, `App.2`)
-# stay RESERVED with the Q-layer `_LETTER_LED_RE` probe.  make_config uses this
-# for whole-range formula detection of appendix page ranges (letter_ch).
+# by `i`, not a separator).  make_config uses this for whole-range formula
+# detection of appendix page ranges (letter_ch).  Single-char ROMAN heads
+# (`I`/`V`/`X`/`L`/`C`/`D`/`M`) are indistinguishable from letters and are
+# therefore left to this probe (conservative election keeps them as letter).
 F_LETTER_RE = re.compile(
     r'(?<![\w\u4e00-\u9fff])[（(]\s*([A-Z])\s*[.·]\s*(\d+)\s*[）)]')
+# Roman-chapter-led formula number `(II.5)` / `（IV.12）` (formula type 16,
+# lead='roman').  Requires a MULTI-CHARACTER roman head ([IVXLCDM]{2,5}) so it
+# yields only unambiguous positive Roman evidence — `(II.5)`/`(IX.3)` cannot be
+# a letter head.  Same parens / lookbehind / (head, num) capture shape as
+# F_LETTER_RE.
+F_ROMAN_RE = re.compile(
+    r'(?<![\w\u4e00-\u9fff])[（(]\s*([IVXLCDM]{2,5})\s*[.·]\s*(\d+)\s*[）)]')

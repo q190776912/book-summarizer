@@ -16,8 +16,8 @@
        标准**）按特异性优先投票出编号族：
          * 单级 `定理2` → 1；两级 `定义1.1` → 2；三级 `定理1.1.1` → 3；
            附录字母章位三级 `Definition A.1.1` → 13、两段 `Theorem B.2` → 14。
-         * 🔴 只产出 ordinal_styles 实现的码 {1,2,3,8,12,13,14}；旧码 4/9/10/11 已
-           废弃并折入 2/3/1（见 verify_config.DEPRECATED_ORDINAL_REMAP）。
+         * 🔴 只产出 ordinal_styles 实现的码 {1,2,3,8,12,13,14}；旧码 4/9/10/11 已于
+           2026-09-21 彻底退役并折入就近规范码（4→2、9/10→3、11→1），加载期不再有任何映射。
          * 8（vakil，序标在前 + 第三维字母）与 12（hum，裸标签 / 纯字母序标）无法被
            数字锚定的页扫投票命中，改由 chapter_map 显式声明采纳。
          * 一条编号条头都检不到 → family=None，**不回退默认 3**，调用方省略 ordinal 组。
@@ -25,7 +25,9 @@
        standalone (N)/（N）与 (C.N)/Eq. C.N/式（C.N）的数量，整书聚合并确认全局
        公式配置（type/depth/scope）。单分量 ≫ 多分量 → type1/depth1（scope 由
        是否「全书数值回落」判定：回落→scope3 节级重排，否则→scope1 全书）；多分量
-       多 → type4/depth2/scope2；都抽不到返回 None（不写 formula 键）。
+       多 → type2/depth2，scope 由**首分量重置行为**派生（逐章重启→2 / 全书连续→1），
+       首分量证据不足（仅见单一前缀）时**不写 scope**——scope 无默认值，交 agent 依
+       书确定；都抽不到返回 None（不写 formula 键）。
   3. 写出 {"ordinal": [<组>, ...], "language": <按实际检出的标签词形判 en / cn>}：
      - 在同一遍整书扫描中，按 LABEL_FORMS 收集『作为编号标题出现』的全部条目类型
        标签词（含 Remark/评注/注、Exercise/习题/练习/问题/Problem、Axiom/公理 等，
@@ -646,6 +648,7 @@ HEADING_SHORT_MAX = 80   # blocks at/under this length are scanned whole
 from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
                           F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
                           F_LETTER_RE as _F_LETTER_RE,
+                          F_ROMAN_RE as _F_ROMAN_RE,
                           SEP_SPLIT_RE)
 
 # --- formula detection confidence gate ------------------------------------
@@ -738,6 +741,44 @@ def _formula_tail_clean(tail):
     return re.fullmatch(r"[\s\.\,\;\)\]\}\:\'\"\u3002\uff0c\uff1b]*", tail) is not None
 
 
+def _series_scope(hits):
+    """Per-head reset vs one book-wide series, for a ``(head, number)`` scan.
+
+    scope 2 when the first number seen under a later head is SMALLER than the
+    previous head's running max (i.e. the number resets after each head —
+    ``B.1..B.15`` then ``C.1..``), else scope 1 (a single monotonic series).
+    Shared by the letter and roman branches so their scope decision cannot
+    drift apart."""
+    heads = []
+    for h, _n in hits:
+        if h not in heads:
+            heads.append(h)
+    for i in range(1, len(heads)):
+        first_of_later = next(n for h2, n in hits if h2 == heads[i])
+        prev_max = max(n for h2, n in hits if h2 == heads[i - 1])
+        if first_of_later < prev_max:
+            return 2
+    return 1
+
+
+def _two_component_scope(pairs):
+    """Digit two-component ``(C.N)`` scope — derived from book evidence, NO default.
+
+    ``pairs`` is a page-ordered list of ``(first_component, second_component)``
+    ints.  scope 2 (per-chapter reset, cross-chapter guard ON) vs scope 1
+    (book-wide, guard off) is decided by the SAME reset test as the alpha-led
+    families (``_series_scope``): does the trailing number restart under a new
+    leading component?  But that question can only be answered when the book
+    actually shows **two or more distinct leading components** — with a single
+    leading value there is no boundary to observe a reset against, so the
+    evidence is genuinely undeterminable and we return ``None`` (the caller then
+    OMITS `scope`, and the load-time validator / agent must settle it from the
+    book rather than silently assuming chapter-scope)."""
+    if len({h for h, _n in pairs}) < 2:
+        return None
+    return _series_scope(pairs)
+
+
 def detect_formula(extract_dir, pages=None):
     """Full-scan EVERY page_*.json and infer the book's formula numbering.
 
@@ -748,14 +789,29 @@ def detect_formula(extract_dir, pages=None):
     (Lee ISM appendices) is counted via ``F_LETTER_RE`` with the same
     tail-clean discipline; when it dominates the range (>= _FORMULA_MIN_COUNT
     and beats the digit form) the returned config carries
-    ``"letter_ch": True`` and the scope is decided by whether the digit
-    component resets after each chapter letter (per-letter reset → scope 2).
+    ``"letter_ch": True`` (``{"type": 2, ...}``).  Roman-chapter-led ``(II.5)``
+    is counted via ``F_ROMAN_RE`` (multi-character head only, so single-char
+    Roman heads stay letter) and returns the formula-only ``{"type": 16}``;
+    Roman wins only on positive multi-char Roman evidence with no non-Roman
+    letter head, keeping the digit / letter elections byte-identical.  In both
+    alpha-led cases the scope is decided by whether the digit component resets
+    after each head (per-head reset → scope 2).  The DIGIT two-component branch
+    ``(C.N)`` likewise DERIVES its scope (never defaults to 2): via
+    ``_two_component_scope`` the trailing number restarting under a new leading
+    component → scope 2 (per-chapter), a book-wide monotonic series → scope 1,
+    and fewer than two distinct leading components → the reset is unobservable
+    so ``scope`` is OMITTED (the load-time validator / agent must settle it from
+    the book — there is no default scope anywhere).
 
-    Returns a ``{"type", "scope", "ignore"[, "letter_ch"]}`` dict (``depth`` is
-    DERIVED from ``type`` via ORDINAL_DEPTH, so it is not part of the config),
-    or ``None`` when no shape is detected (caller then simply omits the
-    ``formula`` key).  Operator-registered keys (``ignore`` / ``bare_number``)
-    from the previous config are re-attached by ``_build_config_dict``.
+    Returns a ``{"type", "ignore", "scope"[, "letter_ch"]}`` dict, where
+    ``scope`` is ALWAYS derived from book evidence and may be omitted when it can
+    not be determined — it is never silently defaulted.  The token ``depth`` /
+    lead is DERIVED from ``type`` via ``resolve_formula_type`` — the formula-only
+    Roman type lives in its own namespace, not ORDINAL_DEPTH — so it is not part
+    of the config.  ``None`` is returned when no shape is detected (caller then
+    simply omits the ``formula`` key).  Operator-registered keys (``ignore`` /
+    ``bare_number``) from the previous config are re-attached by
+    ``_build_config_dict``.
 
     Phase guard: requires MM Repair to be finished (``_extraction_done.json``
     present — written only after mode A+B are applied back to ``page_*.json``,
@@ -774,8 +830,11 @@ def detect_formula(extract_dir, pages=None):
     single_count = 0
     dotted_count = 0
     letter_count = 0
+    roman_count = 0
     single_nums = []  # ints in page order, for per-section-reset fallback
+    dotted_hits = []  # (first_comp, second_comp) in page order, for 2-comp scope
     letter_hits = []  # (letter, num) in page order, for letter-ch scope check
+    roman_hits = []   # (roman_head, num) in page order, for roman scope check
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -801,9 +860,16 @@ def detect_formula(extract_dir, pages=None):
                         single_nums.append(int(last.group(1)))
                     except ValueError:
                         pass
-            dotted_count += len(_F_DOT_RE.findall(text))
-            dotted_count += len(_F_EQ_RE.findall(text))
-            dotted_count += len(_F_CN_EQ_RE.findall(text))
+            for _rx in (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE):
+                for _m in _rx.finditer(text):
+                    dotted_count += 1
+                    _g = _m.group(1)
+                    if '.' in _g:
+                        _a, _b = _g.split('.', 1)
+                        try:
+                            dotted_hits.append((int(_a), int(_b)))
+                        except ValueError:
+                            pass
             # Letter-chapter-led `(A.3)`: same tail-clean discipline as the
             # single-component scan (the block's LAST letter-led paren must be
             # a right-aligned equation number).  Letter-led books (Lee ISM
@@ -816,28 +882,42 @@ def detect_formula(extract_dir, pages=None):
                 if _formula_tail_clean(text[llast.end():]):
                     letter_count += 1
                     letter_hits.append((llast.group(1), int(llast.group(2))))
+            # Roman-chapter-led `(II.5)` / `（IV.12）`: POSITIVE multi-character
+            # Roman evidence only.  F_ROMAN_RE requires [IVXLCDM]{2,5}, so it is
+            # disjoint from the single-letter probe at the regex level —
+            # `(II.5)` never matches F_LETTER_RE (after `I` comes `I`, not a
+            # separator) and single-char `(I.1)` never matches F_ROMAN_RE (its
+            # head needs >=2 chars) and stays with the letter branch.  Same
+            # tail-clean discipline as the letter / single scans.
+            rmatches = list(_F_ROMAN_RE.finditer(text))
+            if rmatches:
+                rlast = rmatches[-1]
+                if _formula_tail_clean(text[rlast.end():]):
+                    roman_count += 1
+                    roman_hits.append((rlast.group(1), int(rlast.group(2))))
 
-    # Letter-chapter-led candidate (checked FIRST — letter-led pages also score
-    # a little on single/dotted noise, and letter-led must win when present).
+    # Roman-chapter-led candidate `(II.5)` (formula type 16, lead='roman').
+    # Checked BEFORE the letter branch: elect ROMAN only on positive multi-
+    # character Roman evidence AND when NO non-Roman letter head was seen (a
+    # genuine letter appendix yields A/B/C heads via F_LETTER_RE and must keep
+    # winning as letter).  Single-char Roman heads (I/V/X/L/C/D/M) are
+    # indistinguishable from letters and are deliberately left to the letter
+    # branch below, so this election never mis-fires on a letter book.
+    if (roman_count >= _letter_min_count(len(pages))
+            and roman_count > dotted_count
+            and _letter_series_confident(roman_hits)
+            and all(head in 'IVXLCDM' for head, _n in letter_hits)):
+        return {"type": 16, "scope": _series_scope(roman_hits), "ignore": []}
+
+    # Letter-chapter-led candidate (checked after Roman — letter-led pages also
+    # score a little on single/dotted noise, and letter-led must win when the
+    # Roman election above declined).
     if (letter_count >= _letter_min_count(len(pages))
             and letter_count > dotted_count
             and _letter_series_confident(letter_hits)):
         # Scope: per-letter-chapter reset (B.1..B.15 then C.1.. → scope 2) vs
-        # one book-wide letter series (scope 1) — decided by whether the first
-        # number of a later letter is smaller than the previous letter's max.
-        letters = []
-        for lt, _n in letter_hits:
-            if lt not in letters:
-                letters.append(lt)
-        scope = 1
-        for i in range(1, len(letters)):
-            first_of_later = next(n for l2, n in letter_hits
-                                  if l2 == letters[i])
-            prev_max = max(n for l2, n in letter_hits
-                           if l2 == letters[i - 1])
-            if first_of_later < prev_max:
-                scope = 2
-                break
+        # one book-wide letter series (scope 1).
+        scope = _series_scope(letter_hits)
         return {"type": 2, "scope": scope, "ignore": [], "letter_ch": True}
 
     if single_count > dotted_count and single_count > 0:
@@ -864,7 +944,16 @@ def detect_formula(extract_dir, pages=None):
         # Require a comparable minimum count so a handful of incidental dotted
         # numbers don't fabricate a type-2 formula scheme.
         if dotted_count >= _FORMULA_MIN_COUNT:
-            return {"type": 2, "scope": 2, "ignore": []}
+            # 🔴 NO default scope: derive 1 (book-wide) vs 2 (per-chapter reset)
+            # from the observed leading-component reset behaviour.  When the
+            # book never shows two distinct leading components the reset can not
+            # be observed -> omit `scope` entirely and let the load-time
+            # validator / agent decide it from the book (宁缺勿滥).
+            out = {"type": 2, "ignore": []}
+            _sc = _two_component_scope(dotted_hits)
+            if _sc is not None:
+                out["scope"] = _sc
+            return out
     return None
 
 
@@ -1392,8 +1481,9 @@ def _detect_ordinal_from_pages(extract_dir, pages=None, letter_chapter=False):
     # returns None when no numbering style matches (unnumbered book) — the caller
     # then OMITS the ordinal group rather than fabricating a `{"type": 3}` entry.
     # 🔴 Only the codes ordinal_styles implements can be emitted: {1,2,3,8,12,13,14}
-    #    (None = unnumbered).  The legacy codes 4/9/10/11 are DEPRECATED and folded
-    #    into 2/3/1 via verify_config.DEPRECATED_ORDINAL_REMAP: an EN two-level book
+    #    (None = unnumbered).  The legacy codes 4/9/10/11 are DEPRECATED and were
+    #    folded into the nearest canonical code (4→2, 9/10→3, 11→1); detection emits
+    #    them directly with no load-time remap: an EN two-level book
     #    now elects 2, a cn3lab book elects 3 (bare `C.S-N` key — per-label counters
     #    are no longer distinguished at the family level), exactly as the user-directed
     #    clean migration accepts.
@@ -2165,6 +2255,12 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
         if old_f:
             formula_cfg.update(old_f)
         config["formula"] = formula_cfg
+        if formula_cfg.get("type") is not None and "scope" not in formula_cfg:
+            print("[make_config] ⚠️ formula 探测到 type=%r 但**无法从书中判定 scope**"
+                  "（首分量证据不足，通常仅见单一章前缀）。`scope` 无默认值，加载期会硬"
+                  "报错；请 agent 依书实际编号体例显式补 `formula.scope`"
+                  "（1=全书连续 / 2=每章重启 / 3=每节重启）后再跑 verify。"
+                  % (formula_cfg.get("type"),))
     config["_provenance"] = {
         "generated_by": "make_config.py",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

@@ -99,6 +99,22 @@ class ConfigError(Exception):
 # exercise group (chapter scope) without a global binary toggle.
 SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 
+# 🔴 主配置**必须显式声明**的解释性配置字段（no-default 规则，2026-10-01）。
+# 这四项直接改变整本书的编号/抽取/语言解释：布尔三件套 strict / chapter_first /
+# section_scoped，加 language（旧写法「默认 cn / 由 ordinal 派生」＝静默兜底）。文档
+# 旧写法标「默认 True/False/cn」违背「任何配置字段都不要设默认值，须从书中确定，
+# 判不交则交 agent」。它们由 `ConfigLoader.require_complete()` 在**主配置**（外层 map
+# 的 `ch` / 扁平正文）上强制「必须在场」——缺失即 ConfigError（exit 2），文案指引
+# `make_config --force` 或人工依书补定。`make_config` 无条件写出这四项（language 恒写、
+# strict/chapter_first/section_scoped 恒写），故对生成书**零影响**，只挡住手写/legacy
+# 缺项。appendix/supplement 是「省略=继承主配置」的可选覆盖，**不受此约束**。
+# 其余结构开关（sections_global / numeric_local_sections / exercise_shared_numbering /
+# chapter_scoped_items / gm_bare_numbered / chapter_local_sections /
+# chapter_local_numbering）沿用「缺省即中性 False / 探测器只落 True」的既有约定，
+# 其「缺席」表达的是「本书无此特殊结构」这一中性事实、而非伪造的错误解释，故不在
+# 强制之列（详见 config_setting.md 规则1）。
+REQUIRED_MAIN_FIELDS = ("strict", "chapter_first", "section_scoped", "language")
+
 # --- ordinal style codes (single integer selector) -------------------------
 # ONE integer encodes BOTH the numbering depth and the structural style.
 # This ABSORBS the old `levels` (depth 1/2/3) and the old `scheme` family
@@ -107,24 +123,11 @@ SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION = 1, 2, 3
 ORDINAL_SINGLE = 1
 ORDINAL_TWO_LEVEL = 2      # CN two-level (N.M, section-first); no chapter filter
 ORDINAL_THREE_LEVEL = 3    # CN three-level (N.M.K) — default
-# 🔴 已弃用码（2026-09-21）：4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 不再作为独立
-#    编号类型产出或识别，其体例并入就近的 ordinal_styles 类型：
-#        4 → 2（EN 两级已由 ordinal_styles.OrdinalTwoLevelCN 覆盖）
-#        9 → 3（EN3 与 type 3 识别同构，规范键漂移为裸号 1.1-1）
-#       10 → 3（CN3LAB 同构，键漂移；与 type 3 共享计数）
-#       11 → 1（Ross 单级字母后缀，已由 OrdinalSingle._key_to_tuple 支持）
-#    存量 verify_config.json 若含这些码，由 BookConfig.from_dict 经
-#    DEPRECATED_ORDINAL_REMAP 在加载时透明映射并打印一次弃用警告；运行时只认
-#    ORDINAL_CODES 中的码。
-#    🔴 映射表本体 = `lib.numbering.DEPRECATED_ORDINAL_REMAP`（唯一真源，见本
-#    模块下方 import 处再导出），此处不复制字面量——两份必然漂移。
-_DEPRECATED_WARNED: Set[int] = set()
-def _warn_deprecated_ordinal(old: int, new: int) -> None:
-    if old in _DEPRECATED_WARNED:
-        return
-    _DEPRECATED_WARNED.add(old)
-    print(f"[CONFIG] ordinal type {old} deprecated, remapped to {new} on load (9/10->3, 11->1, 4->2)."
-          f" Re-run make_config.py --force to regenerate.", file=sys.stderr)
+# 🔴 已弃用码 4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 已于 2026-09-21 彻底退役：
+#    不再作为独立编号类型产出或识别，其体例并入就近规范码（4→2、9/10→3、11→1）。
+#    ORDINAL_CODES / ORDINAL_DEPTH 均不登记这些码，from_dict 也不再透明映射——
+#    存量 verify_config.json 已全部改写为规范码；若配置仍含弃用码，from_dict 的
+#    `t not in ORDINAL_CODES` 分支会直接抛 ConfigError（缺码即硬报错）。
 ORDINAL_VAKIL = 8          # EN three-level, number-first (N.M.item + N.M.A exercises), e.g. Vakil
 
 ORDINAL_HUM = 12             # EN subsection-keyed BARE/LETTER items (Humphreys《Introduction
@@ -184,7 +187,6 @@ ORDINAL_NAME = {
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
 from lib.numbering import (ORDINAL_DEPTH, ordinal_depth,  # noqa: F401  (re-exported)
-                          DEPRECATED_ORDINAL_REMAP, resolve_ordinal_code,
                           is_fig_group)
 from data.chapter_map.chapter_map import normalize_kind  # noqa: E402
 from data.book_structure.book_structure import (  # noqa: E402
@@ -358,7 +360,14 @@ class GroupConfig:
     """
     type: int = ORDINAL_THREE_LEVEL          # ORDINAL_* style code (1..9)
     name: List[str] = field(default_factory=lambda: ["uncat"])  # label categories
-    scope: int = SCOPE_CHAPTER               # 1=book / 2=chapter / 3=section
+    # 1=book / 2=chapter / 3=section.
+    # 🔴 NOT a config-load default: `BookConfig.from_dict` REQUIRES every
+    # non-zero-type ordinal group in verify_config.json to declare `scope`
+    # explicitly (missing => ConfigError / exit 2, no-default rule).  This
+    # dataclass default only covers internal / programmatic construction
+    # (the type-0 absent-ordinal fallback and direct GroupConfig(...) calls),
+    # where scope is either unused (type 0) or supplied by trusted code.
+    scope: int = SCOPE_CHAPTER
 
     @property
     def is_uncat(self) -> bool:
@@ -520,7 +529,10 @@ def _load_ignore_file(path: str) -> List[str]:
     if not path or not os.path.exists(path):
         return []
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        # utf-8-sig: tolerate a UTF-8 BOM (PowerShell-written sidecars carry
+        # one; with plain utf-8 json.load raises and the WHOLE file was
+        # silently dropped — Ross ignore_fig_ch3.json 实测 2026-10-01).
+        with open(path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
     except Exception:
         return []
@@ -745,12 +757,27 @@ class BookConfig:
     # finished books are completely untouched.  Map shape:
     #   {"type": 3, "scope": 2, "ignore": [], "letter_ch": false,
     #    "bare_number": true}
-    #   type  : ORDINAL_* style code (1..9); `depth` is DERIVED from `type`
-    #           via the canonical ORDINAL_DEPTH map, so it is NOT a separate
-    #           field (it can never desync from `type`).
+    #   type  : the token SHAPE code.  Digit-led books reuse an ORDINAL_* style
+    #           code (1/2/3 = one/two/three components); for those the component
+    #           count is DERIVED via the canonical ORDINAL_DEPTH map.  LETTER-
+    #           led `(A.3)` and ROMAN-led `(II.5)` books instead use the
+    #           FORMULA-ONLY codes 15 (letter two-level) / 16 (roman two-level),
+    #           which live in their OWN namespace — deliberately NOT in
+    #           ORDINAL_CODES / ORDINAL_DEPTH, so the entry-ordinal groups can
+    #           never accept them.  Every consumer resolves the (lead, ncomp)
+    #           shape through the SINGLE entry point `resolve_formula_type(type,
+    #           letter_ch)` and must never re-derive `letter_ch` / depth locally.
+    #           `depth` is never a separate field (it can not desync from type).
     #   scope : 1=book / 2=chapter / 3=section — number reset window; the
     #           cross-chapter guard (first component == current chapter) is
-    #           ON iff scope == 2.
+    #           ON iff scope == 2.  🔴 REQUIRED, NO DEFAULT: a formula map that
+    #           declares `type` must carry an explicit scope in {1,2,3} or
+    #           from_dict raises ConfigError (no silent chapter assumption).
+    #           make_config.detect_formula DERIVES it from book evidence (alpha
+    #           per-head reset via _series_scope; digit (C.N) leading-component
+    #           reset via _two_component_scope) and OMITS it when the book shows
+    #           too few distinct leading components to observe a reset, leaving
+    #           the agent to settle it from the book.
     #   ignore: list of normalized formula numbers to SKIP in the 1:1
     #           comparison (neither flagged FABRICATED nor MISSING).
     #   letter_ch (default false): letter-chapter-led numbering `(A.3)` /
@@ -758,11 +785,25 @@ class BookConfig:
     #           leading capital letter; the bare variant is then never used
     #           (indistinguishable from `Fig. A.3` / section headings).
     #           make_config.detect_formula sets this automatically for ranges
-    #           where the letter-led form dominates.  Multi-letter / Roman
-    #           prefixes (`II.5`) stay RESERVED (q_letter_led WARN).
+    #           where the letter-led form dominates.  Multi-character ROMAN
+    #           heads (`(II.5)`) are SUPPORTED via the formula-only `type=16`
+    #           (lead='roman'); single-character Roman heads (I/V/X/L/C/D/M) are
+    #           indistinguishable from letters and stay letter-led.
     #   bare_number (default true): when false, the bare `N.M` source variant
     #           is dropped (books full of numbered cross-references, e.g. Lee).
     formula: Optional[dict] = None
+    # 🔴 Bookkeeping ONLY (carries NO config semantics): the set of top-level
+    # keys the source dict actually declared when this BookConfig was built via
+    # `from_dict`.  `require_complete` uses it to enforce that the MAIN config
+    # explicitly declares `REQUIRED_MAIN_FIELDS` (no-default rule: strict /
+    # chapter_first / section_scoped / language) — it must distinguish "field
+    # absent" from "field present but equal to the historic default", which the
+    # resolved boolean/string values alone cannot express.  `compare=False`/
+    # `repr=False` so it never affects equality, hashing or printing, and no
+    # value-consumer reads it; a directly-constructed `BookConfig(...)` simply
+    # leaves it empty.
+    declared_fields: frozenset = field(default_factory=frozenset,
+                                       repr=False, compare=False)
 
     # 🔴 Figure labels/depth now live in `ordinal` (the Figure group's `type`
     # encodes the component count = `depth` = former `figure.components`).  No
@@ -923,20 +964,47 @@ class BookConfig:
                     raise ConfigError(
                         f"[CONFIG] ordinal[{i}].type={g.get('type')!r} 不是合法整数"
                         f"（编号体例匹配不成功）。")
-                if t in DEPRECATED_ORDINAL_REMAP:
-                    _warn_deprecated_ordinal(t, DEPRECATED_ORDINAL_REMAP[t])
-                    t = DEPRECATED_ORDINAL_REMAP[t]
                 if t not in ORDINAL_CODES:
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].type={t} 非法（应 {'..'.join(map(str, sorted(ORDINAL_CODES)))}）")
+                    raise ConfigError(
+                        f"[CONFIG] ordinal[{i}].type={t} 非法（合法码 "
+                        f"{'/'.join(map(str, sorted(ORDINAL_CODES)))}）。若这是已弃用的"
+                        f"旧码 4/9/10/11，请改写为就近规范码（4→2、9/10→3、11→1）"
+                        f"或重跑 make_config.py --force 重新生成。")
                 nm = g.get('name') or ["uncat"]
                 if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
                     raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
                 # `depth` is a DERIVED projection of `type` (GroupConfig.depth);
                 # it is intentionally NOT read from the config, so a stale or
                 # overridden `depth` can never desync from the authoritative type.
-                sc = int(g.get('scope', SCOPE_CHAPTER))
-                if sc not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].scope={sc} 非法（应 1/2/3）")
+                # 🔴 no-default / must-match：声明了**真实编号体例**（type != 0）的组
+                # 必须显式给出 `scope`（编号重置窗口：1=book/2=chapter/3=section），绝不
+                # 默认成 SCOPE_CHAPTER——把一本书的重置窗口悄悄设错会造成跨章/跨节计数串号
+                # （与 formula.scope、ordinal.type 同一 no-default 原则）。判不清一律报错，
+                # 交人工/agent 依书实际编号体例定夺。
+                # 例外：type 0（UNNUMBERED，无编号）组的 scope 无语义（永不参与重置），
+                # 允许省略，给一个不会被读到的占位值即可。
+                if 'scope' in g:
+                    try:
+                        sc = int(g['scope'])
+                    except (TypeError, ValueError):
+                        raise ConfigError(
+                            f"[CONFIG] ordinal[{i}].scope={g['scope']!r} 不是合法整数"
+                            f"（应 1=book/2=chapter/3=section）。")
+                    if sc not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
+                        raise ConfigError(
+                            f"[CONFIG] ordinal[{i}].scope={sc} 非法（应 "
+                            f"{SCOPE_BOOK}=book/{SCOPE_CHAPTER}=chapter/"
+                            f"{SCOPE_SECTION}=section）。")
+                elif t == 0:
+                    sc = SCOPE_CHAPTER  # 无编号组 scope 无语义，占位即可（永不参与重置）
+                else:
+                    raise ConfigError(
+                        f"[CONFIG] ordinal[{i}] 声明了 type={t} 但缺 `scope`"
+                        f"（编号重置窗口）。本字段**无默认值**（no-default / must-match "
+                        f"规则）：必须显式给出 "
+                        f"{SCOPE_BOOK}=book/{SCOPE_CHAPTER}=chapter/"
+                        f"{SCOPE_SECTION}=section。"
+                        f' 例：{{"type": {t}, "name": ["uncat"], "scope": {SCOPE_CHAPTER}}}')
                 groups.append(GroupConfig(type=t, name=list(nm), scope=sc))
 
         rep = groups[0].type
@@ -967,7 +1035,14 @@ class BookConfig:
         if st[0] not in (0, 1):
             st[0] = 1
 
-        # --- language (orthogonal; default derived from primary type) ---
+        # --- language (orthogonal) ------------------------------------------
+        # 🔴 no-default at the LOAD GATE, tolerant here: `from_dict` keeps a
+        # best-effort derivation (from the primary ordinal type, final fallback
+        # 'cn') so programmatic construction and the absent-file path never
+        # crash.  BUT `require_complete` now REQUIRES a real book's MAIN config
+        # to explicitly declare `language` (see REQUIRED_MAIN_FIELDS) — a real
+        # book may no longer silently default its language; make_config always
+        # writes it, and the agent must state it from the book otherwise.
         language = str(data.get('language', ORDINAL_LANGUAGE_DEFAULT.get(rep, 'cn')))
 
         # --- ignore: merge known_gaps + ignore_keys + ignore_fig into ONE set ---
@@ -985,6 +1060,37 @@ class BookConfig:
 
         # --- manual path (manual_path legacy alias) ---
         manual = data.get('manual', data.get('manual_path'))
+
+        # --- Q-LAYER formula map: `scope` 无默认值，必须从书中确定 -------------
+        # 🔴 no-default 规则：只要 `formula` 块声明了 `type`（即真的选定了一套
+        # 公式编号体例、开启了 Q 层），就必须**显式**给出 `scope`（1=book /
+        # 2=chapter / 3=section）——它是「编号在哪个窗口重置」的书本体例事实，
+        # 只能从书实测得到，绝不能默认成 2。缺 `scope` 或取值非法一律 ConfigError
+        # （exit 2），交人工/agent 依书确认；探测判不交（仅见单一首分量、无法
+        # 观测重置）时 make_config 会**省略** scope，正是靠这里把书挡在加载期，
+        # 逼出「agent 补 scope」这一步（宁缺勿滥，绝不静默兜底造出一个错误守卫）。
+        # 例外：只含 `known_book` / `ignore` 而无 `type` 的**登记式**残块（噪声账本
+        # 追加，不选体例）保持原样放行，不强制 scope——否则会把既有纯登记 config
+        # 误判成缺字段。空 dict 视为「未开启 Q 层」→ None。
+        _formula_map = data.get('formula') or None
+        if isinstance(_formula_map, dict) and _formula_map.get('type') is not None:
+            if 'scope' not in _formula_map:
+                raise ConfigError(
+                    "[CONFIG] formula 声明了 type=%r 但缺 `scope`（编号重置窗口 "
+                    "1=book/2=chapter/3=section）。本字段**无默认值**（no-default 规则），"
+                    "必须从书本实际编号体例确定后显式填写；探测判不交时请依书确认。"
+                    ' 例：{"type": 2, "scope": 2, "ignore": []}'
+                    % (_formula_map.get('type'),))
+            try:
+                _fs = int(_formula_map['scope'])
+            except (TypeError, ValueError):
+                raise ConfigError(
+                    "[CONFIG] formula.scope=%r 不是合法整数（应 1/2/3）。"
+                    % (_formula_map['scope'],))
+            if _fs not in (SCOPE_BOOK, SCOPE_CHAPTER, SCOPE_SECTION):
+                raise ConfigError(
+                    "[CONFIG] formula.scope=%d 非法（应 1=book/2=chapter/3=section）。"
+                    % (_fs,))
 
         return cls(
             ordinal=groups,
@@ -1007,7 +1113,11 @@ class BookConfig:
             manual=manual,
             section_types=st,
             # --- Q-LAYER (formula sequence-label) opt-in: single `formula` map ---
-            formula=dict(data['formula']) if data.get('formula') else None,
+            formula=(dict(_formula_map) if _formula_map else None),
+            # 🔴 记账本段实际声明过的顶层键，供 `require_complete` 对主配置强制
+            # REQUIRED_MAIN_FIELDS「必须在场」（区分「缺字段」与「字段在场但
+            # 恰等于历史默认值」）。非配置语义，compare/repr 均关。
+            declared_fields=frozenset(k for k in data if isinstance(k, str)),
             # (figure labels/components now derived from the `ordinal` Figure
             # group via lib.figure_io — no `figure` field on BookConfig.)
         )
@@ -1247,7 +1357,7 @@ class ConfigLoader:
         """
         self._require_one(self.book, self.verify_config_path,
                           self.verify_config_has_ordinal, allow_absent,
-                          'verify_config.json')
+                          'verify_config.json', main=True)
         if self.appendix_config_path is not None:
             self._require_one(self.appendix_book, self.appendix_config_path,
                               self.appendix_has_ordinal, True,
@@ -1258,7 +1368,8 @@ class ConfigLoader:
                               MAP_KEY_SUPPLEMENT)
 
     def _require_one(self, cfg: BookConfig, cfg_path: Optional[str],
-                     has_ordinal: bool, allow_absent: bool, fname: str) -> None:
+                     has_ordinal: bool, allow_absent: bool, fname: str,
+                     main: bool = False) -> None:
         """Apply the completeness gates to ONE loaded config file.
 
         Rules (identical for the main and the appendix config):
@@ -1272,6 +1383,16 @@ class ConfigLoader:
             role 1) -> raise ConfigError.  Depth is DERIVED from each role code
             via SECTION_TYPE_DEPTH, so there is NO separate depth field to check
             (and a stale `section_depths` key in the JSON is ignored).
+
+        Main-only rule (no-default, 2026-10-01), applies ONLY when `main=True`
+        (the body `ch` / flat config — NOT the optional appendix/supplement
+        overrides, whose omission means "inherit the body"): file present +
+        ordinal declared => every `REQUIRED_MAIN_FIELDS` (strict / chapter_first
+        / section_scoped / language) MUST be explicitly declared in the raw
+        config (present in `cfg.declared_fields`).  Any missing -> ConfigError
+        pointing at `make_config --force` / determining it from the book — these
+        fields change how the whole book is parsed, so a silent default is
+        forbidden.  `make_config` always emits them, so generated books pass.
         """
         import warnings
 
@@ -1312,6 +1433,29 @@ class ConfigLoader:
                 raise ConfigError(
                     f"[CONFIG] {cfg_path} ordinal[{gi}].scope={g.scope}"
                     f" 非法（应 1/2/3）。")
+
+        # --- 🔴 主配置必填字段「必须在场」（no-default，2026-10-01）---------
+        # strict / chapter_first / section_scoped / language 直接决定整本书如何被
+        # 解析，文档旧写法的「默认 True/False/cn」＝静默兜底，一律禁止。仅对**主配置**
+        # （main=True，即 `ch` / 扁平正文）强制——appendix/supplement 是「省略=
+        # 继承正文」的可选覆盖，不受此约束。`make_config` 无条件写出这四项，故
+        # 生成书恒通过；只有手写/legacy 缺项才被挡。用 declared_fields 区分
+        # 「缺字段」与「字段在场但恰等于历史默认值」（解析后的值本身无法区分）。
+        if main:
+            _missing = [k for k in REQUIRED_MAIN_FIELDS
+                        if k not in (cfg.declared_fields or frozenset())]
+            if _missing:
+                raise ConfigError(
+                    f"[CONFIG] {cfg_path} 主配置缺**必须显式声明**的字段 "
+                    f"{_missing}（{', '.join(REQUIRED_MAIN_FIELDS)} 各决定"
+                    f"全书如何被解析：strict=缺号是否严格判失败 / chapter_first=首"
+                    f"分量是章还是节 / section_scoped=是否额外抽取「数字在前」标题"
+                    f"与编号图表 / language=正文主体语言 cn|en）。这些字段**无默认"
+                    f"值**（no-default 规则），须从本书实际体例确定，不得静默兜底。"
+                    f"修法：重跑 python config/verify_config/make_config.py --force "
+                    f"<book>/_extract（会自动写出这四项），或人工依书在 {fname} "
+                    f'主配置补定，例如 {{"language": "cn", "strict": true, '
+                    f'"chapter_first": true, "section_scoped": false}}。')
                 # --- section_types (only the role codes; depth is derived) ----------
         # `from_dict` already filters codes against SECTION_ROLE_CODES and forces
         # the first to 1, so this is a backstop for hand-written configs.  Depth

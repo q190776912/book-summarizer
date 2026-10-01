@@ -170,14 +170,14 @@ class FormulaCfgRoutingTest(unittest.TestCase):
 
     def test_numeric_key_appendix_routes_to_appendix_segment(self):
         ext = self._ext()
-        _ncomp, scope, letter, _bare = self._cfg(ext, "5")
+        _ncomp, scope, letter, _bare, _lead = self._cfg(ext, "5")
         self.assertTrue(letter, "数字键附录必须取到 appendix 段的 letter_ch")
         self.assertEqual(scope, 1)
 
     def test_numbered_chapters_keep_the_main_segment(self):
         ext = self._ext()
         for ch in ("1", "4"):
-            _n, scope, letter, _b = self._cfg(ext, ch)
+            _n, scope, letter, _b, _lead = self._cfg(ext, ch)
             self.assertFalse(letter)
             self.assertEqual(scope, 2)
 
@@ -190,7 +190,7 @@ class FormulaCfgRoutingTest(unittest.TestCase):
                 {"ch": 1, "name": "Body", "start": 1, "end": 90},
                 {"ch": "A", "name": "Appendix", "start": 91, "end": 100},
             ]}, f)
-        _n, scope, letter, _b = self._cfg(ext, "A")
+        _n, scope, letter, _b, _lead = self._cfg(ext, "A")
         self.assertTrue(letter)
         self.assertEqual(scope, 1)
 

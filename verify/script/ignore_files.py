@@ -30,10 +30,12 @@ from verify.script.fig_common import normfig
 
 def load_ignore(ignore_path):
     """Load a --ignore file. Accepts a JSON list ["1.1-1", ...] or a dict
-    {"1.1-1": "reason", ...}. Returns a set of canonical (dash-form) keys."""
+    {"1.1-1": "reason", ...}. Returns a set of canonical (dash-form) keys.
+    utf-8-sig: tolerate a UTF-8 BOM (plain utf-8 would raise on load and the
+    whole file would be silently dropped)."""
     if not ignore_path or not os.path.exists(ignore_path):
         return set()
-    with open(ignore_path, 'r', encoding='utf-8') as f:
+    with open(ignore_path, 'r', encoding='utf-8-sig') as f:
         data = json.load(f)
     if isinstance(data, dict):
         raw = data.keys()
@@ -45,10 +47,11 @@ def load_ignore(ignore_path):
 
 
 def load_ignore_fig(ignore_path):
-    """Load --ignore-figure file: JSON list ['6.3.1', ...] or dict. Returns set."""
+    """Load --ignore-figure file: JSON list ['6.3.1', ...] or dict. Returns set.
+    utf-8-sig: tolerate a UTF-8 BOM (see load_ignore)."""
     if not ignore_path or not os.path.exists(ignore_path):
         return set()
-    with open(ignore_path, 'r', encoding='utf-8') as f:
+    with open(ignore_path, 'r', encoding='utf-8-sig') as f:
         data = json.load(f)
     if isinstance(data, dict):
         raw = data.keys()

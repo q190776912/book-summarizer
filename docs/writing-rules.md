@@ -431,7 +431,7 @@ Common patterns (after correction):
 | **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、书根相对 `figure/` 路径 | `verify/figure_completeness/figure_completeness.md` |
 | **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档) + [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
 | **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 见 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
-| **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号暂 FAIL | `verify/formula_tag/formula_tag.md` |
+| **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号需配 `letter_ch`/`type 15`（`(A.3)`）或 `type 16`（`(II.5)`）后校验 | `verify/formula_tag/formula_tag.md` |
 | **OCR 漏标** | [V-M](#v-m-ocr-漏标条目处理) | `verify/missing_label_policy.md` |
 
 **写源阶段阅读约定**：执行 `write-source` 时，**唯一必读规则文档 = 本 `writing-rules.md`**（正文 + [verify 收敛区](#verify-收敛区唯一规则源)）；`verify/*.md` 仅在校验失败排查、或改 verify 实现时再读。

@@ -21,6 +21,7 @@
 - 🔴 **`ignore_fig` 豁免双向生效（2026-09-29 Apostol IANT 无号引言章根治）**：`ignore_fig_ch{N}.json`（含 `ignore_appendix{X}` / `ignore_supplement{S}`，经 `ConfigLoader.ignore_for_chapter` 并入 `ctx.ignore`）是「图片级噪声豁免」命名空间，现同时是 `missing` 与 `extra` 的减项（`extra = extracted - caption - ignore_fig`）。**根因**：本层文档第 5 条修复步骤早就写着「`E-LAYER FIGURE EXTRA` … 必要时加 `ignore_figure`」，而旧实现只在 `missing` 一侧减项——人工用 fitz 目视核完裁剪图确为判据假阳后**没有任何正规通道**消掉这条 WARN，只能留着污染收官报告，或（更糟）改书侧 `figure_index.json` 迁就判据。典型触发形态：**无章号的引言章**印面图题用罗马章位（`Figure I.1/I.2/I.3`，fitz 300dpi 目视确证），OCR 把字母 `I` 读成数字 `1` → 索引 label 归一为 `1.1`，而 components=2 的题面 harvest 要求 `int(前缀)==ch`（此处 `ch=0`），该式对任何带数字前缀的 label 恒不成立 → 真实在账、且总结 md 已忠实引用的裁剪图必然落进 extra。**放宽范围已普查校准**（`<Apostol>/_extract/_census_ignore_fig_extra.py` → `_census_ignore_fig_extra.txt`）：全库 51 书中 17 书有 44 份 `ignore_fig_*` 侧车、共 80 个登记键，其中 22 键与真裁剪 label 同名（= 本改动新豁免的 extra 条数），其余为幻影引用/无 label 键（零影响）；未登记的 extra 逐字节不变（判据测试 `verify/tests/test_e_layer_ignore_fig_both_directions.py`，含「只豁免登记号、未登记号照旧上报」负向控制）。
 - 🔴 **跨章图引用豁免（仅全局单分量 `components==1`）**：全局整数编号书的号在**全书内唯一**，「本章 OCR 提到的号在别的章已裁剪入库」= 正文里的**跨章回指**，不是丢图。旧实现只拿本章 `extracted` 作对照，于是每一次「（图207）」式回指都报 blocking MISSING（阿诺尔德《经典力学的数学方法》附录J 引 ch9 的 图207、附录O 引 ch1 的 图2 实测 2026-09-29，裁剪文件 `figure/ch09_fig207.png` 一直在账）。判据：`extracted_bookwide`（索引全部条目 `normfig(label)` 集）**只作为 `missing` 的减项**（`_known = extracted | (extracted_bookwide if components==1 else ∅)`）——`extra`（EXTRA WARN）与有效性检查仍按本章，因此「全书都没有这个号」的真丢图照旧 FAIL。章/节编号书（`components` 2/3）号自带章前缀、天然不串章，维持原判据。
 - **OCR 尾数字粘连回捞（仅全局单分量 `components==1`，安全构造）**：OCR 常把多位图号尾数字读成字母（`Fig. 19o`→截断成 `19`，真图号实为 `190`），使 `build_fig_label_re` 的 `([0-9]+)` 在字母处截断、抽出短号 `19`，而索引里真 label 是 `190` → 假 `MISSING 190` + 假 `EXTRA 19`。`check_figure` 的 `_fig_ocr_tail_recovered` 在截断 token 之后按 `_OCR_TAIL_DIGIT`（o/O→0、l/I→1、z/Z→2、s/S→5、b→6、B→8、g/q→9…）逐字符尝试回捞尾数字，**仅当回捞结果已存在于 `extracted`（索引真 label 集）时**才并入 caption。**安全保证**：从不臆造新号、只在能对上真裁剪图 label 时才救回，真缺图（回捞号不在索引）仍照常 MISSING；对无此类粘连的书零影响（回捞返回 None 即走原逻辑）。
+- 🔴 **unembedded 豁免通道（2026-10-01 Ross 习题配图根治）**：`fig_unembedded`（部分覆盖 WARN 的事实集）同样以 `ignore_fig_ch{N}.json` 为豁免命名空间——登记键既可以是图 **label**（`normfig` 比对，与 missing/extra 同一命名空间），也可以是裁剪图**文件名或去扩展名 stem**（无名检测块无 label 可挂）。语义：figure_index 检出、但总结按规则**有意不嵌**的图（典型：章末习题配图，而章末习题按 writing-rules 习题收录规则不收录、宿主条目不存在，无法孤儿式嵌入），人工核验后在 `ignore_fig_ch{N}.json` 登记（dict 形式键→理由）即从 `fig_unembedded` 减除。**护栏**：`embedded` 集与阻断闸 `fig_zero_embed` 不受豁免影响——「embed 根本没跑过」在全登记情况下照旧硬 FAIL；未登记的未嵌图照旧上报（判据测试 `verify/tests/test_e_layer_unembedded_ignore.py`，含负向控制）。
 
 ### 有效性 VALIDITY（原 F）
 - 对本章每条 index 条目，用 `np.fromfile`+`cv2.imdecode`（绕开 Windows 中文路径下 `cv2.imread` 静默失败）打开 `<ext>/<file>`。
@@ -41,7 +42,7 @@
 - 有图时 `fig_missing` 或 `fig_invalid` 非空 → 阻断 FAIL。
 - **嵌入覆盖（堵「检测到了却没嵌进 .md」的假绿）**：本章在 `figure_index.json` 中有**带 label 的真图**、但合并 md 里一条 `<img>` 都没嵌入 → `fig_zero_embed=True` → 阻断 FAIL（`E-LAYER FIGURE NOT EMBEDDED`）。典型成因：检测/合图后未跑 `embed_figures.py`，或中文笔记不引用图号而嵌入脚本的自引用回退只认英文 `Figure N`（→ 中文整章 0 嵌）。
 - `fig_unembedded` = 本章已检出但未嵌入的裁剪文件名列表；`fig_embedded` / `fig_detected` = 汇总行 `Emb:嵌入/检出` 的紧凑计数（无图章节该列显示 `-`）。
-- **部分覆盖仅 WARN**（`E-LAYER FIGURE PARTIAL COVERAGE`）：嵌了一部分但仍有未嵌——按「图被正文引用才嵌入」规则属可接受，故只告警不阻断。
+- **部分覆盖仅 WARN**（`E-LAYER FIGURE PARTIAL COVERAGE`）：嵌了一部分但仍有未嵌——按「图被正文引用才嵌入」规则属可接受，故只告警不阻断；确认有意省略者（宿主习题不收录等）登记 `ignore_fig` 后豁免（见完整性 · unembedded 豁免通道）。
 - `fig_extra` / `fig_invalid_warn` / `fig_misattributed` 仅 WARN（不阻断）。
 - `auto_fixable = False`。
 
@@ -67,7 +68,7 @@
   3. 若图确实存在但索引未含，手工补 `figure_index.json`（或 `figure_embed_overrides.json`）；
   若确为 OCR 幻影引用，加 `ignore_figure` 抑制。
   4. 看 `E-LAYER FIGURE VALIDITY ERRORS` 列出的图（缺失文件 / 无法解码 / 单边 <20px）：到 `<book>/figure/`（🔴 figure 目录与总结 md 同级，在书根下）确认文件存在且可解码；缺失则重跑图片提取生成，损坏则在源 PDF 重新裁剪。
-  5. `E-LAYER FIGURE EXTRA` / `E-LAYER FIGURE SUSPICIOUS` 仅 WARN，核对裁剪图 label 配对 / 近空白疑似文字块，必要时加 `ignore_figure`。
+  5. `E-LAYER FIGURE EXTRA` / `E-LAYER FIGURE SUSPICIOUS` 仅 WARN，核对裁剪图 label 配对 / 近空白疑似文字块，必要时加 `ignore_figure`。`E-LAYER FIGURE PARTIAL COVERAGE` 同理：逐张核验（fitz 目视 + OCR 页面）确认「真实书图、正文按规则有意不嵌」（如章末习题配图）后，在 `ignore_fig_ch{N}.json` 以 dict 形式登记键（图 label 或裁剪文件名）→ 理由。
   6. 重跑 verify，确认 `E-LAYER FIGURE COMPLETENESS MISSING` 与 `E-LAYER FIGURE VALIDITY ERRORS` 清零。
 
 修复后重跑 `verify_chapter.py --all`（或单章 `<ch> <start> <end> <md> <ext>`）确认上述门为空 / 转绿。

@@ -7,10 +7,10 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `ordinal` | `List[GroupConfig]` | 必填。**分组选择器**：数组里每个对象 = 一组**共用同一条计数器**的条目标签（见下方「分组语义」核心节）。数组首元素 `type` 即 `primary_type`，自动反推编号模式与小节层级。 |
-| `language` | `str` | `'cn'` / `'en'`（默认 `'cn'`）。 |
-| `strict` | `bool` | 默认 `true`。 |
+| `language` | `str` | 🔴 **无默认值，主配置必填**（no-default，与 `strict` / `chapter_first` / `section_scoped` 同列「主配置必填四件套」，由 `require_complete` 强制：主配置缺 `language` 即 `exit 2`）。取值 `'cn'` / `'en'` = **正文主体语言**，决定编号解析、条目标签匹配与渲染语种，须从本书实际体例确定，**不得静默回落 `'cn'`**（旧文档「默认 `'cn'`」＝禁止）。`make_config` 依 `primary_type` 家族派生并无条件写出，故生成的书恒通过；appendix/supplement 覆盖段可省略（= 继承正文）。 |
+| `strict` | `bool` | 🔴 **无默认值，主配置必填**（no-default，由 `require_complete` 强制）：缺号是否严格判失败（`true`=结构性缺号即 FAIL，`false`=降级）。不得静默按 `true`——须依书确定后显式写。与 `chapter_first` / `section_scoped` / `language` 同列「主配置必填四件套」；其余结构开关（`exercise_shared_numbering` / `sections_global` / `numeric_local_sections` / `chapter_scoped_items` / `gm_bare_numbered` / `chapter_local_sections` / `chapter_local_numbering`）沿用「缺席=中性 False、探测只落 True」约定，不强制在场。 |
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
-| `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope:2, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置；见 `config_setting` 流程 规则3）。可选 `bare_number`（见下）。 |
+| `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，字母/罗马型 15/16 经 `resolve_formula_type` 派生，均不单独配置；见 `config_setting` 流程 规则3）。🔴 **`scope`（1=book/2=chapter/3=section）为必填、无默认值**：只要声明了 `type`，缺 `scope` 或取值越界即在加载期 `ConfigError`（exit 2），不再静默按章级；`make_config.detect_formula` 从书证派生 scope，证据不足时**省略**交 agent 补定。可选 `bare_number`（见下）。 |
 | `exercise_shared_numbering` | `bool` | **练习与条目共用同一条章内计数器**的书（Lee《Intro to Smooth Manifolds》：Theorem 1.2 / Example 1.3 / Exercise 1.6 是同一条 1..N 序列上的连续槽位）置 `true`。B 层默认把练习/问题强制划入独立编号窗（`:ex:`，为 Katok 那种「练习按节重排」的书而设），对共享序列的书会把每个定理号报成「练习缺号」——整章数百条结构性假 BLOCKING。Problem 无论此开关如何都独立开窗（`N-M` 编号与条目的 `N.M` 不同形，合并会撞号）。默认 `false`。 |
 | （无 `figure` 字段） | — | 🔴 **图序标不再单独成块**，而是 `ordinal` 里的一个 **Figure 组**：`{"type": <components>, "name": ["图","Figure","Fig",…], "scope": <components>}`。`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号**段数（components）**：`1`=全局整数 / `2`=章.图 / `3`=章.节.图 / **`0`=无图编号（显式零匹配）**。图号前缀词写进该组 `name`（Figure/图/Fig/Scheme/Illustration…），由 `lib.figure_io.load_fig_labels` 读取；`components`（=depth）由 `load_fig_components` 从组的 `type` 派生。🔴 **Figure 组必须存在**（2026-09-24 起）：`load_fig_components` 缺组直接抛 `ConfigError`、verify 全书中断，**没有任何静默回落**（旧「不放组即可，figure_io 回落默认」语义已废）。`make_config.py` 探测印刷图题系列自动落组——无图题系列的图书落 `type: 0`；手工修 config 同理，禁止删组。若需显式**零标签**（禁止任何图号前缀词），保留过渡 `{"figure": {"labels": []}}` 由 figure_io 识别为标记号（见下）。 |
 | `formula.bare_number` | `bool` | 默认 `true`：Q 层抽书源公式编号时额外收录**裸 `N.M`**（任何出现在正文里的数字 token 都算）。两类书须置 `false`：① **正文满是带号交叉引用**（Lee：满页 `(Fig. 1.2)`，外加 `1-11` 这种 Problem 标签）；② **印刷编号一律带括号**的扫描书——Apostol《Introduction to Analytic Number Theory》实测裸数字变体把**页码**（`205`）、**OCR 碎片**（`0`）、**表单元**（p277 Bernoulli 数 `42`）全收进独立真值集，ch10 一次报出 176 条幻影「漏写公式」。置 `false` 后只认显式形态 `(N.M)` / `Eq. N.M` / `Equation N.M` / `式（N.M）`。默认 `true`，无该体例的书零影响。🔴 属 operator 手工登记键（`make_config` 探测层无法重建，重生成 config 时由 `_load_old_formula` / `_MANUAL_DECLARED_FLAGS` 原样回贴）。 |
@@ -61,7 +61,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 ### `primary_type` 与默认派生
 
 - `primary_type` = **第一个非 `uncat` 组**的 `type`（`primary_group()`，全 `uncat` 时回退 `ordinal[0]`）。它驱动小节层级（`ORDINAL_SECTION_TYPES`）与默认语言（`ORDINAL_LANGUAGE_DEFAULT`）的反推。
-- `language` 默认由 `primary_type` 派生（CN 家族→cn，EN 家族→en），显式写 `language` 可覆盖。
+- `language` 在 `from_dict` 里按 `primary_type` 家族**尽力派生**（CN 家族→cn，EN 家族→en），仅供程序构造 / 文件缺失路径兜底、避免崩解；🔴 **真实书的完整性闸 `require_complete` 现在要求主配置显式声明 `language`**（no-default，见「字段总览」），这一派生**不再是允许的真实书默认**——`make_config` 依家族派生后无条件写出，手写/legacy 缺项即 `exit 2`。
 
 ## GroupConfig 字段
 
@@ -69,7 +69,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 |------|------|------|
 | `type` | `int`（0–4、8–14） | 编号风格码，**同时编码段数（depth）与结构风格**（见下「类型表」）。`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不再作为独立字段。 |
 | `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。写 `["uncat"]` 表示兜底组。 |
-| `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。 |
+| `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。🔴 **无默认值**（no-default）：声明了真实体例（`type != 0`）的组**必须显式给出** `scope`，缺失或非法（越界 / 非整数）一律 `exit 2`——绝不再悄悄回落 `scope=2`，重置窗口设错会致跨章/跨节计数串号。唯一例外：`type 0`（UNNUMBERED，无编号）组的 scope 无语义（永不参与重置），允许省略。`make_config` 每条生成分支都显式写 scope，故 `--force` 重生成产出必可通过本校验。 |
 
 ### `type` 类型表（0–4、8–14）
 
@@ -81,15 +81,15 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | 1 | single | 1 | 单级（仅一个连续号，无章/节位） | `定义 1` / `Theorem 1` | 单级编号书 |
 | 2 | two_level | 2 | CN 两级 `N.M`（节优先；无章过滤，定理族共用一条连续号） | `定义 1.1` / `定理 2.3` / `引理 4.5`（章.号） | 中文二级标签 |
 | 3 | three_level | 3 | CN 三级 `N.M.K` | `定理 1.2.3` / `定义 3.2.1` / `引理 2.4.7`（章.节.号） | 多数中文教材（如 Kreyszig 中文版） |
-| 4 | en | 2 | EN 两级 `N.M`（章优先；富英文标签词） | `Theorem 6.1` / `Lemma 2.4` / `Proposition 3.7`（章.号） | 英文两级书（如 Strogatz） |
+| ~~4~~ | ~~en~~ 🔴已弃用→并入 2 | 2 | （历史码，加载期不再映射，出现即 `exit 2`）EN 两级 `N.M`（章优先；富英文标签词） | **现配置为 `{"type":2,...}`**（见 type 2 行） | 英文两级书（如 Strogatz） |
 | 8 | vakil | 3 | EN 三级、**数字在前**（`N.M.item`，习题用字母位 `N.M.A`） | `Theorem 1.2.3` / `Exercise 1.2.A` / `Proposition 4.5.B`（章.节.号） | Vakil《Foundations of Algebraic Geometry》 |
-| 9 | en3 | 3 | EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | `Remark 1.1.1` / `Definition 2.3.4` / `Theorem 3.2.1`（章.节.号） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
+| ~~9~~ | ~~en3~~ 🔴已弃用→并入 3 | 3 | （历史码，加载期不再映射，出现即 `exit 2`）EN 三级、**标签在前** `C.S.N`（显式英文标签词，天然排除图号/公式号） | **现配置为 `{"type":3,...}`**（见 type 3 行） | Lasota & Mackey《Chaos, Fractals, and Noise》 |
 | 13 | app | 3 | 附录**字母章位**三级：章位是**单字母**（A/B/C…）而非数字，条目 `Label A.S.N`、节标题 `A.S`（如 `A.1 Categories` / `A.6 Adjoint Functors`） | `Definition A.1.1` / `Theorem A.6.2` / `Example A.3.4` / `Exercise A.4.1`（字母章位.节.号） | Weibel《An Introduction to Homological Algebra》Appendix A |
-| 10 | cn3lab | 3 | CN 三级「**标签紧贴编号**」：`labelC.S.N`（中文标签与三级编号**无空格紧贴**，且**同一 `C.S.N` 编号被多种标签复用**——定义/定理/推论/例各自独立计数，定义1.3.1 与 定理1.3.1 同印 ".1" 但属不同条目） | `定义1.3.1` / `定理1.3.1` / `推论1.3.1` / `例1.3.1`（章.节.号，标签紧贴、标签间独立计数） | 常庚哲/史济怀《数学分析教程》等中文教材（标签紧贴编号、同号多标签） |
+| ~~10~~ | ~~cn3lab~~ 🔴已弃用→并入 3 | 3 | （历史码，加载期不再映射，出现即 `exit 2`）CN 三级「**标签紧贴编号**」：`labelC.S.N`（中文标签与三级编号**无空格紧贴**，且**同一 `C.S.N` 编号被多种标签复用**——定义/定理/推论/例各自独立计数，定义1.3.1 与 定理1.3.1 同印 ".1" 但属不同条目） | **现配置：仍 `type 3`，但按标签族拆成多个 ordinal 组**（定义/定理/推论/例 各自成组、均 `type:3`；习题独立编号用 `type:1`；图另立 `type:3` 组）——独立计数器靠**分组**实现，而非旧 type 10。🔴 切勿用单个 `type:3` `uncat` 组（会把同节内定义/定理并成一条计数器 → B 层假缺号） | 常庚哲/史济怀《数学分析教程》等中文教材（标签紧贴编号、同号多标签） |
 
 > `depth`（段数）一律由 `type` 经 `ORDINAL_DEPTH` 派生，上表「段数(depth)」列即为其唯一来源；配置里**不要**再写 `depth` 字段。
 
-> 🔴 **type 3（three_level）与 type 10（cn3lab）不可混用**：二者都印三级 `C.S.N`，但语义相反——type 3 下每个 `C.S.N` 编号**唯一对应一种标签**（一个计数器，如 `定理1.2.3` 在全书编号里独占 1.2.3）；type 10 下**同一 `C.S.N` 被定义/定理/推论/例多种标签复用**（各标签独立从 1 起号，同节内"定义1.3.1 / 定理1.3.1 / 推论1.3.1"三者同印 .1 但属不同条目）。配错（尤其把 cn3lab 书误配 type 3）会让契约键 `1.3-1` 既要承载定义又要承载定理/推论 → B 层假缺号（TAIL/EXTRA）、门控假报「编号不递增」。`make_config.py` 探测 family=3 时打印 `[CN3LAB 守卫]` 告警（命中"行首条头 `labelC.S.N` + 同一 `C.S-N` 被多标签共用"证据），agent 须据此**改配 type 10** 并整书重跑 `build_structure` + 重拆单元（🔴 脚本不自动改判，重排契约键须人工确认）。
+> 🔴 **CN 三级「标签紧贴编号」书（旧 cn3lab / type 10）的正确配置**：`type 10` 已于 2026-09-21 退役并入 `type 3`，加载期不再有任何透明映射（写 `type 10` 直接 `exit 2`）。但「同一 `C.S.N` 编号被定义/定理/推论/例多种标签复用、各自独立从 1 起号」的语义**仍须保留**——现由**按标签族拆分 ordinal 组**实现：`ordinal` 里定义、定理类、例（以及独立编号的习题、图）各自成一个组，全部 `type: 3`（习题若单级则 `type: 1`）。这样每个标签族各自计数，契约键 `1.3-1` 在「定义组」与「定理组」里是不同条目、互不覆盖。`make_config.py` 探测到该体例时会**自动按标签族拆成多个 `type 3` 组**。🔴 若你手改配置，务必保持分组，**切勿塌成单个 `type: 3` `uncat` 组**——那会把同节内"定义1.3.1 / 定理1.3.1 / 推论1.3.1"并成一条计数器 → 契约键 `1.3-1` 一号多义 → B 层假缺号（TAIL/EXTRA）、门控假报「编号不递增」。
 
 ## 分章配置 map：verify_config.json 的 `ch` / `appendix` / `supplement`
 
@@ -142,34 +142,37 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 
 - 编号形如 定义1.1 / 定理1.1 / 引理1.2 …（只有 章.号 两级，且 定理族共用一个连续号）→ 两级 + 双计数器（中文二级标签）→ `{"type":2,"name":["uncat"],"scope":2}`
 - 编号形如 1.1-2 / 3.2-7（三级 章.节-号）→ 默认 three-level → `{"type":3,"name":["uncat"],"scope":3}`（CN 三级书通常设 `scope:3`，不要用 make_config 默认的 `scope:2`）
-- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":4,"name":["uncat"],"scope":2}`
-- 节基 EN 两级（如 Fraleigh：按节编号、首数是节号、无章号位）→ **并入 type 4**，并设 `"chapter_first": false` + `"section_scoped": true`：`{"ordinal":[{"type":4,"name":[...合并后的文本标签...],"scope":2}],"chapter_first":false,"section_scoped":true,"language":"en"}`。`chapter_first:false` 让抽取/结构/校验把 key 首数当作「节」而非「章」；`section_scoped:true` 让抽取器额外捕获「数字在前」标题（`26.4 Lemma`）与编号图表（`Table 1.20` / `Figure 3.6`）。
+- 英文书编号形如 Theorem 1.2 / Lemma 3.4（EN 两级，无章号位）→ `{"type":2,"name":["uncat"],"scope":2}`（旧 type 4 已退役并入 2）
+- 节基 EN 两级（如 Fraleigh：按节编号、首数是节号、无章号位）→ **并入 type 2**，并设 `"chapter_first": false` + `"section_scoped": true`：`{"ordinal":[{"type":2,"name":[...合并后的文本标签...],"scope":2}],"chapter_first":false,"section_scoped":true,"language":"en"}`。`chapter_first:false` 让抽取/结构/校验把 key 首数当作「节」而非「章」；`section_scoped:true` 让抽取器额外捕获「数字在前」标题（`26.4 Lemma`）与编号图表（`Table 1.20` / `Figure 3.6`）。
 - Vakil 风格 EN 三级、数字在前（如 `1.2.3` 条目、`1.2.A` 习题）→ `{"type":8,"name":["uncat"],"scope":3}`
 - 不确定 / 跑 verify 出现负偏移的 "1.x-y"（x、y 比真实条目小很多）→ 几乎肯定是三级正则误吃公式/枚举 → 先用 `verify_chapter.py`（消费分章契约 `book_structure/ch{N}.json`）或人工核对确认真实条目齐全；确为两级书设 `type:2`，确为三级书但有几个真·OCR 噪点用 `--ignore` 登记（写入 `_extract/ignore_ch{N}.json`，附 `ignore_ch{N}.md` 举证）
 
-> 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":4,"name":["Example"],"scope":2},{"type":4,"name":["Theorem"],"scope":2},…,{"type":4,"name":["uncat"],"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
+> 以上为单组（combined，单个 `uncat` group）最简写法。若某书每类条目独立计数（如 Koopman 的 Theorem/Lemma/Definition/… 各自从 1 起号），须把 `ordinal` 拆成多个具名 group（每个 label 一类），并保留一个 `uncat` 兜底组，例如 `{"ordinal":[{"type":2,"name":["Example"],"scope":2},{"type":2,"name":["Theorem"],"scope":2},…,{"type":2,"name":["uncat"],"scope":2}]}`（见 `verify/item_numbering_integrity/item_numbering_integrity.md`）。
 
 ## `from_dict` 严格校验
 
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
 - 🔴 **`type` 必须显式声明，无默认值**（no-default / must-match）：组里缺 `type`（或缺 `ordinal` 整键）**一律拒绝并报「编号体例匹配不成功」**（`exit 2`），**绝不默默套用 type 3**——凭空补一个三级方案＝伪造体例，会把整本书按错误体例解析。
+- 🔴 **`scope` 必须显式声明，无默认值**（no-default / must-match）：凡声明了真实体例（`type != 0`）的组**必须显式给出** `scope`∈{1,2,3}，缺 `scope` 或非法（越界 / 非整数）**一律 `exit 2`**——绝不再悄悄回落 `SCOPE_CHAPTER`（scope=2）。计数器重置窗口设错会致跨章/跨节计数串号、伪造缺号，与 `type`/`formula.scope` 同一 no-default 原则，判不清一律交人工/agent 依书体例定夺。**唯一例外**：`type 0`（UNNUMBERED，无编号）组的 scope 无语义（永不参与重置），允许省略（写了则照常校验合法性）。`make_config` 每条 ordinal 生成分支都显式写 scope（含继承分支与 `_repaste_old_scopes` 只覆写不删），故 `--force` 重生成产出的配置必可通过本校验。
 - `type 0`（UNNUMBERED，段数 0）**可由用户显式声明**：表示本书**条目不带编号**（`Definition.` / `定理` 之类裸标签，无数字）。它同时是「未声明 `ordinal`」时由代码内部产生的兜底组。`depth` 对 type 0 投影为 **0**（不是幻影的 3）。⚠️ 节的体例是**正交的独立轴**：`type 0` 只说明条目无编号，节仍按 `section_types` 各自判定；无数字小节书（`## § <标题>`）须显式写 `section_types: [1, 0]`（role 0 = 无序号标层级）。
-- 逐组校验：`type` ∈ `ORDINAL_CODES` = {0,1,2,3,4,8,9,10,11,12,13,14}（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 4；13/14 = 附录字母章位三级/两段；0 = 条目无编号）、`scope`∈{1,2,3}，否则 `exit 2`。
+- 逐组校验：`type` ∈ `ORDINAL_CODES` = {0,1,2,3,8,12,13,14}（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 2；13/14 = 附录字母章位三级/两段；0 = 条目无编号）、`scope`∈{1,2,3}，否则 `exit 2`。🔴 已弃用码 4/9/10/11 不再登记（4→2、9/10→3、11→1），出现即 `exit 2`——加载期不做透明映射，存量 config 须改写为规范码。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
 
 ## 顶层字段：`chapter_first` / `section_scoped`
 
-这两个字段**只在「节基」（`chapter_first:false`）书需要区分「章基 / 节基」时**才出现；其余书保持默认即可。**与 `ordinal` type 代码无关**——任何 type 只要节基都会启用。
+这两个字段**无默认值、主配置必填**（no-default，与 `strict` / `language` 同列「主配置必填四件套」，由 `require_complete` 强制：主配置缺任一项即 `exit 2`，绝不静默兜底）。取值**须从本书体例确定**——`make_config` 无条件写出这四项，故生成的书恒通过，只有手写/legacy 缺项才被挡。**与 `ordinal` type 代码无关**——任何 type 只要节基都会启用。
 
-- **`chapter_first`（bool，默认 True）**：条目 key 的首个数字究竟是**章**还是**节**（不限于 EN 两级；节基 EN 书如此，但节基语义本身跨 type 成立）。
-  - `true`（默认，如 Strogatz / Koopman）：`"Theorem 6.1"` = 第 6 章第 1 条，段号取 `"6.1"`。
+- **`chapter_first`（bool，必填、无默认）**：条目 key 的首个数字究竟是**章**还是**节**（不限于 EN 两级；节基 EN 书如此，但节基语义本身跨 type 成立）。
+  - `true`（章基书，如 Strogatz / Koopman）：`"Theorem 6.1"` = 第 6 章第 1 条，段号取 `"6.1"`。
   - `false`（节基书，如 Fraleigh）：`"Theorem 8.1"` = §8 第 1 条，首数即「节号」，段号取 `"8"`。
   - 影响抽取（`extract_items_en` 的跨章前向引用过滤）、结构（`build_structure._section_of_key` 派生段号）、校验（`check_structure_completeness` 的 canon 解析）。
-- **`section_scoped`（bool，默认 False）**：节基书（`chapter_first:false`，**不限 type**）开启；让抽取器额外捕获**数字在前**标题（`26.4 Lemma`、`24.2 Corollary`）与**编号图表**（`Table 1.20` / `Figure 3.6`），因为节基来源把文本条目与图表共享同一个 per-section 计数器。章基书保持 `false`（其来源不这么印，开启也不会多抓，但为明确语义不默认开）。
+- **`section_scoped`（bool，必填、无默认）**：节基书（`chapter_first:false`，**不限 type**）置 `true`；让抽取器额外捕获**数字在前**标题（`26.4 Lemma`、`24.2 Corollary`）与**编号图表**（`Table 1.20` / `Figure 3.6`），因为节基来源把文本条目与图表共享同一个 per-section 计数器。章基书须显式写 `false`（其来源不这么印，开启也不会多抓，但为明确语义不得省略、不静默兜底）。
 
 > `make_config.py` 在 `chapter_map.json` 声明 `"chapter_first": false` 的节基书（任何 type）时，会自动写出这两个字段，并把全部 label（含 Table/Figure）collapse 为单组合并计数器。
 
 ## JSON 示例
+
+> 🔴 以下示例聚焦 `ordinal` / `formula` 体例，是**片段**：一份真实**主配置**还必须显式带「主配置必填四件套」`strict` / `chapter_first` / `section_scoped` / `language`（no-default，由 `require_complete` 强制，缺失即 `exit 2`）。部分示例为省篇幅未列出（有的已带 `strict` / `language`）。`make_config.py --force` 会自动写出这四项——手填时勿漏：章基书 `"chapter_first": true, "section_scoped": false`，节基书反之，`strict` 依书判定，`language` 取正文主体语言 `"cn"` 或 `"en"`。
 
 **多独立计数器书（Kreyszig，正确分组范本）** — 主类共用一条节内计数器，`Problem` 独立成组；`Axiom/Note/Proposition/Remark` 无真实标题或纯噪声，不进配置：
 
@@ -192,7 +195,7 @@ CN 三级（含公式序标，单组最简写法）：
   "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "strict": true,
   "language": "cn",
-  "formula": {"type": 4, "scope": 2, "ignore": []}
+  "formula": {"type": 2, "scope": 2, "ignore": []}
 }
 ```
 
@@ -200,7 +203,7 @@ EN 两级：
 
 ```json
 {
-  "ordinal": [{"type": 4, "name": ["uncat"], "scope": 2}],
+  "ordinal": [{"type": 2, "name": ["uncat"], "scope": 2}],
   "strict": true,
   "language": "en"
 }

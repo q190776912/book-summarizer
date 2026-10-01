@@ -42,6 +42,49 @@ from key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
 from verify_config import ORDINAL_THREE_LEVEL
 
+# 与 audit_ignore.py 的 _EVIDENCE_TOKENS 对齐：ignore 理由含下列任一证据标记时，
+# 视为 agent 已核对源书、确为共享计数器 / 作者稀疏编号（非真实缺项）。
+_EVIDENCE_TOKENS = ("VERIFIED-SPARSE", "已核实跳号", "源书真实跳号", "sparse numbering")
+
+
+def _load_evidenced_ignore(ext):
+    """返回已附 VERIFIED-SPARSE 证据的 ignore 键集合（含 _norm_sep 形态），
+    供 B 层 IGNORE-SUSPECT 与 audit_ignore.py 的 ACCEPTED 判定保持一致——
+    已核实的稀疏跳号不再重复告警（未附证据的 ignore 仍照常告警，护栏不弱化）。
+    """
+    ev = set()
+    if not ext or not os.path.isdir(ext):
+        return ev
+    for name in os.listdir(ext):
+        if ((name.startswith("ignore_ch") or name.startswith("ignore_appendix"))
+                and name.endswith(".json")):
+            fp = os.path.join(ext, name)
+            try:
+                data = json.load(open(fp, encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    reason = v if isinstance(v, str) else ""
+                    if any(tok in reason for tok in _EVIDENCE_TOKENS):
+                        ev.add(k)
+                        ev.add(_norm_sep(k))
+    vc = os.path.join(ext, "verify_config.json")
+    if os.path.exists(vc):
+        try:
+            cfg = json.load(open(vc, encoding="utf-8"))
+        except Exception:
+            cfg = {}
+        for field in ("ignore", "known_gaps", "ignore_keys"):
+            for k in cfg.get(field, []) or []:
+                if isinstance(k, dict):
+                    for kk, vv in k.items():
+                        if any(tok in str(vv) for tok in _EVIDENCE_TOKENS):
+                            ev.add(kk)
+                            ev.add(_norm_sep(kk))
+    return ev
+
+
 # Tail-check tolerance: source max minus md max beyond this is treated as a
 # likely OCR phantom / alien-numbering and collapses to ONE summary warning
 # instead of a per-number flood (mirrors D-layer's TAIL_GAP_THRESHOLD=5).
@@ -61,6 +104,14 @@ _PROOF_RE = re.compile(r'^(证明|的证明|proof|beweis|demonstration|dem\b)', 
 # 专名/引用号在前、证明词收尾 → 该条目本身是印刷的证明项（Vakil 共享计数器
 # 把「X 的证明」列为条目），不得按引用丢弃。
 _PROOF_TAIL_RE = re.compile(r'(?:的证明|之证明|证明|proof)\s*[。.．]?\s*$', re.IGNORECASE)
+
+# EXTRA-MENTION 收窄：下列「题集」类标签在正文 / 交叉引用中出现时，必为对
+# consolidated 习题块的合法引用（练习 / 习题 / Problem / 问题 / Question 在 skill 设计里
+# 从不作为契约条目登记，load_contract 对 exercise/problem 直接 return），非漏登记条目
+# → 从提及桶剔除，避免误报。个别非题集的外部引用（如 Euclid 命题）由 per-book
+# verify_config.json 的 mention_ignore 显式豁免。
+_EXM_DROP_RE = re.compile(
+    r'(练习|习题|Exercise|exercise|Problem|problem|问题|Question|question)\s*[\d.]+')
 
 # The inter-component separator is now SEP_TIGHT, defined ONCE in lib.regexlib
 # and reused everywhere so every book's punctuation variant normalizes the same
@@ -936,6 +987,7 @@ def _md_gap_blocking(ctx):
     false-FAILing.  `strict: false` downgrades gaps to advisory warnings."""
     cfg = ctx.config
     known = ctx.ignore
+    evidenced_ignore = getattr(ctx, 'evidenced_ignore', set())
     if not ctx.md_file:
         return [], [], set(), []
     try:
@@ -1161,22 +1213,28 @@ def _md_gap_blocking(ctx):
             # emitted token even though the grouping key only carries `gi`.
             full = (prefix_str + '-' if prefix_str else '') + str(n)
             matched = False
+            matched_token = None
             for lab in label_candidates:
                 token = f"{lab} {full}" if lab and lab != 'uncat' else full
                 token_norm = f"{_norm_label(lab)} {full}" if lab and lab != 'uncat' else full
-                if (_norm_sep(token) in known or _norm_sep(token_norm) in known
-                        or _norm_sep(f"{gk}:{n}") in known
-                        or f"{gk}:{n}" in ignore
-                        or _norm_sep(full) in known or full in ignore):
-                    matched = True
+                for cand in (token, token_norm, f"{gk}:{n}", full):
+                    if _norm_sep(cand) in known or cand in ignore:
+                        matched = True
+                        matched_token = cand
+                        break
+                if matched:
                     break
             if matched:
-                # 审核护栏：ignore 只应抑制「.md 中真实存在、但属 OCR 乱码」的条头，
-                # 不得用于掩盖「源侧序列洞」（被忽略的编号在 .md 中本就不存在）。
-                # 若 n 不在 present（是洞而非现令牌头），抑制它等于隐藏真实缺项 →
-                # 改为发出 IGNORE-SUSPECT 警告，交由 agent 复核
-                # （补 manual_overrides 或举证稀疏），而非静默放行。
+                # 审核护栏：ignore 只应抑制「.md 中真实存在」的条头，不得掩盖
+                # 「源侧序列洞」（被忽略的编号在 .md 中本就不存在）。
+                # 但若该 ignore 已附 VERIFIED-SPARSE 证据（agent 已核对源书，确认是
+                # 共享计数器 / 作者稀疏编号，非真实缺项），则与 audit_ignore.py 的
+                # ACCEPTED 判定保持一致 → 不再重复告警；未附证据者仍照常告警，护栏不弱化。
                 if n not in present:
+                    if (evidenced_ignore
+                            and (matched_token in evidenced_ignore
+                                 or _norm_sep(matched_token) in evidenced_ignore)):
+                        return
                     warnings.append(
                         f"  [IGNORE-SUSPECT] {gk} 缺号 {n}（序列 {first}..{last}）："
                         f"ignore 条目掩盖了一个源侧序列洞（{full} 在 .md 中并不存在），"
@@ -1363,6 +1421,25 @@ def _scan_book_category_items(ch, start, end, ext_dir):
     return {k: sorted(set(v)) for k, v in by.items()}
 
 
+def _norm_path(k):
+    """Label-tolerant key for three-level presence matching.
+
+    A three-level labeled head (``定义1.1.1`` / ``Theorem 1.1.1`` / ``性质6.2.1``)
+    and the contract's bare dash key (``1.1-1``) denote the SAME entitity.  Strip
+    the leading label and normalize separators to bare dash ``N.S-N`` so the md's
+    labeled head is recognized as present against the contract's bare key.
+
+    Bare keys (``3.1-2``) and any other form pass through unchanged.  This is what
+    keeps CN/EN three-level books from reporting every labeled md head as spurious
+    EXTRA-ENTRY (and keeps a contract type/label mismatch, e.g. registered as
+    ``性质`` but printed ``定义``, from surfacing as false truly-missing).
+    """
+    m = re.match(r'^([^\d]+)(\d+)\.(\d+)\.(\d+)$', k)
+    if m:
+        return f"{m.group(2)}.{m.group(3)}-{m.group(4)}"
+    return k
+
+
 def _split_extra(all_keys, entry_keys, extracted):
     """把「md 有、契约无」的键分成**条目级**与**提及级**两桶。
 
@@ -1442,6 +1519,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         entry_keys = ctx.entry_keys or set()
         all_keys = ctx.all_keys or set()
         ignore_keys = ctx.ignore
+        ctx.evidenced_ignore = _load_evidenced_ignore(ctx.ext_dir)
 
         # --- A-LAYER 完整性（原独立 A 层，现并入 B）：truly_missing / mentioned_only / extra ---
         # 数据来自 EXTRACT 供给的 ctx.items（书真相集）/ all_keys / entry_keys；
@@ -1452,8 +1530,20 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         extracted_raw = {it['key'] for it in items if it.get('label') != 'uncat'}
         ignored_hit = sorted(extracted_raw & ignore_keys, key=sortkey)   # stage1：噪声键
         extracted = extracted_raw - ignore_keys                          # 剔噪书集
-        truly_missing = sorted(extracted - all_keys)
+        # Label-tolerant presence matching for three-level items: a contract bare
+        # key ('1.1-1') and the md's labeled head ('定义1.1.1') are the same
+        # entity.  Normalize both sides so md labeled heads don't show up as
+        # spurious EXTRA-ENTRY and contract type/label mismatches don't surface as
+        # false truly-missing.  Genuinely-absent entries (their normalized path is
+        # found nowhere in the md) are still reported as truly-missing.
+        _ext_norm = {_norm_path(k) for k in extracted}
+        _all_norm = {_norm_path(k) for k in all_keys}
+        truly_missing = sorted(k for k in extracted if _norm_path(k) not in _all_norm)
         mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
+        # EXTRA: suppress md keys whose normalized path matches a contract key
+        # (merely a label-variant of a registered item); keep only genuine orphans.
+        _covered = {k for k in all_keys if _norm_path(k) in _ext_norm}
+        all_keys_eff = set(all_keys) - _covered
         # 🔴 EXTRA 分桶（判据见 `_split_extra`）。混在一行时报告文案
         # "usually correctly-filtered cross-refs" 会把**契约漏登记的真条目**说成
         # 良性噪声：Apostol ch9 §9.6 印面确有 `EXAMPLE 1`（fitz 300dpi 目视，物理页
@@ -1465,7 +1555,23 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # （statistical-inference 契约用两段键而 md 条头三段号；Lie 代数 ch1 无号
         # 条头 `**例**`/`**定义**`）→ 一律阻断会打爆已收官书，故**只改可读性、
         # 不改 pass/fail 语义**（`extra` 仍是并集，老消费者逐字节不变）。
-        extra, extra_entry, extra_mention = _split_extra(all_keys, entry_keys, extracted)
+        extra, extra_entry, extra_mention = _split_extra(all_keys_eff, entry_keys, extracted)
+        # 🔴 EXTRA-MENTION 收窄：练习/习题/Problem/问题/Question 等「题集」类提及
+        # 在采用 consolidated 习题块的书里从不作为契约条目登记（load_contract 对
+        # exercise/problem 直接 return），故它们在正文/交叉引用中出现必为合法引用，
+        # 非漏登记条目 → 从提及桶剔除，避免误报。个别外部引用（如 Euclid 命题）由
+        # 本书 verify_config.json 的 mention_ignore 显式豁免。
+        _drop = {k for k in extra_mention if _EXM_DROP_RE.search(k)}
+        _vc_path = os.path.join(ctx.ext_dir, "verify_config.json")
+        if os.path.exists(_vc_path):
+            try:
+                _vcd = json.load(open(_vc_path, encoding="utf-8"))
+                _drop |= set(_vcd.get("mention_ignore", []) or [])
+            except Exception:
+                pass
+        if _drop:
+            extra_mention = [k for k in extra_mention if k not in _drop]
+            extra = [k for k in extra if k not in _drop]
 
         # --- P2：提取侧查漏（Q 类整项缺失 + over-mark 守卫，归 B 层统一处理）---
         blocking = []

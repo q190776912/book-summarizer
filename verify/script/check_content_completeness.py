@@ -101,7 +101,7 @@ def _block_sig(b):
 
 
 def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
-                         letter=False, bare=True, page_dir=None,
+                         letter=False, bare=True, lead=None, page_dir=None,
                          section_scoped=False):
     """书源独立公式编号块（独立真值，不经 attach 管线）。
 
@@ -253,14 +253,14 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
     # `2.24`=散文里「Lemma 2.24」交叉引用；Koopman `10-2`=科学计数、`0-100`=图轴标；
     # 数值分析/高代 的 `2.0`/`0.25`=数表单元；各书 3 位以上纯数字=页脚页码（如 Evans
     # ch3 p107 的 `91`）。**无一例真印编号被误杀**。
-    _paren_re = formula_tag_re(ncomp, bare=False, letter=letter)
+    _paren_re = formula_tag_re(ncomp, bare=False, letter=letter, lead=lead)
     _col_seeds = []
     for p, _y, _b, s, _xc, _yc, x0 in raw:
         if x0 is None:
             continue
         _pm = _paren_re.match(s.strip())
         if _pm:
-            _num = formula_tag_number(s, ncomp, letter=letter, bare=False)
+            _num = formula_tag_number(s, ncomp, letter=letter, lead=lead, bare=False)
             if _num:
                 _col_seeds.append((_num, p, x0, _y))
     _num_col = number_column(_col_seeds, {str(t[0]) for t in _col_seeds})
@@ -279,7 +279,7 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         # 🔴 纯数字判定用 `nf`（去装饰点后才是数字）——`_filter_noise` 用的 `_norm`
         # 同样去标点，两侧口径一致；括号豁免仍查原样 `s`，`(7)` 永远不被当页码。
         if (page_height > 0 and nf.isdigit() and len(nf) <= 3
-                and not formula_paren_tag_re(ncomp, letter=letter).match(s)
+                and not formula_paren_tag_re(ncomp, letter=letter, lead=lead).match(s)
                 and (y < 0.06 * page_height or bottom > 0.94 * page_height)):
             continue
         if (p, nf) in _furn:
@@ -287,10 +287,10 @@ def _source_formula_tags(ext, start, end, ch_prefix, ncomp=None,
         # 🔴 无括号且含字母的短串（'2e' / '4c' / '020m' / '1970s'）= OCR 碎片（如
         # `2e^{x}` 被切成独立块、年份被当成编号），不是编号：括号是编号的强信号，
         # 缺了它就不接受字母位。（letter 书的 `(A.3)` 带括号，不受影响。）
-        if (not formula_paren_tag_re(ncomp, letter=letter).match(s)
+        if (not formula_paren_tag_re(ncomp, letter=letter, lead=lead).match(s)
                 and re.search(r'[A-Za-z]', n)):
             continue
-        key = formula_tag_number(s, ncomp, letter=letter, bare=bare)
+        key = formula_tag_number(s, ncomp, letter=letter, lead=lead, bare=bare)
         if key is None:
             continue
         # 噪声形态与 attach 侧同判据（`(0)` / `(00)` / 前导零 / 节内重置书的 ≥3 位）
@@ -540,7 +540,7 @@ def check_chapter(ext, ch_node):
         for _t in (b.get("tags") or []):
             got_tags.add(str(_t))
     ch_key_s = str(ch_node.get("key") or "")
-    ncomp, scope, f_letter, f_bare = ac.formula_cfg(ext, ch_key_s)
+    ncomp, scope, f_letter, f_bare, f_lead = ac.formula_cfg(ext, ch_key_s)
     # 🔴 与 Q 层一致**opt-in**：书未配 `formula` 时整项跳过。否则段数兜底正则
     # （段数不限、含裸排）会把页眉页脚的**页码**当成公式编号，而页码已被
     # _filter_noise 从契约剔除 → 每章凭空报「公式编号丢失」并阻断渲染。
@@ -554,11 +554,14 @@ def check_chapter(ext, ch_node):
         if scope == 2:
             if ch_key_s.isdigit():
                 prefix = ch_key_s
-            elif f_letter and len(ch_key_s) == 1 and ch_key_s.isalpha():
+            elif (f_letter or f_lead == 'letter') and len(ch_key_s) == 1 and ch_key_s.isalpha():
+                prefix = ch_key_s
+            elif f_lead == 'roman' and ch_key_s.isalpha():
+                # 罗马章位（type 16）：章键即罗马头（如 'II'，可多字符）
                 prefix = ch_key_s
         want_tags = _source_formula_tags(ext, ch_node.get("page_start"),
                                          ch_node.get("page_end"), prefix, ncomp,
-                                         letter=f_letter, bare=f_bare,
+                                         letter=f_letter, bare=f_bare, lead=f_lead,
                                          page_dir=_node_page_dir(ext, ch_node),
                                          section_scoped=(scope == 3))
 
@@ -589,7 +592,7 @@ def check_chapter(ext, ch_node):
     try:
         _st, _en = int(ch_node.get("page_start") or 0), int(ch_node.get("page_end") or 0)
         _pd = _node_page_dir(ext, ch_node)
-        _ncomp, _scope, _letter, _bare = ac.formula_cfg(ext, ch_key)
+        _ncomp, _scope, _letter, _bare, _lead = ac.formula_cfg(ext, ch_key)
         _srcb, _ph = ac._collect_blocks(ext, _st, _en, ch=ch_key, page_dir=_pd)
         _kept = ac._filter_noise(_srcb, _ph, max(1, _en - _st + 1), _ncomp,
                                  letter=_letter)

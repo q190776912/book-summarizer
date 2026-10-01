@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from verify.script.base import VerifyLayer, LayerResult
-from lib.numbering import formula_num_core
+from lib.numbering import formula_num_core, resolve_formula_type
 
 
 # Neutral no-op metadata returned when `formula` is None.  Mirrors the
@@ -86,10 +86,15 @@ def _summary_has_tags(md_file: str) -> bool:
 # Separator characters that any book may use between number components.
 _SEP_CLASS = r'[.\-·,]'
 # Letter/Roman-LED formula numbering (e.g. `(A.3)` / `（I.2）` / `(II.5)` /
-# `(App.2)`) — RESERVED.  The digit-led `norm()` / `build_formula_patterns()`
-# below cannot capture a number whose first component is a letter / Roman
-# numeral, so a book using such numbering is surfaced (WARN) rather than
-# silently validated.  This regex is the *detection* probe.
+# `(App.2)`) — DETECTION probe only.  Letter-led `(A.3)` (formula type 15 /
+# legacy `letter_ch`) and Roman-led `(II.5)` (formula type 16, `lead='roman'`)
+# ARE now captured by `norm()` / `build_formula_patterns()`, so a book that
+# CONFIGURES such a family is validated normally and this probe is skipped
+# (`run()` only probes digit-configured books).  The probe therefore surfaces a
+# MIS-CONFIG hint: a digit book carrying letter/Roman equation numbers in its
+# source gets a WARN asking the operator to select the right lead.  Only the
+# multi-LETTER-WORD prefixes (`App.2` / `Ap.3`) belong to no lead family and
+# stay genuinely unsupported (WARN + human reconciliation).
 #
 # 🔴 TIGHTENED (2026-08-16): it now matches ONLY genuine letter-led formula
 # numbers so it no longer misfires on algebraic parentheticals (`(n-1)` /
@@ -254,8 +259,7 @@ _BLOCK_RE = re.compile(r'\$\$(.*?)\$\$', re.S)
 # Canonical `type` -> numbering-depth map.  SINGLE source of truth in
 # `lib.numbering.ORDINAL_DEPTH`; depth is always derived from `type` via
 # `lib.numbering.ordinal_depth`, never a second, drift-prone local copy.
-from lib.numbering import (ORDINAL_DEPTH, ordinal_depth, OrdinalDepthError,
-                           resolve_ordinal_code)
+from lib.numbering import (ORDINAL_DEPTH, ordinal_depth, OrdinalDepthError)
 
 # Heading regex used to assign a book-source formula its enclosing section.
 # Matches a SHORT numbered line like "2.3.2 Preliminaries" / "§2.2 Stability ..."
@@ -336,7 +340,7 @@ _CAPTION_LEAD_RE = re.compile(r'^\s*(?:figure|fig\.?\b|图)', re.IGNORECASE)
 
 
 def build_formula_patterns(ncomp: int, allow_bare: bool = True,
-                           letter: bool = False) -> List[str]:
+                           letter: bool = False, lead=None) -> List[str]:
     """Build source-extraction regexes from a formula key's component count.
 
     `allow_bare` (default True, the historical behaviour) also emits the bare
@@ -348,14 +352,17 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True,
     explicitly-marked forms — ``(N.M)`` / ``Eq. N.M`` / ``Equation N.M`` /
     ``式（N.M）`` — are then collected.
 
-    `letter=True`（`formula.letter_ch: true`）: letter-chapter-led numbering
-    `(A.3)` / `（B.12）`（Lee ISM appendices）。The token core comes from the
-    SAME single source (`lib.numbering.formula_num_core(..., letter=True)`);
-    the **bare variant is never emitted** in this mode — a bare `A.3` is
-    indistinguishable from `Fig. A.3` / section headings like `C.1`, so only
-    parenthesised / `Eq.`-prefixed forms are collected (宁缺勿滥).
-    Multi-letter / Roman prefixes (`II.5` / `App.2`) remain RESERVED — the
-    `_LETTER_LED_RE` probe still surfaces them as a WARN.
+    `letter=True`（`formula.letter_ch: true`）是 `lead='letter'` 的兼容别名；
+    `lead`（`digit` / `letter` / `roman`）为现代入口（派生自 `resolve_formula_type`），
+    两者都缺省 → `digit`（旧行为逐字节不变）。alpha-led 编号（letter `(A.3)` /
+    roman `（II.5）`，Lee ISM appendices / 罗马章位书）。The token core comes from the
+    SAME single source (`lib.numbering.formula_num_core(..., lead=...)`);
+    the **bare variant is never emitted** in this mode — a bare `A.3` / `II.5` is
+    indistinguishable from `Fig. A.3` / section headings like `C.1` / prose roman
+    counts, so only parenthesised / `Eq.`-prefixed forms are collected (宁缺勿滥).
+    罗马多字母前缀（`II.5`）不再是 RESERVED——现由 formula type 码 16（`lead='roman'`）
+    实现；单字母罗马头（`I.`/`V.`/`X.`…既是字母又是罗马）的重叠由整书只配一个 lead +
+    `make_config.detect_formula` 保守择族消解。
 
     `ncomp` is the number of numeric components (the `depth` field): 2 -> `1.17`,
     3 -> `11.1-1`, 1 -> `7`.  Each returned pattern has exactly ONE capture
@@ -363,6 +370,8 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True,
     canonicalises it.  Variants cover the common CN/EN wrappers so books with
     non-standard numbering rarely need to override the `formula` map.
     """
+    if lead is None:
+        lead = 'letter' if letter else 'digit'
     if ncomp is None or ncomp < 1:
         ncomp = 1
     # Capture the optional trailing letter suffix (e.g. `8.11a`) so that
@@ -375,13 +384,14 @@ def build_formula_patterns(ncomp: int, allow_bare: bool = True,
     # attach_content 挂 tag、本层抽书源编号、完整性闸门做独立真值，三处必须读
     # 同一套形态（段数 / 分隔符 / 字母后缀 / 字母章位），否则口径漂移会互相判
     # 对方"漏/编造"。
-    group = '(' + formula_num_core(ncomp, letter=letter) + ')'
-    if letter:
-        # Letter-chapter-led: parenthesised + Eq.-prefixed forms only (no bare).
+    group = '(' + formula_num_core(ncomp, letter=letter, lead=lead) + ')'
+    if lead in ('letter', 'roman'):
+        # Alpha-chapter-led (letter `(A.3)` / roman `(II.5)`): parenthesised +
+        # Eq.-prefixed forms only (no bare — 裸排与图注/小节标题/散文计数不可分).
         return [
-            r'[（(]\s*' + group + r'\s*[）)]',   # （A.3） / (B.12)
-            r'\bEq\.?\s+' + group,                # Eq. A.3
-            r'\bEquation\s+' + group,             # Equation A.3
+            r'[（(]\s*' + group + r'\s*[）)]',   # （A.3） / (B.12) / （II.5）
+            r'\bEq\.?\s+' + group,                # Eq. A.3 / Eq. II.5
+            r'\bEquation\s+' + group,             # Equation A.3 / Equation II.5
         ]
     if ncomp == 1:
         # Per-section bare numbering (Kreyszig): genuine formula numbers appear
@@ -1601,6 +1611,7 @@ class SourceFormulaIndex:
             '式（3,4）'  -> '3.4'
             '2.3a'       -> '2.3'   (trailing letter suffix dropped)
             '（A.03）'   -> 'A.3'   (letter-chapter-led; leading zero folded)
+            '（II.5）'   -> 'II.5'  (roman-chapter-led; multi-char head kept)
         """
         if not raw:
             return None
@@ -1615,11 +1626,14 @@ class SourceFormulaIndex:
         # peel a single outer parenthesis pair (handles （）and ())
         while s and s[0] in '（(' and s[-1] in '）)':
             s = s[1:-1].strip()
-        # Optional leading single capital letter + separator (`A.3` / `A.03`
-        # letter-chapter-led; the head group swallows its trailing separator).
-        # Pure-digit tokens never have it, so digit-led books are unaffected —
-        # norm() only ever sees tokens the configured patterns captured.
-        m = re.match(r'([A-Z][.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
+        # Optional leading capital-letter head + separator — `A.3` / `A.03`
+        # (letter-chapter-led) or `II.5` / `IV.3` (roman-chapter-led).  `[A-Z]+`
+        # keeps a **multi-char Roman head intact** (the old `[A-Z]` matched only
+        # one char, so `II.5` fell through to None and every roman tag broke).
+        # The head group swallows its trailing separator.  Pure-digit tokens
+        # never have it, so digit-led books are unaffected — norm() only ever
+        # sees tokens the configured patterns captured.
+        m = re.match(r'([A-Z]+[.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
         if not m:
             return None
         head, core, suffix = m.group(1), m.group(2), m.group(3)
@@ -1629,7 +1643,7 @@ class SourceFormulaIndex:
         # optional letter head is re-prepended verbatim.
         norm_core = re.sub(_SEP_CLASS, '.', core)
         norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
-        parts = ([head[0]] if head else []) + [norm_core]
+        parts = ([head[:-1]] if head else []) + [norm_core]
         # Drop the trailing letter suffix (e.g. `8a` -> `8`).  Books such as
         # Strogatz number sub-parts of a single displayed equation as
         # `(8a)`, `(8b)`, while the curated summary groups them under one
@@ -1673,14 +1687,15 @@ class SourceFormulaIndex:
         s = s.strip()
         while s and s[0] in '（(' and s[-1] in '）)':
             s = s[1:-1].strip()
-        # Optional leading single capital letter + separator — mirrors norm().
-        m = re.match(r'([A-Z][.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
+        # Optional leading capital-letter / roman head + separator — mirrors norm()
+        # (`[A-Z]+` keeps multi-char Roman heads like `II` intact).
+        m = re.match(r'([A-Z]+[.\-·,])?(\d+(?:' + _SEP_CLASS + r'\d+){0,2})([a-zA-Z]?)$', s)
         if not m:
             return None
         head, core, suffix = m.group(1), m.group(2), m.group(3)
         norm_core = re.sub(_SEP_CLASS, '.', core)
         norm_core = '.'.join(str(int(p)) for p in norm_core.split('.'))
-        norm_full = '.'.join(([head[0]] if head else []) + [norm_core])
+        norm_full = '.'.join(([head[:-1]] if head else []) + [norm_core])
         return norm_full + (suffix.lower() if suffix else '')
 
 
@@ -1795,10 +1810,11 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
         # 而 Koopman（标签为章级两段、噪声为函数/散文括号）不再被误判。
         single_re = re.compile(r'(?<![\w\u4e00-\u9fff])[（(]\s*(\d+)\s*[）)]')
         dotted_paren = re.compile(r'[（(]\s*(\d+\.\d+)\s*[）)]')
-        # Letter-chapter-led `(A.3)` counts as two-component too (Lee ISM
-        # appendices) — without it a letter_ch book's scope-2 pre-flight sees
-        # dotted==0 and wrongly demands a scope change.
-        dotted_paren_letter = re.compile(r'[（(]\s*[A-Z][.·]\d+\s*[）)]')
+        # Letter / roman-chapter-led `(A.3)` / `(II.5)` counts as two-component
+        # too (Lee ISM appendices / roman type 16) — without it such a book's
+        # scope-2 pre-flight sees dotted==0 and wrongly demands a scope change.
+        # `[A-Z]+` keeps a multi-char Roman head (`II`, `IV`, …) intact.
+        dotted_paren_letter = re.compile(r'[（(]\s*[A-Z]+[.·]\d+\s*[）)]')
         # 3-component (C.S.N) numbers are also genuine multi-component formula
         # labels; the original dotted_paren only matched 2 components, so
         # chapter-wide 3-component books (e.g. Lasota-Mackey 5.7.21) were wrongly
@@ -1863,8 +1879,7 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     agnostic_nums = agnostic.all_numbers()
 
     configured = SourceFormulaIndex(ctx.ext_dir, patterns, chapter_prefix=False,
-                                    ncomp=ordinal_depth(
-                                        resolve_ordinal_code(formula.get('type'))))
+                                    ncomp=ncomp)
     configured.build(ctx.ch, ctx.start, ctx.end)
     configured_nums = configured.all_numbers()
 
@@ -1885,12 +1900,12 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
             return None
         _ft = formula.get('type')
         try:
-            _fd = ordinal_depth(resolve_ordinal_code(_ft))
+            _fd = ordinal_depth(_ft)
         except OrdinalDepthError:
             _fd = '未登记'
         return (f"`formula` 配置 (type={_ft}, "
                 f"depth={_fd}, "
-                f"scope={formula.get('scope', 2)}) "
+                f"scope={formula.get('scope', '未配置')}) "
                 f"在本章书源中抽不到任何公式编号，但 agnostic 探测抽到 "
                 f"{len(agnostic_nums)} 个编号；depth/scope 与书实际公式形态不符，"
                 f"请按书源真实编号重配 formula（例如单分量节级重排书应 "
@@ -1917,7 +1932,7 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     #    那它与 scope=2 的章级守卫完全自洽；此时源页 OCR 偶发的裸 (1)/(100)（页边
     #    数字、习题计数、括号列表）把 s 顶过 d 只是噪声，绝不能据此改判 scope=3。
     #    故再加 max_tag_ncomp<=1 前置门——只会抑制假阳性，绝不新增报错（回归安全）。
-    scope = formula.get('scope', 2)
+    scope = formula.get('scope')
     if scope == 2 and _summary_has_tags(ctx.md_file):
         s, d = _count_shapes(ctx.ext_dir, ctx.start, ctx.end)
         if s > d and s > 0 and max_tag_ncomp <= 1:
@@ -1930,14 +1945,18 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
 
 
 def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
-    """RESERVED probe: find letter / Roman-led formula numbers in the book
-    source (e.g. `(A.3)` / `（I.2）`).
+    """Letter / Roman-led probe: find alpha-led formula numbers in the book
+    source (e.g. `(A.3)` / `（II.5）`).
 
-    These are NOT yet validated by the Q layer (norm() / build_formula_patterns
-    are digit-led).  Detecting them lets `run()` emit a clear WARN instead of
-    silently degrading to a false-green S-empty pass.  Scans the same
-    `page_*.json` `text[]` the real extractor reads.  Returns the raw matched
-    tokens (for the surfaced message), or an empty set when none are found.
+    🔴 Only meaningful for a **digit-configured** book: `run()` skips this probe
+    whenever the config already selects an alpha-led family (letter via
+    `letter_ch` / type 15, roman via type 16) — those forms ARE validated by the
+    normal `norm()` / `build_formula_patterns` path now.  When a *digit* book's
+    source nonetheless carries letter- or roman-led numbers, the probe lets
+    `run()` emit a clear mis-config WARN instead of silently degrading to a
+    false-green S-empty pass.  Scans the same `page_*.json` `text[]` the real
+    extractor reads.  Returns the raw matched tokens (for the surfaced message),
+    or an empty set when none are found.
     """
     found: Set[str] = set()
     _pdir = resolve_page_dir(ext_dir, ch) if ch is not None else ext_dir
@@ -1959,36 +1978,46 @@ def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
 
 
 def _letter_led_note(found: Set[str]) -> Optional[str]:
-    """Build the (non-blocking) WARN note for letter / Roman-led formula numbers.
+    """Build the (non-blocking) WARN note for alpha-led formula numbers that a
+    **digit-configured** book carries in its source (mis-config hint; `run()`
+    skips the probe entirely once an alpha-led family is selected).
 
-    Returns the note string when `found` is non-empty, else None.  Two branches
-    (2026-09-14 letter-led support landed):
+    Returns the note string when `found` is non-empty, else None.  Branches:
 
-    * ONLY single-letter tokens (`(A.3)`) are found → the book uses
-      letter-chapter-led numbering but the config has NOT enabled
-      `letter_ch` — a mis-config hint pointing at the fix (the numbering itself
-      is now supported).
-    * Multi-letter / Roman tokens (`II.5` / `App.2`) are found → still
-      RESERVED: per the Q-layer SSOT (formula_tag.md), a WARN + downgrade, NOT
-      a blocking FAIL — that part stays un-validated and asks for human
-      reconciliation via formula_audit.md, instead of silently degrading to a
-      false-green pass OR spuriously blocking a digit-led book.
+    * ONLY single-letter tokens (`(A.3)`) → letter-chapter-led numbering, but the
+      config has NOT enabled `letter_ch` — hint: set `"letter_ch": true`
+      (equivalently formula type 15).  The numbering itself is supported.
+    * Roman-led tokens (`(II.5)` / `（IV.3）`, multi-char `[IVXLCDM]{2,5}` head) →
+      roman-chapter-led numbering IS supported now via formula **type=16**
+      (`lead='roman'`); hint the operator to set `type` to 16 and re-run verify.
+    * Residual multi-LETTER tokens (`App.2` / `Ap.2`) belonging to no lead
+      family → genuinely unsupported: WARN + downgrade (NOT a blocking FAIL),
+      asking for human reconciliation via formula_audit.md, instead of silently
+      degrading to a false-green pass OR spuriously blocking a digit-led book.
     """
     if not found:
         return None
     single = {f for f in found
               if re.fullmatch(r'[（(]\s*[A-Z]\s*[.·]\s*\d+[a-zA-Z]?\s*[）)]', f)}
+    roman = {f for f in found - single
+             if re.fullmatch(
+                 r'[（(]\s*[IVXLCDM]{2,5}\s*[.·]\s*\d+[a-zA-Z]?\s*[）)]', f)}
     if single and single == set(found):
         return (
             f"书源含字母章位公式编号（如 {sorted(found)[:3]}…），但 verify_config.json 的"
             f" formula 未启用 \"letter_ch\": true → 此类编号本轮未经机器校验。"
             f"请在对应段（正文 \"ch\" / 附录 \"appendix\"）的 formula 配置加"
             f" \"letter_ch\": true 后重跑 verify。")
+    if roman:
+        return (
+            f"书源含罗马章位公式编号（如 {sorted(roman)[:3]}…），该形态 Q 层已支持"
+            f"（formula type=16 / lead='roman'），但当前配置未选用 → 此类编号本轮未经"
+            f"机器校验。请在对应段的 formula 配置把 \"type\" 设为 16 后重跑 verify。")
     return (
-        f"书源含多字母/罗马开头公式编号（如 {sorted(found - single)[:3] if sorted(found - single) else sorted(found)[:3]}…），"
-        f"该形态（罗马/多字母前缀）Q 层暂不支持，降级为 WARN（不阻断）：该部分公式序标"
-        f"未经机器校验，请人工核对 <extract>/formula_audit.md。单字母章位编号已支持"
-        f"（formula 配置 \"letter_ch\": true）。")
+        f"书源含多字母开头公式编号（如 {sorted(found - single)[:3] if sorted(found - single) else sorted(found)[:3]}…），"
+        f"该形态（多字母前缀，如 App/Ap）无对应 lead 家族，Q 层暂不支持，降级为 WARN"
+        f"（不阻断）：该部分公式序标未经机器校验，请人工核对 <extract>/formula_audit.md。"
+        f"单字母章位（letter_ch / type 15）与罗马章位（type 16）均已支持。")
 
 
 def _dup_beyond_source(src, counts: Dict[str, int], key: str, n: str,
@@ -2115,9 +2144,11 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
             'summary_latex': '',
             'source_text': (
                 s_empty_note
-                or '书源公式编号未抽到（可能是 formula 的 depth/scope 配错，'
-                   '或书源采用字母/罗马开头编号 (A.3)/(I.2) 这类 Q 层暂不支持的'
-                   '形态——预留待实现）；公式序标校验对本章降级，不可报"通过"。'),
+                or '书源公式编号未抽到（多为 formula 的 type/scope/lead 配错——例如'
+                   '把字母章位 (A.3)（type 15 / letter_ch）或罗马章位 (I.2)/(II.5)'
+                   '（type 16 / lead=roman）的书按纯数字家族配置，则括号内核匹配不到、'
+                   'S 为空）；请核对本书实际编号家族后重跑。公式序标校验对本章降级，'
+                   '不可报"通过"。'),
         })
 
     return fab, inc, miss, rows
@@ -2629,11 +2660,15 @@ class QLayer(VerifyLayer):
                     "verify_config.json 缺少 `formula` 配置 → Q 层已静默 no-op，"
                     "公式序标**未校验**，不可报\"公式校验通过\"。\n"
                     "  → 请先按书实际公式编号填写 `formula` 配置再跑 verify：\n"
-                    "      \"formula\": {\"type\": <风格码>, \"scope\": 2, "
+                    "      \"formula\": {\"type\": <风格码>, \"scope\": <1/2/3>, "
                     "\"ignore\": []}\n"
-                    "    type 已包含编号段数：C.N(如 2.6)→type 4；C.S.N / C.S-N"
-                    "(如 11.1-1)→type 3；单分量 (N)→type 1。\n"
-                    "    scope 默认 2（章级编号，开启跨章守卫）；全局编号书用 1。\n"
+                    "    type 已包含编号段数：两级 (C.N)(如 2.6)→type 2；三级 "
+                    "C.S.N / C.S-N(如 11.1-1)→type 3；单分量 (N)→type 1；"
+                    "字母章位 (A.3)→type 15（或 legacy type 2 + letter_ch）；"
+                    "罗马章位 (II.5)→type 16。\n"
+                    "    scope = 编号重置窗口（1=全书连续 / 2=每章重启 / 3=每节"
+                    "重启），必须从书中确定，**无默认值**——缺 scope 或取值非法会在"
+                    "加载期直接报错（exit 2），不再静默按章级处理。\n"
                     "    不确定段数时，先扫该书 page_*.json 的 text[] 实测公式标签。",
                     file=sys.stderr,
                 )
@@ -2675,7 +2710,15 @@ class QLayer(VerifyLayer):
         # scan missed, registered as real (not hidden behind ignore).  Wired
         # from verify_config.json `formula.known_book`.  See SourceFormulaIndex.
         fknown = known_book_scopes(formula)
-        scope = formula.get('scope', 2)
+        scope = formula.get('scope')
+        # 🔴 scope 无默认值：加载期 `verify_config.from_dict` 已强制任何带 type 的
+        # formula 块显式声明 scope；此处再兜一道——若拿到 type 却缺 scope，宁可
+        # 硬报错交人工/agent 依书确定，绝不静默按 scope=2（章级守卫）跑，那样会
+        # 用错误的体例把合法跨章号误判 INCONSISTENT（伪造守卫 = 宁缺勿滥反面）。
+        if scope is None and formula.get('type') is not None:
+            raise ValueError(
+                "formula 配置缺 `scope`（无默认值）：请依书实际编号体例显式设 "
+                "scope（1=全书/2=每章/3=每节）。")
         # Per-section formula numbering (Kreyszig: every section restarts at
         # (1)).  FABRICATED/INCONSISTENT are checked section-locally; the
         # chapter-prefix cross-chapter guard is OFF.
@@ -2683,13 +2726,23 @@ class QLayer(VerifyLayer):
         # Cross-chapter guard (first component == current chapter) is ON iff
         # scope == 2 (chapter-level numbering); book/section scope disables it.
         chapter_prefix = (scope == 2)
-        # raw config 里可能是存量弃用码（4/9/10/11），须先归一再取 depth。
-        ncomp = ordinal_depth(resolve_ordinal_code(ftype))
+        # raw config 的 type 必须是规范码（弃用码 4/9/10/11 已退役、config 已改写）。
+        # 🔴 走 `resolve_formula_type` 统一入口：formula-only 码 15（letter 二级）/
+        # 16（roman 二级）不在 `ORDINAL_DEPTH` 里，直接 `ordinal_depth(15/16)` 会抛
+        # OrdinalDepthError。数字码 1/2/3 + legacy `letter_ch` 经解析器逐字节等价。
+        lead, ncomp = resolve_formula_type(
+            ftype, letter_ch=bool(formula.get('letter_ch')))
         # `formula.letter_ch` (default False): letter-chapter-led numbering
-        # `(A.3)` / `（B.12）`（Lee ISM appendices）.  Patterns and norm() then
-        # accept a single leading capital letter; the cross-chapter guard
-        # (scope 2) compares the letter head against the chapter key ('A'…).
-        letter = bool(formula.get('letter_ch'))
+        # `(A.3)` / `（B.12）`（Lee ISM appendices）；roman type 码 16 → lead='roman'
+        # `（II.5）`。Patterns and norm() then accept a leading capital-letter /
+        # roman head; the cross-chapter guard (scope 2) compares the head against
+        # the chapter key ('A' / 'II'…).
+        letter = (lead == 'letter')
+        # 🔴 RESERVED 探针跳过条件：只要本书已按 alpha-led 配置（letter 或 roman），
+        # 正常路径已在机器校验这类编号——探针只对**数字家族**的书触发（源里冒出
+        # 字母/罗马编号=配错提示）。旧写法只看 `letter`，roman 书（lead='roman'、
+        # letter=False）会被探针误判「罗马尚未支持」而阻断。
+        alpha_led = lead in ('letter', 'roman')
         # `formula.bare_number` (default True): when False, the bare ``N.M``
         # variant is dropped from the source-extraction patterns.  Books whose
         # prose is full of numbered cross-references (Lee: ``(Fig. 1.2)``,
@@ -2697,7 +2750,7 @@ class QLayer(VerifyLayer):
         # numbers and report each as MISSING.
         patterns = build_formula_patterns(
             ncomp, allow_bare=bool(formula.get('bare_number', True)),
-            letter=letter)
+            letter=letter, lead=lead)
 
         # Pre-flight: validate the formula config against the actual book BEFORE
         # the structural compare loop.  A depth/scope mismatch would otherwise
@@ -2766,10 +2819,11 @@ class QLayer(VerifyLayer):
                     tags_sec, src, fglob, reset_on_section=True,
                     scoped_ignore=fscoped)
                 # RESERVED letter/Roman-led probe: only meaningful when the
-                # config has NOT enabled `letter_ch` (with it, single-letter
-                # numbering IS validated; multi-letter/Roman stays RESERVED).
-                # A letter-led book must not silently pass via section scope.
-                _ll_sec = ([] if letter else
+                # config has NOT selected an alpha-led family.  With `letter_ch`
+                # (letter) or roman type 16, that numbering IS validated by the
+                # normal path; the probe only fires for digit books as a
+                # mis-config hint.  A letter-led book must not silently pass.
+                _ll_sec = ([] if alpha_led else
                            _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
                 ll_note_sec = _letter_led_note(_ll_sec)
                 if ll_note_sec is not None:
@@ -2792,13 +2846,13 @@ class QLayer(VerifyLayer):
                                  known_book=fknown)
         src.build(ctx.ch, ctx.start, ctx.end)
 
-        # RESERVED probe for letter / Roman-led formula numbering.  With
-        # `letter_ch` enabled, single-letter `(A.3)` numbering IS validated by
-        # the normal path — the probe only fires for UN-configured letter-led
-        # sources (mis-config hint) or multi-letter / Roman prefixes
-        # (`II.5` / `App.2`, still unsupported → BLOCKING WARN).  See
-        # _letter_led_note for the two branches.
-        _ll = ([] if letter else
+        # RESERVED probe for letter / Roman-led formula numbering.  Only fires
+        # for a **digit-configured** book: with `letter_ch` (letter) or roman
+        # type 16 selected, that numbering IS validated by the normal path.  For
+        # a digit book the probe surfaces letter-led `(A.3)` / roman-led `(II.5)`
+        # numbers sitting in the source as a mis-config hint pointing at the fix.
+        # See _letter_led_note for the branches.
+        _ll = ([] if alpha_led else
                _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
         ll_note = _letter_led_note(_ll)
         if ll_note is not None:

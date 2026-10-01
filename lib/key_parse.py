@@ -219,8 +219,8 @@ def _ross_canon(label, num, suffix=''):
 # bold `**` prefix naturally excludes FIGURE 1.1.1 / (1.1.1) figure/formula numbers
 # (no label word), avoiding key collisions with the item set.
 ENTRY_RE_EN3_C = re.compile(
-    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')'
-    r'\s*(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
+    r'\*\*\s*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*'
+    r'(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
 PROSE_RE_EN3_C = re.compile(
     r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])'

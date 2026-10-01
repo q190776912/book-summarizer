@@ -13,15 +13,15 @@
 1. **先确认配置存在**：检查 `<extract_dir>/verify_config.json` 是否含 `"formula"` map。
 2. **缺失则按书实际编号推导并写入**（agent 负责，不要跳过）：
    - **扫书实测**：遍历该书若干章的 `page_{start:03d}.json … page_{end:03d}.json` 的 `text[].text`，用公式标签正则（覆盖 `（C.N）`/`(C.N)`/`Eq. C.N`/`Equation C.N`/`式（C.N）`/裸 `C.N`）看实际编号长什么样。
-   - **`depth`** = 编号数值段数，**由 `type` 经 `ORDINAL_DEPTH` 派生**（不要单独配置）：`C.N`（如 `2.6`）→ `type 4`（depth 2）；`C.S.N`/`C.S-N`（如 `11.1-1`）→ `type 3`（depth 3）；单分量 `(N)` → `type 1`（depth 1）。
-   - **`scope`**：默认 `2`（章级编号 `C.N`，开启跨章守卫——首分量 ≠ 当前章号判 INCONSISTENT）；若全书为全局连续编号则用 `1`（关闭跨章守卫）；若每节重置（如 Kreyszig `(1)`）用 `3`。
+   - **`depth`** = 编号数值段数，**由 `type` 经 `ORDINAL_DEPTH` 派生**（不要单独配置）：`C.N`（如 `2.6`）→ `type 2`（depth 2）；`C.S.N`/`C.S-N`（如 `11.1-1`）→ `type 3`（depth 3）；单分量 `(N)` → `type 1`（depth 1）。
+   - **`scope`**：编号重置窗口，**必须从书中实测确定，无默认值**——`2`＝章级编号 `C.N`（开启跨章守卫：首分量 ≠ 当前章号判 INCONSISTENT）；`1`＝全书全局连续（关闭跨章守卫）；`3`＝每节重置（如 Kreyszig `(1)`）。🔴 已声明 `type` 的 formula 块若**缺 `scope`** 或取值越界（非 1/2/3），加载期 `verify_config.from_dict` 一律 `ConfigError`（exit 2），不再静默按章级处理。`make_config.detect_formula` 对两级数字 `(C.N)` 用**首分量重置证据**派生 scope（逐章重启→2 / 全书连续→1）；证据不足（整书仅见单一首分量、无从观测重置）时**省略 scope**，交由 agent 依书补定。
    - ⚠️ **scope:3 ⇒ depth 必为 1**：节级重置必为裸 `(N)`，不可能带 `C.N`（若出现 `C.N` 则必 scope:2）。
-   - **`type`**：编号风格码，**唯一权威字段**；`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生（2 段→`4`→depth 2，3 段→`3`→depth 3，单分量→`1`→depth 1）。不再单独写 `depth`。
+   - **`type`**：编号风格码，**唯一权威字段**；`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生（2 段→`2`→depth 2，3 段→`3`→depth 3，单分量→`1`→depth 1）。不再单独写 `depth`。
    - **type 1 = 单分量 standalone `(N)`**：节级重置（Kreyszig 风格），`depth` 必为 1，`scope` 通常为 3。是单分量公式书唯一合法码。
    - `ignore`：先给空数组 `[]`；跑出 MISSING 且确认属合理省略时再加。
    - 写入示例（章级两段编号书）：
      ```json
-     "formula": {"type": 4, "scope": 2, "ignore": []}
+     "formula": {"type": 2, "scope": 2, "ignore": []}
      ```
      ⚠️ 此示例为**章级两段编号书**，仅作章级参考；**不可照抄到节级单分量书**（Kreyszig 每节重置应为 `{"type":1,"scope":3}`）。
 3. **配置错会降级**：若 `formula` 配了但 `depth` 不对导致书源抽不到编号（S 空），层只做结构检查并 WARN「书源公式编号未抽到，请检查 formula 配置」，**不判编造/遗漏 FAIL**——此时须回头修正 `formula` 的 `type`/`scope`（实为 `type` 派生错），不要当成"通过"。
@@ -36,14 +36,15 @@
   ```json
   "formula": {"type": 3, "scope": 2, "ignore": []}
   ```
-  - `type`：ORDINAL_* 风格码（1..9）；**`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生**（2 段→`4`，3 段→`3`，单分量→`1`），不再单独配置。`ORDINAL_SECTION_TYPES` 是小节层级反推，与 formula 的 `depth` 无关。
+  - `type`：**digit 家族**沿用 ORDINAL_* 风格码 `1`/`2`/`3`（`depth`=分量段数由 `type` 经 `ORDINAL_DEPTH` 派生：单分量→`1`、两段→`2`、三段→`3`；弃用码 `4`/`9`/`10`/`11` 已退役）；**alpha 家族**用 formula-only 专用码 `15`（字母二级 `(A.3)`）/ `16`（罗马二级 `(II.5)`），它们不进 `ORDINAL_CODES`/`ORDINAL_DEPTH`。**lead 与段数一律经 `resolve_formula_type(type, letter_ch)` 派生**，`depth`/lead 不再单独配置。legacy 字母书写 `type: 2 + "letter_ch": true` 亦可。`ORDINAL_SECTION_TYPES` 是小节层级反推，与 formula 的 `depth` 无关。
   - `scope`：1=book / 2=chapter / 3=section——编号重置窗口；**跨章守卫**（首分量 ≠ 当前章号判 INCONSISTENT）当且仅当 `scope == 2` 开启，book/section 作用域关闭该守卫。
   - `ignore`：要跳过 1:1 比对的归一化公式编号列表（既不判 FABRICATED 也不判 MISSING）。支持两种键形态：裸编号（全章生效）与 `'<sec>#<num>'` 作用域键（仅该节生效，见上）。
-- **scope/depth 耦合不变量（由 `type` 决定，配置必守）**：scope:3⇒`type 1`(depth 1，节级裸`(N)`)；scope:2⇒`type≥4`(depth≥2，章级带 C. 前缀)；scope:1 通常 `type 1` 全局连续。违反即非法，`require_complete` 应拒。
+- **scope/depth 耦合不变量（`depth`/lead 由 `type` 经 `resolve_formula_type` 派生；`scope` 独立）**：scope:3⇒`type 1`(depth 1，节级裸`(N)`)；scope:2⇒章级带前缀的多段编号（digit `type 2`/`type 3` = depth 2/3，或字母章位 `(A.3)`/罗马章位 `(II.5)` 的 formula-only `type 15`/`type 16`，含 legacy `type 2 + letter_ch:true`）；scope:1 通常 `type 1` 全局连续。违反即非法，`require_complete` 应拒。（弃用码 4/9/10/11 早已退役，不存在「`type≥4`」。）
 - **书源编号抽取**：`SourceFormulaIndex.build()` 遍历 `page_{start:03d}.json .. page_{end:03d}.json`，对每页 `text[].text` 用**由 `type` 派生的 `depth`** 正则抽编号（`build_formula_patterns(ncomp)` 覆盖 `（1.17）`/`(1.17)`/`Eq. 1.17`/`Equation 1.17`/`式（1.17）`/裸 `1.17` 六种变体，每式单捕获组），`norm()` 归一后归入本章集合 S。**只读 text**；`formulas[].latex` 仅在一条守卫下参与——latex **以括号包裹的 `(C.N)` 开头**（OCR 把显示公式连同其编号捕获为 latex 首 token 的形态，如 Han–Lin `(4.3) \quad …`，此时编号从未落进 `text[]`，漏收会使总结忠实的 `\tag` 被误判 FABRICATED）才交给同一 `_scan_text` 管线；普通数学不会以 `(\d+.\d+)` 开头，不会把代数噪声混进 S（2026-09-09）。
   - 🔴 **编号 token 的正则核属于 `lib.numbering.formula_num_core`（唯一真源）**：本层抽书源编号、`attach_content` 给公式挂 `tag`、`check_content_completeness` 做序标独立真值，三处共用同一套形态（段数由 `formula.type` 经 `ORDINAL_DEPTH` 派生；分隔符 `. - · ,`；可选字母后缀；`letter_ch` 时首段为单个大写字母）。**改形态只改 `lib/numbering.py`**，否则三处口径漂移会互相判对方"漏/编造"。
   - 实测形态差异极大，**不可假设 `(C.N)`**：约半数书右缘编号**不带括号**（Kreyszig / Evans SDE / PDE / Ross / 随机过程 / 解析数论），另有 `11.1-1` 连字符三段、`8.11a` 字母后缀、字母章位 `(A.3)`（Lee ISM 附录）等。编号还可能排在公式**左缘**（Kreyszig / 解析数论 / PDE）而非右缘。
-  - 🔴 **字母章位编号（`formula.letter_ch: true`，2026-09-14 落地）**：`(A.3)` / `（B.12）` 形态（Lee 附录 B.1-B.15 / C.1-C.21 / D.1-D.21 实测）。patterns/norm 接受单个大写字母首段（`norm('（A.03）')`→`'A.3'`）；`scope==2` 跨章守卫用字母首分量对比章键（`'B'`）直接工作；**裸排变体在该模式下永不启用**（裸 `A.3` 与 `Fig. A.3` / 小节标题 `C.1` 无形态区别）。`make_config.detect_formula` 对页区间 letter-led 形态占优（≥30 次行尾命中且压过 digit）时自动写 `"letter_ch": true` 并按字母章回退判定 scope。多字母 / 罗马前缀（`II.5` / `App.2`）仍为 RESERVED（`q_letter_led` WARN）。
+  - 🔴 **字母章位编号（`formula.letter_ch: true`，2026-09-14 落地）**：`(A.3)` / `（B.12）` 形态（Lee 附录 B.1-B.15 / C.1-C.21 / D.1-D.21 实测）。patterns/norm 接受单个大写字母首段（`norm('（A.03）')`→`'A.3'`）；`scope==2` 跨章守卫用字母首分量对比章键（`'B'`）直接工作；**裸排变体在该模式下永不启用**（裸 `A.3` 与 `Fig. A.3` / 小节标题 `C.1` 无形态区别）。`make_config.detect_formula` 对页区间 letter-led 形态占优（≥30 次行尾命中且压过 digit）时自动写 `"letter_ch": true` 并按字母章回退判定 scope。
+  - 🔴 **formula-only lead 命名空间（digit / letter / roman，2026-10-01 解耦）**：字母二级 `(A.3)` 除 legacy `type:2 + letter_ch:true` 外有专用码 **`type: 15`**；罗马二级 `(II.5)` / `(I.5)` 有专用码 **`type: 16`**（`lead='roman'`，`make_config.detect_formula` 见**多字母罗马证据**且**无非罗马字母头**时自动选）。这两个码**刻意不进** `ORDINAL_CODES` / `ORDINAL_DEPTH`——条目侧 `verify_config` 的 ordinal 组校验（`t not in ORDINAL_CODES` 即抛 ConfigError）**天然拒绝**它们，两套 type 空间互不知晓，故新增公式体例绝不污染条目体例判定。三个 lead 家族一律经**唯一入口** `lib.numbering.resolve_formula_type(type, letter_ch) → (lead, ncomp)` 取形态，消费方**禁止**各自再判 `letter_ch` 或反查 `ORDINAL_DEPTH`（口径漂移会互相判「漏挂/编造」）。**形态互斥**由 `formula_num_core` 保证：digit 核首段必 `\d`、letter 核首段恰**单个** `[A-Z]`（故 `II.5` 不被 letter 命中——首字母后紧跟的是字母不是分隔符）、roman 核首段 `[IVXLCDM]{1,5}`（故 `A.3` 不被 roman 命中——`A∉IVXLCDM`）；alpha-led（letter/roman）**永不**发裸排变体。唯一残留歧义是**单字母罗马头**（`I.`/`V.`/`X.`/`L.`/`C.`/`D.`/`M.` 既是字母又是罗马）——由**整本书只配一个 lead** + `detect_formula` 保守择族消解（只有多字母罗马证据才选 roman，否则保持 letter，宁缺勿滥）。判据测试 `config/verify_config/tests/test_formula_lead_decoupling.py`。仅**多字母词前缀**（`App.2` / `Ap.3`）无对应 lead 家族，仍 `q_letter_led` WARN。
   - 🔴 **形态②「块尾标签」的唯一判据 = `tail_label_match`（`text[]` 与 `formulas[].latex` 共用，2026-09-29 落地）**：一个块算「以印刷编号收尾」必须同时满足 ① 剥掉尾随空白后以 `(N)`（可带句点）收尾；② 那对括号**不是函数/群的参数表**——由 `_tail_pre_guard(左邻原文)` 判定。判据**吃未剥空白的左邻**：「括号左边有没有空格」本身是判据（剥掉则 `a = 1 (1)` 与 `c_1(2)` 不可区分，一刀切拒数字会把整章右缘标签全判掉——Kreyszig 回归实测）。拒收：与括号**黏着**的左邻是字母/数字/CJK/`\`（`f(x)`、`c_1(2)`、`式(3)`、`SO(3)`、`\sin(2)`）；剥空白后以 **CJK 或 `\`** 收尾（`见式 (3)` 型中文交叉引用）；左侧 **≥2 个连续单大写字母 token**（`\boldsymbol { X }` 类字体壳按一个字母计）= `S O ( 3 )` / `T S O ( 3 )` 型李群记号（阿诺尔德 ch8+附录E 实测 33 条被收进 S，制造两处假 MISSING）。放行：隔空白的**单个** token（`f(x) \le M (9)` 单字母、`b = 2 (2)` 数字）。已知取舍：latex **命令名**隔空白（`\phi ( 2 )`）在放行侧——它与真空标签 `\quad (8)`、`\circ (3)` 形态不可分，实测噪声里无此形态，故不加函数名白名单（命令**黏着**括号时仍由 ① 拒收）。测试 `verify/tests/test_q_tail_label_space_glue.py`。
   - 🔴 **单段编号（`depth<=1`）不收字母后缀**（2026-09-28 Apostol《解析数论导引》ch11 根治）：子式后缀编号 `(8.11a)` 在实测语料里**只出现在多段体例**（Evans SDE/PDE、Koopman、Ross、A First Course in Numerical Methods、Chaos/Fractals/Noise 全部 `depth>=2`）；单段书里孤立的 `(2s)`/`(6s)`/`(9x)` 是**公式被截成独立块**的碎片（Apostol p243/p253/p259 的 `(2s)`/`(6s)` 与 ζ(2s) 同行，同型还有《数学分析》type=1 的 `0x/1D/2M/3w/4m/9x`）。收下它们＝契约多出一条不存在的 tag，而单元 tag 对账是硬闸 → 逼写手凭空造 `\tag{2s}`。判据在 `formula_num_core`（三处消费方同口径），测试 `lib/tests/test_formula_num_core_suffix.py`（含多段后缀书零回归正例 + 碎片负例）。`ncomp=None`（未配置）与 `letter_ch`（字母章位）分支不受影响。
 - **序标校验（自动 FAIL）**：
@@ -65,7 +66,7 @@
 - **build_sectioned 节推进信号（2026-08 收紧）**：`C.S-1` 推进标记只接受**剥离后行首**且后随空白的形态（真实条目标题形如 `9.3-1 Definition (Monotone sequence). ...`）；行中引用（`(cf. 9.9-1)`、`theorem 4.2-1 (variants`）与 OCR 断行残块（行首 `9.2-1), and ...`）一律不再触发。Strogatz 式标题路径（`_HEAD_RE` + 顺序 +1）排除 `N.M-K` 条目形态与行首 `N.M)` 括注断行，防止把条目续行当标题。
 - **作用域化 ignore 键**：per-chapter ignore 文件的键可为裸编号或 `'<sec>#<num>'`（如 `'9.8#17'`）——后者只在该节内静默该编号。节级重置书中每个裸编号在全章各节复用，章级忽略会连累其他节的合法 `\tag{n}` 校验；浓缩省略类豁免一律优先用 scoped 键并附理由。
 - **公式内容校验（人工对账）**：`verify_all` 末聚合各章 `q_rows` 写出 `<extract_dir>/formula_audit.md`，并排列出「总结 LaTeX / 书源文本片段」，机器**不判内容对错**。
-- **S 为空降级**：若派生正则未抽到任何编号（S 空，通常是 `formula` 配置错，或书源采用多字母/罗马前缀编号 `II.5`/`App.2` 这类仍 RESERVED 的形态），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。单字母章位 `(A.3)` 已支持（`formula.letter_ch: true`）；若书源检出单字母章位编号而 config 未启用 `letter_ch`，`_detect_letter_led_formulas` 的 WARN 文案会指向补配置（mis-config 提示），罗马/多字母则仍提示「暂不校验、须人工核对 formula_audit」。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
+- **S 为空降级**：若派生正则未抽到任何编号（S 空，绝大多数是 `formula` 的 `type`/`scope`/`lead` **配错**——例如把字母章位 `(A.3)` 或罗马章位 `(II.5)` 的书按纯数字家族配置，括号内核匹配不到首段），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。字母章位 `(A.3)`（`letter_ch: true` 或 `type: 15`）与罗马章位 `(II.5)`（`type: 16` / `lead='roman'`）**均已支持**：书若正确配置对应 lead，这类编号照常机器校验、不进本降级支；只有当**数字家族**的书源里检出字母/罗马编号时，`_detect_letter_led_formulas` 才 emit 一条 mis-config WARN，提示按家族补 `letter_ch`/`type:15` 或 `type:16` 后重跑。**仅多字母词前缀（`App.2` / `Ap.3`）无对应 lead 家族**，仍作「暂不校验、须人工核对 formula_audit」的 WARN。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
 
 ## 本阶段规则（阻断性 / 可修复）
 - FABRICATED / INCONSISTENT → 始终 FAIL（阻断）。

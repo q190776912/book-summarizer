@@ -86,6 +86,9 @@ _LABEL_TAIL = r"[A-Za-z]*[\*'’′]*"
 # （假 FAIL，实测本书 appendix5 13 缺 13 多）。
 # `letter=True` 变体**只进括号形态**：裸排 `A.5` 与 `Fig. A.5` / 小节标题 `C.1`
 # 无形态区别（与 `formula_tag_re` 的取舍同源，不得各写一份）。
+# 🔴 罗马章位（`formula.type: 16`，`(II.5)` 型）同理加 `_ORD_ROMAN = _index_core(
+# lead='roman')` 并进两条 alternation，否则多字母罗马头在页窗里查无锚点、被
+# `strip_unattested` 剔光（与上文字母章位假 FAIL 同一失配路径）。
 # 🔴 锚点索引**不认逗号**（SSOT 的 `_FORMULA_SEP` 含 `,`，此处收窄为 `[.\-·]`）：
 # `(0, 1)` / `(83, 3)` 在页面上几乎总是坐标 / 列表而非编号，认了就把这类毒 tag
 # 放回来（methods-of-homological-algebra ch1/ch3 的 `0,1` / `0,0,1` / `83,3` 实测，
@@ -93,14 +96,17 @@ _LABEL_TAIL = r"[A-Za-z]*[\*'’′]*"
 _NO_COMMA_SEP = r"[.\-·]"
 
 
-def _index_core(letter=False):
-    return formula_num_core(None, letter=letter).replace(_FORMULA_SEP, _NO_COMMA_SEP)
+def _index_core(letter=False, lead=None):
+    return formula_num_core(None, letter=letter, lead=lead).replace(
+        _FORMULA_SEP, _NO_COMMA_SEP)
 
 
 _ORD_DIGIT = _index_core()
 _ORD_LETTER = _index_core(letter=True)
+_ORD_ROMAN = _index_core(lead='roman')
 _PAREN_LABEL_RE = re.compile(
-    r"[（(]\s*((?:%s|%s)%s)\s*[)）]" % (_ORD_DIGIT, _ORD_LETTER, _LABEL_TAIL))
+    r"[（(]\s*((?:%s|%s|%s)%s)\s*[)）]"
+    % (_ORD_DIGIT, _ORD_LETTER, _ORD_ROMAN, _LABEL_TAIL))
 _BARE_LABEL_RE = re.compile(r"(?:%s)%s" % (_ORD_DIGIT, _LABEL_TAIL))
 _LATEX_NOISE_RE = re.compile(r"\\[a-zA-Z]+\s*")
 # 🔴 **无数字头的符号编号**（Arnold《经典力学的数学方法》§52 印作 `(*)` 的展示式，
@@ -115,6 +121,28 @@ _LATEX_NOISE_RE = re.compile(r"\\[a-zA-Z]+\s*")
 # 星号/撇号构成」的号生效，对既有全语料标定结果零影响（实测跨书普查：除本书回填的
 # `*` 外，607 份契约无任何数字头缺失 tag）。
 _SYMBOL_LABEL_RE = re.compile(r"[（(]\s*([*'’′＊]{1,3})\s*[)）]")
+# 🔴 **独立成块**的带括号编号（整块只有 `(号)`，最多跟一个句号）。`_PAREN_LABEL_RE`
+# 是「块内任意位置」口径，对「无锚点」判毒正合适（宁松勿严），但它会把数学表达式也
+# 收进来：`(2n)!!` / `(2n)!` 是**双阶乘/阶乘**，不是公式编号（基础\数学分析 ch7 p325、
+# ch14 p209 实测）。形态启发式（lettered）要放行一个号，必须拿到「这一整块就是编号」
+# 级别的证据，故另立本口径。
+# 🔴 主体沿用 SSOT `_index_core`（与 `_PAREN_LABEL_RE` 同源）而不是自写 `[0-9]…`：
+# 后者要求「单个数字 + 点分段」，`18.10a` 的第 2 位 `8` 直接失配，豁免永不生效。
+_STANDALONE_LABEL_RE = re.compile(
+    r"^\s*(?:>\s*)?[（(]\s*((?:%s|%s|%s)%s)\s*[)）]\s*[.。]?\s*$"
+    % (_ORD_DIGIT, _ORD_LETTER, _ORD_ROMAN, _LABEL_TAIL))
+
+
+def _standalone_labels(page_loader, lo, hi):
+    """页窗内**整块即为** `(号)` 的编号集合（lettered 豁免用的强证据口径）。"""
+    out = set()
+    for pg in range(int(lo), int(hi) + 1):
+        for raw in (page_loader(pg) or []):
+            for t in _label_forms(raw):
+                m = _STANDALONE_LABEL_RE.match(t.replace("．", "."))
+                if m:
+                    out.add(m.group(1).replace("．", "."))
+    return out
 
 
 def _label_forms(raw):
@@ -291,7 +319,16 @@ def _condemned(tree, page_loader, attested=None):
     if len(paren_hits) >= 5 and len(paren_hits) >= 0.9 * (len(paren_hits) + len(bare_only)):
         for n in bare_only:
             kinds.setdefault(n, "bare-only")
-    lettered = [n for _k, n in tags if _LETTER_RE.search(n)]
+    # 🔴 形态启发式**必须让位于印面锚点**（2026-10-01 Koopman Operator ch18 实测）：
+    # 印面确有 `(18.10a)` / `(18.10b)`（物理页 502 独立成块），旧判据却只看形态
+    # （本章 21 个号里 19 个纯整数）就一票否决，于是「照印面写对的号」被判「须在
+    # 收割处剔除」，而 Q 层同一号又要求写 `\tag` ——两头堵。Strogatz 的 `2n`
+    # （`2` + 下行 `n` 粘连）按定义没有独立编号块，故「拿到独立锚点即放行」只削掉
+    # 这一类假阳。豁免口径用 `_STANDALONE_LABEL_RE`（整块就是 `(号)`）而不是
+    # `_PAREN_LABEL_RE`（块内任意位置）：后者会把 `(2n)!!` 这类阶乘当成锚点。
+    standalone = _standalone_labels(page_loader, lo, hi)
+    lettered = [n for _k, n in tags
+                if _LETTER_RE.search(n) and n not in standalone]
     numeric = [n for _k, n in tags if not _LETTER_RE.search(n)]
     if (len(numeric) >= 5 and lettered
             and len(lettered) <= 0.10 * (len(numeric) + len(lettered))):

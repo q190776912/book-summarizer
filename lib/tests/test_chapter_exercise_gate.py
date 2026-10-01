@@ -50,6 +50,23 @@ class TestNumberHelpers(unittest.TestCase):
         # 两个不相干数字被 OCR 粘成「Exercise 3-1906」→ 只认首号，不凭空造 1900 个号
         self.assertEqual(exercise_item_numbers("**Exercise 3-1906.** x\n"), [3])
 
+    def test_dotted_label_is_not_a_range(self):
+        # Lee ISM 实测假阳根因：「章.题」点分序标不是区间，只贡献尾段
+        self.assertEqual(
+            exercise_item_numbers("**Exercise 12.31.** Prove the lemma.\n"), [31])
+
+    def test_multi_segment_ordinal_tail_and_letter_forms(self):
+        # Robinson `1.2.4` 三段点分 → 尾号 4（㉑ 认题面在位）；
+        # Vakil `23.1.C` 字母尾 → 号流不贡献（㉑ 由契约键判据兜底）
+        self.assertEqual(
+            exercise_item_numbers("**Exercise 23.1.C (choosing the lift).** V\n"), [])
+        self.assertEqual(
+            exercise_item_numbers("**\\*Exercise 2.8.5.** Find $\\mathrm{H}^1$\n"), [5])
+
+    def test_problem_dash_label_keeps_first_number(self):
+        # Lee 章末 `Problem 12-1.`（章-题键）语义与旧一致：认首号 12
+        self.assertEqual(exercise_item_numbers("**Problem 12-1.** Give an example\n"), [12])
+
     def test_gaps_reported_per_run(self):
         self.assertEqual(exercise_run_gaps([1, 2, 3, 1, 2, 5]), [(1, 5, [3, 4])])
 
@@ -166,6 +183,15 @@ class TestChapterExerciseGate(unittest.TestCase):
 
     def test_short_set_exempt(self):
         units = [("a.md", "**Exercise Set 2.1**\n\n1. p\n7. q\n", True)]
+        self.assertEqual(chapter_exercise_problems(units), [])
+
+    def test_fallback_segment_does_not_relay_proof_lists(self):
+        # 边界②'（Lee ISM ch12 实测假阳）：逐题登记的 exercise 单元无印刷集标题 →
+        # 该段只认自己正文的题号；其后命题单元证明里的 `> 1. > 2. > 12.` 列举
+        # 不得接力进号段（旧行为会拼出「号段 1..12，缺 3..11」的假洞）
+        units = [("0052_exercise_12_31.md", "**Exercise 12.31.** Prove the preceding lemma.\n", True),
+                 ("0053_item_prop.md", "**Proposition 12.32.** Part (a).\n\n"
+                                       "> 1. a\n> 2. b\n> 12. c\n", False)]
         self.assertEqual(chapter_exercise_problems(units), [])
 
 

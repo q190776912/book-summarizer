@@ -40,11 +40,10 @@ ORDINAL_DEPTH = {0: 0, 1: 1, 2: 2, 3: 3, 8: 3, 12: 1,
                  # 它是「未声明 ordinal」的内部兜底组，也可由用户显式声明
                  # （`{"type": 0, ...}` 表示本书条目无编号）。🔴 必须登记 0，否则
                  # `ORDINAL_DEPTH.get(0, 3)` 会给无编号组安上 depth=3 的幻影默认。
-                 # 🔴 已弃用码：4(EN 两级)→2、9(EN3)→3、10(CN3LAB)→3、11(Ross)→1；
-                 #    映射表 = 本文件下方 DEPRECATED_ORDINAL_REMAP（唯一真源，
-                 #    verify_config 只再导出）；BookConfig.from_dict 在加载时映射，
-                 #    运行时不再直接识别（见 verify_config.md）。直读 raw config
-                 #    的消费方须自调 resolve_ordinal_code 归一。
+                 # 🔴 已弃用码 4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 已彻底退役，
+                 #    不再登记于此（其体例并入就近规范码 2/3/3/1）。存量
+                 #    verify_config.json 已全部改写为规范码，加载期无透明映射；
+                 #    直读 raw config 的消费方拿到未登记码即由 ordinal_depth 硬报错。
                  # 13 = ORDINAL_APP：附录字母章号三级体例 `Label A.1.1`（章位是
                  # 字母 A/B/C…，后跟 节.号 两个数字段），段数同样是 3。
                  13: 3,
@@ -84,27 +83,13 @@ def ordinal_depth(ocode):
 
 
 # ---------------------------------------------------------------------------
-# Deprecated ordinal codes（弃用码 -> 就近体例码）——唯一真源
+# 已弃用 ordinal 码 4(EN 两级)/9(EN3)/10(CN3LAB)/11(Ross) 已于 2026-09-21
+# 彻底退役：其体例并入就近规范码（4→2、9/10→3、11→1），ORDINAL_DEPTH 不再登记。
+# 历史上带这些码的存量 verify_config.json 已全部改写为规范码，故加载期不再有任何
+# 透明映射：消费方直读 raw config 若拿到未登记码，一律由 ordinal_depth 抛
+# OrdinalDepthError（缺码即硬报错，不做静默兜底）。DEPRECATED_ORDINAL_REMAP 与
+# resolve_ordinal_code 已随之删除。
 # ---------------------------------------------------------------------------
-# 🔴 与 ORDINAL_DEPTH 同处定义，`config/verify_config/verify_config.py`
-# 只做再导出，其余消费方（lib/figure_io、verify/formula_tag、
-# flows/…/attach_content、flows/…/scan_skeleton）一律从这里导入，
-# **禁止各抄一份字面量**——抄副本必然漂移。
-DEPRECATED_ORDINAL_REMAP = {4: 2, 9: 3, 10: 3, 11: 1}
-
-
-def resolve_ordinal_code(ocode):
-    """Normalise a possibly-deprecated ordinal `type` before `ordinal_depth`.
-
-    `ordinal_depth` 对未登记码（含已弃用的 4/9/10/11）**硬报错是故意的**：
-    注册/配置 bug 必须暴露，不做静默兜底。但**直读 raw verify_config.json**
-    的消费方不经过 `BookConfig.from_dict` 的归一，拿到的可能正是存量弃用码，
-    它们必须先调本函数归一再交给 `ordinal_depth`，否则存量 type-4 书会直接
-    崩溃（实测：Koopman 全书 `verify --all` 先后崩于 figure_io 与 formula_tag）。
-    """
-    if ocode is None:
-        return None
-    return DEPRECATED_ORDINAL_REMAP.get(ocode, ocode)
 
 
 # ---------------------------------------------------------------------------
@@ -213,13 +198,73 @@ def is_exercise_head_text(text):
 #                      实测）：首段单个大写字母、后续段纯数字——`letter=True`
 #                      分支支持（2026-09-14）。仅接受**带括号**形态：裸排 `A.3`
 #                      与 `Fig. A.3` / 小节标题 `C.1` 无法区分，宁缺勿滥。
-#                      多字母前缀（罗马 `II.5`、`App.2`）仍暂不支持，由 Q 层
-#                      `_LETTER_LED_RE` 探测兜 WARN（两处注释互为锚点）。
+#                      罗马数字前缀（`I.5` / `II.5`）现由**专用 formula-only 类型**
+#                      （`FORMULA_TYPE_ROMAN_TWO`）支持（带括号 + `Eq.` 形态，同样
+#                      不收裸排）；仅**多字母词前缀**（`App.2` / `Ap.3`）仍暂不支持，
+#                      由 Q 层 `_LETTER_LED_RE` 探测兜 WARN（两处注释互为锚点）。
 _FORMULA_SEP = r'[.\-·,]'                 # 编号分隔符：点 / 连字符 / 间隔号 / 逗号
 _FORMULA_SUFFIX = r'(?:[a-zA-Z])?'        # 子式字母后缀：`8.11a`
+# 罗马数字首段字母集（`[IVXLCDM]`）；首段是**一至五个**这些字母。
+_FORMULA_ROMAN_HEAD = r'[IVXLCDM]{1,5}'
+
+# ---------------------------------------------------------------------------
+# FORMULA-only type codes（公式编号专用体例码）—— 与 ITEM 侧 ordinal 码彻底隔离
+# ---------------------------------------------------------------------------
+# 🔴 这三个 lead（digit / letter / roman）是公式序标 token 的**首段家族**。数字家族
+# 沿用 ITEM 的 `type`（1/2/3，段数由 `ORDINAL_DEPTH` 派生，与条目码同一数值）；**字母
+# / 罗马家族用全新的 formula-only 码**（15 / 16），刻意**不进** `ORDINAL_CODES` 也
+# **不进** `ORDINAL_DEPTH`——ITEM 侧 `verify_config` 的 ordinal 组校验（`t not in
+# ORDINAL_CODES` 即抛 ConfigError）因此**天然拒绝**这两个码，条目的类型投票
+# （OrdinalStyle.detect_style / classify 只遍历 _REGISTRY）也**永远看不到**它们。
+# 于是「新增一个公式体例」不会污染条目体例判定，两套 type 空间互不知晓——这正是
+# 用户要求的「不同 type 之间的判断逻辑不要耦合」。
+#
+# 首段家族的**互斥判据**（`formula_num_core` 保证，见其注释）：digit 首段必为 `\d`、
+# letter 首段恰为**单个** `[A-Z]`、roman 首段为 `[IVXLCDM]{1,5}`；roman 多字母头
+# （`II`）不被 letter 核命中（letter 核要求单字母后紧跟分隔符），非罗马字母头（`A`）
+# 不被 roman 核命中（`A∉IVXLCDM`）。唯一残留歧义是**单字母罗马头**（`I.`/`V.`/`X.`…
+# 既是字母又是罗马数字）——由**整本书配置一个 lead** + `make_config` 保守择族消解
+# （只有出现**多字母罗马证据**且**无非罗马字母头**时才选 roman，否则保持 letter 旧行为）。
+FORMULA_LEAD_DIGIT = 'digit'
+FORMULA_LEAD_LETTER = 'letter'
+FORMULA_LEAD_ROMAN = 'roman'
+
+FORMULA_TYPE_LETTER_TWO = 15   # 二级字母：`(A.3)` —— 单个大写字母 + 1 个数字段
+FORMULA_TYPE_ROMAN_TWO = 16    # 二级罗马：`(I.5)` / `(II.5)` —— 罗马数字 + 1 个数字段
+
+# code -> (lead, ncomp)。ncomp = token **总段数**（含首段），与 legacy `letter=True`
+# 分支的 ncomp 口径一致（`A.3` 记 2 段：1 字母 + 1 数字）。
+FORMULA_TYPE_SHAPE = {
+    FORMULA_TYPE_LETTER_TWO: (FORMULA_LEAD_LETTER, 2),
+    FORMULA_TYPE_ROMAN_TWO: (FORMULA_LEAD_ROMAN, 2),
+}
+
+# formula 专用码集合（供 verify_config 的 formula 块校验放行；注意它们**不在**
+# ORDINAL_CODES 里，所以条目组会拒绝——这就是解耦的落点）。
+FORMULA_ONLY_CODES = frozenset(FORMULA_TYPE_SHAPE)
 
 
-def formula_num_core(ncomp=None, letter=False):
+def resolve_formula_type(code, letter_ch=False):
+    r"""把 `formula` 配置解析成 **(lead, ncomp)**——公式 token 形态的唯一入口。
+
+    三个消费面（`make_config.detect_formula` / `verify/formula_tag` /
+    `attach_content`→`check_content_completeness`/`tag_attestation`）一律经本函数取
+    形态，**禁止**各自再判 `letter_ch` 或反查 `ORDINAL_DEPTH`，否则口径漂移会互相判
+    「漏挂 / 编造」。
+
+      * `code ∈ FORMULA_TYPE_SHAPE`（新 formula-only 码 15/16）→ 直接给 (lead, ncomp)。
+      * 其余（含 ``None``、数字码 1/2/3、legacy 字母书 `type=2 + letter_ch=true`）→
+        lead 由 `letter_ch` 决定（True⇒letter，False⇒digit），ncomp 走 `ORDINAL_DEPTH`
+        （`ordinal_depth(code)`，``None``⇒``None``），与改造前**逐字节等价**（回归安全）。
+    """
+    shape = FORMULA_TYPE_SHAPE.get(code)
+    if shape is not None:
+        return shape
+    lead = FORMULA_LEAD_LETTER if letter_ch else FORMULA_LEAD_DIGIT
+    return lead, ordinal_depth(code)
+
+
+def formula_num_core(ncomp=None, letter=False, lead=None):
     r"""公式编号 token 的正则源（**不含括号**、**不锚定**、**无捕获组**）。
 
     `ncomp` = 段数（由 `formula.type` 经 `ORDINAL_DEPTH` 派生）；``None`` = 段数
@@ -229,15 +274,30 @@ def formula_num_core(ncomp=None, letter=False):
     数字。`ncomp=2` → ``[A-Z][SEP]\d+``；``None`` → 至少一个数字段。纯单字母
     ``[A-Z]``（无数字段）不构成公式序标，故数字段数下限为 1。
     """
-    if letter:
-        n_min = 1  # 数字段数下限：`(A)` 不是公式编号
+    if lead is None:
+        # Back-compat: legacy callers pass only `letter=True`. `letter` is now a
+        # projection of the more general `lead`; digit books (letter=False) are
+        # unaffected (lead→'digit'), so every existing call yields the same core.
+        lead = FORMULA_LEAD_LETTER if letter else FORMULA_LEAD_DIGIT
+
+    if lead in (FORMULA_LEAD_LETTER, FORMULA_LEAD_ROMAN):
+        # Alpha-led: first segment is a letter head, remaining segments digits.
+        #   letter head = exactly ONE `[A-Z]`;
+        #   roman  head = `[IVXLCDM]{1,5}`（`I` / `II` / `IV` / `IX` / `XII`…）。
+        # n_min=1：`(A)` / `(I)`（无数字段）不构成公式序标，数字段数下限为 1。
+        # 🔴 段数独立（家族互斥）：letter 核要求单字母后**紧跟分隔符**，故罗马多字母
+        # 头 `II.5` 不被 letter 核命中；roman 核的 `[IVXLCDM]` 拒非罗马字母（`A`），
+        # 故 `A.3` 不被 roman 核命中。二者只在**单字母罗马头**（`I.`/`V.`/`X.`…）重叠，
+        # 由整书配置一个 lead + detect_formula 保守择族消解（见 FORMULA_TYPE_SHAPE 注释）。
+        head = (r'[A-Z]' if lead == FORMULA_LEAD_LETTER else _FORMULA_ROMAN_HEAD)
+        n_min = 1
         if ncomp is None:
-            return r'[A-Z](?:%s\d+){%d,}%s' % (_FORMULA_SEP, n_min, _FORMULA_SUFFIX)
+            return r'%s(?:%s\d+){%d,}%s' % (head, _FORMULA_SEP, n_min, _FORMULA_SUFFIX)
         try:
             n = max(0, int(ncomp) - 1)
         except (TypeError, ValueError):
             n = 0
-        return r'[A-Z](?:%s\d+){%d}%s' % (_FORMULA_SEP, max(n, n_min), _FORMULA_SUFFIX)
+        return r'%s(?:%s\d+){%d}%s' % (head, _FORMULA_SEP, max(n, n_min), _FORMULA_SUFFIX)
     if ncomp is None:
         return r'\d+(?:%s\d+)*%s' % (_FORMULA_SEP, _FORMULA_SUFFIX)
     try:
@@ -319,42 +379,53 @@ def formula_tag_noise(num, section_scoped=False):
     return bool(section_scoped and _SECTION_LONG_RE.match(s))
 
 
+def _eff_lead(letter=False, lead=None):
+    """Effective leading-segment family: `lead` wins when given, else the legacy
+    `letter` boolean maps to 'letter' / 'digit'. Keeps every caller that still
+    passes only `letter=` byte-identical."""
+    if lead is not None:
+        return lead
+    return FORMULA_LEAD_LETTER if letter else FORMULA_LEAD_DIGIT
+
+
 @functools.lru_cache(maxsize=None)
-def formula_tag_re(ncomp=None, bare=True, letter=False):
+def formula_tag_re(ncomp=None, bare=True, letter=False, lead=None):
     """匹配「**整块**恰为一个公式编号」的锚定正则。
 
     `bare=True` 时额外接受**无括号裸排**编号（右缘编号不带括号的书占实测近
     一半，不可或缺）。需要严格判据时（如噪声过滤的页码豁免）用 `bare=False`。
 
-    `letter=True`（字母章位 `(A.3)`）时 `bare` 强制无效——只返回带括号变体：
-    裸排 `A.3` 与 `Fig. A.3` / 小节标题 `C.1` 无形态区别（宁缺勿滥，见头部
-    注释）。
+    `lead`（`digit` / `letter` / `roman`）指定首段家族；`letter=True` 是
+    `lead='letter'` 的兼容别名。任何 alpha-led（letter / roman）形态 `bare`
+    强制无效——裸排 `A.3` / `II.5` 与 `Fig. A.3` / 小节标题 / 散文罗马计数无法
+    区分（宁缺勿滥，见头部注释）。
     """
-    core = formula_num_core(ncomp, letter=letter)
-    return re.compile(r'^(?:%s)$' % '|'.join(_formula_tag_variants(ncomp, bare, letter)))
+    return re.compile(r'^(?:%s)$'
+                      % '|'.join(_formula_tag_variants(ncomp, bare, letter, lead)))
 
 
-def _formula_tag_variants(ncomp=None, bare=True, letter=False):
+def _formula_tag_variants(ncomp=None, bare=True, letter=False, lead=None):
     """公式编号的**形态变体**列表（唯一构造处，`formula_tag_re` / 末尾编号正则共用）。
 
-    🔴 两处必须共用同一份变体：各抄一份必然漂移（裸排 / 字母章位的开关逻辑
-    已踩过一次）。
+    🔴 两处必须共用同一份变体：各抄一份必然漂移（裸排 / 字母 / 罗马章位的开关逻辑
+    已踩过一次）。裸排只对 **digit** 家族开放；letter / roman 一律只带括号。
     """
-    core = formula_num_core(ncomp, letter=letter)
-    variants = [r'[（(]\s*%s\s*[）)]' % core]        # (2.17) / （A.3）
-    if bare and not letter:
-        variants.append(core)                        # 裸排 2.17
+    core = formula_num_core(ncomp, letter=letter, lead=lead)
+    variants = [r'[（(]\s*%s\s*[）)]' % core]        # (2.17) / （A.3）/ （II.5）
+    if bare and _eff_lead(letter, lead) == FORMULA_LEAD_DIGIT:
+        variants.append(core)                        # 裸排 2.17（仅数字家族）
     return variants
 
 
-def formula_tag_tail_re(ncomp=None, bare=True, letter=False):
+def formula_tag_tail_re(ncomp=None, bare=True, letter=False, lead=None):
     """**只锚定结尾**的编号正则（供 :func:`formula_trailing_tag`）。
 
     :func:`formula_tag_re` 两端锚定（整块恰为编号），在「公式文本 + 末尾编号」
-    这种长文本块里 `finditer` 必然匹配不到，故末尾编号需要本变体。
+    这种长文本块里 `finditer` 必然匹配不到，故末尾编号需要本变体。`lead` 同
+    :func:`formula_tag_re`（digit / letter / roman）。
     """
     return re.compile(r'(?:%s)$'
-                      % '|'.join(_formula_tag_variants(ncomp, bare, letter)))
+                      % '|'.join(_formula_tag_variants(ncomp, bare, letter, lead)))
 
 
 PAGE_MARGIN_BAND = (0.12, 0.90)
@@ -426,24 +497,27 @@ def page_number_furniture(blocks, page_height, band=PAGE_MARGIN_BAND,
 
 
 @functools.lru_cache(maxsize=None)
-def formula_paren_tag_re(ncomp=None, letter=False):
+def formula_paren_tag_re(ncomp=None, letter=False, lead=None):
     """只认**带括号**的公式编号（半角 / 全角）。
 
     用于「页码过滤豁免」一类需要零误判的场合：页码永远不会被写成 `(99)`，
-    但裸排的 `99` 与页码无法区分，故裸排不享受豁免。
+    但裸排的 `99` 与页码无法区分，故裸排不享受豁免。`lead` 同
+    :func:`formula_tag_re`（digit / letter / roman）。
     """
-    return formula_tag_re(ncomp, bare=False, letter=letter)
+    return formula_tag_re(ncomp, bare=False, letter=letter, lead=lead)
 
 
-def formula_tag_number(text, ncomp=None, letter=False, bare=True):
+def formula_tag_number(text, ncomp=None, letter=False, bare=True, lead=None):
     """整块恰为公式编号时返回**裸编号**（去括号 / 去空白），否则返回 ``None``。
 
     `bare=False`：只认带括号形态（`verify_config.json` 的
     `formula.bare_number: false` 书——如 Lee——散文里裸排 `1-11` Problem 标签
-    不可当编号）。`letter=True` 时 `bare` 强制无效（见 `formula_tag_re`）。
+    不可当编号）。任何 alpha-led 形态（`letter=True` 或 `lead='roman'`）
+    `bare` 强制无效（见 `formula_tag_re`）。
     统一返回裸编号，让契约 `tag`、草稿 `\\tag{}` 与 Q 层 `norm()` 三处口径一致。
     """
-    m = formula_tag_re(ncomp, bare=bare, letter=letter).match((text or '').strip())
+    m = formula_tag_re(ncomp, bare=bare, letter=letter, lead=lead).match(
+        (text or '').strip())
     if not m:
         return None
     s = m.group(0).strip()
@@ -452,7 +526,7 @@ def formula_tag_number(text, ncomp=None, letter=False, bare=True):
     return s
 
 
-def formula_trailing_tag(text, ncomp=None, letter=False, bare=True):
+def formula_trailing_tag(text, ncomp=None, letter=False, bare=True, lead=None):
     """文本**末尾**粘着公式编号时返回 ``(裸编号, 匹配原文)``，否则 ``None``。
 
     成因：OCR 有时把「公式文本 + 右缘编号」读成**一个**文本块（Koopman 实测
@@ -468,7 +542,7 @@ def formula_trailing_tag(text, ncomp=None, letter=False, bare=True):
     s = (text or '').strip()
     if not s:
         return None
-    m = formula_tag_tail_re(ncomp, bare=bare, letter=letter).search(s)
+    m = formula_tag_tail_re(ncomp, bare=bare, letter=letter, lead=lead).search(s)
     if m is None:
         return None
     # 前一字符须为空白或标点（防 `abc(3.5)` 这类与词粘连）。含 OCR 常见替身：

@@ -22,7 +22,7 @@ import sys
 
 from data.book_structure.book_structure import (
     chapter_label, prime_chapter_kinds, unit_dir_name, chapter_ordinal,
-    is_numbered_chapter)
+    is_numbered_chapter, chapter_kind)
 
 # --------------------------------------------------------------------------
 # 有序步骤（权威）—— 顺序即强制依赖
@@ -501,12 +501,19 @@ class physical_evidence:
         数字」判章型（与 verify_chapter.chapter_md_groups 同规）。
         """
         _ord = chapter_ordinal(key)
+        _kind = chapter_kind(key)
         if is_numbered_chapter(key) and _ord:
             pats = [f"第{_ord}章_*.md", f"Chapter{_ord}_*.md"]
         elif _ord:
-            pats = [f"附录{_ord}_*.md", f"Appendix{_ord}_*.md"]
+            if _kind == 3:
+                pats = [f"补篇{_ord}_*.md", f"Supplement{_ord}_*.md"]
+            else:
+                pats = [f"附录{_ord}_*.md", f"Appendix{_ord}_*.md"]
         else:
-            pats = ["附录.md", "附录_*.md", "Appendix.md", "Appendix_*.md"]
+            if _kind == 3:
+                pats = ["补篇.md", "补篇_*.md", "Supplement.md", "Supplement_*.md"]
+            else:
+                pats = ["附录.md", "附录_*.md", "Appendix.md", "Appendix_*.md"]
         files = []
         for p in pats:
             files.extend(glob.glob(os.path.join(book_dir, p)))
@@ -528,10 +535,24 @@ class physical_evidence:
             yield el
             yield from physical_evidence._iter_nodes(el)
 
+    # 🔴 乘法记号的两种同源代码形态：契约 section `name` 来自 OCR 印面（`2 × 2`），
+    # 而最终 md 标题按写作规则须写 KaTeX（`$2\times2$` / `$2 \times 2$`）。两者归一化
+    # 后一个是 `22`、一个是 `2times2` → `_missing_contract_names` 把明明在位的节假报
+    # 「不在位」并硬拒 merge_source 证据（Lee《Introduction to Smooth Manifolds》附录 D
+    # §U5「2×2 Constant-Coefficient Linear Systems」2026-10-01 实测）。判据取**删除**
+    # 而非折成 `x`：删除是旧行为（印面 `×` 本就被字符过滤丢弃）的严格超集，只会少报
+    # 假缺、不会新增假缺；代价仅是「标题整条漏写乘号」这种笔误不再由本闸发现，而那
+    # 与「漏标点/空白」同级，归步骤 8 印面抽检。只折**运算符**：`\alpha` 类字母命令
+    # 保留字母，否则不同条目名会被折成同名（负向对照见判据测试）。
+    _MATH_SYM_FOLD = (("\\times", ""), ("×", ""), ("✕", ""), ("⋅", ""), ("·", ""))
+
     @staticmethod
     def _norm_text(s):
         """归一化：仅保留字母数字与 CJK，用于容忍标点/空白/排版差异的在位判断。"""
-        return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(s or "")).lower()
+        s = str(s or "")
+        for _a, _b in physical_evidence._MATH_SYM_FOLD:
+            s = s.replace(_a, _b)
+        return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", s).lower()
 
     # 条目「标签+序号」前缀提取（name 常被 OCR 黏连污染：定义1.1 1.1 (Koopman
     # operator ... — 真正的呈现键只有开头的 标签+序号，如 `定义1.1` / `Theorem 2.1`）
@@ -551,6 +572,12 @@ class physical_evidence:
         "性质": ("property",), "习题": ("exercise", "problem"),
         "练习": ("exercise", "problem"),
         "问题": ("problem", "exercise"), "猜想": ("conjecture",),
+        # 假设 / 条件（Koopman Operator 2026-10-01 实测：契约键 `假设2.1`/`条件5.1`
+        # 等 7 项在英文 md 印作 `**Assumption 2.1**`/`**Condition 5.1**`，缺这两词
+        # 时 merge_source 证据假报「不在位」硬拒；全 corpus 684 契约普查 = 假设14/
+        # 条件2，均为英文书源版 EN 条头。hypothesis 并列：中文「假设」在他书可印
+        # Hypothesis，候选只增不减、不引入假放行）。
+        "假设": ("assumption", "hypothesis"), "条件": ("condition",),
         "记号": ("notation",), "约定": ("convention",),
         "算法": ("algorithm",),
         # 图 / 表：英文书契约把 `Figure N.M` / `Table N.M` 收作编号项，中文笔记版
@@ -843,6 +870,14 @@ class physical_evidence:
                 _formula_on = False
         mark_re = re.compile(
             r"<!-- book-summarizer (DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
+        # 🔴 与 gate_units 同源（Koopman ch12 实测 2026-10-01）：契约同键多单元
+        # （如 `定理12.5` = p343/p344 两节点，仅前者携带 (12.42)）时，**不得**按
+        # key 回退聚合 tag——否则后半单元恒假「缺编号公式」，权威 gate_units
+        # exit 0 而本 shadow 拒绝落账，两趟判据分叉。歧义交给章级 Q 层兜底。
+        _key_counts = {}
+        for _u in manifest.get("units") or []:
+            _kk = str(_u.get("key"))
+            _key_counts[_kk] = _key_counts.get(_kk, 0) + 1
         for u in manifest.get("units") or []:
             up = os.path.join(units_dir, u["file"])
             if not os.path.exists(up):
@@ -872,7 +907,8 @@ class physical_evidence:
                     # 🔴 不可只按 key 聚合：同节内定义/定理/推论各自编号、共用 key，
                     # 聚合会让「定义」单元被要求写出「定理」单元的编号公式。
                     expected = u.get("tags") if isinstance(u.get("tags"), list) else None
-                    if expected is None and cpath and os.path.exists(cpath):
+                    if (expected is None and cpath and os.path.exists(cpath)
+                            and _key_counts.get(str(u["key"]), 0) == 1):
                         try:
                             from data.book_structure.book_structure import (
                                 chapter_tag_map)
@@ -1072,13 +1108,23 @@ class physical_evidence:
     def _md_group_lang(book_dir, key, lang):
         """按语种取该章最终 md 组：cn → 第N章_*/附录X_*；en → ChapterN_*/AppendixX_*。"""
         _ord = chapter_ordinal(key)
+        _kind = chapter_kind(key)
         if is_numbered_chapter(key) and _ord:
             pats = ([f"第{_ord}章_*.md"] if lang == "cn" else [f"Chapter{_ord}_*.md"])
         elif _ord:
-            pats = ([f"附录{_ord}_*.md"] if lang == "cn" else [f"Appendix{_ord}_*.md"])
+            if _kind == 3:
+                pats = ([f"补篇{_ord}_*.md"] if lang == "cn"
+                        else [f"Supplement{_ord}_*.md"])
+            else:
+                pats = ([f"附录{_ord}_*.md"] if lang == "cn"
+                        else [f"Appendix{_ord}_*.md"])
         else:
-            pats = (["附录.md", "附录_*.md"] if lang == "cn"
-                    else ["Appendix.md", "Appendix_*.md"])
+            if _kind == 3:
+                pats = (["补篇.md", "补篇_*.md"] if lang == "cn"
+                        else ["Supplement.md", "Supplement_*.md"])
+            else:
+                pats = (["附录.md", "附录_*.md"] if lang == "cn"
+                        else ["Appendix.md", "Appendix_*.md"])
         files = []
         for p in pats:
             files.extend(glob.glob(os.path.join(book_dir, p)))
@@ -1190,6 +1236,12 @@ class physical_evidence:
         """拼接「产物在位」机械核对（merge_source / merge_translation 共用）：
         每章**源语言**组必须存在；``want_tgt=True`` 时该书若有翻译版则**翻译语言**组
         也须存在。各组核对 oversized（规则3）+ 契约骨架节 / 编号项在位。
+        🔴 规则3（超大合并 md 必须按节拆分 + 中英配对拆分）只对**数字章**生效：
+        判据工具 ``tools/split_chapters.py`` 只产 ``第N章_M_*`` / ``ChapterN_M_*``
+        节文件、且从不扫描 ``附录X``/``AppendixX``/``补篇S``/``SupplementS``，verify
+        的 rule-3 复核也只看数字章节文件——故字母序标的附录 / 补篇即便超阈也无从
+        「拆」，不得据此拒绝 mark（用户裁定 2026-10-01）。附录 / 补篇仍照常核对
+        「产物在位」与「契约骨架节 / 编号项在位」。
         返回 (bool, detail)。"""
         missing, missing_names, degraded, oversized, unpaired = [], [], [], [], []
         for k in keys:
@@ -1202,19 +1254,22 @@ class physical_evidence:
             groups = [(src_lang, physical_evidence._md_group_lang(book_dir, k, src_lang))]
             if want_tgt and tgt_lang:
                 groups.append((tgt_lang, physical_evidence._md_group_lang(book_dir, k, tgt_lang)))
+            _is_num = chapter_kind(k) == 1
             for lang, md_files in groups:
                 if not md_files:
                     missing.append((k, lang))
                     continue
-                ov = physical_evidence._oversized_merged_md(md_files)
-                if ov:
-                    oversized.append((k, lang, ov))
+                if _is_num:
+                    ov = physical_evidence._oversized_merged_md(md_files)
+                    if ov:
+                        oversized.append((k, lang, ov))
                 miss = physical_evidence._contract_names_missing(
                     ex, k, md_files, check_sections=(lang == src_lang))
                 if miss:
                     missing_names.append((k, lang, miss))
-            unpaired.extend(physical_evidence._split_form_pairing_problems(
-                book_dir, k, [lang for lang, _ in groups]))
+            if _is_num:
+                unpaired.extend(physical_evidence._split_form_pairing_problems(
+                    book_dir, k, [lang for lang, _ in groups]))
         if missing:
             (k, lang) = missing[0]
             return False, (f"{len(missing)} 组最终 md 缺失（先跑 merge_units 拼接）: "

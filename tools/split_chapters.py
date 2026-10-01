@@ -61,6 +61,11 @@ SPLIT_RE = re.compile(
     r'|§\s*(\d+)-(\d+)(?=\s|$)'
     r'|§?\s*(\d+)\.(\d+)(?=\s|$))'
 )
+# 4) 无编号具名节（Lee《Smooth Manifolds》等）：顶级节以 `## § 名称` 印出、
+#    名称不以数字开头（子节为 `### § …`，不参与拆分）。原书以节名（非序号）
+#    交叉引用，故无 `§N` / `N.M` 号可锚；拆分时按出现顺序赋 1..k 序数作节号，
+#    仅用于文件名（正文标题原样保留 `## § 名称`，不伪造印刷序号）。
+NAMED_SEC_RE = re.compile(r'^##(?!#)\s+§\s+(\D[^\n]*?)\s*$')
 H1_RE = re.compile(r'^#\s+')
 
 
@@ -123,6 +128,7 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
     intro = []            # 章开头引言（第一个节之前、标题之后的内容）
     current = None
     first_key = None
+    named_ctr = 0         # 无编号具名节的序数计数器（1..k）
 
     for l in lines:
         m = SPLIT_RE.match(l)
@@ -148,6 +154,21 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
                     buckets[fk].append(l)   # 错序重复编号：追加到同一节
                 current = fk
                 continue
+        nm = NAMED_SEC_RE.match(l)
+        if nm:
+            named_ctr += 1
+            key = str(named_ctr)
+            sname = sanitize_name(nm.group(1))
+            fk = (key, sname)
+            if fk not in buckets:
+                buckets[fk] = [l]
+                order.append(fk)
+                if first_key is None:
+                    first_key = fk
+            else:
+                buckets[fk].append(l)
+            current = fk
+            continue
         if current is None:
             if title is not None and l == title:
                 continue             # 标题行稍后逐文件补回，这里跳过

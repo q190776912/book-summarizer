@@ -91,7 +91,8 @@ from data.book_structure.book_structure import (chapter_json_path,
                                                 prime_chapter_kinds,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
-from lib.numbering import (ordinal_depth, resolve_ordinal_code,
+from lib.numbering import (ordinal_depth,
+                           resolve_formula_type, FORMULA_LEAD_DIGIT,
                            formula_paren_tag_re, page_number_furniture,
                            formula_tag_number, formula_trailing_tag, formula_tag_re,
                            formula_tag_shape_ok, formula_tag_noise, folio_norm)
@@ -258,7 +259,7 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
     扫描页高一致；用全书值而非单页值，避免稀疏页页高被低估、页眉页脚落不进
     边缘区）。行内公式先经 :func:`_splice_inline` 拼回宿主文本行。
     """
-    ncomp, scope, letter, bare = formula_cfg(ext, ch)
+    ncomp, scope, letter, bare, lead = formula_cfg(ext, ch)
     _dir = page_dir or ext
     # 边界裁剪窗口（页码 → [lo, hi)；缺省不设限）
     _head_y = chapter_boundary.head_floor(ext, _dir, ch, start) if ch else None
@@ -331,6 +332,7 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
                 # 永远挂不上（契约里直接消失）。保留它，交由 `_attach_formula_tags`
                 # 摘取末尾编号并消耗掉该块。
                 if formula_trailing_tag(tb["text"], ncomp, letter=letter,
+                                        lead=lead,
                                         bare=bare):
                     kept.append(tb)
                     continue
@@ -359,7 +361,7 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
         page_blocks.extend(_figure_blocks(ext, p))
         page_blocks.sort(key=lambda b: (b["y"], b["x"]))
         page_blocks = _attach_formula_tags(page_blocks, ncomp,
-                                           letter=letter, bare=bare,
+                                           letter=letter, bare=bare, lead=lead,
                                            scope=scope, ch=ch,
                                            claimed=claimed)
         _lo, _hi = _win.get(int(p), (None, None))
@@ -376,12 +378,16 @@ _FORMULA_CFG_CACHE = {}
 
 
 def formula_cfg(ext, ch=None):
-    """本书公式序标配置 → ``(ncomp, scope, letter, bare)``；未配置时为 ``(None, None, False, False)``。
+    """本书公式序标配置 → ``(ncomp, scope, letter, bare, lead)``；未配置时为 ``(None, None, False, False, 'digit')``。
 
-    🔴 **编号段数必须由 `verify_config.json` 的 `formula.type` 经
-    `ORDINAL_DEPTH` 派生，不得硬编码**。各书形态差异极大（全语料实测）：
+    🔴 **编号段数与首段家族（lead）必须由 `verify_config.json` 的 `formula.type`
+    经 `resolve_formula_type` 派生，不得硬编码、也不得各自再判 `letter_ch`**。
+    `resolve_formula_type` 内部对数字码走 `ORDINAL_DEPTH`；formula 专用码
+    15（字母二级）/ 16（罗马二级）直接给 (lead, ncomp)——裸调 `ordinal_depth(15/16)`
+    会抛 OrdinalDepthError。各书形态差异极大（全语料实测）：
     ``(1)`` 节级重置 / ``(2.17)`` 章.号 / ``(11.1-1)`` 章.节-号 / ``(8.11a)``
-    字母后缀 / 大量书右缘编号**不带括号**。段数错 → 整章编号一个都挂不上。
+    字母后缀 / ``(A.3)`` 字母章位 / ``(II.5)`` 罗马章位 / 大量书右缘编号**不带括号**。
+    段数或 lead 错 → 整章编号一个都挂不上。
 
     🔴 **配置位置（新旧两版并存）**：`make_config.py` 现行版按
     ``{"ch": {...}, "appendix": {...}, "supplement": {...}}`` 分段落盘，
@@ -395,6 +401,8 @@ def formula_cfg(ext, ch=None):
     该章是**附录/补篇**时读 **`appendix` 段**的 `formula`（缺失回退顶层/`ch`
     段——主配置 digit 形态对字母编号抽不到，零污染）。附录段的
     `formula.letter_ch: true` 置 ``letter=True``（`(A.3)` 字母章位形态）。
+    同理 `formula.type: 16` 选罗马章位形态（`lead='roman'`，`(II.5)`）；
+    `lead` 由 `resolve_formula_type(type, letter_ch)` 统一定出，作为第 5 个返回值。
     判据是 chapter_map 的 **kind**（`prime_chapter_kinds` 灌注后由
     `is_numbered_chapter` 给出），**不是「键是不是数字」**：附录完全可以有数字键
     （Shafarevich BA1 `5 Algebraic Appendix` 实测——章键 5、kind 2，旧判据把它
@@ -419,6 +427,7 @@ def formula_cfg(ext, ch=None):
             prime_chapter_kinds(ext)   # 幂等；kind 真值来自 chapter_map.json
         ncomp = scope = None
         letter, bare = False, False
+        lead = FORMULA_LEAD_DIGIT
         try:
             with open(os.path.join(ext, "verify_config.json"),
                       encoding="utf-8-sig") as f:
@@ -433,23 +442,24 @@ def formula_cfg(ext, ch=None):
             if not fc and isinstance(data.get("ch"), dict):
                 fc = data["ch"].get("formula")
             fc = fc or {}
-            ncomp = ordinal_depth(resolve_ordinal_code(fc.get("type")))
+            letter = bool(fc.get("letter_ch"))
+            lead, ncomp = resolve_formula_type(fc.get("type"), letter_ch=letter)
             s = fc.get("scope")
             if isinstance(s, int):
                 scope = s
-            letter = bool(fc.get("letter_ch"))
             bare = bool(fc.get("bare_number", bool(fc)))
         except Exception:
             ncomp = scope = None
             letter, bare = False, False
-        ck[cache_key] = (ncomp, scope, letter, bare)
+            lead = FORMULA_LEAD_DIGIT
+        ck[cache_key] = (ncomp, scope, letter, bare, lead)
     return ck[cache_key]
 
 
 def tag_re(ext, bare=True, ch=None):
     """本书「独立成块的公式编号」锚定正则（供 attach 与完整性闸门共用）。"""
-    ncomp, _scope, letter, _bare = formula_cfg(ext, ch)
-    return formula_tag_re(ncomp, bare=bare, letter=letter)
+    ncomp, _scope, _letter, _bare, lead = formula_cfg(ext, ch)
+    return formula_tag_re(ncomp, bare=bare, lead=lead)
 
 
 def _claim_key(num, page, scope=None):
@@ -505,12 +515,13 @@ def _same_column_cluster(hits, fx0, fx1):
 
 
 def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
-                         scope=None, ch=None, claimed=None):
+                         lead=None, scope=None, ch=None, claimed=None):
     """把行间公式同行右缘的编号挂到公式块的 ``tag`` 键上（存**裸编号**），
     并从散文流剔除该文本块（纯版面锚点，不是正文）。
 
-    编号形态（段数 / 括号 / 分隔符 / 字母后缀 / 字母章位）由 ``ncomp`` /
-    ``letter`` 经 :func:`lib.numbering.formula_tag_re` 决定，调用方从
+    编号形态（段数 / 括号 / 分隔符 / 字母后缀 / 字母章位 / 罗马章位）由 ``ncomp`` /
+    ``letter`` / ``lead`` 经 :func:`lib.numbering.formula_tag_re` 决定（``lead`` 为
+    首段家族的唯一权威选择器），调用方从
     ``formula_cfg(ext, ch)`` 取得——**绝不在此硬编码某一种编号样式**。
     ``bare=False``（config `formula.bare_number: false`）时只认带括号形态。
 
@@ -594,11 +605,11 @@ def _attach_formula_tags(page_blocks, ncomp=None, letter=False, bare=True,
         if fig_boxes and _in_figure(b, fig_boxes):
             continue          # 图区内的裸数字 = 轴刻度 / 曲线标注，不是编号列
         raw = (b["text"] or "").strip()
-        num = formula_tag_number(raw, ncomp, letter=letter, bare=bare)
+        num = formula_tag_number(raw, ncomp, letter=letter, lead=lead, bare=bare)
         trailing = None
         if num is None:
             # 编号粘在文本块末尾：OCR 把「公式文本 + 右缘编号」读成一整块
-            tr = formula_trailing_tag(raw, ncomp, letter=letter, bare=bare)
+            tr = formula_trailing_tag(raw, ncomp, letter=letter, lead=lead, bare=bare)
             if tr is not None:
                 num, trailing = tr[0], tr[1]
         if num is not None:
@@ -1368,7 +1379,7 @@ def build_chapter_contract(ext, node, page_dir=None):
         page_dir = _node_page_dir(ext, node)
     start, end = int(node.get("page_start") or 0), int(node.get("page_end") or 0)
     ch_key = str(node.get("key") or "")
-    _fc_ncomp, _fc_scope, _fc_letter, _fc_bare = formula_cfg(ext, ch_key)
+    _fc_ncomp, _fc_scope, _fc_letter, _fc_bare, _fc_lead = formula_cfg(ext, ch_key)
     n_noise = [0]
 
     blocks, page_height = _collect_blocks(ext, start, end, ch=ch_key,

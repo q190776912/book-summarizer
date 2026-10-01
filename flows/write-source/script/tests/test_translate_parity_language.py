@@ -135,3 +135,23 @@ def test_pseudocode_translated_comment_passes():
         "```\n"
     )
     assert english_residues(body) == []
+
+
+# ── img alt 内含 `>` 不得漏成「散文尾巴」（Koopman ch15 译文 2026-10-01 实测） ──
+
+def test_img_alt_gt_not_residue():
+    body = (
+        '<div style="display:flex">\n'
+        '  <img src="figure/ch15_fig15.3.png" alt="Fig. 15.3 transition of '
+        'coupled phase oscillators: (a) individual phase dynamics for K>Kc, '
+        '(b) order-parameter modulus R versus coupling K" width="77.3%" height="auto">\n'
+        '</div>\n'
+    )
+    assert english_residues(body) == []
+
+
+def test_english_prose_after_closed_tag_still_flagged():
+    body = ('<img src="figure/ch15_fig15.3.png" alt="Fig. 15.3 x"> This order '
+            'parameter modulus versus coupling displays the synchronization '
+            'transition of the coupled oscillators clearly.\n')
+    assert english_residues(body)

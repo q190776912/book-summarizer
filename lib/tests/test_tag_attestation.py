@@ -146,6 +146,41 @@ class TestPhantom(unittest.TestCase):
         probs = tag_attestation_problems(tree, loader(pages))
         self.assertTrue(any("2n" in p and "含字母" in p for p in probs), probs)
 
+    def test_lettered_tag_with_standalone_anchor_passes(self):
+        """印面确有 `(18.10a)` 时形态启发式必须让位（2026-10-01 Koopman ch18 实测）。
+
+        旧判据只看形态（21 个号里 19 个纯整数）就判「须在收割处剔除」，而 Q 层同一
+        号要求写 `\tag` = 两头堵；Strogatz 的 `2n` 按定义没有括号锚点，故上一条
+        负向用例与本条同时成立才算「只削假阳」。
+        """
+        tags = [str(n) for n in range(1, 20)] + ["18.10a", "18.10b"]
+        tree = contract(tags, lo=500, hi=502)
+        pages = {p: ["(%d)" % n for n in range(1, 20)]
+                 + ["(18.10a)", "(18.10b)"] for p in range(500, 503)}
+        self.assertEqual(tag_attestation_problems(tree, loader(pages)), [])
+
+    def test_lettered_tag_with_bare_only_anchor_still_flagged(self):
+        """只有裸排 `18.10a`（无括号）时照旧判毒：裸块多半是公式内部碎片。"""
+        tags = [str(n) for n in range(1, 20)] + ["18.10a"]
+        tree = contract(tags, lo=500, hi=501)
+        pages = {p: ["%d" % n for n in range(1, 20)] + ["18.10a"]
+                 for p in range(500, 502)}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertTrue(any("18.10a" in p and "含字母" in p for p in probs), probs)
+
+    def test_lettered_factorial_anchor_still_flagged(self):
+        """`(2n)!!` 是双阶乘不是编号：块内任意位置的括号形态**不构成** lettered 豁免。
+
+        基础\数学分析 ch7 p325 / ch14 p209 实测——若豁免沿用宽松口径（`paren` 收块内
+        任意 `(N)`），这个公式碎片号会被放行并要求写手 `\tag{2n}`。
+        """
+        tags = [str(n) for n in range(1, 20)] + ["2n"]
+        tree = contract(tags, lo=304, hi=306)
+        pages = {p: ["%d" % n for n in range(1, 20)] + ["(2n)!!", "2·4..(2n)"]
+                 for p in range(304, 307)}
+        probs = tag_attestation_problems(tree, loader(pages))
+        self.assertTrue(any("2n" in p and "含字母" in p for p in probs), probs)
+
     def test_lettered_dominant_chapter_not_flagged(self):
         """字母编号书（Kreyszig `(7a)` 型）不得被判据③误伤：纯整数太少时字母是体例。"""
         tree = contract(["7a", "7b", "7c", "7d", "7e", "3"], lo=10, hi=11)

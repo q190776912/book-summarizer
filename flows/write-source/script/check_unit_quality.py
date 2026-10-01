@@ -736,6 +736,11 @@ def english_residues(body):
         t = ln.strip().lstrip(">").strip()
         if not t or _CJK_CHAR_RE.search(t):
             continue
+        # 🔴 带引号的属性值先归一：属性值内可含 `>`（实测 Koopman ch15 译文
+        # `<img alt="... for K>Kc ...">`），否则 `<[^>]+>` 在值内截断，alt 尾巴
+        # 被当成「未翻译英文散文」误报（判据测试
+        # tests/test_translate_parity_language.py::test_img_alt_gt_not_residue）。
+        t = re.sub(r'="[^"\n]*"', '=""', t)
         t = re.sub(r"<[^>]+>", " ", t)
         t = re.sub(r"\*\*[^*\n]*\*\*", " ", t)   # bold 标签交由规则 1 判定
         t = re.sub(r"\\[A-Za-z]+\*?", " ", t)

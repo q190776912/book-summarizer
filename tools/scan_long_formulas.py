@@ -270,6 +270,19 @@ def legacy_vis_len(latex):
 
 
 # ---------------------------------------------------------------- 块切分
+# 🔴 块引用前缀（`> $$ ... $$`、`> > $$`）不是公式的一部分：Markdown 渲染时 `>`
+# 只决定引用层级，KaTeX 看到的宽度里根本没有它。旧口径按源码行量宽会把每行前缀的
+# 2 个字符算进去 → 58 宽的引用块被判 60+，`scan`/verify F 层报警而
+# `wrap_long_formulas`（它自己剥前缀）判「未超阈值」，两边互相指对方漏修（实测：
+# Katok 6.4.2 剥前缀后 60.0、F 层报 ~62）。测量前一律先剥。
+BQ_PREFIX = re.compile(r'^\s*(?:>\s*)+')
+
+
+def strip_bq(line):
+    """剥掉一行开头的块引用标记（可多层 `> >`）。"""
+    return BQ_PREFIX.sub('', line)
+
+
 def iter_display_blocks(lines):
     """yield $$ 块的内部行列表。"""
     i, n = 0, len(lines)
@@ -289,6 +302,7 @@ def iter_display_blocks(lines):
 def rendered_rows(body):
     """把 $$ 块内容切成【渲染行】：先剥离 \\tag，按顶层 \\\\ 切分（跳过嵌套环境
     内部的分隔符），再把被折行的源码拼接回一整行。"""
+    body = '\n'.join(strip_bq(ln) for ln in body.split('\n'))
     s = TAG.sub('', body).strip()
     if not s:
         return []

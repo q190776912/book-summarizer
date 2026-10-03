@@ -67,6 +67,7 @@ _EMPTY_Q: Dict[str, object] = {
     'q_missing': [],
     'q_order_mismatch': [],
     'q_misplaced': [],
+    'q_tag_mismatch': [],
     'q_rows': [],
 }
 
@@ -105,10 +106,21 @@ _SEP_CLASS = r'[.\-·,]'
 # letter / Roman numeral / `App`/`Ap`) + `.` or `·` separator (NEVER `-` or `,`)
 # + digits + optional trailing letter + closing paren.  Reference words
 # (Fig/Chap/Sec/Eq/Prob/...) are excluded via negative lookahead.
+#
+# 🔴 2026-10-03 false-positive guard (Hogg–McKean《Introduction to Mathematical
+# Statistics》): a lone capital `O` before the separator is NOT a chapter letter
+# — it is the reserved big-O asymptotic-order symbol and a canonical OCR
+# confusion for zero (`OCR_DIGIT` below already maps O→0).  Raw page prose such
+# as the unit interval `(0,1)` and `0.1`, OCR-rendered as `(O. 1)`/`(O.0)`, was
+# being mis-detected as a letter-led equation number and surfacing a spurious
+# `letter_ch` mis-config WARN.  No textbook numbers a chapter "O", so we reject
+# `O\s*[.·]` leads while keeping every legitimate single-letter / Roman / App
+# lead (A.3, I.2, II.5, …) fully detectable.
 _LETTER_LED_RE = re.compile(
     r'[（(]\s*'
     r'(?!(?:Fig|Chap|Sec|Eq|Prob|Ex|Def|Lem|Thm|Cor|Prop|Rem|Alg|Sol|Note|'
     r'Lec|Part|Vol|Appx|Tbl|Tab|Exa|Exs|Thms|Lems|Cors|Props|Defs|Rmk|Remk)\b)'
+    r'(?!(?:O)\s*[.·])'
     r'(?:[A-Z]|[IVXLCDM]{1,5}|App|Ap)'
     r'\s*[.·]\s*'
     r'\d+(?:[a-zA-Z])?'
@@ -306,7 +318,20 @@ def _heading_num(s: str) -> Optional[str]:
     hm = _HEAD_RE.match(s)
     if not hm or len(s) >= 80:
         return None
-    if re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s):
+    # 🔴 例外（IDDS ch5 实测 2026-10-02）：印面 `§5.3 ε-orbits` 被 OCR 读成拉丁
+    # 字母 `5.3 e-Orbits` / `5.3. e-Orbits`（本书 p124 是前形、p125/p127 是后形，
+    # 三种印面同一节）。该形态恰好撞上两道「散句/OCR 残迹」守卫：
+    #   ① 字母后缀残迹守卫 `\d[-.][A-Za-z]`——`6.A` / `3.4.B` 这类图号子标；
+    #   ② 小写起头的尾巴判散句。
+    # 于是该节标题**全书永不识别**，`_cur_heading` 永远停在 §5.2，印在 p126 的
+    # (5.2)…(5.6) 五枚忠实 `\tag` 整批误判 MISPLACED。
+    # 判别只认这个形状：**无内部空格**的 `小写缩写-大写字母词` 单 token。散文续行
+    # 必含空格（"and it is stated…"），字母残迹必是**单**字母（`.A`/`.B`），
+    # 都不满足 `[a-z]{1,5}-[A-Z][A-Za-z]{2,}`，故两道守卫一并放行的面极窄、
+    # 不影响其余判据强度。
+    _tail_pre = s[hm.end():].strip().strip('.').strip()
+    _greek_runin = bool(re.fullmatch(r'[a-z]{1,5}-[A-Z][A-Za-z]{2,}', _tail_pre))
+    if re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s) and not _greek_runin:
         return None
     # 编号后紧跟闭括号/逗号/分号 = OCR 断行的引用残行，绝非标题。
     if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
@@ -315,8 +340,9 @@ def _heading_num(s: str) -> Optional[str]:
     if not tail.strip() and s.startswith('§'):
         return _head_norm(hm.group(1))
     tail2 = tail.strip().strip('.').strip()
-    # 小写起头的尾巴（"20.6 and it is stated…"）必为散句，非标题。
-    if tail2[:1].isascii() and tail2[:1].islower():
+    # 小写起头的尾巴（"20.6 and it is stated…"）必为散句，非标题——
+    # 唯一放行的是上面的希腊字母节题单 token 形态。
+    if tail2[:1].isascii() and tail2[:1].islower() and not _greek_runin:
         return None
     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
         return _head_norm(hm.group(1))
@@ -559,10 +585,28 @@ class SourceFormulaIndex:
         self._by_chapter: Dict[int, Set[str]] = {}
         # normalized number -> first source text snippet (for the audit report)
         self._source_text: Dict[str, str] = {}
+        # 书源里**逐字带字母后缀**印过的编号（`norm_full` 值，如 `8.11a`）。
+        # 集合成员用 `norm`（丢后缀，见下）以便 `(8a)` 与 `\tag{8}` 对账，但
+        # 位置/定义节证据也按丢后缀的键登记，于是一本**按节重启的裸号书**
+        # （depth 1，pattern 核 `\d+` 根本匹配不到 `(8a)`）里总结写
+        # `\tag{8a}`/`\tag{8b}` 时，两枚后缀标签的比较对象成了别处那枚真 `(8)`
+        # → 整批假 MISPLACED（nonlin ch3 实测 2026-10-02，page_090.json 印面
+        # 确有 `(8a)`/`(8b)` 两个独立标签块）。豁免判据：总结标签带后缀且书源
+        # 从未**逐字**印过该后缀形态 → 抽取器对它无位置证据，「无证据不判」。
+        self._full_keys: Set[str] = set()
         # ORDER_MISMATCH / MISPLACED support (populated during build / build_sectioned):
         #   _primary_pos  : normalized number -> earliest (page, y) occurrence
         #   _book_section : normalized number -> book-side enclosing section (first occurrence)
         #   _cur_heading  : running "nearest preceding heading" during a scan
+        self._pos_strong: Dict[str, bool] = {}
+        self._sec_strong: Dict[str, bool] = {}
+        # 🔴 强弱分级（IDDS ch2 实测 2026-10-02）：**强信号**（带括号 `(2.1)` /
+        # `Eq. 2.1` 前缀）才是印刷标签本身；裸命中（`B(w, 2-1)` 这类数学内容经
+        # 分隔符归一得到的 `2.1`）只是同形的散文/坐标。旧写法「首个命中即锚定」，
+        # 于是一处行内噪声把定义位置从 §2.4 的真标签抢到了 §2.3 的散文页，忠实
+        # `\tag{2.1}` 被误判 MISPLACED。规则：已有强证据时弱证据一律不得改写；
+        # 强证据到来则覆盖既有弱证据（即便页码更晚）。全书只有弱证据时行为与
+        # 旧写法逐字节一致（不比大小写，全按「最早」）。
         self._primary_pos: Dict[str, tuple] = {}
         self._book_section: Dict[str, str] = {}
         # Per-(section, number) membership in the book source. Unlike the global
@@ -610,6 +654,9 @@ class SourceFormulaIndex:
         self._source_text = {}
         self._primary_pos = {}
         self._book_section = {}
+        self._pos_strong = {}
+        self._sec_strong = {}
+        self._full_keys = set()
         self._pos_sec = {}
         self._sec_start_page = {}
         self._n_pages = {}
@@ -689,6 +736,9 @@ class SourceFormulaIndex:
         sectioned: Dict[str, Set[str]] = {s: set() for s in md_sections}
         self._primary_pos = {}
         self._book_section = {}
+        self._pos_strong = {}
+        self._sec_strong = {}
+        self._full_keys = set()
         self._pos_sec = {}
         self._sec_start_page = {}
         self._n_pages = {}
@@ -700,6 +750,16 @@ class SourceFormulaIndex:
         # 的同时也属于 S——总结挂 \tag{5.9.1} 完全忠实。这里先记下扫描期间
         # 收集的 item-label 编号（_scan_label_nums），build 结束后并入 union。
         self._scan_label_nums: Set[str] = set()
+        # 🔴 右缘独立编号块（本卷统计书 ch11/ch12 实测）：排版把显示公式与其
+        # 编号切成两个 text 块——公式块含数学记号、编号块**只有** `(11.3.10)`
+        # 这类纯编号（无任何数学记号）。sectioned 路径此前对 `not _block_has_math`
+        # 的块一律 continue（line 910），于是这类真实印刷编号从未进 S，忠实的
+        # `\tag` 反被误判 FABRICATED（plain 路径靠 `_is_strong_signal` 保留括号
+        # 号，故无此问题——两路口径不一致）。补救：把「整块就是一个公式编号」
+        # （strip 尾点后对任一 pattern **fullmatch**）的号收进 _standalone_labels，
+        # build 末尾并入**章级 union**（供 FABRICATED 免疫），但**不进**分节 S
+        # （不新增 MISSING / 不动 ORDER·MISPLACED 证据）——最小侵入、零回归。
+        self._standalone_labels: Set[str] = set()
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
@@ -908,6 +968,23 @@ class SourceFormulaIndex:
                                 continue
                             _tail_only_span = (_m_head.start(), _m_head.end())
                 elif not self._block_has_math(txt):
+                    # 🔴 右缘独立编号块（本卷统计书 ch11/ch12）：整块就是一个
+                    # 公式编号 `(11.3.10)`（公式正文在另一块），本块无数学记号。
+                    # 收下它（并入 _standalone_labels → 章级 union），否则忠实的
+                    # `\tag` 被误判 FABRICATED。ncomp==1 由上面独立分支处理，这里
+                    # 只管多分量书；判据=去尾点后对任一 pattern fullmatch，即「整块
+                    # 除一个编号外别无他物」，散文/标题/交叉引用块不会整块等于编号。
+                    if self._ncomp is None or self._ncomp >= 2:
+                        _sa = txt.strip().rstrip('.。').strip()
+                        for _pat_sa in self.patterns:
+                            _mm_sa = _pat_sa.fullmatch(_sa)
+                            if _mm_sa:
+                                _n_sa = self.norm(_mm_sa.group(1))
+                                if (_n_sa and _n_sa not in self.ignore
+                                        and self._plausible(_n_sa,
+                                                            _mm_sa.group(1))):
+                                    self._standalone_labels.add(_n_sa)
+                                break
                     # 🔴 谢启鸿《高等代数》2026-09-29：纯散文块里的条目标签
                     # 「定义5.9.1设…」也是一次印刷编号出现，须登记进
                     # _label_pages（按当前节分桶）供 label_limit 放宽重复检测；
@@ -957,14 +1034,23 @@ class SourceFormulaIndex:
                                 self._count_label(_n_lbl, pg, sec)
                             continue  # ① 条目词前缀（Proposition 1.3.3 / (cf. Definition 1.9.3)）
                         _rest = txt[mm.end():mm.end() + 48]
+                        # ①' 块首裸号 + 紧跟句点 = 条目/习题头（Katok 实测 2026-10-03：
+                        #     「2.4.7. If f is close to Ek」「2.9.3. For w E S2 let」
+                        #     「15.2.2. Given e > 0」——③的动词表枚举不完，见
+                        #     `_bare_item_head`）。与 ②③ 同口径：不进 S、不锚位。
+                        if self._bare_item_head(txt, mm.start(), mm.end(),
+                                                self._is_strong_signal(mm.group(0))):
+                            continue
                         if re.match(
                                 r'[\.\。]?\s*(?:definition|theorem|remark|example|proposition|corollary|exercise|lemma|定义|定理|引理|推论|命题|例|习题|注)\b',
                                 _rest, re.IGNORECASE):
                             continue  # ② 编号后紧跟条目词（OCR 复写头「1.9.11 Theorem1.9.11.」）
                         if re.match(
-                                r'[\.\。]\s*(?:Give|Prove|Show|Define|Let|Suppose|Consider|Find|Construct|Formulate|Describe|Generalize|Disprove|Every|Each)\b',
+                                r'[\.\。]\s*(?:Give|Prove|Show|Define|Let|Suppose|Consider|Find|Construct|Formulate|Describe|Generalize|Disprove|Every|Each)[A-Za-z]*\b',
                                 _rest, re.IGNORECASE):
-                            continue  # ③ 条目号 + 祈使句 = 习题头（「0.4.1. Give an example of」）
+                            continue  # ③ 条目号 + 祈使句 = 习题头（「0.4.1. Give an example of」；
+                            #     词尾用 `[A-Za-z]*` 而非 `\b`：否则变形「Given e > 0 construct…」
+                            #     这类最常见习题起句因词干后失配而漏网。
                         if _rest[:1] in (',', ';', '，', '；'):
                             continue  # ④ 括号号后紧跟逗号/分号 = 散文交叉引用（「(2.5.1), we consider」）
                         raw = mm.group(1)
@@ -972,6 +1058,7 @@ class SourceFormulaIndex:
                         if not n or n in self.ignore or not self._plausible(n, raw):
                             continue
                         sectioned[sec].add(n)
+                        self._full_keys.add(self.norm_full(raw) or n)
                         # first occurrence's section == book-side definition section
                         # （嵌入引用不作为定义节证据 —— 见 _embedded_ref）
                         if not self._embedded_ref(txt, mm.start(), mm.end()):
@@ -980,7 +1067,8 @@ class SourceFormulaIndex:
                             # 「真标签出现」计数：与 plain 路径 _scan_text 同一
                             # 谓词（非嵌入引用），供 label_limit 放宽重复检测。
                             self._count_label(n, pg, sec)
-                            self._record_pos(n, pg, y)
+                            self._record_pos(n, pg, y,
+                                             strong=self._is_strong_signal(mm.group(0)))
                         # (sec, n) membership — authoritative for per-section books
                         self._book_section_sec[(sec, n)] = sec
                         # per-(sec, n) earliest position — the ORDER window of a
@@ -1083,6 +1171,11 @@ class SourceFormulaIndex:
         # 使总结忠实的 \tag 不被误判 FABRICATED；同时 MISSING 语义保持一致
         # （书印了编号而总结整条公式未写 → 仍应报 MISSING）。
         for _n in getattr(self, '_scan_label_nums', set()) or set():
+            union.add(_n)
+            self._by_chapter.setdefault(ch, set()).add(_n)
+        # 🔴 右缘独立编号块（本卷统计书 ch11/ch12）：并入章级 union 供 FABRICATED
+        # 免疫，但**不进**分节 S——因此不新增 MISSING、不动 ORDER·MISPLACED 证据。
+        for _n in getattr(self, '_standalone_labels', set()) or set():
             union.add(_n)
             self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}
@@ -1330,22 +1423,43 @@ class SourceFormulaIndex:
                 return cand
         return h
 
-    def _record_pos(self, n: str, pg, y) -> None:
+    def _record_pos(self, n: str, pg, y, strong: bool = False) -> None:
         """Record the earliest (page, y) occurrence of `n` (its definition site).
 
         「None = 页级/无锚点证据」的处理与 `_pos_sec` 写路径共用 `_pos_better`
         一个判据（原内联的分支表与它等价，此处收敛以免再出现「一处修 None、
         另一处照旧裸比较元组」的漏网）。
-        """
-        if _pos_better((pg, y), self._primary_pos.get(n)):
-            self._primary_pos[n] = (pg, y)
 
-    def _update_pos(self, n: str, pg, y) -> None:
+        🔴 强弱分级（IDDS ch2 实测 2026-10-02）：**强信号**（带括号 `(2.1)` /
+        `Eq. 2.1` 前缀）才是印刷标签本身；裸命中（`B(w, 2-1)` 这类数学内容经
+        分隔符归一得到的 `2.1`）只是同形的散文/坐标。旧写法「首个命中即锚定」，
+        于是一处行内噪声把定义位置从 §2.4 的真标签抢到了 §2.3 的散文页，忠实
+        `\tag{2.1}` 被误判 MISPLACED。规则：已有强证据时弱证据一律不得改写；
+        强证据到来则覆盖既有弱证据（即便页码更晚）。全书只有弱证据时行为与
+        旧写法逐字节一致（不比大小写，全按「最早」）。
+        """
+        prev_strong = self._pos_strong.get(n)
+        if prev_strong and not strong:
+            return
+        if _pos_better((pg, y), self._primary_pos.get(n)) or (strong and not prev_strong):
+            self._primary_pos[n] = (pg, y)
+            self._pos_strong[n] = bool(strong)
+
+    def _update_pos(self, n: str, pg, y, strong: bool = False) -> None:
         """Record earliest position AND anchor the book-side section to the
-        first occurrence's enclosing heading (the definition location)."""
-        self._record_pos(n, pg, y)
-        if n not in self._book_section and self._cur_heading is not None:
+        first occurrence's enclosing heading (the definition location).
+
+        定义节证据与位置证据同一强弱分级（见 `_record_pos`）：弱命中不得再
+        抢占已登记的节，强标签可覆盖弱登记。
+        """
+        self._record_pos(n, pg, y, strong=strong)
+        if self._cur_heading is None:
+            return
+        if self._sec_strong.get(n) and not strong:
+            return
+        if n not in self._book_section or (strong and not self._sec_strong.get(n)):
             self._book_section[n] = self._cur_heading
+            self._sec_strong[n] = bool(strong)
 
     def _scan_text(self, txt: str, nums: Set[str], pg=None, y=None) -> None:
         # 单分量书（ncomp==1，Kreyszig/Fraleigh 式裸 `(N)`）的 plain-path 门禁：
@@ -1384,6 +1498,18 @@ class SourceFormulaIndex:
         # 带 Eq./Equation/式 前缀的命中（强信号）无条件保留。ncomp==1 不门禁。
         need_gate = (self._ncomp is not None and self._ncomp >= 2)
         has_math = self._block_has_math(txt) if need_gate else True
+        # 🔴 锚点分级用的「这块像不像一枚印出来的标签」：
+        #   ①整块**就是一个编号**（右缘标签被 OCR 切成独立块）——`_block_has_math`
+        #     的短块豁免只到 8 字符，那是为 Kreyszig 式单分量 `(N)` 设的，多分量
+        #     书的 `(11.1.15)` 有 10 字符、且不含任何数学记号，**不被它认作数学块**
+        #     （Lasota-Mackey ch11 实测：真标签 p356 y=1605 因此被降级成弱证据，
+        #     反倒让 p358 那句含 `>` 的散文回指以「强信号」取胜 → 顺序假阳）；
+        #   ②该块含数学记号（标签并进公式行尾/行首）。
+        # 二者取并集，与 `build_sectioned` 的「standalone 或 has_math」同一口径。
+        _t_alone = (txt or '').strip().rstrip('.。').strip()
+        _standalone_blk = bool(_t_alone) and any(
+            _p.fullmatch(_t_alone) for _p in self.patterns)
+        _label_grade = has_math or _standalone_blk
         for pat in self.patterns:
             for m in pat.finditer(txt):
                 if _tail_only_span is not None and not (
@@ -1410,6 +1536,12 @@ class SourceFormulaIndex:
                             self._count_label(_n_lbl, pg)
                             getattr(self, '_scan_label_nums', set()).add(_n_lbl)
                         continue
+                # 与 sectioned 路径 ①' 同口径：块首裸号 + 紧跟句点 = 条目/习题头，
+                # 既不进 S 也不锚位（Katok 2026-10-03：一处习题头就能把真标签
+                # 顶成 ORDER_MISMATCH 假阳）。
+                if self._bare_item_head(txt, m.start(), m.end(),
+                                        self._is_strong_signal(span)):
+                    continue
                 if need_gate and not has_math and (
                         not self.keep_cross_refs or not self._is_strong_signal(span)):
                     continue
@@ -1433,6 +1565,7 @@ class SourceFormulaIndex:
                 if not n or n in self.ignore or not self._plausible(n, raw):
                     continue
                 nums.add(n)
+                self._full_keys.add(self.norm_full(raw) or n)
                 if n not in self._source_text:
                     idx = txt.find(span)
                     if idx < 0:
@@ -1456,7 +1589,39 @@ class SourceFormulaIndex:
                 # 「真标签出现」计数（与位置证据同一谓词，勿另立判据）：INCONSISTENT
                 # 重复检测按此放宽，见 label_limit。
                 self._count_label(n, pg)
-                self._update_pos(n, pg, y)
+                # 🔴 锚点强度须再叠一层「标签证据等级」`_label_grade`（standalone
+                # 编号块 或 含数学记号的块，见其定义处）。
+                # `keep_cross_refs=True` 下，纯散文块里的括号命中**必须进 S**
+                # （否则总结里忠实转写的 `\tag{3.1}` 被误判 FABRICATED），但
+                # 「进了 S」≠「是位置证据」：一行注释/图注续行里的 `(N.M)` 只是
+                # **提及**。旧写法把「带括号」当成无条件强信号，于是一处散文块
+                # 就能把定义位置从真标签手里抢走（Lasota-Mackey ch1
+                # 实测：FIGURE 1.2.2 的图注被 OCR 切成 5 块，第 4 块以
+                # `(1.2.11) (shown as a dashed line)…` 开头，其 y=648 早于
+                # 真标签 `(1.2.11)`（y=1173）、也早于上一号 `(1.2.10)`（y=948）
+                # → 顺序倒挂假阳）。降级为**弱证据**即可：无强证据时行为逐字节
+                # 同旧写法（`_record_pos` 的强弱分级），有真标签时由它覆盖。
+                self._update_pos(n, pg, y,
+                                 strong=self._is_strong_signal(span) and _label_grade)
+
+    @staticmethod
+    def _bare_item_head(txt: str, start: int, end: int, strong: bool) -> bool:
+        """True 当该命中是「条目/习题头」的排版形状，而非印在行尾的公式标签。
+
+        形状判据（不是词表）：**裸号**（无括号/`Eq.` 前缀）+ 编号就是块的**首个
+        记号** + 编号后**紧跟句点**。印面上这正是 `2.4.7. If f is close to Ek…`、
+        `2.9.3. For w E S2 let Φ(w) = …`、`15.2.2. Given e > 0 …` 的条目头（Katok
+        实测 2026-10-03，三枚都曾因旧词表短一个词而抢到定义位置，把后面的真标签
+        判成 ORDER_MISMATCH）。公式标签在印面上要么带括号、要么位于行尾，**不会**
+        顶在块首后又跟一个句点。
+
+        只用作位置/集合证据的门禁；括号形态（strong）一律放过，行为与旧写法一致。
+        """
+        if strong:
+            return False
+        if (txt or '')[:start].strip():
+            return False
+        return (txt or '')[end:end + 1] in ('.', '。')
 
     @staticmethod
     def _embedded_ref(txt: str, start: int, end: int) -> bool:
@@ -1489,6 +1654,18 @@ class SourceFormulaIndex:
         if j < 0:
             return False
         c = txt[j]
+        if c in ('(', '（'):
+            # 🔴 开括号属于**编号本身**，不是左边界。印刷公式标签的形态就是
+            # `(N.M)`，于是 `allow_bare` 带进来的裸号 pattern 在同一块文字里匹配
+            # 到的命中，其左邻永远是那枚开括号——照旧返回 False 就等于让
+            # 「Further, by (11.1.4),」「and from (12.7.4) with」这类**散文回指**
+            # 抢到定义位置（Lasota-Mackey 实测：ch11 的 11.1.4、ch12 的 12.7.4
+            # 都只作为回指出现，其括号形态命中已被 `_embedded_ref` 正确拒掉，
+            # 裸号形态却漏网 → 把后面的真标签顶成 ORDER_MISMATCH 假阳）。
+            # 判据=**跨过这层括号再走一遍同一谓词**：括号左边是文字/条目词 → 引用；
+            # 括号左边是行首或运算符（`= (N)`、行首 `(N)`）→ 标签。递归每次严格
+            # 左移一个非空字符，必然终止。
+            return SourceFormulaIndex._embedded_ref(txt, j, end)
         if c in '例义理题论质习节章图表§Ss':
             return True          # 紧邻条目词 / 节字形（定义3.1、§3.1、S4.2）
         if c in '{[':
@@ -2017,7 +2194,8 @@ def _letter_led_note(found: Set[str]) -> Optional[str]:
         f"书源含多字母开头公式编号（如 {sorted(found - single)[:3] if sorted(found - single) else sorted(found)[:3]}…），"
         f"该形态（多字母前缀，如 App/Ap）无对应 lead 家族，Q 层暂不支持，降级为 WARN"
         f"（不阻断）：该部分公式序标未经机器校验，请人工核对 <extract>/formula_audit.md。"
-        f"单字母章位（letter_ch / type 15）与罗马章位（type 16）均已支持。")
+        f"单字母章位（letter_ch / type 15）、罗马章位（type 16）及其**三段**形态"
+        f"`(A.2.1)`/`(II.1.3)`（type 17 / 18）均已支持。")
 
 
 def _dup_beyond_source(src, counts: Dict[str, int], key: str, n: str,
@@ -2145,8 +2323,9 @@ def _compare(tags: List[FormulaTag], src: 'SourceFormulaIndex', ch: int,
             'source_text': (
                 s_empty_note
                 or '书源公式编号未抽到（多为 formula 的 type/scope/lead 配错——例如'
-                   '把字母章位 (A.3)（type 15 / letter_ch）或罗马章位 (I.2)/(II.5)'
-                   '（type 16 / lead=roman）的书按纯数字家族配置，则括号内核匹配不到、'
+                   '把字母章位 (A.3)（type 15 / letter_ch）、罗马章位 (I.2)/(II.5)'
+                   '（type 16 / lead=roman）或三段章位 (A.2.1)/(II.1.3)'
+                   '（type 17 / 18）的书按纯数字家族配置，则括号内核匹配不到、'
                    'S 为空）；请核对本书实际编号家族后重跑。公式序标校验对本章降级，'
                    '不可报"通过"。'),
         })
@@ -2507,6 +2686,20 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         # oranges.  A tag without in-section evidence carries no trustworthy
         # local position (label OCR-merged or genuinely misplaced), so neither
         # flagging nor anchoring prev_pos is fair — skip it entirely.
+        # 🔴 后缀标签的「逐字印刷证据」豁免（nonlin ch3 实测 2026-10-02）：
+        # 集合成员用 `norm`（丢尾字母，见 `norm` 文档），于是总结的 `\tag{8a}`
+        # 与 `\tag{8b}` 都折成键 `8`；而**单分量**书（`ncomp==1`）的抽取 pattern
+        # 核是 `\d+`，`formulas`/`text` 里印面的 `(8a)`/`(8b)` 独立标签块**根本
+        # 匹配不到**，S 里的 `8` 只可能来自别处那枚真 `(8)`（本节 = §3.7，`8` 印在
+        # §3.6）→ 两枚忠实标签被误判 MISPLACED（顺序支同样拿到的是别人的位置）。
+        # 规则：总结标签带后缀，而书源从未**逐字**印过该后缀形态（`_full_keys`
+        # 无记录）= 抽取器对这一枚标签没有任何位置证据 → 按「无证据不判」跳过
+        # 两支。多分量书（`(8.11a)` 能被 pattern 捕获）照常判定，集合成员
+        # FABRICATED / MISSING 一律不受影响（本豁免只可能少报，不会多报）。
+        _full = SourceFormulaIndex.norm_full(getattr(t, 'raw_tag', '') or '')
+        if (_full and _full != n
+                and _full not in getattr(src, '_full_keys', set())):
+            continue
         cur = None
         if reset_on_section:
             cur = getattr(src, '_pos_sec', {}).get((sec, n))
@@ -2564,6 +2757,16 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         # 24/24、Lee ch7 16/16 全为此类假 MISPLACED）。plain 支早就是同款约定
         # （`bsec is not None` 才判），本节级支是唯一的例外，现已对齐。
         flagged = False
+        # 🔴 层级自述编号豁免（Katok ch1 实测 2026-10-02）：三级标签 `C.S.i`
+        # 的**中段本身就写明它属于哪一节**。总结把 `(1.2.2)` 写在 `## §1.2` 之下
+        # = 标签自己作证，谈不上「放错节」；而书侧两条证据都受 OCR 滞后支配——
+        # plain 支的 `_cur_heading` 游标（Katok 的 §1.2 节头从未被 `_heading_num`
+        # 认出，于是 `(1.2.2)` 挂在 §1.1）、sectioned 支的整页页跨（§1.2 起始页判成
+        # p42，标签印在 p41）——据其开报只会造出整批假阳（本书 ch1 5/5 全属此类）。
+        # 真正的错位 = 总结把标签挂在**别的节**下（chaos ch8 把 `8.8.*` 九枚挂在
+        # `## §8.7`），前缀不等 → 照判，一条不放过。本豁免只动 MISPLACED；
+        # 集合成员（FABRICATED/MISSING）与顺序（ORDER_MISMATCH）两支不受影响。
+        _self_reported = bool(sec) and n.startswith(sec + '.')
         if reset_on_section:
             rng = _section_page_range(src, sec)
             npages = getattr(src, '_n_pages', {}).get(n) or set()
@@ -2571,12 +2774,13 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             #   「节在页中间起头」）→ 书与总结同判，谈不上放错。
             # ②回退：标签被 OCR 并进公式行而漏记 (sec, n) 时，用整页页跨宽松核。
             # ③两者都无 → 无证据不判（见上）。
-            if getattr(src, '_pos_sec', {}).get((sec, n)) is None:
+            if (not _self_reported
+                    and getattr(src, '_pos_sec', {}).get((sec, n)) is None):
                 if rng is not None and npages:
                     flagged = not any(rng[0] <= p <= rng[1] for p in npages)
         else:
             bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
-            flagged = (bsec is not None
+            flagged = (bsec is not None and not _self_reported
                        and not _section_prefix_compatible(bsec, sec))
         if flagged and n not in seen_mp:
             seen_mp.add(n)
@@ -2636,6 +2840,30 @@ def _split_scoped_ignore(keys) -> tuple:
     return glob, scoped
 
 
+def _tag_pairing_rows(ctx, ncomp, lead, ignore) -> list:
+    """「同号配错式」探针（`q_tag_mismatch`，非阻断 WARN）。
+
+    实现在同包自包含模块 `tag_formula_pairing.py`：那里按 `page_*.json` 重建
+    「印面标签 -> 展示式正文」的书侧真值账，再与总结 `$$\\tag{X}$$` 的正文逐一
+    对账。集合成员（FABRICATED/MISSING）、顺序（ORDER_MISMATCH）、归属（MISPLACED）
+    三支都只看**号**，章级契约对账同样只看号的**集合**——于是「漏贴一枚印面标签 +
+    后续 `\\tag` 整体错位一格 + 给印面无号展示式补一枚号」可以一路全绿（Katok ch2
+    §2.6/§2.8、ch4 §4.4 实测）。本族把号与式重新钉在一起。
+
+    🔴 探针自身异常**不阻断 verify**（新判据，跨书形态未普查完），但会把
+    「未跑成」打到 stderr——绝不静默吞掉。
+    """
+    try:
+        from tag_formula_pairing import pairing_problems
+        return pairing_problems(ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
+                                ctx.md_file, ncomp=ncomp, ignore=ignore,
+                                lead=lead)
+    except Exception as exc:                      # noqa: BLE001
+        print(f"[Q-LAYER TAG-PAIRING *WARN*] 配对探针未跑成：{exc!r}",
+              file=sys.stderr)
+        return []
+
+
 class QLayer(VerifyLayer):
     code = 'Q'
     name = 'formula-tag'
@@ -2665,7 +2893,8 @@ class QLayer(VerifyLayer):
                     "    type 已包含编号段数：两级 (C.N)(如 2.6)→type 2；三级 "
                     "C.S.N / C.S-N(如 11.1-1)→type 3；单分量 (N)→type 1；"
                     "字母章位 (A.3)→type 15（或 legacy type 2 + letter_ch）；"
-                    "罗马章位 (II.5)→type 16。\n"
+                    "罗马章位 (II.5)→type 16；三段章位 (A.2.1)→type 17、"
+                    "(II.1.3)→type 18。\n"
                     "    scope = 编号重置窗口（1=全书连续 / 2=每章重启 / 3=每节"
                     "重启），必须从书中确定，**无默认值**——缺 scope 或取值非法会在"
                     "加载期直接报错（exit 2），不再静默按章级处理。\n"
@@ -2818,6 +3047,9 @@ class QLayer(VerifyLayer):
                 om, mp = _compute_order_and_section(
                     tags_sec, src, fglob, reset_on_section=True,
                     scoped_ignore=fscoped)
+                tm = _tag_pairing_rows(
+                    ctx, ncomp, lead,
+                    fglob | {nn for (_s, nn) in fscoped})
                 # RESERVED letter/Roman-led probe: only meaningful when the
                 # config has NOT selected an alpha-led family.  With `letter_ch`
                 # (letter) or roman type 16, that numbering IS validated by the
@@ -2836,6 +3068,7 @@ class QLayer(VerifyLayer):
                     'q_missing': miss,
                     'q_order_mismatch': om,
                     'q_misplaced': mp,
+                    'q_tag_mismatch': tm,
                     'q_letter_led': [ll_note_sec] if ll_note_sec is not None else [],
                     'q_rows': rows,
                 })
@@ -2863,6 +3096,7 @@ class QLayer(VerifyLayer):
             tags_sec, src, fignore, reset_on_section=False)
         fab, inc, miss, rows = _compare(
             tags, src, ctx.ch, chapter_prefix, fignore, s_empty_note=ll_note)
+        tm = _tag_pairing_rows(ctx, ncomp, lead, fignore)
         return LayerResult(code='Q', metadata={
             'q_checked': True,
             'q_fabricated': fab,
@@ -2870,6 +3104,7 @@ class QLayer(VerifyLayer):
             'q_missing': miss,
             'q_order_mismatch': om,
             'q_misplaced': mp,
+            'q_tag_mismatch': tm,
             'q_letter_led': [ll_note] if ll_note is not None else [],
             'q_rows': rows,
         })

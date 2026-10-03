@@ -96,9 +96,12 @@ def test_short_english_terms_not_flagged():
 # ── 词跑计数本身 ──────────────────────────────────────────────────────────
 
 def test_en_word_run_counts_and_breaks():
-    assert _en_word_run("First suppose that X and Y are both non negative") >= 8
+    assert _en_word_run("the dominated convergence theorem gives the desired limit here") >= 8
     assert _en_word_run("由 (21.10) 和 (21.7)，最后一项不超过") == 0
     assert _en_word_run("By the dominated convergence theorem we let") == 7
+    # 🔴 单字母标识符不算英文词（statistical-inference appendixA/0006：Mathematica
+    # `Clear[f, g, u, v, x, y, a, b, c]` 不得被当作英文散文残留）。
+    assert _en_word_run("Clear f g u v x y a b c") == 1
 
 
 # ── 代码围栏不豁免（Rosen 8e ch3 伪码实测，2026-09-26）────────────────────
@@ -135,6 +138,24 @@ def test_pseudocode_translated_comment_passes():
         "```\n"
     )
     assert english_residues(body) == []
+
+
+def test_mathematica_code_statement_not_residue():
+    """语言中立的 Mathematica 输入行（赋值/单字母标识符列表）不得判为英文残留。
+
+    statistical-inference appendixA/0006 实测：`In[6]:= Clear[f, g, u, v, x, y, a, b, c]`
+    与源书逐字节一致、属代码，不该译；旧 `_en_word_run` 把 9 个单字母连成 10 击误报。
+    新口径单字母打断词跑 → 干净。真实英文散文（test_pseudocode_english_comment_flagged）
+    仍是多字母词连击，照常被抓。
+    """
+    body = (
+        "**例 A.0.3 (二元变换)**：演示二元变换。\n\n"
+        "```mathematica\n"
+        "In[6]:= Clear[f, g, u, v, x, y, a, b, c]\n"
+        "f[x_, y_] := PDF[BetaDistribution[a, b], x] * PDF[BetaDistribution[a + b, c], y]\n"
+        "```\n"
+    )
+    assert english_residues(body) == [], english_residues(body)
 
 
 # ── img alt 内含 `>` 不得漏成「散文尾巴」（Koopman ch15 译文 2026-10-01 实测） ──

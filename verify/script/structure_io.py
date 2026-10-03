@@ -189,6 +189,19 @@ def read_structure_items(ext_dir, ch, primary_type=None):
                 _canon = f"{_canon} {_app}"
             elif _slotsuffix:
                 _canon = f"{_canon}{_slotsuffix}"
+            # 🔴 本分支自己收尾：键 = 裸标签（`定理` / `推论 A`），**没有**可用于
+            # 下面「首个数字串」分支的 `num_raw`。历史上这里落到函数级共用的
+            # `items.append`，后来共用 append 被拆进各数字分支，本分支漏了收尾，
+            # 于是一路走到 `if '-' in num_raw:`——首个 § 节点即 UnboundLocalError
+            # （实测 Robinson《Lie Algebras》ch1-7 全崩），若上一节点恰好绑过
+            # `num_raw` 则更糟：用**陈旧的数字串**造出别人的键，静默污染 B 层真值集。
+            items.append({
+                'key': _canon,
+                'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                'page': n.page_start,
+                'text': n.name,
+            })
+            continue
         # Ross 体例（ORDINAL_ROSS）：字母位键 "Example 2a" —— 规范键保留字母位
         # （例2a）。通用分支的 `\d+(?:[.\-…]\d+)+` 会把字母截掉（例2），与 md 侧
         # key_parse 的 例2a 永不交集 → 整书例题假性 truly-missing。故先试
@@ -197,6 +210,15 @@ def read_structure_items(ext_dir, ch, primary_type=None):
             _ross_m = re.match(r'^[A-Za-z]+\s+(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$', raw.strip())
             if _ross_m:
                 _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _ross_m.group(1) + _ross_m.group(2).lower()
+                # 同 § 分支：字母位键没有 `num_raw`，必须自己收尾（否则落到下面的
+                # `if '-' in num_raw:` → UnboundLocalError / 陈旧键）。
+                items.append({
+                    'key': _canon,
+                    'label': TYPE_TO_LABEL.get(n.type, 'uncat'),
+                    'page': n.page_start,
+                    'text': n.name,
+                })
+                continue
             else:
                 m = re.search(r'\d+(?:[.\-．·－–]\d+)+', raw)
                 if not m:

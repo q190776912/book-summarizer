@@ -164,6 +164,9 @@ class TestPosBetterWritePath(unittest.TestCase):
         from formula_tag import SourceFormulaIndex
         idx = SourceFormulaIndex.__new__(SourceFormulaIndex)
         idx._primary_pos = {}
+        # `_record_pos` 的强/弱证据分支（2026-10-02）另开两张账本；`__new__` 夹具
+        # 绕过 `__init__`，故此处按构造契约补齐。
+        idx._pos_strong = {}
         for n, pg, y in (("1", None, None), ("1", 156, 560.0), ("1", 156, None),
                          ("2", 156, 560.0), ("2", 155, None), ("2", 156, 100.0),
                          ("3", 156, None), ("3", 156, None)):

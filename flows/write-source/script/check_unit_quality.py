@@ -653,12 +653,25 @@ _SOURCE_CJK_RUN_MIN = 5
 
 
 def _en_word_run(text):
-    """最长连续英文词数（数字/符号/非 ASCII 连字符词均打断）。"""
+    r"""最长连续英文词数（数字/符号/非 ASCII 连字符词均打断）。
+
+    🔴 **单字母不算英文词**（statistical-inference appendixA/0006 实测）：Mathematica
+    输入行 `In[6]:= Clear[f, g, u, v, x, y, a, b, c]` 在旧口径下得到「Clear + 9 个
+    单字母标识符」= 10 连击，误报为「未翻译英文散文」，但这行是**语言中立**的代码，
+    与源书逐字节一致、不该译。改成 `len>=2` 后，`f/g/u/v/x/y/a/b/c` 一律打断，
+    run=0 → 不再误报。反向：真正的英文残留（Rosen 8e ch3 伪码注释
+    `{location is the subscript of the term that equals x}`；ch21/22 事故里
+    `First suppose that X and Y are both non-negative and bounded by a positive
+    integer M`——此处的 X/Y/M 都写作 `$X$` `$Y$` `$M$`，**在上游 english_residues
+    先剥** `\$[^$\n]*\$` → 传入本函数的字符串里根本不含变量字母）都是多字母词
+    连击，≥8 命中不变。本改动对 run 计数是**单调不增**：只可能减少误报、不可能
+    新增误报，因此放宽单字母不会漏任何真实英文残留。
+    """
     best = cur = 0
     for tok in re.split(r"\s+|[,;:.!?()\[\]\"'“”‘’]+", text):
         if not tok:
             continue
-        if re.fullmatch(r"[A-Za-z][A-Za-z'-]*", tok):
+        if re.fullmatch(r"[A-Za-z][A-Za-z'-]+", tok):
             cur += 1
             best = max(best, cur)
         else:
@@ -945,7 +958,7 @@ def exercise_run_gap_problems(utype, body):
 def check_body(utype, name, body, expected_tags=None, allow_extra=None,
                expected_images=None, content_blocks=None, source_text=None,
                key=None, ext_dir=None, ch=None, source_language=None,
-               translation=False, src_body=None):
+               translation=False, src_body=None, node_type=None):
     """对单个单元正文做「写对」质量校验。返回 (ok, problems)。
 
     按 verify F 层校验顺序执行全部检测，报告所有错误（不只第一个）。
@@ -1063,9 +1076,19 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
 
     # H1) 结构标签 + G1) example blockquote
     if utype == "item":
-        has_bold = bool(TOP_LEVEL_HEADER_RE.search(body_clean)) or bool(re.search(r"\*\*", body_clean))
-        if not has_bold:
-            all_problems.append("编号项单元缺粗体标签（**name** 或 **定义/定理/…**）")
+        # 🔴 `uncat` 兜底族豁免（与 B/M 层 `extracted_raw`、`_flow_contract`
+        # 合并证据闸同源判据）：契约节点类型没被配置分组表认领 = 原书**没有**
+        # 编号条头可写。此闸若照逼，唯一过闸方式就是造一个原书不存在的粗体条头
+        # —— 实测微分遍历论 ch4 `**4.5-5 回顾注 4.5.5 的记号**：`（印面 p117 是
+        # 「…对于这个 δ>0，回顾注 4.5.5 的记号 r_n(x,δ,f)=…」句中散文）与 ch6
+        # `**6.5-4**：证明引理6.5.4的一般情形…`（印面 p184 是 §6.7 习题 5，题面
+        # 已在习题单元逐字在位）两处，契约内部键随假头落进交付物。
+        # 豁免只免「必须有粗体标签」；内容在位仍由覆盖闸⑩ + 空正文闸 + 图片对账
+        # 保证，真·编号项（theorem/definition/…）照旧强制。
+        if node_type != "uncat":
+            has_bold = bool(TOP_LEVEL_HEADER_RE.search(body_clean)) or bool(re.search(r"\*\*", body_clean))
+            if not has_bold:
+                all_problems.append("编号项单元缺粗体标签（**name** 或 **定义/定理/…**）")
         if re.match(r"^例", (name or "")) or re.match(r"^Example", (name or ""), re.I):
             errs = check_example_blockquote_lines(line_list)
             if errs:

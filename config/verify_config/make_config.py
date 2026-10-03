@@ -85,6 +85,7 @@ import glob
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
 from lib.numbering import ordinal_depth
+from lib.numbering import resolve_formula_type, FORMULA_LEAD_DIGIT
 from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_io / primary_group 同源）
 from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
@@ -649,6 +650,8 @@ from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
                           F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
                           F_LETTER_RE as _F_LETTER_RE,
                           F_ROMAN_RE as _F_ROMAN_RE,
+                          F_LETTER3_RE as _F_LETTER3_RE,
+                          F_ROMAN3_RE as _F_ROMAN3_RE,
                           SEP_SPLIT_RE)
 
 # --- formula detection confidence gate ------------------------------------
@@ -674,6 +677,15 @@ _FORMULA_MIN_RUN = 5      # and a consecutive run of at least this length
 # from the notes (prose references "(A.3)" then point at unnumbered displays).
 _FORMULA_LETTER_MIN = 8       # floor for a letter-led series
 _FORMULA_FULL_SCAN_PAGES = 60  # range size at which the whole-book bar applies
+# 🔴 三段 alpha-led（`(A.2.1)` / `(II.1.3)`，formula-only 码 17/18）的置信阈值。
+# **不**沿用 `_letter_min_count`（那是按页数缩放的「两段」条数闸，38 页附录要 19
+# 条）：三段形态自带「字母章 + 节 + 号」，撞形概率远低于两段，而附录里的真公式
+# 系列天生稀疏——跨 51 书普查（`tools/census_alpha3_formula.py`，2026-10-03）实测
+# 全语料只有 Katok《现代动力系统导论》成系列（附录A 5 命中 / 补篇S 15 命中），
+# 其余三本各有 1–2 条**孤立撞形**（同族两段命中 45/43 条压倒）。故判据重心放在
+# 「跨桶 + 连续升序」的**形状**上，条数只设下限 5（`_alpha3_confident`）。
+_FORMULA3_MIN_COUNT = 5       # 三段命中的条数下限
+_FORMULA3_MIN_RUN = 3         # 单个 (字母章, 节) 桶内连续升序的下限
 
 
 def _letter_min_count(n_pages):
@@ -761,6 +773,77 @@ def _series_scope(hits):
     return 1
 
 
+def _alpha3_buckets(hits):
+    """`(head, section, number)` 命中 → ``{(head.upper(), section): set(numbers)}``。
+
+    三段 alpha-led 编号（`(A.2.1)`，formula-only 码 17/18）的计数器窗口就是
+    **(字母章, 节)** 这一对——`A.3` 下的 1,2,3 与 `A.4` 下重新从 1 起（Katok 附录A
+    实测）是同一件事的两面，故分桶键必须含节段，只看首字母会把重启误读成乱序。
+    """
+    buckets = {}
+    for h, sec, num in hits:
+        try:
+            buckets.setdefault((str(h).upper(), int(sec)), set()).add(int(num))
+        except (TypeError, ValueError):
+            continue
+    return buckets
+
+
+def _alpha3_confident(hits):
+    """True iff the three-component alpha-led hits are a genuine equation series.
+
+    三段形态本身几近无歧义（必须带括号 + 尾点纪律，见 `F_LETTER3_RE`），但语料里
+    仍有零星撞形的散文括号（跨书普查 51 书：`an-introduction-to-homological-algebra`
+    1 命中、`a-course-in-homological-algebra` 1、`methods-of-homological-algebra` 2——
+    全是撞形，无一条成套）。判据（与 `_letter_series_confident` 同一「升序成串」
+    纪律，只是窗口换成 (字母章, 节)）：
+
+      * 总命中 >= ``_FORMULA3_MIN_COUNT``（5）；
+      * **至少 2 个** (head, section) 桶——单桶的一串可能是别的东西（图 a.1.1/
+        a.1.2 之类），成套的公式编号必然跨节；
+      * 某一桶内最长连续升序 >= ``_FORMULA3_MIN_RUN``（3）——公式号是 1,2,3，
+        撞形括号不会连着排；或 >= 2 个桶各含 >= 2 个号（跨节重启本身即成套证据）。
+    """
+    if len(hits) < _FORMULA3_MIN_COUNT:
+        return False
+    buckets = _alpha3_buckets(hits)
+    if len(buckets) < 2:
+        return False
+    multi = 0
+    for nums in buckets.values():
+        uniq = sorted(nums)
+        if len(uniq) >= 2:
+            multi += 1
+        longest = cur = 1
+        for i in range(1, len(uniq)):
+            cur = cur + 1 if uniq[i] == uniq[i - 1] + 1 else 1
+            longest = max(longest, cur)
+        if longest >= _FORMULA3_MIN_RUN:
+            return True
+    return multi >= 2
+
+
+def _alpha3_scope(hits):
+    """三段 alpha-led 的重置窗口：跨 (字母章, 节) 桶重启 → scope 3，否则 1。
+
+    与 `_series_scope` 同一「后来桶的首号 < 前一桶的最大号 = 重启」判据，只是
+    头换成 (head, section) 对；三级体例的「按节重置」正是 scope 3 的定义（数字
+    三级书 `SCOPE_BY_TYPE[3] = 3` 同源）。单桶/无重启时给 1（全书连续）。"""
+    order = []
+    for h, sec, _n in hits:
+        k = (str(h).upper(), int(sec))
+        if k not in order:
+            order.append(k)
+    for i in range(1, len(order)):
+        first_of_later = next(n for h2, s2, n in hits
+                             if (str(h2).upper(), int(s2)) == order[i])
+        prev_max = max(n for h2, s2, n in hits
+                       if (str(h2).upper(), int(s2)) == order[i - 1])
+        if first_of_later < prev_max:
+            return 3
+    return 1
+
+
 def _two_component_scope(pairs):
     """Digit two-component ``(C.N)`` scope — derived from book evidence, NO default.
 
@@ -777,6 +860,103 @@ def _two_component_scope(pairs):
     if len({h for h, _n in pairs}) < 2:
         return None
     return _series_scope(pairs)
+
+
+# ---------------------------------------------------------------------------
+# 🔴 formula.bare_number 探测器（no-default 落地，2026-10-02，用户裁定）
+# ---------------------------------------------------------------------------
+# 数字家族裸编号核：standalone `N.M` / `N.M.K`（≥2 段），与 Q 层裸变体 `(?<![\d.])`
+# 同一词边界纪律（防从 `Lemma 13.4.2` 中段切出 `3.4.2` 造伪命中）。
+_BARE_NUM_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)+)(?![\d.])")
+_BARE_NUMBER_MIN_SLOT = 20   # 落点样本低于此 → 证据不足，判不交（返回 None）
+_BARE_NUMBER_HI = 0.50       # 裸落点占比 >= 此 → 判 true（确有裸排公式号）
+_BARE_NUMBER_LO = 0.10       # 裸落点占比 <= 此 且括号落点成规模 → 判 false
+
+
+def _mask_explicit_forms(text):
+    """抹掉所有**显式标记**公式号形态（括号 `(N.M)` / `Eq. N.M` / `式（N.M）`），
+    用等长空格替换，只留真正**裸排**的数字供裸落点统计。返回与 `text` 等长字符串。"""
+    chars = list(text)
+    for _rx in (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE):
+        for m in _rx.finditer(text):
+            s, e = m.span()
+            for k in range(s, e):
+                chars[k] = " "
+    return "".join(chars)
+
+
+def detect_bare_number(extract_dir, formula_cfg, pages=None):
+    """从书页证据推导 `formula.bare_number`（Q 层是否额外收录**裸排** `N.M`）。
+
+    no-default 探测器：旧「静默默认 true」被禁。本函数据书证给出 True / False；
+    **证据不足时返回 None**——调用方据此**留空**该字段，交由 `require_complete`
+    挡下、agent 依书补定，绝不静默兜底（与 `scope` 探测「判不交即省略」同套路）。
+
+    仅当 `build_formula_patterns` 真会 emit 裸变体时才有意义：那要求 **digit-led 且
+    ncomp>=2**（单级书、字母/罗马章位书的裸排与图注/小节标题/散文计数不可分，Q 层
+    恒不 emit 裸变体，此时 bare_number 对本抽取**无实际作用**）。对这类"inert"形状，
+    直接返回 True 作为可复核的显式起点——它不改变任何抽取结果，故不算静默兜底。
+
+    对 ncomp>=2 的数字书：逐块看**公式编号落点（右对齐 clean tail）**是**带括号/
+    标签**还是**裸排**（一块只计一票，显式优先）：
+      * 括号主导、裸落点≈0 → False（本书一律带括号，开裸只会把页码/表值/交叉引用
+        收成幻影 MISSING，Lee / Apostol 型）。
+      * 裸落点成规模         → True（确有裸排公式号，关掉即漏收）。
+      * 样本过少 / 混叠无明确优势 → None（判不交，交 agent）。
+    """
+    if not isinstance(formula_cfg, dict) or formula_cfg.get("type") is None:
+        return True  # 未开 Q 层 / 无 formula：bare 无从谈起，返回中性可复核起点
+    lead, ncomp = resolve_formula_type(
+        formula_cfg.get("type"), letter_ch=bool(formula_cfg.get("letter_ch")))
+    if lead != FORMULA_LEAD_DIGIT or ncomp is None or ncomp < 2:
+        # 裸变体根本不会被 emit：bare_number 无实际作用 → 显式 True（可复核起点）。
+        return True
+
+    if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
+        return None  # MM Repair 未完成，统计不可靠 → 判不交
+
+    pages = pages if pages is not None else sorted(
+        glob.glob(os.path.join(extract_dir, 'page_*.json')))
+    explicit_slot = 0   # 右对齐、带括号/标签的公式号落点数
+    bare_slot = 0       # 右对齐、无任何包裹的裸 `N.M` 落点数
+    for pg in pages:
+        try:
+            with open(pg, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        for b in data.get('text', []):
+            if not isinstance(b, dict):
+                continue
+            text = blk_text(b)
+            if not text:
+                continue
+            hit_explicit = False
+            for _rx in (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE):
+                for m in _rx.finditer(text):
+                    if _formula_tail_clean(text[m.end():]):
+                        hit_explicit = True
+                        break
+                if hit_explicit:
+                    break
+            if hit_explicit:
+                explicit_slot += 1
+                continue
+            masked = _mask_explicit_forms(text)
+            for m in _BARE_NUM_RE.finditer(masked):
+                if _formula_tail_clean(masked[m.end():]):
+                    bare_slot += 1
+                    break
+
+    total = explicit_slot + bare_slot
+    if total < _BARE_NUMBER_MIN_SLOT:
+        return None
+    bare_frac = bare_slot / total
+    if bare_frac >= _BARE_NUMBER_HI:
+        return True
+    if bare_frac <= _BARE_NUMBER_LO and explicit_slot >= _BARE_NUMBER_MIN_SLOT:
+        return False
+    return None
 
 
 def detect_formula(extract_dir, pages=None):
@@ -802,6 +982,20 @@ def detect_formula(extract_dir, pages=None):
     and fewer than two distinct leading components → the reset is unobservable
     so ``scope`` is OMITTED (the load-time validator / agent must settle it from
     the book — there is no default scope anywhere).
+
+    🔴 Three-component alpha-led ``(A.2.1)`` / ``(II.1.3)`` — an appendix that
+    numbers its displays 字母章.节.号 (Katok《现代动力系统导论》附录A/补篇S,
+    2026-10-03 印面实测) — is elected FIRST, as the formula-only
+    ``{"type": 17}`` / ``{"type": 18}`` with scope from ``_alpha3_scope``
+    (restart across ``(字母章, 节)`` buckets → 3, else 1).  The two-component
+    probes structurally cannot see it (they want ``)`` after ONE numeric
+    segment), so before this branch such a segment scored zero on every counter,
+    got no ``formula`` key, and the Q layer no-oped over its printed 序标.  The
+    election requires the 3-comp family to **beat every other family in the
+    scanned range**, so an appendix-only series can never hijack the whole-book
+    (ch) election; confidence = count >= 5 + >= 2 ``(head, section)`` buckets +
+    an ascending run >= 3 (calibrated over the 51-book corpus — three other
+    books show isolated 1–2 hit collisions and are rejected).
 
     Returns a ``{"type", "ignore", "scope"[, "letter_ch"]}`` dict, where
     ``scope`` is ALWAYS derived from book evidence and may be omitted when it can
@@ -831,10 +1025,14 @@ def detect_formula(extract_dir, pages=None):
     dotted_count = 0
     letter_count = 0
     roman_count = 0
+    letter3_count = 0
+    roman3_count = 0
     single_nums = []  # ints in page order, for per-section-reset fallback
     dotted_hits = []  # (first_comp, second_comp) in page order, for 2-comp scope
     letter_hits = []  # (letter, num) in page order, for letter-ch scope check
     roman_hits = []   # (roman_head, num) in page order, for roman scope check
+    letter3_hits = []  # (letter, section, num) — 3-comp letter-ch scope
+    roman3_hits = []   # (roman_head, section, num) — 3-comp roman-ch scope
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -895,6 +1093,58 @@ def detect_formula(extract_dir, pages=None):
                 if _formula_tail_clean(text[rlast.end():]):
                     roman_count += 1
                     roman_hits.append((rlast.group(1), int(rlast.group(2))))
+            # Three-component alpha-led `(A.2.1)` / `（II.1.3）` (formula-only
+            # types 17 / 18).  The two-component probes above CANNOT see these
+            # (`F_LETTER_RE` wants the closing paren right after the ONE numeric
+            # segment), so a letter-led three-part book — Katok 附录A `(A.2.1)`…
+            # `(A.4.1)` / 补篇S `(S.2.1)`…`(S.4.2)`, 2026-10-03 印面实测 — scored
+            # ZERO on every counter and its appendix/supplement sub-config
+            # silently lost the `formula` key → Q-layer no-op, 序标从未校验.
+            # Same last-paren + tail-clean discipline as the letter / roman /
+            # single scans (a prose ref leaves content after the paren).
+            l3matches = list(_F_LETTER3_RE.finditer(text))
+            if l3matches:
+                l3last = l3matches[-1]
+                if _formula_tail_clean(text[l3last.end():]):
+                    letter3_count += 1
+                    letter3_hits.append((l3last.group(1),
+                                         int(l3last.group(2)),
+                                         int(l3last.group(3))))
+            r3matches = list(_F_ROMAN3_RE.finditer(text))
+            if r3matches:
+                r3last = r3matches[-1]
+                if _formula_tail_clean(text[r3last.end():]):
+                    roman3_count += 1
+                    roman3_hits.append((r3last.group(1),
+                                        int(r3last.group(2)),
+                                        int(r3last.group(3))))
+
+    # 🔴 Three-component alpha-led candidates `(A.2.1)` / `（II.1.3）` (formula-
+    # only types 17 / 18), elected BEFORE the two-component alpha families.
+    # Why they must win here: `_F_LETTER_RE` / `_F_ROMAN_RE` demand the closing
+    # paren right after ONE numeric segment, so a letter-led three-part series
+    # scores ZERO on them, and a digit 2/3-part series scores ZERO on them too —
+    # the range then yields no `formula` key at all and the Q layer silently
+    # no-ops over that segment's printed 序标 (Katok 附录A / 补篇S 实测).
+    # 🔴 Dominance is the safety valve, not just the count: the SAME book scanned
+    # WHOLE-BOOK contains both the appendix series (21 hits) and its digit scheme
+    # (79 clean single hits).  Requiring the 3-comp family to beat EVERY other
+    # family in the scanned range means an appendix-only series can never hijack
+    # the whole-book (ch) election — it wins only in the range it actually owns.
+    # Cross-calibrated on the 51-book corpus (`tools/census_alpha3_formula.py`):
+    # three other books show 1–2 isolated 3-comp hits (prose-shape collisions)
+    # and are rejected by both the count floor and the confidence test.
+    _a3_other = (letter_count + roman_count + dotted_count + single_count)
+    if (roman3_count >= _FORMULA3_MIN_COUNT
+            and roman3_count > letter3_count
+            and roman3_count > _a3_other
+            and _alpha3_confident(roman3_hits)
+            and all(str(h).upper() in 'IVXLCDM' for h, _s, _n in letter3_hits)):
+        return {"type": 18, "scope": _alpha3_scope(roman3_hits), "ignore": []}
+    if (letter3_count >= _FORMULA3_MIN_COUNT
+            and letter3_count > _a3_other
+            and _alpha3_confident(letter3_hits)):
+        return {"type": 17, "scope": _alpha3_scope(letter3_hits), "ignore": []}
 
     # Roman-chapter-led candidate `(II.5)` (formula type 16, lead='roman').
     # Checked BEFORE the letter branch: elect ROMAN only on positive multi-
@@ -955,6 +1205,50 @@ def detect_formula(extract_dir, pages=None):
                 out["scope"] = _sc
             return out
     return None
+
+
+def _finalize_formula_cfg(extract_dir, cfg_path, detected, section_key="ch",
+                          pages=None):
+    """把 `detect_formula` 的探测结果装配成配置里的 `formula` 块（判据只此一份）。
+
+    `_build_config_dict`（整份生成）与 `_upgrade_missing_special_keys`（**增量补齐**
+    已存在子配置缺失的 `formula` 键）共用同一段收尾，否则两条路会漂移到不同的
+    配置形态：
+
+      * 回贴 operator 登记（`ignore` / `bare_number` / `known_book` 是人工判断，
+        探测层无法重建，见 `_load_old_formula`）——缺了这步，重生成即静默清空
+        噪声账本。
+      * 🔴 `bare_number` no-default（2026-10-02，用户裁定）：改由
+        `detect_bare_number` **据书页证据**探测；证据不足则**留空**，加载闸
+        `require_complete` 会硬报错，交 agent 依书补定，绝不静默兜底。
+      * `scope` 无法从书中判定时同样只打印警告、不代拟默认值。
+    """
+    formula_cfg = detected
+    old_f = _load_old_formula(cfg_path, section_key)
+    if old_f:
+        formula_cfg.update(old_f)
+    if formula_cfg.get("type") is not None and "bare_number" not in formula_cfg:
+        _bn = detect_bare_number(extract_dir, formula_cfg, pages=pages)
+        if _bn is None:
+            print("[make_config] ℹ️ formula.bare_number 证据不足以判定（裸排公式号落点与"
+                  "括号/标签落点过少或混叠）。本字段无默认值，**暂留空**；require_complete "
+                  "会挡下本书，请 agent 依书页实际体例显式补 `\"bare_number\": true/false`"
+                  "（正文确有裸排公式号→true；公式号一律带括号 / 满是裸号噪声如 Lee/Apostol"
+                  " 型→false；单级 / 字母罗马章位书该值对抽取无作用，填 true 即可）。")
+        else:
+            formula_cfg["bare_number"] = _bn
+            print("[make_config] ℹ️ formula.bare_number 依书页证据探测为 **%s**"
+                  "（比较公式号落点里裸排 `N.M` vs 括号/`Eq.`/`式` 形态判得较清；"
+                  "单级 / 字母罗马章位书该值对抽取无作用，恒给 true）。仍请**人工核对**"
+                  "复核——bare_number 无静默默认，值来自本书证据。"
+                  % ("true" if _bn else "false"))
+    if formula_cfg.get("type") is not None and "scope" not in formula_cfg:
+        print("[make_config] ⚠️ formula 探测到 type=%r 但**无法从书中判定 scope**"
+              "（首分量证据不足，通常仅见单一章前缀）。`scope` 无默认值，加载期会硬"
+              "报错；请 agent 依书实际编号体例显式补 `formula.scope`"
+              "（1=全书连续 / 2=每章重启 / 3=每节重启）后再跑 verify。"
+              % (formula_cfg.get("type"),))
+    return formula_cfg
 
 
 # canonical NAME (EN) of each surface form — used for grouping decisions.
@@ -2249,18 +2543,8 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
         # name 解决，自身不需要本字段，故只在正文段落落。
         config["exercise_shared_numbering"] = True
     if formula_cfg is not None:
-        # 回贴 operator 登记（ignore / bare_number 是人工判断，探测层无法重建，
-        # 见 _load_old_formula）——缺了这步，重生成即静默清空噪声账本。
-        old_f = _load_old_formula(cfg_path, section_key)
-        if old_f:
-            formula_cfg.update(old_f)
-        config["formula"] = formula_cfg
-        if formula_cfg.get("type") is not None and "scope" not in formula_cfg:
-            print("[make_config] ⚠️ formula 探测到 type=%r 但**无法从书中判定 scope**"
-                  "（首分量证据不足，通常仅见单一章前缀）。`scope` 无默认值，加载期会硬"
-                  "报错；请 agent 依书实际编号体例显式补 `formula.scope`"
-                  "（1=全书连续 / 2=每章重启 / 3=每节重启）后再跑 verify。"
-                  % (formula_cfg.get("type"),))
+        config["formula"] = _finalize_formula_cfg(
+            extract_dir, cfg_path, formula_cfg, section_key, pages)
     config["_provenance"] = {
         "generated_by": "make_config.py",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -2541,6 +2825,75 @@ def _generate_special_verify_configs(extract_dir):
     return out
 
 
+def _backfill_missing_formula_cfg(extract_dir, cfg_path, data):
+    """给「子配置已在账、却没有 `formula` 键」的 appendix / supplement 段补写探测值。
+
+    只按**该段自己的页区间**跑 `detect_formula`（与 `_generate_special_verify_configs`
+    同一取页函数 `_special_page_files`，故窗口口径不会漂移），探测不到就什么都不写
+    （宁缺勿滥）；`ch` 段**一律不碰**——整段重生成的风险见 `_upgrade_missing_special_keys`
+    的注记。返回补写过的段名清单，供调用方打印变更账。
+    """
+    filled = []
+    for key, kind in (('appendix', KIND_APPENDIX),
+                      ('supplement', KIND_SUPPLEMENT)):
+        seg = data.get(key)
+        if not isinstance(seg, dict) or seg.get('formula') is not None:
+            continue
+        chs = _detect_special_chapters(extract_dir, kind)
+        pages = _special_page_files(extract_dir, chs) if chs else []
+        if not pages:
+            continue
+        detected = detect_formula(extract_dir, pages=pages)
+        if not detected or detected.get('type') is None:
+            continue
+        seg['formula'] = _finalize_formula_cfg(extract_dir, cfg_path, detected,
+                                              key, pages)
+        filled.append(key)
+        print(f"[make_config] {key} 段页区间按自己的窗口探测到 formula="
+              f"{json.dumps(seg['formula'], ensure_ascii=False)}（原缺该键）。")
+    return filled
+
+
+def _declare_same_style_flat(cfg_path, data, special):
+    """扁平（legacy）`verify_config.json` 的**只写声明**增量通道。
+
+    🔴 Arnold《经典力学的数学方法》实测（2026-10-03）：16 个字母附录按 kind 路由到
+    `'appendix'` 子配置，而扁平配置没有该键 → 每轮 verify 打 32 行 `[CONFIG]` 回退
+    警告。下游给的 prescribed 出路是 `--force`，但对这类书**不安全**：整份重扫把人工
+    登记的账洗掉（本书 `section_types [1,1,5]→[1,2]`、`sections_global true→丢失`，
+    并凭空多出 4 个英文标签 group），而探测器对附录的结论本来只有一句「与正文同体例」。
+    所以这里**只**补写 `MAP_KEY_SPECIAL_SAME_STYLE`（消费侧 `ConfigLoader` 的扁平分支
+    就读这个顶层键），既有键一字不动。
+
+    判明附录**需要独立子配置**时**不写**惰性的 `appendix` 字典——扁平分支根本不消费
+    它（只认顶层声明与独立 `appendix_verify_config.json`），写了等于假装配置到位；
+    改为打印转换指引，让人决定何时 `--force`。返回补写过的 kind 清单。
+    """
+    special = special or {}
+    ss = [str(k) for k in (special.get("same_style") or [])]
+    have = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
+    existing = {str(k) for k in have} if isinstance(have, (list, tuple, set)) else set()
+    declared = [k for k in ss if k not in existing]
+    for key in ('appendix', 'supplement'):
+        if special.get(key) is not None and key not in declared:
+            print(f"[make_config] ⚠ {cfg_path} 是扁平（legacy）格式，而 {key} 章检出了"
+                  f"独立编号体例：扁平配置里的 `{key}` 子配置**不会被消费**（ConfigLoader "
+                  f"只读顶层声明与独立 appendix 文件），故不写惰性键。请人工决定何时用 "
+                  f"`make_config.py <extract_dir> --force` 转成外层 map 格式——注意 "
+                  f"`--force` 会整份重扫并可能改写 section_types / sections_global / "
+                  f"ordinal 分组等人工账，转换前务必备份并逐字段比对。")
+    if not declared:
+        print(f"[make_config] 已存在 {cfg_path}（扁平格式），跳过（用 --force 转外层 map）。")
+        return []
+    data[MAP_KEY_SPECIAL_SAME_STYLE] = sorted(existing | set(declared))
+    with open(cfg_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[make_config] ⚠ 增量升级 {cfg_path}（扁平格式，只写声明）：{declared} 扫过页区间"
+          f"判明与正文同体例，已记入 {MAP_KEY_SPECIAL_SAME_STYLE}；其余键原样不动。"
+          f"ConfigLoader 的 [CONFIG] 回退警告自此消音——回退在这里是正确行为。")
+    return declared
+
+
 def _upgrade_missing_special_keys(extract_dir, cfg_path):
     """已存在的 verify_config.json 缺 appendix/supplement 子配置时的增量升级。
 
@@ -2566,31 +2919,46 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
         return 0
 
     missing = [k for k in ('appendix', 'supplement') if k not in data]
-    if not missing:
-        print(f"[make_config] 已存在 {cfg_path}，跳过（外层 map 完整；用 --force 覆盖）。")
-        return 0
 
-    special = _generate_special_verify_configs(extract_dir)
+    special = _generate_special_verify_configs(extract_dir) if missing else None
+    # 🔴 legacy 扁平配置（顶层即正文体例、没有 `ch` 包裹）走**只写声明**的窄通道。
+    if 'ch' not in data:
+        return _declare_same_style_flat(cfg_path, data, special)
     added = []
-    for key in missing:
-        if special.get(key) is not None:
-            data[key] = special[key]
-            added.append(key)
-    # 🔴 该类章扫过、结论是「与正文同体例」→ 落账声明（不产出冗余子配置）。
-    # 没有它，老配置的 appendix 键缺失会永久触发一条 --force 也消不掉的警告。
     declared = []
-    ss = [k for k in (special.get("same_style") or []) if k in missing]
-    have = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
-    existing = {str(k) for k in have} if isinstance(have, (list, tuple, set)) else set()
-    for key in ss:
-        if key not in existing:
-            declared.append(key)
-    if declared:
-        data[MAP_KEY_SPECIAL_SAME_STYLE] = sorted(existing | set(declared))
-    if not added and not declared:
-        print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。"
-              f"缺 {missing} 键但对应 kind 的章未检出或无页区间——若这不符合预期，"
-              f"请核对 chapter_map.json 的章名/章号。")
+    if special is not None:
+        for key in missing:
+            if special.get(key) is not None:
+                data[key] = special[key]
+                added.append(key)
+        # 🔴 该类章扫过、结论是「与正文同体例」→ 落账声明（不产出冗余子配置）。
+        # 没有它，老配置的 appendix 键缺失会永久触发一条 --force 也消不掉的警告。
+        ss = [k for k in (special.get("same_style") or []) if k in missing]
+        have = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
+        existing = {str(k) for k in have} if isinstance(have, (list, tuple, set)) else set()
+        for key in ss:
+            if key not in existing:
+                declared.append(key)
+        if declared:
+            data[MAP_KEY_SPECIAL_SAME_STYLE] = sorted(existing | set(declared))
+
+    # 🔴 同族第二形态：special 子配置**在账**、却缺 `formula` 键。
+    # 实测（Katok 现代动力系统 附录A / 补篇S，2026-10-03）：探测层后来才学会
+    # 三段字母章位 `(A.2.1)`，而「已存在则跳过」硬闸 + 「整份 --force 会洗掉
+    # 正文段人工/早期探测确定的 formula（本书 ch 段是 type 3）」两条夹在一起，
+    # 使这份配置既不会自动补、也不能安全重生成——附录与补篇的 17 枚印面序标
+    # 就此永远无人校验（Q 层 no-op WARN）。补法与 `missing` 分支同一纪律：
+    # **只**往「该段没有 formula 键」里写探测器给出的值，既有键（含 ch 段）
+    # 一字不动，也不覆盖已存在的 formula。
+    filled = _backfill_missing_formula_cfg(extract_dir, cfg_path, data)
+
+    if not added and not declared and not filled:
+        if missing:
+            print(f"[make_config] 已存在 {cfg_path}，跳过（用 --force 覆盖）。"
+                  f"缺 {missing} 键但对应 kind 的章未检出或无页区间——若这不符合预期，"
+                  f"请核对 chapter_map.json 的章名/章号。")
+        else:
+            print(f"[make_config] 已存在 {cfg_path}，跳过（外层 map 完整；用 --force 覆盖）。")
         return 0
     with open(cfg_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -2602,6 +2970,11 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
         print(f"[make_config] ⚠ 增量升级 {cfg_path}：{declared} 判明与正文同体例，"
               f"已记入 {MAP_KEY_SPECIAL_SAME_STYLE} 声明（不产出冗余子配置）。"
               f"下游 ConfigLoader 的回退警告自此消音——回退在这里是正确行为。")
+    if filled:
+        print(f"[make_config] ⚠ 增量升级 {cfg_path}：为 {filled} 段补写探测到的 "
+              f"`formula` 键（其余键原样保留）。这些段的印面公式序标自下一次 "
+              f"verify 起进入 Q 层校验——请核对新登记的 \\\\tag 对账结果，"
+              f"并**重跑这些章的 build_structure** 让契约收割同样带上该体例。")
     return 0
 
 

@@ -113,6 +113,126 @@ _PROOF_TAIL_RE = re.compile(r'(?:的证明|之证明|证明|proof)\s*[。.．]?\
 _EXM_DROP_RE = re.compile(
     r'(练习|习题|Exercise|exercise|Problem|problem|问题|Question|question)\s*[\d.]+')
 
+# 🔴 无标签习题序列的契约真值路由（2026-10-02 Katok 根治）。
+#   印面把某些书的节后习题**不冠任何标签词**直接排成裸号条头：Katok《Modern
+#   Theory》每节后段就是 `2.9.1.` / `2.9.2.` / `2.9.3.`（fitz 目视 + 契约
+#   `book_structure/ch2.json` 里 §2.9 的三个 `type: "exercise"` 节点为证），
+#   而该书条目计数器**跨类型共享且按节重启**（Definition 2.9.1 → Theorem 2.9.2
+#   → … → Proposition 2.9.5，单一 ordinal 组、`separate_types` 未开）。
+#   于是 md 里 `**Definition 2.9.1**` 与 `**2.9.1.**` 是**两条不同的印刷序列**，
+#   却被现有的「按条头标签词路由 ex 窗」判据看成同一窗（裸号头没有标签词可读）
+#   → 阅读顺序窗出现 同号二现 [1,2,3]，全书 81 条「疑似幽灵重复节点」WARN。
+#   后果不是难看：该 WARN 正是 B 层用来区分「重复节点伪影」与「真条目错位
+#   (BLOCKING 顺序错乱)」的那一支，把真序列碰撞说成伪影 = 错位信号被稀释。
+#   修法 = 让**契约类型**（标签无关的真值）参与路由，但只作**候选**：条头无标签词而
+#   该键在契约里登记为 exercise / problem 者，还要过一道「同号二现」碰撞判据
+#   （`_resolve_bare_ex_candidates`）才真开窗。Weibel 类书每节只有一条 1..N 共享
+#   计数器，裸号头 `**10.2.3（疏解…）**` 本身就是序列成员，抢先开窗会把主窗挖成
+#   假缺号（跨书普查 2026-10-02：Weibel ch1–10 BLOCKING 0→79）。
+#   `exercise_node_windows` 已按设计排除 `consolidated` 成堆块（writing-rules 规定
+#   集中习题块不进总结，md 里本就没有）。
+#   两道既有守卫照旧生效：`is_uncat` 合并计数器（Vakil）与
+#   `exercise_shared_numbering`（Lee / Etingof）下**不得**另开窗，否则主窗假缺号。
+def _norm_ex_key_form(raw):
+    """契约习题节点键 → md 键形：最后一段之前用短横（`2.9.1` → `2.9-1`）。
+
+    非纯数字尾段（`问题1` / `Example A`）原样返回，绝不凭空造号。
+    """
+    s = str(raw or '').strip()
+    parts = [p for p in SEP_SPLIT_RE.split(s) if p]
+    if len(parts) >= 2 and parts[-1].isdigit():
+        return '.'.join(parts[:-1]) + '-' + parts[-1]
+    return s
+
+
+def _contract_exercise_keys(ext_dir, ch):
+    """本章契约里登记为 exercise / problem 的节点键（md 键形集合）。
+
+    契约缺失 / 读不出 → 返回空集（不路由，行为逐字节回到改前）。
+    🔴 路径按**磁盘物理证据**解析（`resolve_chapter_json_path`）而非只信
+    `chapter_json_path`：后者的章型前缀取自进程级注册表，可被同进程另一本书污染，
+    于是 `ch3.json` 被算成 `appendix3.json` → 契约「读不到」→ 本判据静默失明
+    （实测教训见该函数 docstring）。
+    """
+    if not ext_dir or ch is None:
+        return set()
+    try:
+        from data.book_structure.book_structure import (
+            exercise_node_windows, norm_chapter_key, resolve_chapter_json_path)
+        fp = resolve_chapter_json_path(ext_dir, norm_chapter_key(ch))
+        if not os.path.isfile(fp):
+            return set()
+        with open(fp, encoding='utf-8') as f:
+            root = json.load(f)
+        return {_norm_ex_key_form(k)
+                for k, _ps, _pe, _nc, _nm in exercise_node_windows(root)}
+    except Exception:
+        return set()
+
+
+def _exercise_window_routing(label, prefix_str, key, contract_ex_keys, *,
+                             combined, shared, stays_main, demoted_word=False):
+    r"""该条头要不要并入**独立习题窗**（gk 中段插 `ex`）。
+
+    返回 ``(routed, bare_candidate)`` 两条腿，身份来源不同、处置时机也不同：
+      ① ``routed``：条头自带习题标签词（``_EXERCISE_LABELS``）——身份自证，
+         调用处**立即**开窗（原行为）；
+      ② ``bare_candidate``：条头**无标签词**（裸号 `**2.9.1.**`）但该键在**契约**里
+         登记为 exercise / problem（``contract_ex_keys``，Katok 体例，见
+         `_contract_exercise_keys` 注记）——2026-10-02 新增。裸号头**不在此处**开窗：
+         它没有自证的标签，必须再过一道「同号二现」碰撞判据
+         （`_resolve_bare_ex_candidates`），否则会把共享计数器书的裸号头从主窗挖走
+         造成假缺号（Weibel 实测，见该函数注记）。
+    放行方向只改「同一个号属于哪条印刷序列」的归属，不改任何计数判据。
+
+    守卫缺一不可（各拦一次实测假缺号）：
+      · ``combined``（Vakil uncat 合并计数器）：练习本身就是主序列成员；
+      · ``shared``（Lee / Etingof ``exercise_shared_numbering``）下**裸号头**不得
+        另开窗——它没有标签词可自证身份，挪走就是把主序列的号凭空抹掉；带习题标签词
+        的共享头由调用方折算进 ``stays_main``（同源判据，两条路径都留在主窗）；
+      · ``stays_main``：共享计数器下与条目同形（点号多段）的 Problem；
+      · ``prefix_str`` 为空：gk 是 `gi:file` 形态，另开窗会被 body 解析读成
+        prefix='file'，故裸文件窗一律不动；
+      · ``demoted_word``：条头里**本就写着**习题词、只是被行首难度标记 `\*` 挡住了
+        标签解析（Intro-to-Dyn-Systems ch3 实测 `**\\*习题 3.2.2.**`，label 落
+        'uncat'）。该头的归属由既有的两步法（`_resolve_demoted_entries` 按习题词
+        所在组回补真习题窗）裁决；裸号腿若抢先，就会把它并进**内容组**的 ex 窗
+        （`0:ex:3.2`），真习题窗 `1:ex:3.2` 反而被挖出假「缺号 2」。
+    """
+    _lab = (label or '').strip().lower().rstrip('*')
+    routed = bool(_lab in _EXERCISE_LABELS and not combined and not stays_main)
+    bare = bool(prefix_str and _lab in ('', 'uncat')
+                and not demoted_word
+                and not combined and not shared and not stays_main
+                and key in (contract_ex_keys or set()))
+    return routed, bare
+
+
+def _resolve_bare_ex_candidates(entries, pending):
+    r"""裸号习题头的**碰撞判据**：仅当同一条主窗里**另有具名条头占着同一个键**时，
+    才把它并入 ex 窗；否则留在原地。
+
+    跨书普查 2026-10-02（623 单元 old/new 对拍，脚本 = chaos 书
+    `_extract/_census_b_ab_routing.py`）实测两侧形态：
+      · Katok：印面并存**两条**序列（`**Definition 2.9.1**` 与 `**2.9.1.**` 同窗
+        同号二现）→ 必须搬走，否则「疑似幽灵重复节点」把真错位信号稀释成伪影；
+      · Weibel：每节**只有一条** 1..N 共享计数器，裸号头 `**10.2.3（疏解…）**`
+        本身就是该序列的成员（契约把它登记成 exercise 也不改变这一点），搬走就把
+        主窗挖成假「缺号」——普查里 Weibel ch1–10 一次 BLOCKING 0→79。
+    碰撞 = 同 `(gk, key)` 由**非候选**条目的具名头登记过。
+    """
+    if not pending:
+        return entries
+    idxs = {i for i, _gk, _key in pending}
+    claims = {(gk, key) for i, (gk, _n, key, *_r) in enumerate(entries)
+              if i not in idxs}
+    for i, gk, key in pending:
+        if (gk, key) not in claims:
+            continue
+        _gh, _gb = gk.split(':', 1)      # 候选必有节前缀（见路由函数 prefix_str 守卫）
+        entries[i] = (f"{_gh}:ex:{_gb}",) + tuple(entries[i][1:])
+    return entries
+
 # The inter-component separator is now SEP_TIGHT, defined ONCE in lib.regexlib
 # and reused everywhere so every book's punctuation variant normalizes the same
 # way.  Different books use '.' or '-' (or fullwidth variants) interchangeably
@@ -386,6 +506,28 @@ def _is_reference_tail(tail, lang=None):
     return False
 
 
+# 裸号条头尾部的「难度星号」残留：印面 `3.1.6*` 写成 md 后是 `**3.1.6\***.`，
+# 而 _SPAN_RE 的非贪婪闭合会把 `\*` 的星号吞进闭合 `**`，传进 _parse_entry 的
+# inner 只剩 `3.1.6\`。判据 = 尾部**只**由空白 / 反斜杠 / 星号组成（即纯难度标记
+# 残段），剥掉后才允许参与裸号匹配——其余形态字节不变。
+_BARE_STAR_TAIL_RE = re.compile(r'[\\\*\s]+$')
+
+
+def _bare_head_core(inner):
+    """裸号条头的可比内核：剥掉句末点号与尾部的转义难度星号。
+
+    先剥 ``.．。``（既有行为，Vakil 无标题条目 ``3.2.1.`` 靠它），再剥纯星号
+    尾巴（Katok 打星习题），最后再剥一次点号——三种尾巴以任何
+    顺序混现都能归一。整个字符串本身就是星号/空白时返回空串（裸 ``**\\***``
+    不成条目）。
+    """
+    s = inner.rstrip().rstrip('.．。').strip()
+    t = _BARE_STAR_TAIL_RE.search(s)
+    if t and t.start() > 0:
+        s = s[:t.start()].rstrip().rstrip('.．。').rstrip().strip()
+    return s
+
+
 def _parse_entry(inner, levels, lang=None):
     """Return (comps, label) for a real numbered entry header, else None.
 
@@ -441,7 +583,7 @@ def _parse_entry(inner, levels, lang=None):
     # …' → bold span is just '3.2.1.'): the printed trailing period must not
     # defeat the bare-numpath check, or the item vanishes and the B layer
     # reports a false 缺号 for it.
-    _bare = inner.rstrip().rstrip('.．。').strip()
+    _bare = _bare_head_core(inner)
     if levels == 3 and _exact.match(_bare):
         comps = _comps_of(_bare)
         if comps is None:
@@ -673,15 +815,15 @@ def _resolve_demoted_entries(entries, demoted):
     的 2 号已有真习题头 → 不回补，留在内容窗）；ch10「Topology Exercise 10.9.2」
     是真习题（习题窗 10.9 缺 2 号且 10.9.2 内容另有其头 → 回补）。"""
     ex_present = {}
-    for gk, num, _key, _lab, _pfx, _primed in entries:
+    for _e in entries:
+        gk, num = _e[0], _e[1]
         if 'ex' in gk.split(':'):
             ex_present.setdefault(gk, set()).add(num)
     for idx, gi, prefix_str, item_num in demoted:
         ex_gk = f"{gi}:ex:{prefix_str}"
         have = ex_present.get(ex_gk)
         if have is not None and item_num not in have:
-            gk0, num0, key0, lab0, pfx0, pr0 = entries[idx]
-            entries[idx] = (ex_gk, num0, key0, lab0, pfx0, pr0)
+            entries[idx] = (ex_gk,) + tuple(entries[idx][1:])
             have.add(item_num)
     return entries
 
@@ -704,7 +846,8 @@ def _merge_orphan_ex_windows(entries):
     """
     main_nums = {}
     ex_nums = {}
-    for gk, num, _key, _lab, _pfx, _pr in entries:
+    for _e in entries:
+        gk, num = _e[0], _e[1]
         if 'ex' in gk.split(':'):
             ex_nums.setdefault(gk, set()).add(num)
         else:
@@ -728,9 +871,9 @@ def _merge_orphan_ex_windows(entries):
         holes = set(range(lo, hi + 1)) - M
         if not E <= holes or (set(range(lo, hi + 1)) - (M | E)):
             continue                      # 并不平主窗 → 维持原路由
-        for i, (gk, num, key, lab, pfx, pr) in enumerate(entries):
-            if gk == ex_gk and num in E:
-                entries[i] = (main_gk, num, key, lab, pfx, pr)
+        for i, _e in enumerate(entries):
+            if _e[0] == ex_gk and _e[1] in E:
+                entries[i] = (main_gk,) + tuple(_e[1:])
         M |= E
     return entries
 
@@ -973,6 +1116,26 @@ def _section_anchors(txt):
     return _sec_pos, _sec_str
 
 
+def _subblock_anchors(txt):
+    """(offsets, tokens) for EVERY `^##..#### §` heading, letter sub-blocks included.
+
+    与 `_section_anchors` 的分工：那边是**计数器窗口**边界，字母子块必须继承父节
+    （Arnold §32 的 问题1..15 横跨 A./B./C./D./E. 连续编号，切开就假报缺号）；
+    本表只服务一件判据——区分「同号二现」究竟是**印面重启/并行计数器交错**还是
+    真幻影（正文引用被误建成条目节点）。判据要看得见 `### §C` 这一层，所以这里
+    一律注册，不做任何继承/包含性豁免。取不到任何标题时返回空表 → 判据退化为
+    「全部同子块」，即维持旧行为（fail-closed，宁误报不漏报）。
+    """
+    pos, tok = [], []
+    for m in re.finditer(r'^(#{2,4})[ \t]*§[ \t]*([^\n]*)$', txt, re.M):
+        toks = (m.group(2) or '').strip().split()
+        if not toks:
+            continue
+        pos.append(m.start())
+        tok.append(toks[0].strip(':.，,；;')[:24])
+    return pos, tok
+
+
 def _md_gap_blocking(ctx):
     """Return (BLOCKING, WARNING, present_md_keys) for item-number gaps found
     in the written .md, grouped by the per-book numbering convention carried on
@@ -1012,9 +1175,19 @@ def _md_gap_blocking(ctx):
         i = _bisect.bisect_right(_sec_pos, pos) - 1
         return _sec_str[i] if i >= 0 else None
 
+    _sub_pos, _sub_str = _subblock_anchors(txt)
+
+    def _cur_sub(pos):
+        import bisect as _bisect
+        i = _bisect.bisect_right(_sub_pos, pos) - 1
+        return _sub_str[i] if i >= 0 else None
+
     _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
-    entries = []  # (group_key, item_num, unique_key, label, prefix_str, primed)
+    entries = []  # (group_key, item_num, unique_key, label, prefix_str, primed, sub_block)
     _demoted = []  # 习题窗两步法候选：(entries 下标, gi, prefix_str, item_num)
+    _bare_pending = []  # 裸号习题头候选：(entries 下标, 主窗 gk, key)
+    # 🔴 契约习题键（无标签条头的路由真值，判据见 `_contract_exercise_keys`）
+    _ex_keys = _contract_exercise_keys(ctx.ext_dir, ctx.ch)
     for span in _SPAN_RE.finditer(txt):
         inner = span.group(1).strip()
         parsed = None
@@ -1088,22 +1261,28 @@ def _md_gap_blocking(ctx):
             _lab in ('exercise', 'exercse', '习题', '练习')
             or (_lab in ('problem', 'problems', '问题')
                 and re.search(r'\d+\.\d+', inner) is not None))
-        _routed_ex = False
-        if _lab in _EXERCISE_LABELS and not _combined and not _stays_main:
+        _routed_ex, _bare_ex = _exercise_window_routing(
+            _lab, prefix_str, key, _ex_keys,
+            combined=_combined, shared=_shared, stays_main=_stays_main,
+            demoted_word=bool(_demoted_word))
+        if _bare_ex:
+            # 裸号习题头：先按主窗登记，窗算术之后再按「同号二现」碰撞决定去留
+            _bare_pending.append((len(entries), gk, key))
+        elif _routed_ex:
             if ':' in gk:
                 _gh, _gb = gk.split(':', 1)
                 gk = f"{_gh}:ex:{_gb}"
             else:
                 gk = f"{gk}:ex"
-            _routed_ex = True
         if _demoted_word and prefix_str and not _routed_ex:
             # 习题词内嵌于专名（'~Word'）：暂存候选，窗算术两步法稍后裁决。
             _dw_norm = _norm_label(_demoted_word)
             _dgi = cfg.ordinal.index(cfg.group_for_label(_dw_norm))
             _demoted.append((len(entries), _dgi, prefix_str, item_num))
         entries.append((gk, item_num, key, label, prefix_str,
-                        _own_number_primed(inner)))
+                        _own_number_primed(inner), _cur_sub(span.start())))
 
+    _resolve_bare_ex_candidates(entries, _bare_pending)
     _resolve_demoted_entries(entries, _demoted)
     _merge_orphan_ex_windows(entries)
 
@@ -1115,8 +1294,11 @@ def _md_gap_blocking(ctx):
     # 合法重置误判为 BLOCKING 顺序错乱。gk 已编码类型(group index)，与「缺号」
     # 检查保持一致地按 gk 分组即可正确按类型隔离顺序校验。
     section_order = defaultdict(list)   # gk -> [item_num,...] 阅读顺序（按类型隔离，用于顺序错乱检测）
+    # 与 section_order **同序平行**的出现明细 (num, label, sub_block)，专供
+    # 「幽灵重复」判据把同号二现归到「同标签 + 同子块」——见下方 WARN 分支。
+    section_order_meta = defaultdict(list)
     present_md = set()
-    for gk, num, key, label, prefix_str, primed in entries:
+    for gk, num, key, label, prefix_str, primed, sub in entries:
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
         # per-type mode embeds the label ("C.S:LABEL"), combined mode does not
         # ("C.S").  Re-adding `label` here would split a combined section into
@@ -1129,6 +1311,7 @@ def _md_gap_blocking(ctx):
         # 「35 出现在 42 之后」的合法印面会被误判 BLOCKING 错位（见上 _PRIME 注释）。
         if not primed:
             section_order[gk].append(num)
+            section_order_meta[gk].append((num, label, sub))
 
     # --- route-A: .md 自身引用的 Table/Figure 编号，序列查缺时跳过 -------------
     # Fraleigh 把表/图编入连续章节序号，但 .md 把它们写成正文（如 "Table 1.20
@@ -1291,6 +1474,9 @@ def _md_gap_blocking(ctx):
         # ignore 同时压制 缺号 与 顺序错乱 两类告警。
         seq_f = [n for n in seq
                  if not _ignored_num(gk_key, pref, n, label_candidates, known, ignore)]
+        # 与 seq_f 同过滤口径的出现明细（判据只依赖号 n，故两表逐项对齐）。
+        meta_f = [(n, lab, sub) for (n, lab, sub) in section_order_meta.get(gk_key, [])
+                  if not _ignored_num(gk_key, pref, n, label_candidates, known, ignore)]
         last_pos = {}
         for i, num in enumerate(seq_f):
             last_pos[num] = i
@@ -1309,11 +1495,30 @@ def _md_gap_blocking(ctx):
         for i in range(1, len(ordered)):
             if ordered[i] < ordered[i - 1]:
                 if monotone_first:
-                    dups = sorted({n for n in seq_f if seq_f.count(n) > 1})
-                    warnings.append(
-                        f"  WARN (non-blocking): 疑似幽灵重复节点 @{pref} [gk={gk_key}]: "
-                        f"同号二现 {dups}（保留首次去重后单调）——正文引用被误建为条目"
-                        f"节点，请核对源书并清理契约中的重复节点。")
+                    # 🔴 2026-10-03 判据收窄（跨语料普查 `tools/census_ghost_rows.py`
+                    # 实测 49 行 / 8 书，绝大多数不是幻影）：同号二现有两类**印面
+                    # 合法的多计数器交错**——
+                    #   A. 节内字母子块重启：Arnold §14.B 的 例1..4 与 §14.D 的 例1..2、
+                    #      §8.D 与 §8.E 的 问题1..；ODE《常微分方程》ch1 每节 问题N 重启；
+                    #   B. 合并窗内跨类型各自起号：Katok §9.2 的 Example 9.2.1 与
+                    #      Proposition 9.2.1、Weibel §6.5 的 Definition 6.5.1 与
+                    #      Exercises 6.5.1。
+                    # 旧判据把整窗的同号一律说成「正文引用误建为条目节点」，既假又
+                    # 稀释真信号。现只报**同标签 + 同子块**的同号二现（= 真幻影形态，
+                    # Katok §1.1 的第二个 定义1.1.1 正是此形），跨标签/跨子块一律放行。
+                    # 🔴 只收窄 WARN 分支：BLOCKING 分支与顺序判据一字未动，真错位
+                    # （如 2.6-8 排在 2.6-11 之后，去重后仍非单调）照旧硬阻断。
+                    # 子块锚取不到（md 无 `§` 标题）时所有出现落同一锚 → 旧行为不变。
+                    _by_key = defaultdict(list)
+                    for n, lab, sub in meta_f:
+                        _by_key[(lab, sub)].append(n)
+                    dups = sorted({n for vals in _by_key.values()
+                                   for n in vals if vals.count(n) > 1})
+                    if dups:
+                        warnings.append(
+                            f"  WARN (non-blocking): 疑似幽灵重复节点 @{pref} [gk={gk_key}]: "
+                            f"同号二现 {dups}（同标签同子块，保留首次去重后单调）——正文引用"
+                            f"被误建为条目节点，请核对源书并清理契约中的重复节点。")
                 else:
                     blocking.append(
                         f"  WARN (BLOCKING): 顺序错乱 @{pref} [gk={gk_key} seq={seq_f}]: 编号 {ordered[i]} "
@@ -1421,6 +1626,94 @@ def _scan_book_category_items(ch, start, end, ext_dir):
     return {k: sorted(set(v)) for k, v in by.items()}
 
 
+# 🔴 EXTRA-MENTION 的「领域归属」收窄（2026-10-02 Lasota-Mackey / Strogatz 根治）：
+#   提及桶此前把 md 里一切「契约无、正文有」的编号都当成待核对提及，而**公式标签**
+#   `\tag{1.2.11}`、**图/表号** `图 1.1.2` / `ch01_fig1.1.2.png`、以及印刷公式回指形态
+#   `(1.2.8)` 与条目号在 `keys_in_md` 层长得一模一样（三段号 1.2.11 既可能是公式号
+#   也可能是定理号），实测 chaos 634 个提及键里 627 个（99%）、Strogatz 全部 525 个
+#   都属于**别的层已负责**的领域 → 真正「契约漏登记条目」的信号被上千行良性噪声淹没。
+#   判据：一个提及键**只有在其全部出现位置**都属于下列领域时才从报告桶剔除——
+#     tag    : 位于 `\tag{...}` 内部（Q 层 formula_tag 的辖域）；
+#     figref : 紧跟 图/表/Figure/Fig./Plate/Table/`…_fig` 文件名（图像域——writing-rules
+#              规定图只在正文引用、从不作条目登记，`extracted` 也按 label=='uncat' 剔它们）；
+#     eqref  : 被括号包住 `(1.2.8)` / `（1.2.8）`（印刷公式回指形态）；**开括号前是条目词**
+#              （`Definition (5.6.5)` / `定理（5.6.5）`）时不算，那正是条目引用形态。
+#   任何一处出现在其他上下文（裸号散文提及、条目头、带标签引用）→ 照旧报；md 里根本
+#   扫不到该号（跨语言/跨文件带进来的键）→ 不判。
+#   🔴 只影响 `extra` / `extra_mention` 两个**非阻断**报告桶；`all_keys` 原样不动，
+#   故 truly_missing、整类首项缺失等阻断判据逐字节不变。
+_TAG_SPAN_RE = re.compile(r'\\tag\s*\{[^{}]*\}')
+_FIGREF_TAIL_RE = re.compile(
+    r'(?<![a-z])(?:Figure|Fig\.?|Plate|Table|Tab\.?)\s*[:：.．]?\s*$'
+    r'|(?:图|圖|图例|插图|表)\s*[:：.．]?\s*$',
+    re.IGNORECASE)
+_FIGFILE_TAIL_RE = re.compile(r'(?:fig|figure|img)[-_/]*$', re.IGNORECASE)
+_LABEL_BEFORE_PAREN_RE = re.compile(
+    # 🔴 `Equation` / `Eq.` 曾在「条目词 → real」表里，于是 EN 的
+    # `Equation (4.2.6) follows directly from (4.2.5)` 被判成条目引用而**永不豁免**
+    # （同句 CN 侧 `由 (4.2.6)` 判 eqref → 双语不对称，2026-10-02 chaos ch4/ch12 实测）。
+    # 公式词不属于条目域：全链（`TYPE_TO_LABEL_CN` / `extract_items` / 契约 `type`）
+    # 从不把 equation 登记为条目类型，编号公式一律是 `formula` 块 + `\tag{}`，
+    # 对账归 Q 层 formula_tag；`Figure/Table` 同理早已被 `_FIGREF_TAIL_RE` 归图像域。
+    r'(?:定义|定理|引理|推论|例|例題|例题|性质|注|评注|练习|习题|命题|算法|证明|观察|问题|'
+    r'Definition|Theorem|Lemma|Corollary|Example|Exercise|Proposition|Remark|'
+    r'Note|Problem|Algorithm)\s*$',
+    re.IGNORECASE)
+_OPEN_PAREN_RE = re.compile(r'[(（]\s*$')
+_CLOSE_PAREN_RE = re.compile(r'^\s*[)）]')
+_NUM_SEP = r'[.\-·．–—]'
+_MENTION_DOMAIN_EXPLAINED = frozenset(('tag', 'figref', 'eqref'))
+
+
+def _mention_num_regex(key):
+    """提及键 → 只匹配「该号本身」的正则（分量间分隔符走全书统一通配）。
+
+    非纯数字键（`性质1` / 罗马 / 字母形态）返回 None = 不判，照旧报。
+    前后守卫禁邻数字/分隔符，避免 `1.2.11` 被 `11.2.11`、`1.2.115` 里的片段冒充。
+    """
+    parts = re.split(r'[.\-]', _norm_path(key))
+    if len(parts) < 2 or not all(p.isdigit() for p in parts):
+        return None
+    body = _NUM_SEP.join(re.escape(p) for p in parts)
+    return re.compile(r'(?<![\d.])' + body + r'(?![\d.])')
+
+
+def _mention_occurrence_domain(txt, m, tag_spans):
+    s, e = m.start(), m.end()
+    if any(ts <= s and e <= te for ts, te in tag_spans):
+        return 'tag'
+    left = txt[max(0, s - 24):s]
+    if _FIGREF_TAIL_RE.search(left) or _FIGFILE_TAIL_RE.search(left):
+        return 'figref'
+    prev = txt[max(0, s - 8):s]
+    pm = _OPEN_PAREN_RE.search(prev)
+    if pm and _CLOSE_PAREN_RE.match(txt[e:e + 8]):
+        open_idx = s - len(prev) + pm.start()
+        before = txt[max(0, open_idx - 24):open_idx]
+        if _LABEL_BEFORE_PAREN_RE.search(before):
+            return 'real'          # `Definition (5.6.5)`：条目引用形态
+        return 'eqref'
+    return 'real'
+
+
+def domain_suppressed_mentions(md_text, keys):
+    """返回可归入公式/图像领域的提及键（判据见 `_TAG_SPAN_RE` 上方注释）。"""
+    txt = md_text or ''
+    tag_spans = [(m.start(), m.end()) for m in _TAG_SPAN_RE.finditer(txt)]
+    out = set()
+    for k in keys:
+        rx = _mention_num_regex(k)
+        if rx is None:
+            continue
+        ms = list(rx.finditer(txt))
+        if not ms:
+            continue
+        doms = {_mention_occurrence_domain(txt, m, tag_spans) for m in ms}
+        if doms and doms <= _MENTION_DOMAIN_EXPLAINED:
+            out.add(k)
+    return out
+
+
 def _norm_path(k):
     """Label-tolerant key for three-level presence matching.
 
@@ -1438,6 +1731,33 @@ def _norm_path(k):
     if m:
         return f"{m.group(2)}.{m.group(3)}-{m.group(4)}"
     return k
+
+
+# 字母章位键（附录 `A.2-1` / `定理A.1-13` / `Proposition A.1.2`）：标签词后面必须
+# 紧跟「单个拉丁字母 + 分隔符」，否则 `Fig1.2-3` / `Corollary5.1-2` 一类无从折叠。
+_LETTER_SLOT_RE = re.compile(r'^(.*?)([A-Za-z])[.．](\d+)[.\-](\d+)$')
+
+
+def _norm_path_labelfree(k):
+    """A 部分（书真相 ↔ md 在账比较）专用的标签无关归一。
+
+    先走 `_norm_path`（纯数字三段号已有行为，逐字节不变），再对**字母章位**键做
+    同一条口径的剥标签：`定义A.2-1` / `A.2-1` / `Proposition A.1.2` 一律折成
+    `A.2-1`。缺这一折，附录章的 md 条头与契约键只要标签词不同（Katok 附录印面
+    `Definition A.2.1` 而契约登记 `定义A.2-1`，md 裸号头 `**A.2.1**` 亦然）就双双
+    落不进 `_ext_norm`，于是每条附录条目都被报成 `extra_entry`（Katok 附录 A 实测
+    13 键 × cn/en = 26 行）。
+
+    单调性 = 本函数是**函数**（两侧同折），`k1 == k2 ⇒ f(k1) == f(k2)`：原本匹配
+    的照旧匹配，只会多匹配，绝不会新造 `truly_missing` 或新的 EXTRA。代价与
+    `_norm_path` 完全同源：同一 `A.2-1` 路径下「定义 vs 定理」的**类型分歧**不再
+    由本层暴露（类型对账在闸门⑩ / P 层）。
+    """
+    s = _norm_path(k)
+    m = _LETTER_SLOT_RE.match(s)
+    if m:
+        return f"{m.group(2)}.{m.group(3)}-{m.group(4)}"
+    return s
 
 
 def _split_extra(all_keys, entry_keys, extracted):
@@ -1536,13 +1856,28 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # spurious EXTRA-ENTRY and contract type/label mismatches don't surface as
         # false truly-missing.  Genuinely-absent entries (their normalized path is
         # found nowhere in the md) are still reported as truly-missing.
-        _ext_norm = {_norm_path(k) for k in extracted}
-        _all_norm = {_norm_path(k) for k in all_keys}
-        truly_missing = sorted(k for k in extracted if _norm_path(k) not in _all_norm)
+        _ext_norm = {_norm_path_labelfree(k) for k in extracted}
+        # 🔴 契约里的习题/问题节点键同样算「已在账」（2026-10-02 Katok 264 行
+        # EXTRA-ENTRY 根治）。`load_contract` 对 exercise/problem 直接 return，于是
+        # `ctx.items` **永不含**习题节点，而 md 照印面写的习题条头（`**练习 0.2.1**` /
+        # `**Exercise 0.2.1**`，Katok 每节后段成排）不可能被 `_covered` 折掉 → 每一行
+        # 都被报成「契约漏登记印面条目」的真信号（Katok 264 行、
+        # Introduction-to-Dynamical-Systems 383 行；上一条 Apostol 例1 的判读文案因此
+        # 被假信号淹没）。真值仍只有一份：`book_structure/ch{N}.json` 里
+        # type=exercise/problem 的节点（`_contract_exercise_keys`，与裸号开窗判据同源，
+        # 键形已按 md 侧 `_norm_ex_key_form` 归一）。
+        # 🔴 **只进 `_ext_norm`（EXTRA 覆盖集），绝不进 `extracted`**：后者是
+        # `truly_missing` 的书真相集，consolidated 成堆习题块按 writing-rules 不进总结，
+        # 塞进去就是拿放宽判据造假的「整条漏写」。习题**内容**是否在账由闸门⑩ /
+        # `check_structure_completeness` 负责，本行只声明「该键契约已登记，不是孤儿条头」。
+        _ext_norm |= _contract_exercise_keys(ctx.ext_dir, ctx.ch)
+        _all_norm = {_norm_path_labelfree(k) for k in all_keys}
+        truly_missing = sorted(k for k in extracted
+                               if _norm_path_labelfree(k) not in _all_norm)
         mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
         # EXTRA: suppress md keys whose normalized path matches a contract key
         # (merely a label-variant of a registered item); keep only genuine orphans.
-        _covered = {k for k in all_keys if _norm_path(k) in _ext_norm}
+        _covered = {k for k in all_keys if _norm_path_labelfree(k) in _ext_norm}
         all_keys_eff = set(all_keys) - _covered
         # 🔴 EXTRA 分桶（判据见 `_split_extra`）。混在一行时报告文案
         # "usually correctly-filtered cross-refs" 会把**契约漏登记的真条目**说成
@@ -1572,6 +1907,29 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         if _drop:
             extra_mention = [k for k in extra_mention if k not in _drop]
             extra = [k for k in extra if k not in _drop]
+        # 🔴 领域归属收窄（判据见 `domain_suppressed_mentions` 上方注释）：
+        # 公式标签 / 图表号 / 括号公式回指形态的提及键不再占用提及桶。
+        # 🔴 同一判据并进**条目桶**（2026-10-02 chaos ch4/ch8/ch12 根治）：
+        # `ENTRY_RE` 的粗体跨度以 `\*+` 收尾，于是会在**行内数学的星号上闭合**
+        # （`$f^{*}$` / `$\mu_*$` / `^{*}` 的单个 `*`），把 `> **证明**：1. 由 (4.2.6)
+        # 与定理 4.2.1 可知 $f^{*}$…` 里的**公式回指**登记成条目键 → 直落 `extra_entry`
+        # =「契约漏登记印面条目」最强信号桶（实测该键在 md 里根本没有粗体条头）。
+        # 豁免口径与提及侧同函数且更硬：某键在 md 里的**每一处**出现都属
+        # tag/figref/eqref 才剔除——真条头（`**定义 4.2.6**`）必然自己贡献一处
+        # `real` 出现，故本行不可能洗掉真漏登记。只动非阻断的 EXTRA 三桶，
+        # 被剔除的键照旧进 `extra_mention_domain` 清单打印，不静默消失。
+        _dom_sup = set()
+        if extra_mention or extra_entry:
+            try:
+                _md_txt = '\n'.join(ctx.read_md_lines())
+            except Exception:
+                _md_txt = ''
+            _dom_sup = domain_suppressed_mentions(
+                _md_txt, set(extra_mention) | set(extra_entry))
+            if _dom_sup:
+                extra_mention = [k for k in extra_mention if k not in _dom_sup]
+                extra_entry = [k for k in extra_entry if k not in _dom_sup]
+                extra = [k for k in extra if k not in _dom_sup]
 
         # --- P2：提取侧查漏（Q 类整项缺失 + over-mark 守卫，归 B 层统一处理）---
         blocking = []
@@ -1650,4 +2008,5 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             'extra': extra,
             'extra_entry': extra_entry,
             'extra_mention': extra_mention,
+            'extra_mention_domain': sorted(_dom_sup, key=sortkey),
         })

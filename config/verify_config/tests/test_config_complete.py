@@ -85,14 +85,31 @@ CORPUS_ROOT = _uc_get("corpus_root", r"D:\study\book")
 
 
 def _find_real_has_cfg_book():
-    """Return the _extract path of a real book that already has
-    verify_config.json, or None if none found."""
+    """Return the _extract path of a real book whose ``verify_config.json``
+    actually **PASSES** the completeness gate (scan/verify would exit 0), or
+    ``None`` if no such book exists yet.
+
+    no-default rollout note: as fields like ``formula.bare_number`` migrate from
+    a silent default to an explicit requirement, older corpus configs
+    legitimately fail the gate until they are regenerated with
+    ``make_config --force``. This integration test asserts that ``scan_skeleton``
+    exits 0 on a *complete* real config, so discovery must **gate-check each
+    candidate** and skip present-but-incomplete ones rather than blindly picking
+    the first ``verify_config.json`` found. The corpus is never mutated here —
+    we only read the config and run ``require_complete`` in-process."""
     if not os.path.isdir(CORPUS_ROOT):
         return None
     for root, dirs, files in os.walk(CORPUS_ROOT):
         if os.path.basename(root) != "_extract":
             continue
         if "verify_config.json" not in files:
+            continue
+        try:
+            loader = ConfigLoader(root, root, extra_ignore=None)
+            loader.require_complete(allow_absent=True)
+        except Exception:
+            # present-but-incomplete (e.g. missing bare_number) or a loader
+            # upstream gate (no completion marker): not a valid exit-0 witness.
             continue
         return root
     return None
@@ -206,7 +223,7 @@ class TestRequireComplete(unittest.TestCase):
     # --- (d) file present + legal ordinal array -> no raise ---------------
     def test_valid_array_ordinal_3_no_raise(self):
         loader = _loader_with_config(
-            {"ordinal": [{"type": 3, "scope": 2}],
+            {"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
              "strict": True, "chapter_first": True, "section_scoped": False,
              "language": "cn"})
         loader.require_complete()  # must not raise
@@ -222,7 +239,7 @@ class TestRequireComplete(unittest.TestCase):
         # `section_types` role code via SECTION_TYPE_DEPTH.  Declaring only
         # `section_types` must be accepted, and the derived `section_depths`
         # property must equal [1, 2, 3, 4].
-        cfg = {"ordinal": [{"type": 2, "scope": 2}],
+        cfg = {"ordinal": [{"type": 2, "name": ["uncat"], "scope": 2}],
                "section_types": [1, 2, 3, 4],
                "strict": True, "chapter_first": True, "section_scoped": False,
                "language": "cn"}
@@ -357,15 +374,15 @@ class TestRequireComplete(unittest.TestCase):
         _bools = {"strict": True, "chapter_first": True, "section_scoped": False,
                   "language": "cn"}
         bad_variants = [
-            dict({"ordinal": [{"type": 3, "scope": 2}],
+            dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
                   "section_types": [1, 2]}, **_bools),              # valid after sanitize
-            dict({"ordinal": [{"type": 3, "scope": 2}],
+            dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
                   "section_types": [1, 2, 9]}, **_bools),           # role 9 dropped -> [1, 2]
-            dict({"ordinal": [{"type": 3, "scope": 2}],
+            dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
                   "section_types": [1, 2, 3]}, **_bools),           # valid
-            dict({"ordinal": [{"type": 3, "scope": 2}],
+            dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
                   "section_types": [1, 2]}, **_bools),              # valid (no depths key)
-            dict({"ordinal": [{"type": 3, "scope": 2}],
+            dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
                   "section_types": [2, 2]}, **_bools),              # head coerced -> [1, 2]
         ]
         for bad in bad_variants:
@@ -396,7 +413,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
     文件缺失走自己的 allow_absent 语义，也不受在场门影响。"""
 
     def test_missing_all_required_raises(self):
-        loader = _loader_with_config({"ordinal": [{"type": 3, "scope": 2}]})
+        loader = _loader_with_config({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}]})
         with self.assertRaises(ConfigError) as ctx:
             loader.require_complete()
         msg = str(ctx.exception)
@@ -407,7 +424,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
 
     def test_partial_missing_required_raises(self):
         loader = _loader_with_config(
-            {"ordinal": [{"type": 3, "scope": 2}], "strict": True})
+            {"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}], "strict": True})
         with self.assertRaises(ConfigError) as ctx:
             loader.require_complete()
         msg = str(ctx.exception)
@@ -418,7 +435,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
 
     def test_all_required_declared_no_raise(self):
         loader = _loader_with_config(
-            {"ordinal": [{"type": 3, "scope": 2}], **_MAIN_REQUIRED})
+            {"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}], **_MAIN_REQUIRED})
         loader.require_complete()  # must not raise
 
     def test_bool_value_equal_to_old_default_still_accepted(self):
@@ -426,7 +443,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
         # （节基书真实判定）、strict=False、section_scoped=True、language="cn"（=
         # 旧默认）都是合法显式声明，必须被接受。
         loader = _loader_with_config({
-            "ordinal": [{"type": 3, "scope": 2}],
+            "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
             "strict": False, "chapter_first": False, "section_scoped": True,
             "language": "cn"})
         loader.require_complete()  # must not raise
@@ -445,7 +462,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
         # 外层 map：ch 声明全部必填字段，appendix 覆盖段省略它们（含 language，
         # = 继承正文）→ 通过。
         cfg = {
-            "ch": {"ordinal": [{"type": 2, "scope": 2}], **_MAIN_REQUIRED},
+            "ch": {"ordinal": [{"type": 2, "name": ["uncat"], "scope": 2}], **_MAIN_REQUIRED},
             "appendix": {"ordinal": [{"type": 1, "name": ["uncat"], "scope": 2}]},
         }
         loader = _loader_with_config(cfg)
@@ -454,7 +471,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
     def test_main_map_missing_required_raises(self):
         # 外层 map 的 ch 段缺必填字段 → 主配置门报错（哪怕 appendix 段带全了）。
         cfg = {
-            "ch": {"ordinal": [{"type": 2, "scope": 2}]},
+            "ch": {"ordinal": [{"type": 2, "name": ["uncat"], "scope": 2}]},
             "appendix": {"ordinal": [{"type": 1, "name": ["uncat"], "scope": 2}],
                          **_MAIN_REQUIRED},
         }
@@ -466,7 +483,7 @@ class TestMainRequiredNoDefault(unittest.TestCase):
         # 三个布尔都在场、唯独缺 language → 主配置门必须报错（language 现已是
         # REQUIRED_MAIN_FIELDS 之一，不再静默回落 'cn'）。
         loader = _loader_with_config({
-            "ordinal": [{"type": 3, "scope": 2}],
+            "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
             "strict": True, "chapter_first": True, "section_scoped": False})
         with self.assertRaises(ConfigError) as ctx:
             loader.require_complete()
@@ -778,6 +795,54 @@ class TestMakeConfig(unittest.TestCase):
             self.assertEqual(g["type"], 3)
             self.assertEqual(g["scope"], 3)
         self.assertEqual(body["language"], "en")
+
+    def test_make_config_seeds_explicit_bare_number_for_typed_formula(self):
+        # no-default rollout, GENERATION side: a book with enough right-aligned
+        # two-component equation numbers ("(C.N)") that `detect_formula` returns a
+        # TYPED formula block (opens the Q layer). Since make_config has no
+        # detector for `bare_number` (a manual operator decision), it must seed an
+        # EXPLICIT boolean `bare_number` whenever the emitted formula carries a
+        # `type` — never leave it to a silent default. This locks that behaviour.
+        ext = tempfile.mkdtemp(prefix="qc_bn_seed_")
+        with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
+            json.dump({"chapters": [{"ch": 1, "start": 1, "end": 2}]}, f)
+        with open(os.path.join(ext, "_extraction_done.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"done": True}, f)
+        # > _FORMULA_MIN_COUNT (30) "(C.N)" tokens across two leading components
+        # (1.x and 2.x) so the digit two-component branch fires (type 2) and the
+        # leading-component reset is observable.
+        texts = []
+        for lead in (1, 2):
+            for k in range(1, 20):
+                texts.append({"text": "由前述不等式可得估计 ({}.{}).".format(lead, k),
+                              "poly": [0, 0, 100, 0, 100, 20, 0, 20]})
+        page = {"text": texts}
+        for name in ("page_001.json", "page_002.json"):
+            with open(os.path.join(ext, name), "w", encoding="utf-8") as f:
+                json.dump(page, f)
+        rc, out, err = _run([MAKE_CLI, ext])
+        self.assertEqual(rc, 0,
+                         "make_config should exit 0. out=%s err=%s"
+                         % (out[-500:], err[-500:]))
+        with open(os.path.join(ext, "verify_config.json"), encoding="utf-8") as f:
+            gen = json.load(f)
+        body = _body_segment(gen)
+        formula = body.get("formula")
+        self.assertIsInstance(formula, dict,
+                              "book with a typed formula scheme must emit a "
+                              "formula block; got %r (out=%s)"
+                              % (formula, out[-300:]))
+        self.assertIsNotNone(formula.get("type"),
+                             "detection should have selected a formula type")
+        # THE core assertion: a type-declaring formula block carries an EXPLICIT
+        # boolean bare_number (no silent default survives to the written config).
+        self.assertIn("bare_number", formula,
+                      "make_config must seed explicit bare_number for a typed "
+                      "formula block, got %r" % (formula,))
+        self.assertIsInstance(formula["bare_number"], bool,
+                              "bare_number must be a JSON boolean, got %r"
+                              % (formula["bare_number"],))
 
     def test_make_config_real_no_config_book_then_cleanup(self):
         # Real no-config book (discovered at runtime), two tiers so the test

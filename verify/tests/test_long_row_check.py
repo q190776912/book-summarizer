@@ -86,6 +86,38 @@ class LongRowCheckTest(unittest.TestCase):
         md = ['$$', 'x = y + z', '\\tag{1.2}', '$$']
         self.assertEqual(check_long_formula_rows(md, max_vis=100), [])
 
+    # ---- 🔴 块引用前缀不计宽（Katok 6.4.2 假阳根治）---------------------------
+    # `> $$ … $$` 里的 `>` 是 Markdown 引用标记，渲染后不在公式里；旧口径按源码行
+    # 量宽把每行 2 个字符算进去，于是 60 宽的引用块被判 62，F 层报警而折行工具
+    # （自己剥前缀）判「未超阈值」——两份度量互指对方漏修。
+
+    def test_blockquote_prefix_is_not_counted_as_width(self):
+        f = 'a' * 12                      # 12 可见宽
+        plain = ['$$', f + '\\tag{1.3}', '$$']
+        quoted = ['> $$', '> ' + f + '\\tag{1.3}', '> $$']
+        self.assertEqual(check_long_formula_rows(plain, max_vis=13), [])
+        # 旧口径此处报 14 > 13；修复后引用与否同判（都不报）。
+        self.assertEqual(check_long_formula_rows(quoted, max_vis=13), [])
+
+    def test_quoted_block_measures_the_same_as_unquoted(self):
+        long_f = 'a' * 20
+        plain = check_long_formula_rows(
+            ['$$', long_f + '\\tag{1.4}', '$$'], max_vis=13)
+        quoted = check_long_formula_rows(
+            ['> $$', '> ' + long_f + '\\tag{1.4}', '> $$'], max_vis=13)
+        self.assertEqual(len(plain), 1)
+        self.assertEqual(len(quoted), 1)
+        self.assertIn('1.4', quoted[0])
+
+    def test_quoted_multirow_env_is_unwrapped_like_plain(self):
+        # 剥前缀后 `^\begin{…}…\end{…}$` 才认得出来 → 引用块里的 array/aligned
+        # 也按【渲染行】逐行量，而不是把整段源码拼成一行。
+        env = r'\begin{array}{l} ' + 'a' * 8 + r' \\ ' + 'b' * 8 + r' \end{array}'
+        quoted = ['> $$', '> ' + env + '\\tag{1.5}', '> $$']
+        self.assertEqual(check_long_formula_rows(quoted, max_vis=13), [])
+        plain = ['$$', env + '\\tag{1.5}', '$$']
+        self.assertEqual(check_long_formula_rows(plain, max_vis=13), [])
+
 
 if __name__ == '__main__':
     unittest.main()

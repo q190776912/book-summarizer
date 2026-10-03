@@ -255,7 +255,10 @@ def _backfill_chapter(ext, ch_key, units_sub, apply, report):
         lang = getattr(cfg, "language", None) or "cn"
         ctx = types.SimpleNamespace(
             config=cfg, ignore=list(getattr(cfg, "ignore", None) or []),
-            md_file=tmp_md, language=lang)
+            md_file=tmp_md, language=lang,
+            # B 层的裸号习题窗路由要按磁盘契约取真值（`_contract_exercise_keys`），
+            # 故轻量 ctx 必须带 ext_dir / ch；缺一项则该路判据静默失明。
+            ext_dir=ext, ch=ch_key)
         # 🔴 tmp_md 由 merge_chapter_map 亲自产出（=最终章 md），与步骤 8 同源；
         # B / O 两真层都读它，跑完再删（finally 兜底）。
         blocking, _w, _p, _t, _g = _md_gap_blocking(ctx)

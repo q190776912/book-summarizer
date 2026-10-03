@@ -234,6 +234,42 @@ def _group_lang(grp):
     return None
 
 
+# 🔴 同一「章 + 语种」的多份合并交付物 = 重复交付（见 duplicate_merged_deliveries）
+_DUP_HEAD = re.compile(r'^(第\d+章|Chapter\d+|附录[0-9A-Za-z]*|Appendix[0-9A-Za-z]*'
+                       r'|补篇[0-9A-Za-z]*|Supplement[0-9A-Za-z]*)'
+                       r'(?:[_.]|$)')
+
+
+def duplicate_merged_deliveries(book_dir):
+    """返回 [(语种, 章前缀, [文件名…])]：同一章同语种存在 ≥2 份**合并稿**。
+
+    交付契约是每个 (章, 语种) 只有一种形态：要么一份合并稿，要么一组节文件
+    （节文件由 `_section_num_from_filename` 排除，另有 `--reconcile` 判据）。
+    合并稿写出时不会覆盖**旧名**文件（章名一旦换形制，如 `第9章_测度论熵.md` →
+    `第9章_Measure-Theoretic_Entropy.md`），旧文件就留在盘上当第二份交付；
+    `chapter_md_groups` 会把同前缀的合并稿全部并进同一个组 → 该章正文/`\tag`
+    在校验视图里出现两次。Q 层开着的书会报 duplicate \\tag 硬 FAIL（Katok ch1），
+    Q 层没开的书则**静默通过**（IntroDS 第9章 实测）——故此判据必须独立于 Q 层。
+
+    判据跨语料普查校准（50 书 / 全部章前缀桶）：命中 1 组，即 IntroDS 第9章 本身，
+    零假阳。
+    """
+    buckets = {}
+    for fn in sorted(os.listdir(book_dir)):
+        if not fn.endswith('.md'):
+            continue
+        if _section_num_from_filename(fn) is not None:
+            continue                       # 节文件另有判据
+        m = _DUP_HEAD.match(fn)
+        if not m:
+            continue
+        head = m.group(1)
+        lang = 'cn' if head[:1] in ('第', '附', '补') else 'en'
+        buckets.setdefault((lang, head), []).append(fn)
+    return [(lang, head, names) for (lang, head), names in sorted(buckets.items())
+            if len(names) > 1]
+
+
 def _norm_lang(token):
     """归一化语言标记：zh/cn → 'cn'，en → 'en'，其余（含 None/空）→ None。"""
     if not token:
@@ -788,6 +824,18 @@ def _main_impl():
             sys.exit(2)
         ext = _norm_win(pos[i + 1])
         book_dir = _norm_win(pos[i + 2])
+        # 🔴 交付形态硬闸：同一 (章, 语种) 有两份合并稿 = 同一章正文交付两次，
+        # 校验视图里内容/`\tag` 双份（Q 层未开的书此前会静默 PASS）。先拦后验。
+        dups = duplicate_merged_deliveries(book_dir)
+        if dups:
+            print("[verify] BLOCKED: 同一章存在多份合并交付物（旧名残档未被回收）：")
+            for lang, head, names in dups:
+                print("    %s(%s): %s" % (head, lang, names))
+            print("  修复：python tools/split_chapters.py \"%s\" --reconcile"
+                  "  （把被取代者移入 _extract/_superseded_split_md/<日期>/，**移动不删除**）"
+                  % book_dir)
+            sys.exit(1)
+
         # 🔴 灌注 kind 注册表（Chapter/Appendix/Supplement 三分依赖显式 kind）
         try:
             from data.book_structure.book_structure import prime_chapter_kinds

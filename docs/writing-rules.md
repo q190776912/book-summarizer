@@ -364,6 +364,8 @@ Common patterns (after correction):
     - **写法**：长行包进 `\begin{aligned}…\end{aligned}`——首行保留左侧对齐，续行用 `& \qquad <运算符> …`（示例：`\frac{\mathrm{d}\nu}{\mathrm{d}t} &= \frac{1}{T K_{eff} K_m}\{\cdots \right. \\ &\qquad \left. - P_0 - P_1 - \cdots \},`）。
     - **不可折环境**（`matrix`/`array`/`cases`/交换图 `\begin{CD}` 等整块宽度天然超界）：不做硬折行，靠查看器横向滚动兜底（CSS `.katex-display { overflow-x: auto; }`）。
     - **批量折行工具**：`tools/wrap_long_formulas.py`——规划 `python tools/wrap_long_formulas.py <units_dir> [阈值]`（只读，列待折公式）；折行落盘 `python tools/wrap_long_formulas.py <units_dir> --apply [--tgt 45] [--dry]`（原地改写 `<dir>` 下 `*.md`）。🔴 `<units_dir>` 传**源单元目录**（`units/chN`；译文 `units-translate/chN` 同样处理），不传书根目录——成品 md 由 `merge_units` 再生，先改单元再重拼。落盘内置守卫：折后须 w≤60 且 h≤8、确有改善、`\tag` 原样、内容逐字保真、定界符配对，任一不满足即 SKIP（宁可不折）。
+    - **🔴 blockquote 前缀度量不对称（贴近阈值必踩）**：F 层 `long_row_check.check_long_formula_rows` 在**合并成品 md** 上量宽时**不剥** `> ` 前缀（逐字取 `md_lines`），而 `wrap_long_formulas.py`/`scan_long_formulas.py` 的 `iter_blocks_with_idx` **会剥** `> ` 前缀。于是某 `> $$` 单行式剥前缀后 ~58–60（被折行工具的前闸 `w0≤60 → 不折` 判合格、直接 SKIP），但合并 verify 量到 ~61（多出 `> ` 的 ~2 字形）→ 仍报 WARN。解法：对贴近阈值（约 57–60）的 `> $$` 单行式**强制折行**——脚本调 `apply_dir(..., max_w=55)`（把前闸与折后合格线整体抬高留余量），令折后**剥缀**宽度 ≤55，合并**不剥缀**即 ≤~57 <60，WARN 归零。
+    - **🔴 双语书改源数学式后的同步闭环（顺序敏感）**：改 `units/chN` 的公式后，`check_translate_parity` 判据6「源单元已改（派生后漂移）」会命中每个被改单元——译侧 `manifest.json.units[].src_hash` 是派生时源正文 SHA1，改源即失配。且判据9 的 `_norm_display_blocks` 归一时**保留 `&` 与 `\\`**（仅剥 `> `/空白/`\text{}` 体/尾标点），故折行引入的 `&`/`\\` 版式**必须逐字符镜像写进 CN 单元**（哪怕 CN 本已 ≤60 不须折），否则判「显示公式丢失/被改写」FAIL。闭环：`gate_units <ch>`（源）→ `gate_units <ch> --units-dir units-translate` → `init_translate_units.py <ext> <ch...>`（重写译侧 manifest 刷 src_hash，**无 `--scaffold` 不碰已存在 CN 正文**）→ `check_translate_parity <ch>` → `merge_units`（双语）→ `verify_chapter.py --all`。
 
 **公式序标（编号 1:1 真实性，Q 层校验）**
 
@@ -431,7 +433,7 @@ Common patterns (after correction):
 | **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、书根相对 `figure/` 路径 | `verify/figure_completeness/figure_completeness.md` |
 | **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档) + [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
 | **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 见 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
-| **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号需配 `letter_ch`/`type 15`（`(A.3)`）或 `type 16`（`(II.5)`）后校验 | `verify/formula_tag/formula_tag.md` |
+| **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号需配 `letter_ch`/`type 15`（`(A.3)`）、`type 16`（`(II.5)`）或三段 `type 17`/`18`（`(A.2.1)`/`(II.1.3)`）后校验 | `verify/formula_tag/formula_tag.md` |
 | **OCR 漏标** | [V-M](#v-m-ocr-漏标条目处理) | `verify/missing_label_policy.md` |
 
 **写源阶段阅读约定**：执行 `write-source` 时，**唯一必读规则文档 = 本 `writing-rules.md`**（正文 + [verify 收敛区](#verify-收敛区唯一规则源)）；`verify/*.md` 仅在校验失败排查、或改 verify 实现时再读。

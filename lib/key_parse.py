@@ -69,6 +69,21 @@ ENTRY_RE_2 = re.compile(
     # 子集字面量（不随 COMBINED 自动派生），两边不同步会让 type 2 的 md 抽键与
     # 新层级 _LABEL_ALT 口径不一致。
     r'|练习|Exercise)\s*(\d+)' + SEP_TIGHT + r'(\d+)\s*(?:' + SEP_TIGHT + r')?\s*\*+')
+# 🔴 三段号截断守卫（幻影前缀键）。二级正则最长按「标签+两段数字」匹配，遇到三级
+# 条头 `**定义2.1.1**` / 正文引用「见定义 2.1.1」会同时吐出真键 `定义2.1.1` 和**被截
+# 断的幻影键** `定义2.1`。契约侧三级条目登记为裸 dash 键 `2.1-1`，`_norm_path` 只能
+# 折回三段式，幻影二级键无人认领 → B 层把它列进 EXTRA-ENTRY（「md 有条头而契约无此
+# 条目」），Lasota & Mackey《Chaos, Fractals and Noise》实测每章每（类别,节）都刷一
+# 条（ch2 11 条 / ch3 10 条 …），把**真的契约漏登记**淹没在噪声里。
+# 守卫 = 数字后紧跟「分隔符+数字」即判定这不是二级号，整条匹配让位给三级正则
+# （ENTRY_RE_EN3_C / `_norm_path`）。与 ENTRY_RE_EN_SINGLE_C 用同样手法拒绝把
+# `**Label N.N**` 截成 `Label N` 一脉相承。
+# 🔴 两道缺一不可：`(?!\d)` 拦**同段数字回退**（`**定义5.10.1**` 里 `(\d+)` 若只吞
+# `1`，后面紧跟的是 `0` 而非分隔符，只靠 SEP 断言会被绕过 → 幻影键 `定义5.1`；
+# Lasota & Mackey ch5 §5.10 实测），`(?!SEP\d)` 拦**跨段截断**（`2.1` ⊂ `2.1.1`）。
+# 与 ENTRY_RE_EN_SINGLE_C 的 `(\d+)(?!\d)(?!\s*SEP\s*\d)` 同一手法。
+_NOT_DEEPER = r'(?!\d)' + r'(?!' + SEP_TIGHT + r'\s*\d)'
+
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
 # 2026-08-27 补齐 例/Example/公理/Axiom/问题/Problem/示例 的 ENTRY_RE_2+PROSE_RE_2 覆盖
 # （之前仅含 定义|定理|引理|推论|命题|注记|评注|注|Remark，中文书籍的
@@ -80,7 +95,7 @@ PROSE_RE_2 = re.compile(
     r'|公理|Axiom'
     r'|问题|Problem'
     r'|注记|评注|注|Remark'
-    r'|练习|Exercise)\s*(\d+)' + SEP_TIGHT + r'(\d+)')
+    r'|练习|Exercise)\s*(\d+)' + SEP_TIGHT + r'(\d+)' + _NOT_DEEPER)
 
 def normkey(s):
     """Canonicalize a key to N.S-N dash form (N.S.N -> N.S-N, N·S·N -> N.S-N).
@@ -131,7 +146,8 @@ PROSE_RE_EN = re.compile(
 # CoROLLARY); without it the md-side parser misses those entries and they
 # surface as false "truly missing". Mirrors extract_items_en (EN_LAB_RE).
 ENTRY_RE_EN_C = re.compile(
-    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)' + SEP_TIGHT + r'(\d+)'
+    + _NOT_DEEPER,
     re.IGNORECASE)
 # Number-FIRST English entries (Fraleigh《A First Course in Abstract Algebra》
 # prints "0.12 Definition", "0.20 Example" — number before label). The label-FIRST
@@ -173,7 +189,8 @@ ENTRY_RE_TWO_LETTER_C = re.compile(
 PROSE_RE_EN_C = re.compile(
     # Same CJK-aware boundaries as PROSE_RE_EN (see note there): \b fails after
     # CJK chars (「由命题 14.17」) and before digits in no-space form (命题14.17).
-    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])\s*(\d+)' + SEP_TIGHT + r'(\d+)',
+    r'(?<![A-Za-z0-9])(' + '|'.join(COMBINED_LABEL_KINDS) + r')(?![A-Za-z])\s*(\d+)' + SEP_TIGHT + r'(\d+)'
+    + _NOT_DEEPER,
     re.IGNORECASE)
 # Single-level English entries (e.g. `**Example 1**`, `**Remark 2**`) where the
 # item carries ONE numeric component only (no section/item split).  This is the

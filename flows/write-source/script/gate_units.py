@@ -789,6 +789,9 @@ def gate_chapter(ext, ch_key, units_sub="units"):
                     # 🔴 P1 证明分条闸同照抄闸：只跑源单元。译单元逐行镜像已过该闸的
                     # 冻结源单元，源侧散文式证明不得在译侧被拆成 `1. 2. 3.`。
                     translation=(units_sub != "units"),
+                    # 🔴 H1 粗体标签闸的 uncat 豁免判据：契约节点类型（manifest
+                    # `ntype`）。缺字段的老 manifest 传 None → 行为照旧（保守）。
+                    node_type=(u.get("ntype") or None),
                     src_body=_src_body)
             except Exception as e:  # 🔴 fail-closed：校验崩溃绝不放行
                 ok_q, qproblems = False, [

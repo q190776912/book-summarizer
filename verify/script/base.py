@@ -172,7 +172,11 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'truly_missing': [], 'mentioned_only': [], 'extra': [],
     # B 层 `extra` 的两桶重述（并集仍是 `extra`，pass/fail 不受影响）：
     # entry = md 有独立加粗条头而契约无条目（契约漏登记信号），mention = 仅正文提及。
-    'extra_entry': [], 'extra_mention': [],
+    # `extra_mention_domain` = mention 中被判属**公式标签 / 图表号 / 括号公式回指**
+    # 三个非条目领域的键（`domain_suppressed_mentions`；判据与跨 53 书普查见
+    # `verify/item_numbering_integrity/item_numbering_integrity.md`）。同样非阻断，
+    # 仅由 report 单独列出，绝不当作「已核对通过」。
+    'extra_entry': [], 'extra_mention': [], 'extra_mention_domain': [],
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
     'long_formula_rows': [],   # F 层：超长显示公式行（tag 重叠风险，WARN 非阻断）
@@ -202,6 +206,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'q_checked': False,
     'q_fabricated': [], 'q_inconsistent': [], 'q_missing': [],
     'q_order_mismatch': [], 'q_misplaced': [],
+    'q_tag_mismatch': [],
     'q_letter_led': [],
     'q_rows': [],
     'extract_dir': None, 'items': [],

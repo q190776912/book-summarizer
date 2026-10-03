@@ -202,6 +202,9 @@ def is_exercise_head_text(text):
 #                      （`FORMULA_TYPE_ROMAN_TWO`）支持（带括号 + `Eq.` 形态，同样
 #                      不收裸排）；仅**多字母词前缀**（`App.2` / `Ap.3`）仍暂不支持，
 #                      由 Q 层 `_LETTER_LED_RE` 探测兜 WARN（两处注释互为锚点）。
+#   (A.2.1) / (S.3.4)  字母**三段**（字母.节.号，Katok 附录A/补篇S 实测 2026-10-03：
+#                      印面 `(A.2.1)`…`(A.4.1)`、`(S.2.1)`…`(S.4.2)`，每节从 1 重启）
+#                      ——`FORMULA_TYPE_LETTER_THREE`(17)；罗马同形 = 18。
 _FORMULA_SEP = r'[.\-·,]'                 # 编号分隔符：点 / 连字符 / 间隔号 / 逗号
 _FORMULA_SUFFIX = r'(?:[a-zA-Z])?'        # 子式字母后缀：`8.11a`
 # 罗马数字首段字母集（`[IVXLCDM]`）；首段是**一至五个**这些字母。
@@ -231,12 +234,16 @@ FORMULA_LEAD_ROMAN = 'roman'
 
 FORMULA_TYPE_LETTER_TWO = 15   # 二级字母：`(A.3)` —— 单个大写字母 + 1 个数字段
 FORMULA_TYPE_ROMAN_TWO = 16    # 二级罗马：`(I.5)` / `(II.5)` —— 罗马数字 + 1 个数字段
+FORMULA_TYPE_LETTER_THREE = 17   # 三级字母：`(A.2.1)` —— 字母 + 2 个数字段（Katok 附录A/补篇S）
+FORMULA_TYPE_ROMAN_THREE = 18    # 三级罗马：`(II.1.3)` —— 罗马头 + 2 个数字段
 
 # code -> (lead, ncomp)。ncomp = token **总段数**（含首段），与 legacy `letter=True`
 # 分支的 ncomp 口径一致（`A.3` 记 2 段：1 字母 + 1 数字）。
 FORMULA_TYPE_SHAPE = {
     FORMULA_TYPE_LETTER_TWO: (FORMULA_LEAD_LETTER, 2),
     FORMULA_TYPE_ROMAN_TWO: (FORMULA_LEAD_ROMAN, 2),
+    FORMULA_TYPE_LETTER_THREE: (FORMULA_LEAD_LETTER, 3),
+    FORMULA_TYPE_ROMAN_THREE: (FORMULA_LEAD_ROMAN, 3),
 }
 
 # formula 专用码集合（供 verify_config 的 formula 块校验放行；注意它们**不在**

@@ -37,6 +37,7 @@ r"""将一个过大的章总结文件，按「节」拆分成每节一个独立�
 
 用法：
     python split_chapters.py <book_dir> [--threshold 60000] [--dry-run] [--keep]
+    python split_chapters.py <book_dir> --reconcile [--dry-run]   # 只回收旧名残档（节号 + 同章重复合并稿）
 
 <book_dir> 下同时扫描 `第*章*.md` 与 `Chapter*.md`，按章号配对；
 若某章任一语言超阈值，则中文与英文（若存在）都会按各自标题拆分。
@@ -44,6 +45,7 @@ r"""将一个过大的章总结文件，按「节」拆分成每节一个独立�
 import os
 import re
 import sys
+import time
 import argparse
 
 DEFAULT_THRESHOLD = 60000
@@ -100,7 +102,14 @@ def sanitize_name(name, maxlen=60):
     name = name.strip()
     name = name.lstrip('.。;；:：,，')              # §N. 标题编号后残留的句点
     if len(name) > maxlen:
-        name = name[:maxlen]
+        cut = name[:maxlen]
+        # 截断点落在括号英文段名内 → 不把尾 `)` 截丢（Koopman 实测：
+        # `第5章_5.3_…(TheKoopman…Eigenfunctions).md` 生成 dangling 尾括号名）
+        if cut.count("(") > cut.count(")"):
+            shortened = name[:maxlen - 1]
+            cut = shortened + ")" if shortened.count("(") > shortened.count(")") \
+                else cut.rstrip("(")
+        name = cut
     return name
 
 
@@ -178,6 +187,7 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
 
     written = []
     plan = []
+    new_content = {}
     for k in order:
         key, sname = k
         content = []
@@ -200,10 +210,169 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
             with open(outpath, 'w', encoding='utf-8') as f:
                 f.write(out)
             written.append(outpath)
+        new_content[fname] = out
+
+    # 🔴 同名节旧残档回收：节文件名含标题截断，标题一改（如节名统一轮）就换名，
+    # 旧名文件不会被动到 → 同一节留下两份交付物，章级重拼视图里内容/`\tag` 双份，
+    # Q 层判「duplicate \tag number」硬 FAIL（Katok ch1 1.5 实测）。凡本节号下
+    # 与本轮所写不同名、且内容与本轮所写逐字相同的残档，移入
+    # `<book>/_extract/_superseded_split_md/<日期>/`（**移动不删**，可回滚）；
+    # 内容不同者一律保留并打印告警——那意味着正文真的分叉了，须人工裁决。
+    prefix = f"第{num}章_" if lang == 'zh' else f"Chapter{num}_"
+    stems = {prefix + key + '_' for (key, _sn) in order}
+    superseded, diverged = [], []
+    book_dir = os.path.dirname(path)
+    for name in sorted(os.listdir(book_dir)):
+        if not name.endswith('.md') or name in plan:
+            continue
+        stem = next((s for s in stems if name.startswith(s)), None)
+        if stem is None:
+            continue                        # 不属于本轮任何节号：不动
+        newf = next((f for f in plan if f.startswith(stem)), None)
+        new = new_content.get(newf or '')
+        if new is None:
+            diverged.append(name)
+            continue
+        try:
+            old = open(os.path.join(book_dir, name), encoding='utf-8').read()
+        except OSError:
+            continue
+        (superseded if old == new else diverged).append(name)
+
+    if superseded or diverged:
+        arch = os.path.join(book_dir, '_extract', '_superseded_split_md',
+                            time.strftime('%Y%m%d'))
+        print(f"  [节号回收] {prefix}{len(superseded)} 个同节旧名残档 / "
+              f"{len(diverged)} 个内容分叉（分叉不动）")
+        for name in diverged:
+            print(f"     ⚠ 保留（内容与本轮所写不一致，须人工裁决）: {name}")
+        for name in superseded:
+            print(f"     → 移入归档: {name}")
+            if not dry_run:
+                os.makedirs(arch, exist_ok=True)
+                os.replace(os.path.join(book_dir, name), os.path.join(arch, name))
 
     verb = "将拆分(计划)" if dry_run else "已拆分"
     print(f"  [{verb}] {os.path.basename(path)} ({len(text)} 字符) -> {len(order)} 个节文件: {', '.join(plan)}")
     return written
+
+
+SEC_FILE_RE = re.compile(r'^(?:(?:第(\d+)章)|(?:Chapter(\d+)))_(\d+(?:[.-]\d+)*)_.+\.md$')
+
+
+def section_file_key(fn):
+    """节文件名 -> (lang, 章号, 节号)；非节文件（合并稿/附录/补篇）返回 None。"""
+    m = SEC_FILE_RE.match(fn)
+    if not m:
+        return None
+    lang = 'zh' if m.group(1) is not None else 'en'
+    return (lang, int(m.group(1) or m.group(2)), m.group(3))
+
+
+def reconcile_section_files(book_dir, dry_run=False):
+    """回收「同一节号多份交付物」的残档（标题改名后旧文件名不会被覆盖）。
+
+    每组 (lang, 章, 节) 以 mtime 最新者为当前交付，其余**逐字相同**者移入
+    `<book>/_extract/_superseded_split_md/<日期>/`（移动不删，可回滚）；
+    内容分叉者保留并报告——那需要人工判断哪一份才是正文。
+    """
+    groups = {}
+    for fn in sorted(os.listdir(book_dir)):
+        if not fn.endswith('.md'):
+            continue
+        k = section_file_key(fn)
+        if k:
+            groups.setdefault(k, []).append(fn)
+    dup = {k: v for k, v in groups.items() if len(v) > 1}
+    if not dup:
+        print(f"[reconcile] 无同节号残档（共 {len(groups)} 个节文件）。")
+        return 0, 0
+    arch = os.path.join(book_dir, '_extract', '_superseded_split_md',
+                        time.strftime('%Y%m%d'))
+    moved = kept_diverged = 0
+    for (lang, num, key), names in sorted(dup.items()):
+        names.sort(key=lambda f: os.path.getmtime(os.path.join(book_dir, f)), reverse=True)
+        cur, rest = names[0], names[1:]
+        cur_text = open(os.path.join(book_dir, cur), encoding='utf-8').read()
+        print(f"  {lang} ch{num} sec{key}: 保留 {cur}")
+        for name in rest:
+            other = open(os.path.join(book_dir, name), encoding='utf-8').read()
+            if other != cur_text:
+                kept_diverged += 1
+                print(f"     ⚠ 分叉保留（内容与所保留者不同，须人工裁决）: {name}")
+                continue
+            moved += 1
+            print(f"     → 同节旧名残档，移入归档: {name}")
+            if not dry_run:
+                os.makedirs(arch, exist_ok=True)
+                os.replace(os.path.join(book_dir, name), os.path.join(arch, name))
+    print(f"[reconcile] 移动 {moved} 个同节残档，保留 {kept_diverged} 个内容分叉。"
+          + ("（dry-run 未写入）" if dry_run else f" 归档目录: {arch}"))
+    return moved, kept_diverged
+
+
+MERGED_HEAD_RE = re.compile(r'^(第\d+章|Chapter\d+|附录[0-9A-Za-z]*|Appendix[0-9A-Za-z]*'
+                            r'|补篇[0-9A-Za-z]*|Supplement[0-9A-Za-z]*)(?:[_.]|$)')
+TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
+
+
+def merged_file_head(fn):
+    """合并稿文件名 -> (lang, 章前缀)；节文件 / 非章文件返回 None。
+
+    与 verify_chapter.duplicate_merged_deliveries 同源：交付契约是每个
+    (章, 语种) 只有一种形态（一份合并稿 或 一组节文件）。
+    """
+    if not fn.endswith('.md'):
+        return None
+    if SEC_FILE_RE.match(fn):
+        return None
+    m = MERGED_HEAD_RE.match(fn[:-3])
+    if not m:
+        return None
+    head = m.group(1)
+    return ('zh' if head[:1] in ('第', '附', '补') else 'en', head)
+
+
+def reconcile_merged_files(book_dir, dry_run=False):
+    """回收「同一章同语种两份合并稿」的旧名残档（改名后旧文件不会被覆盖）。
+
+    每组以 mtime 最新者为当前交付；其余者**当且仅当其 `\tag` 集合是被保留者的
+    子集**（= 同一交付的较早版本，不含保留者没有的编号公式）时移入
+    `<book>/_extract/_superseded_split_md/<日期>/`（**移动不删**，可回滚）。
+    tag 集合不是子集关系者一律保留并报告——那两份正文真的分叉，须人工裁决。
+    """
+    buckets = {}
+    for fn in sorted(os.listdir(book_dir)):
+        k = merged_file_head(fn)
+        if k:
+            buckets.setdefault(k, []).append(fn)
+    dup = {k: v for k, v in buckets.items() if len(v) > 1}
+    if not dup:
+        print(f"[reconcile] 无同章重复合并稿（共 {len(buckets)} 个章-语种桶）。")
+        return 0, 0
+    arch = os.path.join(book_dir, '_extract', '_superseded_split_md',
+                        time.strftime('%Y%m%d'))
+    moved = kept = 0
+    for (lang, head), names in sorted(dup.items()):
+        names.sort(key=lambda f: os.path.getmtime(os.path.join(book_dir, f)), reverse=True)
+        cur, rest = names[0], names[1:]
+        cur_tags = set(TAG_RE.findall(open(os.path.join(book_dir, cur), encoding='utf-8').read()))
+        print(f"  {lang} {head}: 保留（最新）{cur}")
+        for name in rest:
+            other = set(TAG_RE.findall(open(os.path.join(book_dir, name), encoding='utf-8').read()))
+            if not other <= cur_tags:
+                kept += 1
+                print(f"     ⚠ 分叉保留（含保留者没有的 tag: "
+                      f"{sorted(other - cur_tags)[:6]}，须人工裁决）: {name}")
+                continue
+            moved += 1
+            print(f"     → 同章旧名残档（tag 集合为其子集），移入归档: {name}")
+            if not dry_run:
+                os.makedirs(arch, exist_ok=True)
+                os.replace(os.path.join(book_dir, name), os.path.join(arch, name))
+    print(f"[reconcile] 合并稿回收：移动 {moved} 份，分叉保留 {kept} 份。"
+          + ("（dry-run 未写入）" if dry_run else f" 归档目录: {arch}"))
+    return moved, kept
 
 
 def main():
@@ -212,12 +381,19 @@ def main():
     ap.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD, help="字符数阈值，默认 60000")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不写文件")
     ap.add_argument("--keep", action="store_true", help="拆分后保留源合并文件（默认删除）")
+    ap.add_argument("--reconcile", action="store_true",
+                    help="只回收「同一节号多份交付物」的旧名残档（移入 _extract/_superseded_split_md/，不删除），不做拆分")
     args = ap.parse_args()
 
     book_dir = args.book_dir
     if not os.path.isdir(book_dir):
         print(f"错误：目录不存在 {book_dir}", file=sys.stderr)
         sys.exit(2)
+
+    if args.reconcile:
+        m1, k1 = reconcile_section_files(book_dir, dry_run=args.dry_run)
+        m2, k2 = reconcile_merged_files(book_dir, dry_run=args.dry_run)
+        sys.exit(1 if (k1 + k2) else 0)
 
     chinese, english = {}, {}
     sections = {}       # 章号 -> {'zh': bool, 'en': bool}：该语言是否已有节文件（曾拆分过）

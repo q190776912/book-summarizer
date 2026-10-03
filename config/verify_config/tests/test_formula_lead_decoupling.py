@@ -5,7 +5,8 @@
 16（罗马二级），并保证**各 formula type 之间的判断逻辑相对独立、绝不互相判成功**。
 
 本文件锁死三件事：
-1. **命名空间隔离**：15/16 只在 `FORMULA_ONLY_CODES` 里，**不在** `ORDINAL_CODES` /
+1. **命名空间隔离**：formula-only 码（15/16 二级、17/18 三级）只在 `FORMULA_ONLY_CODES`
+   里，**不在** `ORDINAL_CODES` /
    `ORDINAL_DEPTH`，条目侧 `ordinal_depth(15/16)` 必须**硬报错**（fail-loud），这样
    `verify_config` 的 ordinal 组校验（`t not in ORDINAL_CODES`）天然拒绝它们；
 2. **形态互斥**：digit / letter / roman 三条正则核互相拒绝对方的特征 token
@@ -94,8 +95,9 @@ class ResolveFormulaTypeMapping(unittest.TestCase):
 class NamespaceDecoupling(unittest.TestCase):
     """formula-only 码与 ITEM ordinal 码彻底隔离——解耦的落点。"""
 
-    def test_only_codes_are_15_16(self):
-        self.assertEqual(set(FORMULA_ONLY_CODES), {15, 16})
+    def test_only_codes_are_the_alpha_led_families(self):
+        # 15/17 = 字母二级/三级，16/18 = 罗马二级/三级（Katok 附录 `(A.2.1)` 实测）。
+        self.assertEqual(set(FORMULA_ONLY_CODES), {15, 16, 17, 18})
 
     def test_formula_only_not_in_ordinal_codes(self):
         for code in FORMULA_ONLY_CODES:

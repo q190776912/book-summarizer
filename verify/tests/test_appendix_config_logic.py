@@ -12,6 +12,7 @@
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,14 @@ for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
     if (_c / "SKILL.md").exists():
         _ROOT = str(_c)
         break
+else:
+    _ROOT = str(Path(__file__).resolve().parents[2])
+# 🔴 与同目录其他判据测试同一个引导块：少了这两行 `import lib.boot` 直接
+# ModuleNotFoundError，这个文件在 `python <file>` 和 `pytest` 下都永远跑不起来
+# （仓库没有 conftest.py 注入根目录）。
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
 

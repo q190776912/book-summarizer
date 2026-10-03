@@ -105,21 +105,21 @@ class TestBookConfigFromDict(unittest.TestCase):
         self.assertEqual(cfg.section_types, [1])
 
     def test_ordinal_3_infers_three_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2, 3])
         self.assertEqual(cfg.section_depths, [1, 2, 3])
         self.assertEqual(cfg.max_level, 3)
 
     def test_ordinal_2_infers_two_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 2, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 2, "name": ["uncat"], "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_TWO_LEVEL)
         self.assertEqual(cfg.section_types, [1, 2])
         self.assertEqual(cfg.section_depths, [1, 2])
         self.assertEqual(cfg.max_level, 2)
 
     def test_ordinal_1_infers_single_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 1, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 1, "name": ["uncat"], "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_SINGLE)
         self.assertEqual(cfg.section_types, [1])
         self.assertEqual(cfg.section_depths, [1])
@@ -171,7 +171,7 @@ class TestBookConfigFromDict(unittest.TestCase):
 
     # -- helpers: max_level / section_depth / section_role --
     def test_helpers_on_three_level(self):
-        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "scope": 2}]})
+        cfg = BookConfig.from_dict({"ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}]})
         self.assertEqual(cfg.primary_type, ORDINAL_THREE_LEVEL)
         self.assertEqual(cfg.max_level, 3)
         self.assertEqual(cfg.section_depth(1), 1)

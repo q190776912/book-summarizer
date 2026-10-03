@@ -195,6 +195,33 @@ def _item_header_name(name, lang):
     return _EN_LABEL[lab] + " " + num + ((" " + rest) if rest else "")
 
 
+def strip_internal_key_head(name, key):
+    """剥掉条目名开头的**契约内部键**，只保留印刷形态。
+
+    `extract_items` 把节点 name 存成 ``"<key> <印刷文本>"``，而三级序标的 key 是
+    印刷 `N.M.K` 的**内部归一形** `N.M-K`（`lib/key_parse` 同一约定）。草稿条头
+    `**<name>**：` 于是把内部键直接带进交付物——实测 6 本书 1305 个单元
+    （Weibel `**5.2-1 5.2.1 …**`、Gelfand–Manin、Kreyszig、微分遍历论
+    `**2.2-3**：`），读者看到的 `5.2-1` 原书从未印过。
+
+    只在「剥掉内部键后剩下的文本里确实有该序标的印刷点分形」时剥（`2.2-3` →
+    文本含 `2.2.3`），因此原书真用连字符编号的形态（如习题 `3-15`，其点分形
+    `3.15` 不在文本里）一律不动，不会把印刷序标一起剥掉。
+    """
+    name = (name or "").strip()
+    key = str(key or "").strip()
+    if not key or "-" not in key or not name.startswith(key):
+        return name
+    rest = name[len(key):].strip()
+    if not rest:
+        return name
+    printed = key.replace("-", ".")
+    head_band = rest[:len(printed) + 8]
+    if printed in head_band or printed.rstrip("0123456789") in head_band:
+        return rest
+    return name
+
+
 def _proof_label(lang):
     """草稿的证明标签 —— **完整证明**，故用「证明」/「Proof」而非「证明思路」/
     ``Proof sketch``。后者是最终 md 把证明压成 `1. 2. …` 步骤后的标签（见
@@ -369,7 +396,7 @@ def _walk_mixed(node, out, quote=False, lang="cn", top=False):
 def _render_item(node, out, lang):
     """条目 → ``**name**：正文``（首段与粗体标签同行；例块整段 ``> `` 包裹）。"""
     t = node.get("type")
-    name = _item_header_name((node.get("name") or "").strip(), lang)
+    name = _item_header_name(strip_internal_key_head(node.get("name"), node.get("key")), lang)
     is_example = (t == "example")
     body = []
     _walk_mixed(node, body, quote=is_example, lang=lang)

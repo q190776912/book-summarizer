@@ -185,3 +185,20 @@ F_LETTER_RE = re.compile(
 # F_LETTER_RE.
 F_ROMAN_RE = re.compile(
     r'(?<![\w\u4e00-\u9fff])[（(]\s*([IVXLCDM]{2,5})\s*[.·]\s*(\d+)\s*[）)]')
+# --- 三段 alpha-led 公式序标 `(A.2.1)` / `（II.1.3）` ------------------------
+# 🔴 上面的 F_LETTER_RE / F_ROMAN_RE 在**第一个**数字段后就要求闭括号，故对三段
+# 体例 `(A.2.1)` 一个也匹配不到（`A.2` 后面是 `.` 不是 `)`）。实测成因：
+# Katok《现代动力系统导论》附录A 印 `(A.2.1)`…`(A.4.1)`、补篇S 印 `(S.2.1)`…
+# `(S.4.2)`（每节从 1 重启），两段探针全零 → 该段 `verify_config.json` 无
+# `formula` 键 → Q 层 no-op，公式序标从未校验。
+# 判据与两段**完全同纪律**：必须带半/全角括号（裸排 `A.2.1` 与小节标题、
+# 条目号 `A.2.6.` 不可分，宁缺勿滥）、负向后顾排除词内/汉字粘连。
+# 消费方：`config/verify_config/make_config.detect_formula`（择族）、
+# `tools/census_alpha3_formula.py`（跨书普查）。捕获组 (head, section, number)。
+_F3_SEP = r'[.·]'
+F_LETTER3_RE = re.compile(
+    r'(?<![\w\u4e00-\u9fff])[（(]\s*([A-Z])\s*' + _F3_SEP + r'\s*'
+    r'(\d+)\s*' + _F3_SEP + r'\s*(\d+)\s*[）)]')
+F_ROMAN3_RE = re.compile(
+    r'(?<![\w\u4e00-\u9fff])[（(]\s*([IVXLCDM]{2,5})\s*' + _F3_SEP + r'\s*'
+    r'(\d+)\s*' + _F3_SEP + r'\s*(\d+)\s*[）)]')

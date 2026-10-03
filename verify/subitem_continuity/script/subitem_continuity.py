@@ -145,7 +145,18 @@ def _o_is_seq_marker(line, pos):
     before = line[:pos].rstrip()
     if before and before[-1] in '；;，,、:：.':
         return True
-    return bool(re.match(r'\s*\*{0,2}[A-Z\u4e00-\u9fff0-9]', line[pos:]))
+    # 「标记后紧跟条目正文（大写/中文/数字开头）」判据。旧实现在 `line[pos:]` 上
+    # 直接匹配，而 pos 指向**开括号** '(' → `\s*\*{0,2}[A-Z…]` 恒不命中，本支形同
+    # 虚设：只有靠「前句读分隔符」那条才收得到，于是 roman 子项 (ii)(iii)(iv)（前面
+    # 是被剥成 ` MATH ` 的行内公式、无句读尾）全漏采，独存的 (i) 被当字母 i=9 拼进
+    # (a)(b) 字母序列 → 假 INTERNAL 缺 (c)-(h)（statistical-inference ch10 10.29 实测）。
+    # 修正：先跳过整枚括号 token，再看其后正文首字符。散文回指（'…part (a) is called'
+    # ——标记后是小写词）仍据此判**否**，docstring 原意不变。
+    rest = line[pos:]
+    _mtok = re.match(r'[（(]\s*[0-9a-z]+\s*[）)]', rest)
+    if _mtok:
+        rest = rest[_mtok.end():]
+    return bool(re.match(r'\s*\*{0,2}[A-Z\u4e00-\u9fff0-9]', rest))
 
 
 def _o_match_line(line):

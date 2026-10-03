@@ -336,6 +336,19 @@ class TestLoaderHonoursDeclaration(unittest.TestCase):
         self.assertEqual(loader.special_same_style, set())
         self.assertIn("附录/补篇配置缺失", self._call(loader, "appendix"))
 
+    def test_flat_format_declaration_is_honoured(self):
+        """Flat config WITH the declaration must silence it too:
+        `_upgrade_missing_special_keys` does not distinguish formats and writes
+        `_special_same_style` into the top level of any existing config — a
+        producer that records and a consumer that ignores is the same
+        "unactionable remedy" gate bug the declaration exists to fix
+        (数学物理方程 实测: 扁平配置 + 顶层声明仍每轮打印 [CONFIG])。"""
+        loader = self._loader(dict(self._body(),
+                                   **{MAP_KEY_SPECIAL_SAME_STYLE: ["appendix"]}))
+        self.assertEqual(loader.special_same_style, {"appendix"})
+        self.assertEqual(self._call(loader, "appendix"), "",
+                         "flat-format declaration must silence the fallback")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

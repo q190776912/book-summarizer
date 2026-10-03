@@ -115,7 +115,7 @@ def print_result(r):
         print(f"\nMENTIONED-ONLY ({len(r['mentioned_only'])}): in .md as prose/cross-ref, not as own entry (review):")
         for k in r['mentioned_only']:
             print(f"  ~ {k}")
-    if r['extra']:
+    if r['extra'] or r.get('extra_mention_domain'):
         # 条目级 / 提及级分桶（判据与文案见 item_numbering_integrity.py 的
         # `extra_entry` / `extra_mention` 注释）：旧报告把两类混在一行且文案写着
         # "usually correctly-filtered cross-refs"，于是「契约漏登记的真条目」被
@@ -136,6 +136,16 @@ def print_result(r):
                   f"detected by extractor (usually correctly-filtered cross-refs):")
             for k in _em:
                 print(f"  ~ {k}")
+        _emd = r.get('extra_mention_domain')
+        if _emd:
+            print(f"\nEXTRA-MENTION · 领域归属豁免 ({len(_emd)}, 非阻断、不计数): 这些编号在 .md 里"
+                  f"**只**出现在公式标签 `\\tag{{}}` / 图表号 / 括号公式回指形态里，分属 Q 层"
+                  f"(formula_tag) 与图像域的辖域，不是条目域漏登记（判据 "
+                  f"`item_numbering_integrity.domain_suppressed_mentions`）：")
+            for k in _emd[:40]:
+                print(f"  · {k}")
+            if len(_emd) > 40:
+                print(f"  · …（其余 {len(_emd) - 40} 个从略）")
     if r['blocking']:
         problems += 1
         print(f"\nB-LAYER BLOCKING ({len(r['blocking'])}): extraction may have missed items — resolve before writing:")
@@ -498,6 +508,7 @@ def print_result(r):
         q_miss = r.get('q_missing', []) or []
         q_om = r.get('q_order_mismatch', []) or []
         q_mp = r.get('q_misplaced', []) or []
+        q_tm = r.get('q_tag_mismatch', []) or []
         if q_fab:
             problems += 1
             print(f"\nQ-LAYER FORMULA FABRICATED ({len(q_fab)}): summary \\tag number "
@@ -532,6 +543,19 @@ def print_result(r):
                   f"definition section — check the \\tag is under the right section:")
             for row in q_mp:
                 print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}")
+        if q_tm:
+            # 「同号配错式」：号在集合里、顺序也单调，唯独**正文**不是印面那一号的中
+            # 式子（漏贴标签 + 后续 tag 整体错位一格，或给印面无号展示式补号）。
+            # 集合成员 / ORDER / MISPLACED 三支与章级契约对账都看不见它，故独立成族。
+            # 先降级为 WARN（新判据，跨书普查校准中），取证毕再议是否阻断。
+            print(f"\nQ-LAYER FORMULA TAG_MISMATCH ({len(q_tm)}) [WARN, non-blocking]: "
+                  f"\\tag 的号与**正文**配错——该式子印面另有其号（多为「漏贴一枚印面"
+                  f"标签 + 后续 \\tag 整体错位一格」或「给印面无号展示式贴号」）。"
+                  f"按印面逐条把号挂回各自式子（含改写正文里的交叉引用），"
+                  f"源/译两套单元都要改：")
+            for row in q_tm:
+                print(f"  ~ {row.get('number', '')}  {row.get('summary_latex', '')}"
+                      f"  |  {row.get('source_text', '')}")
         q_ll = r.get('q_letter_led', []) or []
         if q_ll:
             # NON-BLOCKING WARN (per formula_tag.md SSOT): the source carries
@@ -542,20 +566,22 @@ def print_result(r):
             # formula_audit.md.  Does NOT count toward `problems`, never FAILs.
             print(f"\nQ-LAYER FORMULA LETTER-LED ({len(q_ll)}) [WARN, non-blocking]: "
                   f"书源含字母/罗马开头公式编号 (A.3)/(I.2)/(II.5)，但本书 formula 配置"
-                  f"未选用对应编号家族——字母章位请设 \"letter_ch\": true（或 type 15），"
-                  f"罗马章位请设 \"type\": 16（lead=roman）后重跑 verify；该部分公式序标"
+                  f"未选用对应编号家族——字母章位请设 \"letter_ch\": true（或 type 15，"
+                  f"三段 (A.2.1) 为 type 17），"
+                  f"罗马章位请设 \"type\": 16（lead=roman，三段 (II.1.3) 为 type 18）后重跑 verify；该部分公式序标"
                   f"**降级为 WARN、不阻断**，并请人工核对 formula_audit.md。")
             for row in q_ll:
                 print(f"  ~ {row if isinstance(row, str) else row.get('source_text', '')}")
         q_fab_n, q_inc_n, q_miss_n = len(q_fab), len(q_inc), len(q_miss)
         q_om_n, q_mp_n = len(q_om), len(q_mp)
+        q_tm_n = len(q_tm)
         q_ll_n = len(q_ll)
     else:
         q_fab_n = q_inc_n = q_miss_n = 0
-        q_om_n = q_mp_n = 0
+        q_om_n = q_mp_n = q_tm_n = 0
         q_ll_n = 0
     q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
-              f"/ {q_om_n} q-om / {q_mp_n} q-mp / {q_ll_n} q-ll "
+              f"/ {q_om_n} q-om / {q_mp_n} q-mp / {q_tm_n} q-tm / {q_ll_n} q-ll "
               if q_checked else "")
 
     # U-LAYER: unit structural reading order (contract page monotonicity). BLOCKING.

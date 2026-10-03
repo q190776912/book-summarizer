@@ -235,10 +235,13 @@ def _warn_missing_special_config(kind_key: str, ch: Any,
     print(
         "[CONFIG]   若该章条目编号首段不是数字章号（如 Theorem A.1），回退配置会让"
         "抽取全部落空、整章被塞进单个 description。补救："
-        "python config/verify_config/make_config.py <extract_dir> --force"
-        "（会重扫该 kind 的页区间：检出字母章位编号则补写 %r 子配置；判明与正文同"
-        "体例则把 %r 记入 _special_same_style，本警告自此消失）。"
-        % (kind_key, kind_key), file=sys.stderr)
+        "python config/verify_config/make_config.py <extract_dir>"
+        "（**非** --force 的增量升级：map 格式补写 %r 子配置，扁平格式只写 "
+        "_special_same_style 声明，既有键原样不动；判明与正文同体例则记入 "
+        "_special_same_style，本警告自此消失）。只有确需整份重扫时才用 --force——"
+        "它会重写 section_types / sections_global / ordinal 分组等人工账，"
+        "转换前务必备份并逐字段比对。"
+        % (kind_key,), file=sys.stderr)
 
 # --- section role codes = ORDINAL-DEPTH codes for the nested `## §` hierarchy -
 # The code stored in `section_types` is NOT a "chapter/section/subsection"
@@ -359,6 +362,12 @@ class GroupConfig:
     item whose label matches no group falls into the `uncat` fallback group.
     """
     type: int = ORDINAL_THREE_LEVEL          # ORDINAL_* style code (1..9)
+    # 🔴 NOT a config-load default: `BookConfig.from_dict` REQUIRES every
+    # non-zero-type ordinal group in verify_config.json to declare an explicit,
+    # NON-EMPTY `name` (label set; a generic catch-all must be written as
+    # ["uncat"] rather than omitted).  Missing => ConfigError / exit 2 (no-default
+    # rule).  This dataclass default only covers internal / programmatic
+    # construction (the type-0 absent-ordinal fallback and direct GroupConfig(...)).
     name: List[str] = field(default_factory=lambda: ["uncat"])  # label categories
     # 1=book / 2=chapter / 3=section.
     # 🔴 NOT a config-load default: `BookConfig.from_dict` REQUIRES every
@@ -444,7 +453,15 @@ _LABEL_CANON = {
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
                   'Assumption', 'Condition', 'Algorithm', 'Commentary', 'Application',
-                  'Variation', 'Porism', 'Exercise']
+                  'Variation', 'Porism', 'Exercise', 'Property']
+# 🔴 `Property` 补入（Lasota《Chaos, Fractals and Noise》ch8 实测）：本节印面以
+# `Property 1.–5.` 立目，md 双侧照印面写成 `**Property 1.**` / `**性质1.**`。
+# `_LABEL_CANON` 与 TYPE_TO_LABEL_CN/EN 一直认 Property↔性质（契约侧 type='property'
+# 正常出键 `性质1`），唯独本表漏收 → EN 版条头解析不出键，于是同一批印面条目在
+# 中文版报 EXTRA-ENTRY（契约无槽位）、登记契约后又在英文版报 TRULY MISSING（md 键
+# 看不见），两头都堵死。跨 50 书普查（`Property\s*\d` 全形态）净新增 49 处命中、
+# 落在 6 书，逐条核过全是印面 Property 条目或其交叉引用（do Carmo §2-7 Property 1–3、
+# Lasota §5.36 Property 1–2、Strogatz 索引理论 property n），无一处是标题/散文误配。
 
 
 # --- 节点类型 ↔ 规范标签（类型词表单一来源） -------------------------------
@@ -789,8 +806,25 @@ class BookConfig:
     #           heads (`(II.5)`) are SUPPORTED via the formula-only `type=16`
     #           (lead='roman'); single-character Roman heads (I/V/X/L/C/D/M) are
     #           indistinguishable from letters and stay letter-led.
-    #   bare_number (default true): when false, the bare `N.M` source variant
-    #           is dropped (books full of numbered cross-references, e.g. Lee).
+    #   bare_number : 🔴 REQUIRED, NO DEFAULT — when the formula map declares
+    #           `type` it must ALSO carry an explicit boolean `bare_number`.
+    #           When true, the Q layer ADDITIONALLY collects the bare `N.M`
+    #           source variant (any numeric token in prose); when false it is
+    #           dropped (books full of numbered cross-references, e.g. Lee, or
+    #           bracket-only printed numbering, e.g. Apostol -> phantom MISSING).
+    #           Enforced at `require_complete` per-segment, NOT `from_dict` —
+    #           from_dict stays tolerant so programmatic/test formula maps that
+    #           omit it still construct.  `make_config` DERIVES the value from
+    #           book evidence via `detect_bare_number` (compares bare vs
+    #           bracketed/labeled formula-tag slots across the page text): it
+    #           writes an explicit true/false when the evidence is clear, and
+    #           LEAVES THE FIELD ABSENT when indeterminate so `require_complete`
+    #           blocks and the agent settles it from the book — never a silent
+    #           default.  For inert shapes (single-level / alpha-led) where the
+    #           bare variant is never emitted it returns a reviewed True.  An
+    #           operator's registered value is re-attached first via
+    #           `_load_old_formula`.  Absence detection keys on the raw dict
+    #           membership, so an explicit `false` passes just like `true`.
     formula: Optional[dict] = None
     # 🔴 Bookkeeping ONLY (carries NO config semantics): the set of top-level
     # keys the source dict actually declared when this BookConfig was built via
@@ -970,9 +1004,30 @@ class BookConfig:
                         f"{'/'.join(map(str, sorted(ORDINAL_CODES)))}）。若这是已弃用的"
                         f"旧码 4/9/10/11，请改写为就近规范码（4→2、9/10→3、11→1）"
                         f"或重跑 make_config.py --force 重新生成。")
-                nm = g.get('name') or ["uncat"]
-                if not isinstance(nm, list) or not all(isinstance(x, str) for x in nm):
-                    raise ConfigError(f"[CONFIG] ordinal[{i}].name 必须是字符串数组")
+                # 🔴 no-default / must-match：组的 `name`（本计数器要匹配的条目标签
+                # 集合）与 `type`/`scope` 同则——声明了**真实编号体例**（type != 0）的组
+                # 必须**显式**给出**非空**字符串数组，绝不静默补成 `["uncat"]`。省略 name
+                # 会被悄悄当成通用兜底桶，等于伪造「本组不匹配任何具名标签」这一体例事实
+                # （与 formula.scope / ordinal.type / ordinal.scope 同一 no-default 原则）。
+                # 允许显式写通用桶 `["uncat"]`（这是作者的真实决策，非缺省）——但必须写出来。
+                # 例外：type 0（UNNUMBERED）组 name 无语义，允许省略，占位 ["uncat"] 即可
+                # （与 scope 对 type 0 的豁免对称；ordinal 整体缺省派生的兜底组也走此路）。
+                if 'name' in g:
+                    nm = g['name']
+                    if (not isinstance(nm, list) or not nm
+                            or not all(isinstance(x, str) for x in nm)):
+                        raise ConfigError(
+                            f"[CONFIG] ordinal[{i}].name={nm!r} 必须是**非空**字符串数组"
+                            f"（本组要匹配的条目标签集合，如 [\"定理\",\"引理\"]；通用兜底"
+                            f"桶须显式写 [\"uncat\"]）。")
+                elif t == 0:
+                    nm = ["uncat"]  # 无编号组 name 无语义，占位即可
+                else:
+                    raise ConfigError(
+                        f"[CONFIG] ordinal[{i}] 声明了 type={t} 但缺 `name`（条目标签集合）。"
+                        f"本字段**无默认值**（no-default 规则）：必须显式给出本书该计数器要"
+                        f"匹配的标签列表，或通用兜底桶 [\"uncat\"]，绝不静默补 [\"uncat\"]。"
+                        f' 例：{{"type": {t}, "name": ["uncat"], "scope": {SCOPE_CHAPTER}}}')
                 # `depth` is a DERIVED projection of `type` (GroupConfig.depth);
                 # it is intentionally NOT read from the config, so a stale or
                 # overridden `depth` can never desync from the authoritative type.
@@ -1294,6 +1349,16 @@ class ConfigLoader:
             self.verify_config_has_ordinal = (
                 self._has_ordinal(data) if isinstance(data, dict) else False)
             self._load_legacy_special_config()
+            # 🔴 `_special_same_style` 同样适用于扁平配置：`make_config` 的增量
+            # 升级（`_upgrade_missing_special_keys`）不辨格式，判明「与正文同体例」
+            # 就把 kind 写进任何已存在的 verify_config.json 顶层；消费侧只在 map
+            # 分支读取会让生产侧的落账永远无效（警告按 prescribed 补救也消不掉，
+            # 与 Serre 裁决「永远消不掉的警告 = 闸门 bug」同源）。数学物理方程
+            # 实测：扁平配置 + 顶层声明仍每轮打印 [CONFIG] 警告。
+            if isinstance(data, dict):
+                sss = data.get(MAP_KEY_SPECIAL_SAME_STYLE)
+                if isinstance(sss, (list, tuple, set)):
+                    self.special_same_style = {str(k) for k in sss}
 
     def _load_legacy_special_config(self) -> None:
         """Flat-format fallback: read a standalone appendix_verify_config.json /
@@ -1433,6 +1498,34 @@ class ConfigLoader:
                 raise ConfigError(
                     f"[CONFIG] {cfg_path} ordinal[{gi}].scope={g.scope}"
                     f" 非法（应 1/2/3）。")
+
+        # --- 🔴 formula.bare_number「必须在场」（no-default，2026-10-01）------
+        # bare_number 决定 Q 层是否把正文里裸 `N.M` 也当公式号收录，直接改变公式
+        # 抽取结果（默认 true 对「公式号一律带括号 / 满是裸号交叉引用」的书会批量
+        # 造出幻影 MISSING，Apostol ch10 实测 176 条）。旧「默认 true」＝静默兜底，
+        # 一律禁止：凡**声明了 type**（开启 Q 层）的 formula 段，必须显式带布尔
+        # `bare_number`。与三布尔 / language 同放 `require_complete` 而**非** from_dict——
+        # 因为真实书 config 里此前普遍缺席、探测器又可能判不交（留空），放 from_dict 会
+        # 误伤程序化 / 测试构造的 formula map（from_dict 保持宽容）。判据是 cfg.formula
+        # 里 key 在不在场（原样存的 raw dict），故显式 `false` 也照样通过。只含
+        # ignore / known_book 而无 type 的**登记式** formula 残块不选体例、豁免本门。
+        # `make_config.detect_bare_number` 现据书页证据**探测** bare_number（旧登记值优先
+        # 回贴）：判得清即写显式 true/false（`--force` 重生成多能自动补），判不交则**留空**——
+        # 正是被本门挡下、逼 agent 依书补定；存量未回填的真实书同样在此暴露，提示补定。
+        if isinstance(cfg.formula, dict) and cfg.formula.get("type") is not None:
+            if "bare_number" not in cfg.formula:
+                raise ConfigError(
+                    f"[CONFIG] {cfg_path} 的 formula 声明了 "
+                    f"type={cfg.formula.get('type')!r} 却缺 `bare_number`（是否收录裸 "
+                    f"`N.M` 公式号 true/false）。本字段**无默认值**（no-default 规则）："
+                    f"须依书体例显式声明——正文满是带括号编号 / 裸号交叉引用（Lee/Apostol "
+                    f"型）的书填 `false`，其余填 `true`。修法：重跑 python "
+                    f"config/verify_config/make_config.py --force <book>/_extract（会自动"
+                    f'显式写 bare_number），或人工在 formula 补 "bare_number": true/false。')
+            if not isinstance(cfg.formula.get("bare_number"), bool):
+                raise ConfigError(
+                    f"[CONFIG] {cfg_path} formula.bare_number="
+                    f"{cfg.formula.get('bare_number')!r} 必须是布尔 true/false。")
 
         # --- 🔴 主配置必填字段「必须在场」（no-default，2026-10-01）---------
         # strict / chapter_first / section_scoped / language 直接决定整本书如何被

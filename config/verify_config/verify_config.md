@@ -10,10 +10,10 @@
 | `language` | `str` | 🔴 **无默认值，主配置必填**（no-default，与 `strict` / `chapter_first` / `section_scoped` 同列「主配置必填四件套」，由 `require_complete` 强制：主配置缺 `language` 即 `exit 2`）。取值 `'cn'` / `'en'` = **正文主体语言**，决定编号解析、条目标签匹配与渲染语种，须从本书实际体例确定，**不得静默回落 `'cn'`**（旧文档「默认 `'cn'`」＝禁止）。`make_config` 依 `primary_type` 家族派生并无条件写出，故生成的书恒通过；appendix/supplement 覆盖段可省略（= 继承正文）。 |
 | `strict` | `bool` | 🔴 **无默认值，主配置必填**（no-default，由 `require_complete` 强制）：缺号是否严格判失败（`true`=结构性缺号即 FAIL，`false`=降级）。不得静默按 `true`——须依书确定后显式写。与 `chapter_first` / `section_scoped` / `language` 同列「主配置必填四件套」；其余结构开关（`exercise_shared_numbering` / `sections_global` / `numeric_local_sections` / `chapter_scoped_items` / `gm_bare_numbered` / `chapter_local_sections` / `chapter_local_numbering`）沿用「缺席=中性 False、探测只落 True」约定，不强制在场。 |
 | `ignore` | `List[str]` | 章节忽略列表（合并旧 `known_gaps` + `ignore_keys` + `ignore_fig` 语义）。 |
-| `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，字母/罗马型 15/16 经 `resolve_formula_type` 派生，均不单独配置；见 `config_setting` 流程 规则3）。🔴 **`scope`（1=book/2=chapter/3=section）为必填、无默认值**：只要声明了 `type`，缺 `scope` 或取值越界即在加载期 `ConfigError`（exit 2），不再静默按章级；`make_config.detect_formula` 从书证派生 scope，证据不足时**省略**交 agent 补定。可选 `bare_number`（见下）。 |
+| `formula` | `object?` | **仅书含公式序标时存在**：`{type, scope, ignore:[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，字母/罗马型 15/16 经 `resolve_formula_type` 派生，均不单独配置；见 `config_setting` 流程 规则3）。🔴 **`scope`（1=book/2=chapter/3=section）为必填、无默认值**：只要声明了 `type`，缺 `scope` 或取值越界即在加载期 `ConfigError`（exit 2），不再静默按章级；`make_config.detect_formula` 从书证派生 scope，证据不足时**省略**交 agent 补定。🔴 **`bare_number` 同为必填、无默认值**：声明了 `type` 就必须显式带布尔 `bare_number`（强制在 `require_complete` 逐段门，非 `from_dict`；见下一行）。 |
 | `exercise_shared_numbering` | `bool` | **练习与条目共用同一条章内计数器**的书（Lee《Intro to Smooth Manifolds》：Theorem 1.2 / Example 1.3 / Exercise 1.6 是同一条 1..N 序列上的连续槽位）置 `true`。B 层默认把练习/问题强制划入独立编号窗（`:ex:`，为 Katok 那种「练习按节重排」的书而设），对共享序列的书会把每个定理号报成「练习缺号」——整章数百条结构性假 BLOCKING。Problem 无论此开关如何都独立开窗（`N-M` 编号与条目的 `N.M` 不同形，合并会撞号）。默认 `false`。 |
 | （无 `figure` 字段） | — | 🔴 **图序标不再单独成块**，而是 `ordinal` 里的一个 **Figure 组**：`{"type": <components>, "name": ["图","Figure","Fig",…], "scope": <components>}`。`type` 经 `ORDINAL_DEPTH` 派生的 `depth` 即图号**段数（components）**：`1`=全局整数 / `2`=章.图 / `3`=章.节.图 / **`0`=无图编号（显式零匹配）**。图号前缀词写进该组 `name`（Figure/图/Fig/Scheme/Illustration…），由 `lib.figure_io.load_fig_labels` 读取；`components`（=depth）由 `load_fig_components` 从组的 `type` 派生。🔴 **Figure 组必须存在**（2026-09-24 起）：`load_fig_components` 缺组直接抛 `ConfigError`、verify 全书中断，**没有任何静默回落**（旧「不放组即可，figure_io 回落默认」语义已废）。`make_config.py` 探测印刷图题系列自动落组——无图题系列的图书落 `type: 0`；手工修 config 同理，禁止删组。若需显式**零标签**（禁止任何图号前缀词），保留过渡 `{"figure": {"labels": []}}` 由 figure_io 识别为标记号（见下）。 |
-| `formula.bare_number` | `bool` | 默认 `true`：Q 层抽书源公式编号时额外收录**裸 `N.M`**（任何出现在正文里的数字 token 都算）。两类书须置 `false`：① **正文满是带号交叉引用**（Lee：满页 `(Fig. 1.2)`，外加 `1-11` 这种 Problem 标签）；② **印刷编号一律带括号**的扫描书——Apostol《Introduction to Analytic Number Theory》实测裸数字变体把**页码**（`205`）、**OCR 碎片**（`0`）、**表单元**（p277 Bernoulli 数 `42`）全收进独立真值集，ch10 一次报出 176 条幻影「漏写公式」。置 `false` 后只认显式形态 `(N.M)` / `Eq. N.M` / `Equation N.M` / `式（N.M）`。默认 `true`，无该体例的书零影响。🔴 属 operator 手工登记键（`make_config` 探测层无法重建，重生成 config 时由 `_load_old_formula` / `_MANUAL_DECLARED_FLAGS` 原样回贴）。 |
+| `formula.bare_number` | `bool` | 🔴 **无默认值（no-default，2026-10-01）**：凡 `formula` 块声明了 `type`（开启 Q 层）就**必须显式带布尔** `bare_number`，缺即在完整性门 `require_complete` `exit 2`（旧「默认 `true`」＝静默兜底，一律禁止）。含义：Q 层抽书源公式编号时是否**额外收录裸 `N.M`**（正文里任何数字 token 都算）。两类书须显式置 `false`：① **正文满是带号交叉引用**（Lee：满页 `(Fig. 1.2)`，外加 `1-11` 这种 Problem 标签）；② **印刷编号一律带括号**的扫描书——Apostol《Introduction to Analytic Number Theory》实测裸数字变体把**页码**（`205`）、**OCR 碎片**（`0`）、**表单元**（p277 Bernoulli 数 `42`）全收进独立真值集，ch10 一次报出 176 条幻影「漏写公式」。置 `false` 后只认显式形态 `(N.M)` / `Eq. N.M` / `Equation N.M` / `式（N.M）`。🔴 **强制层 = `require_complete` 而非 `from_dict`**（与 `strict`/`language` 同则）：真实书 config 里此前普遍缺席、探测器又可能判不交（留空），放 from_dict 会误伤程序化 / 测试构造的 formula map，故 `from_dict` 保持宽容、只在逐段完整性门要求在场；判据是 raw dict 里 key 在不在场，故显式 `false` 也照样通过。只含 `ignore`/`known_book` 而无 `type` 的**登记式**残块不选体例、豁免本门。`make_config` 现由 `detect_bare_number` **据书页证据探测** `bare_number`（逐块比较「公式号落点」里裸排 `N.M` vs 括号/`Eq.`/`式` 标注形态：括号主导且裸落点≈0→`false`；裸落点成规模→`true`；样本过少或混叠无明确优势→判不交、**留空**，由本门挡下后交 agent 依书补定；单级/字母/罗马章位等**恒不 emit 裸变体**的 inert 形状给可复核的显式 `true`——该值对其抽取无作用，非静默兜底）。操作者旧登记值优先由 `_load_old_formula` 回贴、探测器不覆盖，故 `--force` 重生成对判得清的书多能自动补；存量未回填且探测仍判不交的真实书会被本门挡下，正是提示其补定。 |
 | `section_types` | `List[int]` | **逐层级**列表，从**章层级（元素 0）**排到最深的 `## §` 层级；每个元素 = 该层级 `## §` 标题携带的数字段数（ordinal depth），**不是**"章/节/小节"角色名：`1`=一级序标 `## §N`、`2`=二级序标 `## §N.M`、`3`=三级序标 `## §N.M.K`、`4`=四级序标 `## §N.M.K.L`、`5`=**字母标号子节**（Karlin/Arnold 体例原书印 `A. Title`，md 写 `### §A`，父节靠位置；Arnold 式附录的字母**节**也归此形态语境）、`0`=**无序号标**。深度由段数经 `SECTION_TYPE_DEPTH` 派生，**不单独配置**。**列表长度必须等于章节层级总数（章计入）**——单层级书是 `[0]`、章+无序号标小节的书是 `[0, 0]`（两个层级，**不能合并成一个**）。多数由 `primary_type` 自动反推（见 `ORDINAL_SECTION_TYPES`，标准书会 prepend 章前缀 `1`）；仅四级子小节 `1.1.1.1` 需显式覆盖 `section_types`。「章=1/节=2」只是**标准书**下这些段数的*典型称呼*，并非硬语义——一本书完全可以 `section_types: [1, 1, 1]` 或 `[0, 0]`（Silverman）。缺节闸门对含 `0` 的层级按「位置/数量」比对、绝不编造 `## §N`。 |
 | `sections_global` | `bool` | **全书全局单序标节号书**（Arnold《数学方法》：节印 `§12．变分法`，§1..§52 跨章连续、首分量**不是**章号）置 `true`。D 层通用路径据此豁免「token 首分量==章号」前缀要求（该要求对全局节号书毫无意义且必产幻影尾节），改为「契约节号 ∪ md 已写」交集验收；配合 `section_types` 含 role `5` 时校验裸字母子块（原书印 `A. 变分`，父节靠位置；md 写 `### §A`）。与 `chapter_local_sections` 正交（那是每章重起）。默认 `false`，标准 §C.S 书零影响。 |
 
@@ -68,7 +68,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | `int`（0–4、8–14） | 编号风格码，**同时编码段数（depth）与结构风格**（见下「类型表」）。`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不再作为独立字段。 |
-| `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。写 `["uncat"]` 表示兜底组。 |
+| `name` | `List[str]` | 该组覆盖的**标签类别**（如 `["定理","定义"]`；可含中英文，靠规范化匹配）。同组标签共用一条计数器。🔴 **无默认值**（no-default，与 `type` / `scope` 同则）：声明了真实体例（`type != 0`）的组**必须显式给出非空**字符串数组，缺失 / 空数组 `[]` / 非数组 / 含非字符串元素一律 `exit 2`——绝不再悄悄回落 `["uncat"]`（省略＝伪造「本组不匹配任何具名标签」这一体例事实）。**通用兜底桶须显式写 `["uncat"]`**（这是作者的真实决策，允许，但必须写出来）。唯一例外：`type 0`（UNNUMBERED）组 name 无语义，允许省略（占位 `["uncat"]`，与 scope 对 type 0 的豁免对称）。`make_config` 每条生成分支都显式写检出标签，故 `--force` 重生成产出必可通过本校验。`GroupConfig` dataclass 的 `["uncat"]` 默认仅覆盖程序化构造，不是加载默认。 |
 | `scope` | `int` | 计数器重置边界：`1`=全书（book）/`2`=章（chapter）/`3`=节（section）。🔴 **无默认值**（no-default）：声明了真实体例（`type != 0`）的组**必须显式给出** `scope`，缺失或非法（越界 / 非整数）一律 `exit 2`——绝不再悄悄回落 `scope=2`，重置窗口设错会致跨章/跨节计数串号。唯一例外：`type 0`（UNNUMBERED，无编号）组的 scope 无语义（永不参与重置），允许省略。`make_config` 每条生成分支都显式写 scope，故 `--force` 重生成产出必可通过本校验。 |
 
 ### `type` 类型表（0–4、8–14）
@@ -154,6 +154,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
 - 旧整型 `{"ordinal": int}` / 字符串 `ordinal` **直接拒绝**，提示重跑 `make_config --force`（`exit 2`）。
 - 🔴 **`type` 必须显式声明，无默认值**（no-default / must-match）：组里缺 `type`（或缺 `ordinal` 整键）**一律拒绝并报「编号体例匹配不成功」**（`exit 2`），**绝不默默套用 type 3**——凭空补一个三级方案＝伪造体例，会把整本书按错误体例解析。
 - 🔴 **`scope` 必须显式声明，无默认值**（no-default / must-match）：凡声明了真实体例（`type != 0`）的组**必须显式给出** `scope`∈{1,2,3}，缺 `scope` 或非法（越界 / 非整数）**一律 `exit 2`**——绝不再悄悄回落 `SCOPE_CHAPTER`（scope=2）。计数器重置窗口设错会致跨章/跨节计数串号、伪造缺号，与 `type`/`formula.scope` 同一 no-default 原则，判不清一律交人工/agent 依书体例定夺。**唯一例外**：`type 0`（UNNUMBERED，无编号）组的 scope 无语义（永不参与重置），允许省略（写了则照常校验合法性）。`make_config` 每条 ordinal 生成分支都显式写 scope（含继承分支与 `_repaste_old_scopes` 只覆写不删），故 `--force` 重生成产出的配置必可通过本校验。
+- 🔴 **`name` 必须显式声明，无默认值**（no-default / must-match，与 `type`/`scope` 同则）：凡声明了真实体例（`type != 0`）的组**必须显式给出非空**字符串数组 `name`（本组要匹配的条目标签集合），缺 `name` / 空数组 `[]` / 非数组 / 含非字符串元素**一律 `exit 2`**——绝不再悄悄回落 `["uncat"]`（省略＝伪造「本组不匹配任何具名标签」这一体例事实）。通用兜底桶须**显式**写 `["uncat"]`（真实决策，允许，但必须写出来）。**唯一例外**：`type 0`（UNNUMBERED）组 name 无语义，允许省略（占位 `["uncat"]`，与 scope 对 type 0 的豁免对称；一旦写了仍按非空数组校验）。`make_config` 每条 ordinal 生成分支都显式写检出标签，故 `--force` 重生成产出必可通过本校验。
 - `type 0`（UNNUMBERED，段数 0）**可由用户显式声明**：表示本书**条目不带编号**（`Definition.` / `定理` 之类裸标签，无数字）。它同时是「未声明 `ordinal`」时由代码内部产生的兜底组。`depth` 对 type 0 投影为 **0**（不是幻影的 3）。⚠️ 节的体例是**正交的独立轴**：`type 0` 只说明条目无编号，节仍按 `section_types` 各自判定；无数字小节书（`## § <标题>`）须显式写 `section_types: [1, 0]`（role 0 = 无序号标层级）。
 - 逐组校验：`type` ∈ `ORDINAL_CODES` = {0,1,2,3,8,12,13,14}（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独校验；两级序标 + `chapter_first:false` 组合用 type 2；13/14 = 附录字母章位三级/两段；0 = 条目无编号）、`scope`∈{1,2,3}，否则 `exit 2`。🔴 已弃用码 4/9/10/11 不再登记（4→2、9/10→3、11→1），出现即 `exit 2`——加载期不做透明映射，存量 config 须改写为规范码。
 - 无 `uncat` 组不自动追加、不警告（`uncat` 是显式决策；无 `uncat` 时 `uncat_group()` 回退 `ordinal[0]`）。
@@ -184,7 +185,7 @@ B 层（`item_numbering_integrity`）的编号连续性/缺号检查**在组内�
   ],
   "strict": true,
   "language": "en",
-  "formula": {"type": 1, "scope": 3, "ignore": []}
+  "formula": {"type": 1, "scope": 3, "ignore": [], "bare_number": true}
 }
 ```
 
@@ -195,7 +196,7 @@ CN 三级（含公式序标，单组最简写法）：
   "ordinal": [{"type": 3, "name": ["uncat"], "scope": 2}],
   "strict": true,
   "language": "cn",
-  "formula": {"type": 2, "scope": 2, "ignore": []}
+  "formula": {"type": 2, "scope": 2, "ignore": [], "bare_number": true}
 }
 ```
 
@@ -231,7 +232,7 @@ EN 两级：
     {"type": 1, "name": ["Fig", "Figure"], "scope": 1}
   ],
   "language": "en",
-  "formula": {"type": 1, "scope": 3, "ignore": []}
+  "formula": {"type": 1, "scope": 3, "ignore": [], "bare_number": true}
 }
 ```
 

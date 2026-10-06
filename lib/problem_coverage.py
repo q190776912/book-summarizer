@@ -351,11 +351,39 @@ def _node_text_bundles(node: Dict[str, Any]) -> List[List[Any]]:
     return bundles
 
 
+def _is_tail_ref_name(name: Any) -> bool:
+    """**节名**本身就是章末书目/致谢/索引标题（`5.8 REFERENCES` / `Appendix A Bibliography`）。
+
+    `tail_reference_cut` 只扫**文本块**里的独占一行标题；抽取期把书目自成一节
+    （Underactuated Robotics ch5 §5.8「REFERENCES」实测）时标题被吃掉当节名，块里
+    只剩 `1. Orin…` 一直到 `20.`，契约侧于是把书目条数当「节内连续编号内容」，
+    报「缺 N 项，须逐项分行补全」= 逼写手抄参考文献。与 `tail_reference_cut` 同族、
+    同样保守（只压低契约侧下限，不会凭空造出缺失）。
+
+    判据 = 剥掉**前导序标 token**（含数字的 token / 单字母 token / section·appendix·
+    chapter·part 这类词）之后，**整个剩余名**必须就是那个词（允许尾随标点）。
+    散文式节名不匹配：`The References in the Literature`（剩余名是一整句）、
+    `Further references`（多词）都留在判据外。
+    """
+    toks = str(name or "").strip().split()
+    i = 0
+    while i < len(toks) and (
+            re.search(r"\d", toks[i]) or re.fullmatch(r"[A-Za-z§.]", toks[i])
+            or toks[i].lower().rstrip(".") in
+            ("section", "appendix", "chapter", "subsection", "part", "§")):
+        i += 1
+    rest = " ".join(toks[i:]).strip()
+    return bool(re.fullmatch(
+        r"(?:" + _TAIL_REF_WORDS + r")\s*[.:：·—–\-]*", rest, re.IGNORECASE))
+
+
 def contract_run_lengths(root: Dict[str, Any]) -> List[Tuple[str, int, Tuple[str, ...]]]:
     """→ [(节键, 契约侧最长编号链, 该节子树的键集合)]（只含链长 ≥ 阈值的节）。"""
     out = []
     for s in _section_nodes(root):
         if _skip_consolidated(s):
+            continue
+        if _is_tail_ref_name(s.get("name")):
             continue
         n = 0
         for texts in _node_text_bundles(s):
@@ -643,8 +671,26 @@ def exercise_item_numbers(text: str) -> List[int]:
 
     裸号体维持旧语义（``2-4`` 摊成 ``2, 3, 4``）；标签体按整个序标解析
     （``_label_values``）：``Exercise 12.31`` → ``31``、``23.1.C`` → 无、
-    ``Exercises 2-4`` → ``2, 3, 4``。
+    ``Exercises 2-4`` → ``2, 3, 4``。分体判据见 ``exercise_item_pairs``。
     """
+    return [v for v, _k in exercise_item_pairs(text)]
+
+
+# 🔴 题号的**两种体**属于两套互不相干的计数体系，号流必须分轨（2026-10-06，
+# Underactuated Robotics ch3/ch7 实测）：
+#   · **裸号体**（``1.`` / ``2.``）= 一道题**内部**的小问 / 枚举，每题从 1 重启；
+#   · **标签体**（``**Exercise 3.4 (…)**``）= **整集**的题序，一集内连续。
+# 混成一条流时，标签号会被拼进裸号跑出来的段里，把「本题内部列到 2」看成
+# 「缺 3」——印面根本没有第 3 小题（ch3/0055 实测：号流 3,1,2,**4**,1,2,3 →
+# 段 [1,2,4] 报缺 3，写手被迫把习题标题降级成普通文本才过闸 = 闸门逼代理篡改体例）。
+# 分轨后：每种体**自己**一条流（保持文档顺序）各自切递增段，标签轨 [3,4,5] 与
+# 裸号轨 [1,2],[1,2,3] 互不借号；「同集跳号」照旧拦得住（漏写 ``Exercise 3.4``
+# → 标签轨 [3,5,…] 报缺 4）。
+_KIND_BARE, _KIND_LABEL = "bare", "label"
+
+
+def exercise_item_pairs(text: str) -> List[Tuple[int, str]]:
+    """同 ``exercise_item_numbers``，但逐个带回**体**（``bare`` / ``label``）。"""
     got = []
     for m in EXER_ITEM_BARE_RE.finditer(text):
         lo = int(m.group(1))
@@ -652,16 +698,16 @@ def exercise_item_numbers(text: str) -> List[int]:
         vals = [lo]
         if hi > lo and hi - lo <= _RANGE_SPAN_MAX:
             vals = list(range(lo, hi + 1))
-        got.append((m.start(), vals))
+        got.append((m.start(), vals, _KIND_BARE))
     for m in EXER_ITEM_LABEL_RE.finditer(text):
-        got.append((m.start(), _label_values(m.group(1))))
+        got.append((m.start(), _label_values(m.group(1)), _KIND_LABEL))
     seen: set = set()
-    out: List[int] = []
-    for pos, vals in sorted(got):
+    out: List[Tuple[int, str]] = []
+    for pos, vals, kind in sorted(got):
         if pos in seen:
             continue
         seen.add(pos)
-        out.extend(vals)
+        out.extend((v, kind) for v in vals)
     return out
 
 
@@ -684,6 +730,23 @@ def exercise_runs(nums: Iterable[int]) -> List[List[int]]:
     return runs
 
 
+def exercise_runs_typed(pairs: Iterable[Tuple[int, str]]) -> List[List[int]]:
+    """**分轨**号段：同一体（bare / label）各自成流，流内按 ``exercise_runs`` 切段。
+
+    两条流按体分组、**保持文档顺序**（标签流不被中间题内裸号打断，反之亦然），
+    然后各自切递增段。这才是「两套计数」的正确语义：把换体当成切段点会让标签流
+    每题只剩一个号（长度 1，全部豁免），漏写整题反而看不见。
+    """
+    by_kind: dict = {}
+    for v, kind in pairs:
+        by_kind.setdefault(kind, []).append(v)
+    runs: List[List[int]] = []
+    for kind in (_KIND_BARE, _KIND_LABEL):
+        if kind in by_kind:
+            runs.extend(exercise_runs(by_kind[kind]))
+    return runs
+
+
 def exercise_run_gaps(nums: Iterable[int], min_run: int = 3
                       ) -> List[Tuple[int, int, List[int]]]:
     """→ [(段首号, 段末号, 段内缺号列表)]；长度 < ``min_run`` 的短段不判。
@@ -692,6 +755,20 @@ def exercise_run_gaps(nums: Iterable[int], min_run: int = 3
     """
     out = []
     for run in exercise_runs(nums):
+        if len(run) < min_run:
+            continue
+        have = set(run)
+        missing = [k for k in range(run[0], run[-1] + 1) if k not in have]
+        if missing:
+            out.append((run[0], run[-1], missing))
+    return out
+
+
+def exercise_run_gaps_typed(pairs, min_run: int = 3
+                            ) -> List[Tuple[int, int, List[int]]]:
+    """``exercise_run_gaps`` 的分轨版（判据同，只是按 ``exercise_runs_typed`` 切段）。"""
+    out = []
+    for run in exercise_runs_typed(pairs):
         if len(run) < min_run:
             continue
         have = set(run)
@@ -732,23 +809,28 @@ def chapter_exercise_problems(ordered_units, min_run: int = 3) -> List[str]:
     def flush():
         if not seg:
             return
-        for lo, hi, missing in exercise_run_gaps([n for n, _ in seg], min_run):
-            first_after = missing[0]
-            nxt = min((n for n, _ in seg if n > first_after), default=None)
-            where = next((f for n, f in seg if n == nxt), "?")
-            problems.append(
-                "习题集「%s」题号缺号 %d 处（号段 %d..%d，缺 %s）——原书该节习题集是"
-                "连续编号，跳号即题面被漏写；须按 page_*.json 把缺的各题题面补全"
-                "（插在单元 %s 之前），禁止用措辞搪塞，也禁止删短已有各题来「凑连续」" % (
-                    head, len(missing), lo, hi,
-                    ", ".join(str(m) for m in missing[:12])
-                    + ("…" if len(missing) > 12 else ""), where))
+        # 两套计数分轨判缺号（见 ``exercise_item_pairs`` 上注），报洞时同轨内找落点。
+        for kind in (_KIND_BARE, _KIND_LABEL):
+            sub = [(n, f) for n, k, f in seg if k == kind]
+            if not sub:
+                continue
+            for lo, hi, missing in exercise_run_gaps([n for n, _ in sub], min_run):
+                first_after = missing[0]
+                nxt = min((n for n, _ in sub if n > first_after), default=None)
+                where = next((f for n, f in sub if n == nxt), "?")
+                problems.append(
+                    "习题集「%s」题号缺号 %d 处（号段 %d..%d，缺 %s）——原书该节习题集是"
+                    "连续编号，跳号即题面被漏写；须按 page_*.json 把缺的各题题面补全"
+                    "（插在单元 %s 之前），禁止用措辞搪塞，也禁止删短已有各题来「凑连续」" % (
+                        head, len(missing), lo, hi,
+                        ", ".join(str(m) for m in missing[:12])
+                        + ("…" if len(missing) > 12 else ""), where))
         del seg[:]
 
     def take(text, fname):
         if opened:
-            for v in exercise_item_numbers(text):
-                seg.append((v, fname))
+            for v, kind in exercise_item_pairs(text):
+                seg.append((v, kind, fname))
 
     def open_at(title, fallback):
         nonlocal opened, head, own_only

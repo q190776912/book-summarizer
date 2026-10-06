@@ -20,8 +20,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from problem_coverage import (consolidated_cut, coverage_problems,
-                              longest_run_from_one,
+from problem_coverage import (_is_tail_ref_name, consolidated_cut,
+                              coverage_problems, longest_run_from_one,
                               page_floor_problems, page_problem_floors,
                               tail_reference_cut, unit_run_length)
 
@@ -51,6 +51,47 @@ def _read(bodies):
 PROBLEMS = [txt("1. Show that $p(0)=0$."), txt("2. Show that a norm is"),
             txt("3. Prove the converse."), txt("4. Give an example."),
             txt("5. Finish the proof.")]
+
+
+class TestSectionNamedReferences(unittest.TestCase):
+    """负向：书目**自成一节**（节名就是 REFERENCES）时不得把条目号当编号内容。
+
+    `tail_reference_cut` 只扫文本块里的独占一行标题；抽取期把标题吃进节名后，块里
+    只剩 `1. Orin…`…`20. …`，契约侧把书目条数当成「节内连续编号内容」→ 报
+    「缺 N 项，须逐项分行补全」= 逼写手抄参考文献（Underactuated Robotics
+    ch5 §5.8「REFERENCES」实测）。反向锁：散文式节名与真习题节名一律不豁免。
+    """
+
+    REFS = [txt("%d. Some Author, \"A title\", Journal, %d." % (i, i))
+            for i in range(1, 21)]
+
+    def _root(self, key, name, blocks):
+        sec = node("section", key, blocks)
+        sec["name"] = name
+        return chapter(sec)
+
+    def test_references_named_section_is_skipped(self):
+        root = self._root("5.8", "5.8 REFERENCES", self.REFS)
+        self.assertEqual(coverage_problems(root, [unit("D15", "")],
+                                           _read({})), [])
+
+    def test_exercises_named_section_still_counted(self):
+        # 反向：真习题节名不豁免（漏写照样要报）
+        root = self._root("3.9", "3.9 EXERCISES", PROBLEMS)
+        probs = coverage_problems(root, [unit("3.9", "")], _read({}))
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("3.9", probs[0])
+
+    def test_prose_section_name_not_exempt(self):
+        for name in ("5.1 The References in the Literature",
+                     "1.6 Mathematical Descriptions of Systems",
+                     "Further references"):
+            self.assertFalse(_is_tail_ref_name(name), name)
+
+    def test_named_bibliography_variants(self):
+        for name in ("Appendix A Bibliography", "9 Index",
+                     "12.3 Acknowledgements", "3 参考文献", "References."):
+            self.assertTrue(_is_tail_ref_name(name), name)
 
 
 class TestRuns(unittest.TestCase):

@@ -119,8 +119,8 @@ from format_verify import check_example_blockquote_lines  # G 层：example bloc
 # 习题题号判据（集标题 / 题号两体 / 号段切分 / 缺号）与 gate_units 的**章级**跨单元
 # 号流闸同源——同一判据两处实现必然分叉（本 skill 已多次踩过）。
 from lib.problem_coverage import (
-    EXER_SET_HEAD_RE, exercise_item_numbers, exercise_run_gaps,
-    printed_ordinal_heads, norm_ordinal)
+    EXER_SET_HEAD_RE, exercise_item_numbers, exercise_item_pairs,
+    exercise_run_gaps_typed, printed_ordinal_heads, norm_ordinal)
 
 # ── 复用 format_verify 文档级检查（块引用/例/证明/列表结构），单元级化 ──
 # 这些检查在 verify 里以文件为输入；单元门控把单元正文写到临时 .md 后复用原函数，
@@ -933,6 +933,10 @@ def exercise_run_gap_problems(utype, body):
     （一个单元合法含两个集，两段号段互不相干），段内再按号回退切段；长度 < 3 的短段不判
     （两三条枚举不构成「集」）。同节习题拆成多个单元、各覆盖连续一段 = 合法（只看段内，
     不要求从 1 起）。跨单元的洞由章级闸 ``chapter_exercise_problems`` 负责。
+    🔴 题内小问裸号（``1. 2. 3.``）与整集题标签（``**Exercise 3.4 (…)**``）是两套
+    计数，**分轨各判各的连续**（``exercise_runs_typed``）——合流会让标签号替裸号补位、
+    把「本题只列到 2」报成缺号（Underactuated ch3/0055 实测假阳，写手被逼把习题标题
+    降级成普通文本 = 闸门逼代理篡改体例）。
     """
     if utype != "exercise":
         return []
@@ -941,7 +945,8 @@ def exercise_run_gap_problems(utype, body):
     problems = []
     seen = set()
     for a, b in zip(cuts, cuts[1:]):
-        for lo, hi, gaps in exercise_run_gaps(exercise_item_numbers(body[a:b])):
+        for lo, hi, gaps in exercise_run_gaps_typed(
+                exercise_item_pairs(body[a:b])):
             if (lo, hi) in seen:
                 continue
             seen.add((lo, hi))

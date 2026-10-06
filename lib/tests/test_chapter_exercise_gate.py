@@ -194,6 +194,38 @@ class TestChapterExerciseGate(unittest.TestCase):
                                        "> 1. a\n> 2. b\n> 12. c\n", False)]
         self.assertEqual(chapter_exercise_problems(units), [])
 
+    def test_mixed_streams_true_print_shape_passes(self):
+        # 反例（假阳）：ch3/0055 印面 = 每题的题内小问各自从 1 数，标签尾号 3→4→5
+        # 单调；单流下题内 `1. 2.` 会被卷进标签号段报「缺 3」，分轨后两套各自连续。
+        units = [("a.md", "**Exercises**\n\n"
+                          "**Exercise 3.3 (Third)**\n\n1. p\n2. q\n"
+                          "**Exercise 3.4 (Fourth)**\n\n1. p\n2. q\n3. r\n"
+                          "**Exercise 3.5 (Fifth)**\n\n1. p\n2. q\n3. r\n", True)]
+        self.assertEqual(chapter_exercise_problems(units), [])
+
+    def test_mixed_bare_and_label_streams_do_not_borrow_numbers(self):
+        # Underactuated Robotics ch3 §3.9 实测体例：题标签 `**Exercise 3.4 (…)**` 与
+        # 题内小问裸号 `1. 2. 3.` 是两套计数。合并成单流时标签号会替裸号「补位」，
+        # 漏写整题（3.4 缺失）看不见；分轨后标签轨 [3,5,6,7] 自报缺 4。
+        units = [("a.md", "**Exercises**\n\n"
+                          "**Exercise 3.3 (Third)**\n\n1. p\n2. q\n3. r\n"
+                          "**Exercise 3.5 (Fifth)**\n\n1. p\n2. q\n3. r\n"
+                          "**Exercise 3.6 (Sixth)**\n\n1. p\n2. q\n3. r\n"
+                          "**Exercise 3.7 (Seventh)**\n\n1. p\n2. q\n3. r\n", True)]
+        probs = chapter_exercise_problems(units)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("缺 4", probs[0])
+
+    def test_mixed_streams_bare_gap_still_caught(self):
+        # 同一混合体例下，题内小问真漏（3 缺）也必须照报。
+        units = [("a.md", "**Exercises**\n\n"
+                          "**Exercise 3.1 (One)**\n\n1. p\n2. q\n3. r\n"
+                          "**Exercise 3.2 (Two)**\n\n1. p\n2. q\n4. r\n"
+                          "**Exercise 3.3 (Three)**\n\n1. p\n2. q\n3. r\n", True)]
+        probs = chapter_exercise_problems(units)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("缺 3", probs[0])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

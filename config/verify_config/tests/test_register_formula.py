@@ -5,7 +5,9 @@
 被 OCR 读成字母等，Apostol IANT ch2 的 `(4)` 实测为 `C4)`）。它是 Q 层与写源闸门
 ⑭ 共用的人工确证通道，因此**登记纪律必须可机械执行**，否则白名单会变成遮丑工具：
 
-  1. **契约已登记**的号 → 拒绝（门控本来就要求写手写它，挂号=把漏写洗白）；
+  1. **契约已登记且 Q 层页窗收得到**的号 → 拒绝（门控本来就要求写手写它，挂号=把
+     漏写洗白）；契约已登记但**页窗收不到**（页边号整块漏读）→ 放行，因为登记只解除
+     Q 的 FABRICATED、门控判据 ③ 仍要求写手写 `\tag`；
   2. 无 `--evidence`（印面目视证据）→ 拒绝；
   3. 手写/手改的 `verify_config.json`（无 `_provenance`）→ 拒绝；
   4. 契约缺档即可登记，**即使 Q 层页扫描收得到**（内联粘连编号：契约里没有可挂
@@ -129,15 +131,38 @@ class TestRegistration(unittest.TestCase):
             raw = fh.read()
         self.assertIn(b"\r\n", raw, "写回破坏了原文件 CRLF 换行风格")
 
-    def test_number_in_contract_is_refused(self):
-        # 契约在档 = 门控本来就要求写手写它，挂号只会把漏写洗白。
+    def test_number_in_contract_and_harvestable_is_refused(self):
+        # 契约在档 **且** Q 层页窗收得到 = 写手两头都被要求写出该号，
+        # 挂号只会把漏写（或 tag 挂错公式）洗白 → 拒绝。
         ext = self._mk()
         _mk_contract(ext, 2, ["5"])
         rc = _run(ext, "--chapter", "2", "--number", "5",
                   "--evidence", "此书该号契约已登记，写手漏写才是问题")
         self.assertNotEqual(rc.returncode, 0)
         self.assertIn("契约已登记", rc.stderr)
+        self.assertIn("Q 层页窗收得到", rc.stderr)
         self.assertEqual(_formula(ext).get("known_book"), None)
+
+    def test_number_in_contract_but_unharvestable_registers(self):
+        # 「页边号整块漏读」形态（Underactuated Robotics ch7 `(6)` 实测：出版社
+        # 文字层右缘有独立行 `(6)`，OCR 把该块整块漏掉，页 JSON 里只剩散文回指
+        # `satisfying (6)`，而 Q 的形态判据刻意不收散文回指）。
+        # 此时登记**只**解除 Q 层的 FABRICATED；门控判据 ③（契约 tag 真值）照旧
+        # 要求写手写 `\tag`，漏写仍 FAIL → 洗白不了任何东西，必须放行，
+        # 否则「Q 要写 / Q 又判编造」与「契约要写」两头互斥，无解。
+        ext = self._mk()
+        _mk_contract(ext, 2, ["7"])
+        rc = _run(ext, "--chapter", "2", "--number", "7",
+                  "--evidence", "fitz p001 右缘目视确有独立的 (7)，"
+                                "该块 OCR 整块漏读，页 JSON 只剩散文回指")
+        self.assertEqual(rc.returncode, 0, rc.stderr[-400:])
+        self.assertIn("Q 层页窗收不到", rc.stdout)
+        fm = _formula(ext)
+        self.assertEqual(fm["known_book"], ["7"])
+        entry = fm["known_book_audit"][0]
+        self.assertEqual(entry["harvested"], False)
+        self.assertEqual(entry["contract_missing"], False)
+        self.assertNotIn("契约无档", rc.stdout)
 
     def test_harvested_but_absent_from_contract_registers(self):
         # 内联粘连编号：Q 层页扫描收得到 `(5)`，契约里却没有可挂 tag 的展示式

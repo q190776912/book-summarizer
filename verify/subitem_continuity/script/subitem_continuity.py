@@ -140,8 +140,18 @@ def _o_is_seq_marker(line, pos):
     * 紧贴 `( 前的字符是字母/数字（'2.1.3(d)' 型附着回指）→ 不算；
     * 否则要求其一成立：前面（去空格）是句读分隔符 '；;，,、:：.'，
       或后随内容以大写/中文/数字开头（真正的「(b) Show …」条目样式）。"""
-    if pos > 0 and line[pos - 1].isalnum():
-        return False
+    if pos > 0:
+        # 🔴 CJK 行内公式引用漏判（Kreyszig ch3 §3.5 CN 实测）：旧实现只查紧贴 `(` 的字符
+        # `line[pos-1]`，而中文「级数 (6)」「(a) 级数 (6) 收敛」里 `(` 前是空格 → 漏过
+        # alnum 守卫；随后「标记后中文开头」判据把 (6) 误收为子项序号，与 EN「series (6)
+        # converges」（小写 c 开头被正确忽略）行为不一致，造成 INTERNAL gap 假报缺 (7)。
+        # 修正：忽略前导空格，看 `(` 之前最近的非空格字符——若是字母/汉字/数字，说明括号是
+        # 行内交叉引用（'2.1.3(d)' 附着回指、'series (6)'、'级数 (6)'），不是独立子项序号。
+        # 真正的行首子项「(b) 证明」pre 为空或仅 '*'/'1.' 等标点，不受影响；本改只减少
+        # 假阳、绝不新增告警，对其他书零回归。
+        _pre = line[:pos].rstrip()
+        if _pre and _pre[-1].isalnum():
+            return False
     before = line[:pos].rstrip()
     if before and before[-1] in '；;，,、:：.':
         return True

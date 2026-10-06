@@ -45,6 +45,14 @@ from scan_long_formulas import row_metrics, rendered_rows, DEFAULT_W, DEFAULT_H
 LONG_ROW_MAX_VIS = DEFAULT_W      # 渲染行可视宽度阈值（默认 60）
 LONG_BLOCK_MAX_H = DEFAULT_H      # 块高（渲染行数）阈值（默认 8）
 
+# 🔴 长公式校验开关（校验行为，非度量实现）：按维护者要求「当前先不校验超长显示
+# 公式行」。关闭时 F 层 `long_formula_rows` 恒为空——该键本就 WARN 非阻断、不参与
+# FAIL，关闭后 writer 无需为「过宽公式」折行，也免去 CN/EN 折行镜像同步的负担。
+# 恢复校验：设环境变量 BOOKSUM_LONG_FORMULA=1，或把此常量改回 True。
+# 注意：只关掉「校验调用点」的开关；度量实现 `check_long_formula_rows` 与其单测
+# （verify/tests/test_long_row_check.py）保持不变，随时可复用。
+LONG_FORMULA_CHECK_ENABLED = os.environ.get("BOOKSUM_LONG_FORMULA", "0").strip() == "1"
+
 DELIM = re.compile(r'^\s*(?:>\s*)?\$\$\s*$')
 TAG_RE = re.compile(r'\\tag\{([^}]*)\}')
 

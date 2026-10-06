@@ -172,11 +172,25 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'truly_missing': [], 'mentioned_only': [], 'extra': [],
     # B 层 `extra` 的两桶重述（并集仍是 `extra`，pass/fail 不受影响）：
     # entry = md 有独立加粗条头而契约无条目（契约漏登记信号），mention = 仅正文提及。
-    # `extra_mention_domain` = mention 中被判属**公式标签 / 图表号 / 括号公式回指**
-    # 三个非条目领域的键（`domain_suppressed_mentions`；判据与跨 53 书普查见
-    # `verify/item_numbering_integrity/item_numbering_integrity.md`）。同样非阻断，
-    # 仅由 report 单独列出，绝不当作「已核对通过」。
+    # `extra_mention_domain` = mention / entry 中被判属**十个非条目领域**的键：公式标签
+    # `\tag{}`、图/表号、括号公式回指 `(1.2.8)`（含字母后缀 `(8.4.3a)`；号在 `\tag{}`
+    # 名册里即可归公式域）、题集（习题/
+    # Exercise…）、公式词（方程/equation）、书目（文献[n]/参考答案）、跨章回指（带条目词
+    # 且首段号 ≠ 本章 ≠ 所在章锚点）、契约在册小节标题 `### §N.M.K`、`untyped`（本书
+    # config 词表未宣告该条目类型的「标签+单段号」键，救济 = 补宣告计数器组）、
+    # `xref`（不可扫描的「标签+单段号」键且**每一处**出现都被 `§`/`Sect.`/`第 … 节`
+    # 锚点限定）
+    # （`domain_suppressed_mentions`；判据、粗体条头否决与跨 51 书 / 672 单元普查见
+    # `verify/item_numbering_integrity/item_numbering_integrity.md`）。🔴 同章跨节的条目
+    # 回指**不属于任何豁免域**（印面误指必须留在报告里走举证通道）。同样非阻断，
+    # 仅由 report 单独列出，绝不当作「已核对通过」；逐键域归属用
+    # `mention_domains_of` 追溯。
+    # `extra_attested` = 形状与「漏登记」相同、但已回源 PDF 逐页确证为**印面形态**
+    # （原书笔误 / 误指 / 引他文之号）的键，登记在 `<extract>/ignore_b_mention_{章}.json`
+    # （CLI `verify/item_numbering_integrity/script/attest_b_mention.py`，🔴 空理由不生效）；
+    # `extra_attested_reasons` 带逐键取证理由，report 逐条打印。
     'extra_entry': [], 'extra_mention': [], 'extra_mention_domain': [],
+    'extra_attested': [], 'extra_attested_reasons': {},
     'blocking': [], 'warnings': [], 'label_warns': [],
     'katex_errors': [], 'katex_lines': [],
     'long_formula_rows': [],   # F 层：超长显示公式行（tag 重叠风险，WARN 非阻断）

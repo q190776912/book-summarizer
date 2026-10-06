@@ -287,8 +287,15 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
                             continue
                     caption.add(normfig(num))
                 else:
-                    parts = num.split('.')
-                    if len(parts) >= 2 and int(parts[0]) == ch:
+                    # 🔴 分隔符必须**点 / 短横同认**（do Carmo 实测 2026-10-05）：
+                    # 印面图题是短横式 `Figure 4-14`，而旧判据只按 `.` 切分 →
+                    # `parts` 恒为 1 段、`len(parts) >= 2` 永不成立 → 本章 OCR
+                    # 图题**一张都进不了 caption 集**，`extra = extracted -
+                    # caption` 遂把全章每一张真实裁剪图都报成 FIGURE EXTRA
+                    # （do Carmo 五章 227 张 × 中英）。点式标签的切分结果不变，
+                    # 零回归；`parts[0].isdigit()` 兜住分隔符混杂的 OCR 残渣。
+                    parts = re.split(r'[.\-·．－–—]', num)
+                    if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) == ch:
                         caption.add(normfig(num))
     _known = extracted | (extracted_bookwide if components == 1 else set())
     missing = sorted(caption - _known - ignore_fig, key=sortkey)

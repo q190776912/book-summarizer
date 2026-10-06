@@ -289,6 +289,27 @@ def _o_inline_ordinals(line):
             vals |= _label_ordinals(m.group(1))
     return vals
 
+def _o_line_style(line):
+    """行首序号标记的**版式**：`'paren'`（`(1)` / `（2）`）、`'bold'`（`**1.**`）、
+    `'dot'`（`1.` / `*5.`），不是编号行则返回 `None`。
+
+    派发顺序与 `_o_match_line` 完全一致（同一行只会命中一套版式）。专供
+    `_o_split_restarts` 在**版式切换处切段**：子项清单 `(1)(2)` 与顶层大题号
+    `30.` 属于两条不同层级的序列，被行距并进同一块后不能当成一条序列求缺。
+    """
+    s = _INLINE_MATH_RE.sub(' MATH ', line)
+    if _O_PAREN_RE.match(s):
+        return 'paren'
+    if _O_BOLD_DOT_RE.match(s):
+        return 'bold'
+    if not s.lstrip().startswith('>'):
+        if _O_PLAIN_DOT_RE.match(s):
+            return 'dot'
+        if _O_STAR_NUM_RE.match(s):
+            return 'dot'
+    return None
+
+
 # 🔴 异质序列守卫（2026-09-16，statistical-inference 3.33/3.34 实测）：
 # 相邻编号跳幅上限。超过即判定为「两条不同序列被并进同一窗」，而非单条序列缺号。
 # 真缺号是「中间少几个」（跳幅小）；把另一条序列的头接进来才会「跳到很远」。
@@ -307,14 +328,28 @@ def _o_split_restarts(ordinal_items):
     一个块。整块按 min–max 求缺 → 凭空造出 16..41 一大串幽灵号（Rosen ch9 L3822 实测）。
     下降点即「换了一条清单」的证据，段内求缺才是同一序列自己的缺号。
     """
+    # 元素可携带第 3 位「版式」标记（见 _o_line_style）；2 元组视为版式未知
+    # （既有调用方 / 测试传 2 元组 → 行为与打补丁前完全一致）。
+    norm = [(it[0], it[1], it[2] if len(it) > 2 else None) for it in ordinal_items]
     runs = []
-    for li, val in ordinal_items:
-        if runs and val < runs[-1][-1][1]:
+    prev_style = None
+    for li, val, st in norm:
+        # 切点一（原判据）：数值下降 = 换了一条从 1 重启的清单。
+        # 切点二（本次新增）：版式切换 = 子项清单 `(1)(2)` 与顶层大题号 `30.`
+        #   被行距并进同一块（茆诗松《概率论与数理统计教程》ch3/ch5 实测：
+        #   `29.(1)(2)` 紧接 `30.` → 整块按 1..30 求缺，凭空造出 3..29；
+        #   `试证明：(1)(2)(3)` 紧接 `18.` → 凭空造出 4..17）。
+        #   两者层级不同，绝不该当成同一条序列求缺。
+        # 切段只会把「整段求缺」收窄成「段内求缺」→ 缺号集合只可能变小，绝不新增告警。
+        if runs and (val < runs[-1][-1][1]
+                     or (st is not None and prev_style is not None
+                         and st != prev_style)):
             runs.append([(li, val)])
         elif runs:
             runs[-1].append((li, val))
         else:
             runs.append([(li, val)])
+        prev_style = st
     return runs
 
 
@@ -408,11 +443,14 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
 
     n = len(lines)
     out = []
+    # 印面确证豁免表：只作用于 TAIL `~` 行（HEAD/INTERNAL 的 `x` 行不受影响）。
+    o_tail_exempt = load_o_tail_exemptions(ext_dir, ch)
 
     # Phase 1: find all numbered/lettered lines
     item_lines = []  # (line_idx, raw_label)
     inline_ords = {}  # line_idx -> {ordinal, ...}（行内标记，仅用于抑制）
     decl_lines = []   # [(line_idx, {ordinal, ...})]（组题声明，仅用于抑制）
+    style_by_line = {}  # line_idx -> 行首序号版式（见 _o_line_style，仅用于切段）
     in_math = False
     for i, ln in enumerate(lines):
         # Skip display-math ($$) blocks entirely: formula content lines may
@@ -424,6 +462,8 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         if in_math or n_fence:
             continue
         labels = _o_match_line(ln)
+        if labels:
+            style_by_line[i] = _o_line_style(ln)
         for lb in labels:
             item_lines.append((i, lb))
         iv = _o_inline_ordinals(ln)
@@ -584,7 +624,8 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         # `decl_here` = 本块名下的组题声明号（只印图的题，见 _O_GROUP_DECL_RE）。
         block_union = set(ordinals)
         decl_here = block_meta[bi]['decl']
-        for run in _o_split_restarts(ordinal_items):
+        for run in _o_split_restarts(
+                [(li, v, style_by_line.get(li)) for li, v in ordinal_items]):
             run_vals = sorted({v for _, v in run})
             if len(run_vals) < 2:
                 continue
@@ -605,12 +646,82 @@ def check_ordinal_subitem_gaps(md_file, ext_dir=None, ch=None, start=None, end=N
         if seq_type == 'numeric' and ext_dir and ch is not None and start is not None and end is not None:
             tail_found = _o_tail_ocr_scan(ext_dir, ch, start, end, ordinals, ctx_label)
             if tail_found:
+                sig = o_tail_signature(ctx_label, max_ord, tail_found)
+                if sig in o_tail_exempt:
+                    # 已按印面逐字核对过并登记理由 → 静默豁免（与 ignore_fig 同构：
+                    # 登记文件本身就是取证记录，不再占告警通道）。
+                    continue
                 out.append(
                     f"  ~ L{first_line}: [{ctx_label}] TAIL gap — md max = ({max_ord}), "
-                    f"but OCR shows higher number(s): ({', '.join(map(str, tail_found))})"
+                    f"but OCR shows higher number(s): ({', '.join(map(str, tail_found))})\n"
+                    f"    （印面核对确认无尾缺后，用 "
+                    f"`python verify/subitem_continuity/script/attest_o_tail.py "
+                    f"\"{ext_dir}\" {ch} --sig \"{sig}\" --reason \"…印面页码取证…\"` 登记豁免）"
                 )
 
     return out
+
+# ── TAIL 印面确证豁免（sidecar: <ext>/ignore_o_tail_{chapter_label}.json）────────
+# 成因（Katok 2026-10-03 实测）：`_o_tail_ocr_scan` 以「含同一上下文关键词的整页」
+# 为窗口找更大编号，于是**同页另一张清单**的号必然命中——Theorem 5.5.21 的
+# `Then: (1)(2)(3)` 被印面 p.228 习题 5.5.3 的 `(4)` 判成尾缺；补篇 Definition S.3.3
+# 的 `Remarks (1)(2)(3)` 被同页窗口里 Theorem S.3.1 的 `(4)` 判成尾缺。两处逐页
+# 核对印面均为**假阳**。这类行既不该当缺陷修，也不该每次 verify 都重跑一遍印面
+# 考古，故开一条带取证的登记通道：签名 = `上下文标签|md最大号|OCR更大号`，
+# 只有**同号同清单**的再次出现才被豁免（印面真多出一项时签名不同 → 照常告警）。
+O_TAIL_IGNORE_NS = 'ignore_o_tail'
+
+
+def o_tail_signature(ctx_label, max_ord, tail_found):
+    """TAIL 行的登记签名（与告警行一一对应，供 `attest_o_tail.py` 与判据共用）。"""
+    kw = (ctx_label or '').rstrip('：:').strip()
+    return '%s|%d|%s' % (kw, int(max_ord), ','.join(str(t) for t in sorted(tail_found)))
+
+
+def o_tail_ignore_path(ext_dir, ch):
+    """侧车路径：SSOT 标签优先，缺失时按**磁盘物理证据**回退其余章型同名文件。
+
+    与 `book_structure.resolve_chapter_json_path` 同一纪律：进程级 kind 注册表可能
+    未灌注/被污染，只信 SSOT 会让已登记的豁免静默失效。
+    """
+    try:
+        from data.book_structure.book_structure import chapter_label, chapter_ordinal
+        primary = chapter_label(ch)
+        ordv = chapter_ordinal(ch)
+        cands = [primary] + [f"{p}{ordv}" for p in ('ch', 'appendix', 'supplement')
+                             if f"{p}{ordv}" != primary]
+    except Exception:
+        cands = ['ch%s' % ch]
+    for lbl in cands:
+        fp = os.path.join(ext_dir, '%s_%s.json' % (O_TAIL_IGNORE_NS, lbl))
+        if os.path.exists(fp):
+            return fp
+    return os.path.join(ext_dir, '%s_%s.json' % (O_TAIL_IGNORE_NS, cands[0]))
+
+
+def load_o_tail_exemptions(ext_dir, ch):
+    """读该章 TAIL 豁免表 -> {签名: 理由}。
+
+    缺文件 / 坏 JSON -> 空表（判据照常打 `~` 行，fail-open 到告警侧）。
+    🔴 **理由为空的登记一律不生效**：豁免必须携带印面取证，否则等于把告警通道
+    静默关掉（与 `audit_ignore` 的「无证据标记即 SUSPECT」同源纪律）。
+    """
+    if not ext_dir or ch is None:
+        return {}
+    fp = o_tail_ignore_path(ext_dir, ch)
+    if not os.path.exists(fp):
+        return {}
+    try:
+        import json as _json
+        with open(fp, encoding='utf-8-sig') as f:
+            data = _json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).strip(): str(v).strip() for k, v in data.items()
+            if str(k).strip() and str(v or '').strip()}
+
 
 def _o_tail_ocr_scan(ext_dir, ch, start, end, md_nums, ctx_label):
     """Scan OCR JSON for parenthesized numbers higher than md max, in the

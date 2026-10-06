@@ -846,13 +846,30 @@ def _section_anchor(ext, node, page_dir=None):
 
 def _item_anchor(ext, node, page_dir=None):
     page = int(node.get("page_start") or 0)
-    pos = _bs._item_pos(ext, {"key": node.get("key") or "",
-                              "page": page,
-                              "text": node.get("name") or "",
-                              "type": node.get("type") or ""},
-                        page_dir=page_dir)
+    _it = {"key": node.get("key") or "",
+           "text": node.get("name") or "",
+           "type": node.get("type") or ""}
+    pos = _bs._item_pos(ext, dict(_it, page=page), page_dir=page_dir)
     if pos and pos[0] == page and pos[1] is not None and pos[1] >= 0:
         return page, float(pos[1])
+    # 🔴 ±1 页窗回退（Evans PDE2e ch6 `6.2.3/定理5` 实测 2026-10-05）：
+    # `insert_item` / `_fix_pages` 会把条目的 `page_start` 挪到「条头实际印刷页」的
+    # 下一面（该例 p337 → p338），而 `_item_pos` **只查 page_start 这一页** → 返回
+    # y=-1 哨兵 → `_item_anchor` 落成 `(page, 0.0)`，即「该页页顶」。可条头与正文
+    # 都还在**前一页**，于是锚点被推到自身正文**之后**：分派时
+    # 「位置 ≤ 块位置的最后一个锚点」把定理5 的 44 个正文块判给了前一个节点，
+    # 那节点多出来的尾料又生成一个新的 description 节点 —— 一条**编号条目被降级成
+    # 散散文**（条目身份 / `\tag{}` 锚点 / 类型全丢），而 `check_content_completeness`
+    # 因为只做「磁盘 vs 纯管线重算」对账，两侧一致，照样 **GATE=PASS** —— 损坏是静默的。
+    # 修法：哨兵之前先在 ±1 页找条头；找到就用那一页的真实 y（锚点回到正文所在面）。
+    # 只在 page_start 本身查不到时启用，命中即等价于「page_start 本来就该是那一页」，
+    # 故对 page_start 正确的书逐字节不变。
+    for cand in (page - 1, page + 1):
+        if cand < 1:
+            continue
+        p2 = _bs._item_pos(ext, dict(_it, page=cand), page_dir=page_dir)
+        if p2 and p2[0] == cand and p2[1] is not None and p2[1] >= 0:
+            return cand, float(p2[1])
     # y=-1 是 _item_pos 的「整块丢失」哨兵：在 attach 事件流里必须落在
     # (page, 0.0)，否则会排到同页所有节头之前、吞掉/错失内容块。
     return page, 0.0

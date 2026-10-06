@@ -112,9 +112,18 @@ class TestOrderMismatchNoCrash(unittest.TestCase):
         self.assertEqual([r["number"] for r in om], ["5.1"])
 
     def test_real_inversion_still_flagged_same_page(self):
-        om, mp = _run({"5.2": (160, 100.0), "5.1": (160, 90.0)},
+        # 2026-10-04 起同页 y 倒挂带**锚定偏斜容限 300**（多行公式右缘标签的
+        # 下沉量，Iwaniec–Kowalski ch1/ch3/ch12 实测偏斜 45~268 全是噪声）——
+        # 夹具差值须超过容限才代表真倒挂。
+        om, mp = _run({"5.2": (160, 500.0), "5.1": (160, 90.0)},
                       ["5.2", "5.1"])
         self.assertEqual([r["number"] for r in om], ["5.1"])
+
+    def test_same_page_small_skew_not_flagged(self):
+        """容限内的同页 y 倒挂 = 标签锚定偏斜，不判（ch1 (1.100)/(1.101) 实测）。"""
+        om, mp = _run({"5.2": (160, 130.0), "5.1": (160, 90.0)},
+                      ["5.2", "5.1"])
+        self.assertEqual(om, [])
 
     def test_forward_order_clean(self):
         om, mp = _run({"5.1": (160, 90.0), "5.2": (160, 100.0)},

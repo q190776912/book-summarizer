@@ -383,6 +383,23 @@ class SectionedTocPageGateTest(unittest.TestCase):
                             ['(7)'])
         self.assertNotIn('7', built['_union'])
 
+    def test_hybrid_chapter_opener_rescues_printed_label(self):
+        """Evans PDE ch1 p19（2026-10-03）：目录式节头 + 真方程正文的**混合章首页**。
+
+        本页列满 §1.1–§1.6（≥4 节头 → `_is_toc_page`），但同页 §1.1 确有显示方程
+        「F(D^k u(x),…,u(x),x) =0」并在其右缘**真印**编号 `(1)`。页级数学前置条件
+        （存在非裸标签的数学块）成立 → 回收该裸标签进章级 union，使总结忠实的
+        `\tag{1}` 不被误判 FABRICATED；与上两条**纯目录页**用例（无数学块 → 抑制）
+        正好互补，共同锁定「只在真有方程正文的混合页回收、纯目录页绝不回收」。
+        """
+        built = self._build(['1.1  Partial differential equations',
+                             '1.2 Examples', '1.3 Strategies for studying PDE',
+                             '1.4 Overview', '1.5 Problems', '1.6 References'],
+                            ['(1)',
+                             'F(Dku(x),Dk-1u(x),...,Du(x),u(x),x) =0 (x in U)'])
+        self.assertIn('1', built['_union'],
+                      "混合章首页真印的 `(1)` 须回收，否则忠实 \\tag{1} 假 FABRICATED")
+
 
 class RegistryTest(unittest.TestCase):
     def test_q_registered_after_p(self):

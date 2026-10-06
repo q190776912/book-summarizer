@@ -1784,6 +1784,38 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                         _collect_ex_keys(k)
 
                 _collect_ex_keys(tree)
+                # 🔴 节级同名条目（Evans PDE2e §6.4.2 实测 2026-10-05）：**章级**
+                # 复合键在「计数器按节重置」的书里不唯一。ch6 的 `定理3` 同时存在于
+                # §6.2.2(p333) / §6.3.1(p348) / §6.5.2(p375)，`load_contract` 的
+                # items 是 dict（同键后者覆盖前者），于是 agent 为 §6.4.2 那一条
+                # （印面 p363 `THIEOREM 3 (Strong maximum principle)`，OCR 把标签啃成
+                # THIEOREM、编辑距离 2，抽取器漏采）补写的 manual 条目撞上同名复合键
+                # → 旧判重直接 `continue`，`--backfill` 报 BACKFILLED=0，节级断号
+                # （印面序列 1,2,3,4,5，契约只剩 1,2,4,5）永远补不回来。
+                # 判据收紧为「同键**且页码落在既有节点页跨 ±1 内**才算重复」：
+                # 同页/邻页 = 同一条目（Lee 2e ch1 BACKFILLED=13 全为已存在节点的
+                # 重复，防回归仍在）；异页 = 另一节各自的同号条目 → 插入。
+                _ck_pages = {}
+
+                def _collect_ck_pages(n):
+                    if n.type in ("chapter", "section"):
+                        for k in n.sub_sec:
+                            _collect_ck_pages(k)
+                        return
+                    canon = _canon_key(
+                        _PRIMARY, n.key if isinstance(n.key, str) else str(n.key))
+                    if canon is None:
+                        return
+                    label = _TYPE_TO_LABEL.get(n.type, "uncat")
+                    if label == "uncat":
+                        m = re.match(r'^([A-Za-z\u4e00-\u9fff]+)', str(n.key).strip())
+                        if m:
+                            label = m.group(1)
+                    _ck_pages.setdefault(
+                        _composite_key(_PRIMARY, label, canon), []).append(
+                            (n.page_start, n.page_end))
+
+                _collect_ck_pages(tree)
                 for mo in mo_list:
                     mk = mo.get("key")
                     if not mk:
@@ -1801,7 +1833,19 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
                         if _mk_variants & _ex_keys:
                             continue  # 树内已有同号 exercise 节点（避免重复插入）
                     elif _composite_key(_PRIMARY, _mo_label, c) in contract_items:
-                        continue  # 已在校验起点契约中，跳过（避免重复插入）
+                        # 见上 `_ck_pages`：同名但异页 = 另一节的同号条目，
+                        # 按节重置计数器的书里二者并存（Evans ch6 §6.4.2 定理3
+                        # vs §6.3.1/§6.5.2 定理3），此时不得跳过。
+                        _ck = _composite_key(_PRIMARY, _mo_label, c)
+                        try:
+                            _mp = int(mo.get("page") or 0)
+                        except (TypeError, ValueError):
+                            _mp = 0
+                        _spans = _ck_pages.get(_ck) or []
+                        if (not _spans
+                                or any(abs((p0 or 0) - _mp) <= 1
+                                        for (p0, _pe) in _spans)):
+                            continue  # 同页/邻页 = 已在校验起点契约中（避免重复插入）
                     ok, where = insert_item(tree, mk, _mo_label,
                                             mo.get("page", 0), c, mo.get("text", ""))
                     if ok:
@@ -1818,7 +1862,55 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
             from attach_content import build_chapter_contract as _bcc
             from data.book_structure.book_structure import chapter_json_path as _ch_path
             tree.clear_raw_recursive()
+            # 🔴 条目块数守恒闸（Evans PDE2e ch6 实测 2026-10-05）：
+            # 回填会触发 `build_chapter_contract` 按页几何**重挂全部内容**，而锚点
+            # 只在 `page_start` 一页上找条头——`insert_item`/`_fix_pages` 把某条目的
+            # page_start 挪到条头实际印刷页的下一面时，该条目锚点落到「次页页顶」，
+            # 即**自身正文之后**，正文被改判给前一个节点、条目被降级成散描述节点
+            # （实测 `6.2.3/定理5` 45 块 → 1 块，`\tag{24}` 与条目身份一并丢失）。
+            # ① 闸门 GATE=PASS 抓不到：它只对账「磁盘 vs 纯管线重算」，两侧一致。
+            # 故在此显式比对回填前后的**每节点内容块数**：既有条目掉块即报硬错，
+            # 杜绝「重建成功、条目静默消失」。新建条目（回填目标）不参与比对。
+            def _blk_census(root):
+                out = {}
+
+                def _w(n, path):
+                    for x in n.get("sub_sec") or []:
+                        if not isinstance(x, dict) or "type" not in x:
+                            continue
+                        q = (path + "/" if path else "") + str(x.get("key"))
+                        nb = len([b for b in (x.get("sub_sec") or [])
+                                  if isinstance(b, dict) and "type" not in b])
+                        out[q] = nb
+                        _w(x, q)
+                _w(root, "")
+                return out
+
+            _before = _blk_census(tree.to_dict())
             full_ch, _stats = _bcc(ext, tree.to_dict())
+            _after = _blk_census(full_ch)
+            _new_paths = set()
+            for _b in backfilled_items:
+                _new_paths.add(str(_b.get("key")))
+            _lost = []
+            for _q, _n in _before.items():
+                if not _n:
+                    continue
+                _keyname = _q.rsplit("/", 1)[-1]
+                if _keyname in _new_paths:
+                    continue      # 本次回填新建/改写的条目，不算丢失
+                _m = _after.get(_q)
+                if _m is not None and _m < _n:
+                    _lost.append((_q, _n, _m))
+            if _lost:
+                print("  x 回填使既有条目丢失内容块（重建重挂按页几何错判归属，"
+                      "条目被降级为描述节点）：")
+                for _q, _n, _m in _lost[:12]:
+                    print("      %s : %d 块 -> %d 块" % (_q, _n, _m))
+                print("    🔴 本次回填**未写盘**（已中止）。先查条目 page_start 是否"
+                      "落在条头实际印刷页之外（attach_content._item_anchor 的哨兵"
+                      "`(page,0.0)` 会把锚点推到自身正文之后），修好再重跑。")
+                return 3
             with open(_ch_path(ext, str(ch)), "w", encoding="utf-8") as f:
                 json.dump(full_ch, f, ensure_ascii=False, indent=2)
             bs.root.replace_chapter(StructureNode.from_dict(full_ch))

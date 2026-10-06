@@ -11,7 +11,7 @@
 全部检测函数为内联实现（与原九个格式校验逐字一致，超长公式行检测独立成模块），`run()` 一次性返回下方 19 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
 
 1. 加载章节 markdown，并调用 `verify/format_verify/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
-2. 扫描显示公式块，检查「单行过长 → `\tag` 与公式重叠」风险（`long_formula_rows`，WARN 非阻断，阈值见 `long_row_check.py`）。
+2. 扫描显示公式块，检查「单行过长 → `\tag` 与公式重叠」风险（`long_formula_rows`，WARN 非阻断，阈值见 `long_row_check.py`）。〔**当前默认关闭**：`LONG_FORMULA_CHECK_ENABLED` 为假时本项恒返回空列表；恢复设环境变量 `BOOKSUM_LONG_FORMULA=1`。〕
 3. 扫描 `>` 引用块，检查连续性 / 嵌套 / 例证空隙（原 G 层）。
 4. 扫描结构标签守卫——结构标签在引用块内 / 陈述内容误包 / 无标签引用块 / 须进引用块的标签在顶层（原 H 层，4 子项）。
 5. 检查条目间分隔符完整性——连续 item 间缺 `---`（原 I 层）。

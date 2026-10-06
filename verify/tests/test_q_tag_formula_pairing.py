@@ -11,12 +11,16 @@ MISPLACED 比归属小节，`gate_units` 的契约 tag 对账也是**章级集�
 露出一条 MISPLACED。本判据把号与式重新钉在一起，故正反例都必须钉死：
 
   正例 = 错位链必须开报（否则新族形同虚设）；
-  反例 = 「合法改写 / 无载体 / 账太薄 / 过短」一律不判（放宽判据前先证不误伤，
-         跨 51 书普查见 `tools/q_tag_mismatch_census.py`：hi=0.80 时 51 书 74 行，
-         其中 24 行 r=1.00 集中在 Katok，其余为灰带待裁决）。
+  反例 = 「合法改写 / 无载体 / 账太薄 / 过短 / 书侧账 artifact」一律不判（放宽判据
+         前先证不误伤）。跨 51 书普查标定（`tools/q_tag_mismatch_census.py`）：
+         hi=0.80 时 2026-10-03 基线 34 行 → 2026-10-04 一轮（字形壳折叠 + 对手侧
+         账身下限 + 包含度豁免）21 行，Koopman 12→0；保留的 21 行里 Katok ch9
+         (9.3.2)→(9.4.2) 与 Lee ch9 (9.25)→(9.26) 两条**真缺陷**一行不少（逐页
+         取证见 `verify/formula_tag/formula_tag.md` 的标定记录）。
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -36,7 +40,8 @@ _boot.setup()
 
 from tag_formula_pairing import (norm_math, pairing_problems,               # noqa: E402
                                  connector_share, printed_tag_bodies,
-                                 summary_tag_bodies)
+                                 summary_tag_bodies, _ratio, _containment,
+                                 _CONTAINMENT_EXEMPT)
 
 
 def _page(pg, labels, formulas):
@@ -79,8 +84,9 @@ class _Fixture(unittest.TestCase):
             f.write("\n".join(parts))
         return fp
 
-    def _run(self, md, ignore=None, hi=None, min_body=12, ch=2, start=1, end=2):
-        return pairing_problems(self.ext, ch, start, end, md, ncomp=3,
+    def _run(self, md, ignore=None, hi=None, min_body=12, ch=2, start=1, end=2,
+             ncomp=3):
+        return pairing_problems(self.ext, ch, start, end, md, ncomp=ncomp,
                                 lead="digit", ignore=ignore,
                                 hi=self.HI if hi is None else hi,
                                 min_body=min_body)
@@ -406,8 +412,10 @@ class TestCensusFalsePositivesAreSilent(_Fixture):
         r"""Leinster ch5 实测的 6 行假阳形态：交付 5.3/5.15 贴的是**自己那枚号**的
         式子，只因 OCR 把箭头读成 `stackrel…longrightarrow` / `xrightarrow` 两种写法
         （r_self 掉到 0.67）而「另一枚号」的乱码图给到 0.85 就开报。
-        反向钉：同一份数据把闸门关掉（`_CONNECTOR_SHARE_MAX` 抬高）**必须**开报，
-        否则这条静音等于什么都没测。"""
+        反向钉：同一份数据把闸门关掉**必须**复现原假阳，否则这条静音等于什么都没测。
+        2026-10-04 起这类乱码图有**两层**独立静音（箭头占比闸 + 「两格同式」包含度闸，
+        实测 `_containment(claim, own)=0.800 ≥ hi`），故复现要把两支一起关掉：抬
+        `_CONNECTOR_SHARE_MAX` 让乱码图进账，再抬 `hi` 到 0.81 让包含度闸失手。"""
         self._write_pages({
             1: _page(1, [(100, "(2.6.1)"), (300, "(2.6.2)"), (500, "(2.6.3)"),
                          (700, "(2.6.4)")],
@@ -423,11 +431,16 @@ class TestCensusFalsePositivesAreSilent(_Fixture):
         import tag_formula_pairing as T
         old = T._CONNECTOR_SHARE_MAX
         try:
-            T._CONNECTOR_SHARE_MAX = 9.9          # 关掉新闸门
-            nums = {r["number"] for r in self._run(md)}
+            T._CONNECTOR_SHARE_MAX = 9.9          # 关掉第一层（箭头占比）
+            # 第二层仍在：两格互为同式 → 不判
+            self.assertEqual({r["number"] for r in self._run(md)}, set())
+            self.assertGreaterEqual(_containment(norm_math(self.P_XRIGHT),
+                                                 norm_math(self.P_STACK)),
+                                    self.HI, "第二层的根据")
+            # 两层一起关 = 原假阳复现
+            self.assertIn("2.6.1", {r["number"] for r in self._run(md, hi=0.81)})
         finally:
             T._CONNECTOR_SHARE_MAX = old
-        self.assertIn("2.6.1", nums, "闸门一关就该复现原假阳，否则静音是无的放矢")
 
     def test_real_math_using_circ_is_still_evidence(self):
         r"""词表只收**无歧义的多字符箭头/堆叠名**：Katok 的正文里 `\circ`/`\bigcap`/
@@ -437,6 +450,151 @@ class TestCensusFalsePositivesAreSilent(_Fixture):
             self.assertLess(connector_share(norm_math(s)), 0.50, s)
         self.assertGreaterEqual(connector_share(norm_math(self.P_ARRAY_GARB)),
                                 0.50)
+
+
+class TestBookSideArtifactGates(_Fixture):
+    r"""2026-10-04 一轮（Koopman Operator 12 行 / 跨书普查 34→21 行）新增的三支
+    判据各钉正反例。三条都遵守同一约定：**账本保持书侧可核对的原样**，静音全部
+    发生在判据侧——把「残段 / 同式两种转写」从「另一枚号的载体」证据里剔除，
+    但绝不改动 `printed_tag_bodies` 的归属，否则真移位（Katok (9.3.2)、Lee (9.25)）
+    会跟着一起消失（这一条回退过一次，实测就是如此）。
+
+    另注：`_SHELL_CMDS` 的字形扩展（`\mathfrak` / `{\bf }` / `\lvert\rvert` /
+    `\var*`）只在 `norm_math` 层面钉死，不做端到端反例——因为「同一式子的两种
+    转写」天然会被下面的包含度/同式两支二次静音，端到端反例测不到被删的那一支。
+    """
+
+    # ---- 字形壳折叠（Koopman ch6 (6.10) / ch11 (11.17) / ch16 (16.24) 实测）----
+    FRK_PRINTED = (r"\mathfrak{h}\circ\mathfrak{g}=\mathfrak{f},\ "
+                   r"\lvert x_{1}\rvert+\lvert x_{2}\rvert=\lvert x_{3}\rvert")
+    FRK_DELIVERY = (r"\mathbf{h}\circ\mathbf{g}=\mathbf{f},\ "
+                    r"|x_{1}|+|x_{2}|=|x_{3}|")
+    BF_PRINTED = (r"{\bf x}\circ{\bf y}={\bf z},\ |x_{1}|+|x_{2}|=|x_{3}|")
+    BF_DELIVERY = (r"\mathbf{x}\circ\mathbf{y}=\mathbf{z},\ "
+                   r"\|x_{1}\|+\|x_{2}\|=\|x_{3}\|")
+
+    def test_font_and_delimiter_shell_spellings_fold(self):
+        self.assertEqual(norm_math(self.FRK_PRINTED), norm_math(self.FRK_DELIVERY))
+        self.assertEqual(norm_math(self.BF_PRINTED), norm_math(self.BF_DELIVERY))
+        # `\var` 变体与正体名 = 同一枚字母（OCR 两侧写法不稳）
+        self.assertEqual(norm_math(r"\varPhi \circ \varphi"), norm_math(r"\Phi \circ \phi"))
+        self.assertEqual(norm_math(r"\mathcal{L}\,\boldmath z"), "lz")
+        # 反例：实义命令名不得被折掉（`\setminus` 剥壳后仍留两侧字母才是对的）
+        self.assertEqual(norm_math(r"A\setminus B"), "ab")
+
+    def test_displaystyle_and_prime_spelling_fold(self):
+        r"""Katok ch9 (9.3.2) 实测（2026-10-04）：印面 `… x ^ { \prime } …` vs 交付
+        `… x' …`。逐字同一条式子，旧归一化下 r_self=0.45（`prime` 五个字母留在书侧，
+        裸 `'` 却是非字母）而邻号 (9.4.2) 给到 0.82 → 正确交付被读成配错号。
+        这一支之前被当成「真移位」误判过一次，教训：**配对假阳先查两侧字形转写**。"""
+        printed = (r"\begin{array} { l } { { \displaystyle { \frac { \partial H } "
+                   r"{ \partial x ^ { \prime } } } = y ^ { \prime } , \ } } \\ { { "
+                   r"\displaystyle { \frac { \partial H } { \partial x } } = - y . } } "
+                   r"\end{array}")
+        delivery = (r"\begin{aligned} \frac{\partial H}{\partial x'} &= y',\\ "
+                    r"\frac{\partial H}{\partial x} &= -y. \end{aligned}")
+        self.assertEqual(norm_math(printed), norm_math(delivery))
+        self._write_pages({
+            1: _page(1, [(100, "(9.3.2)"), (300, "(9.4.2)")],
+                     [(100, printed),
+                      (300, r"\frac { d } { d t } \frac { \partial L } { \partial v }"
+                            r" - \frac { \partial L } { \partial x } = 0")]),
+            2: _page(2, [(100, "(9.4.3)")], [(100, E3)]),
+        })
+        md = self._write_md([(delivery, "9.3.2"), (E1, "9.4.2"), (E3, "9.4.3")])
+        self.assertEqual(self._run(md, ch=9, ncomp=3), [])
+        # 反向钉：**只**关掉 `\prime` 一支（别支闸门一概不动）→ 原假阳必须复现
+        import tag_formula_pairing as T
+        old = T._SHELL_CMDS
+        pat = old.pattern
+        self.assertIn("(?:prime|", pat, "反向钉的根据：这一支还在表里")
+        try:
+            T._SHELL_CMDS = re.compile(pat.replace("(?:prime|", "(?:zzzprime|"))
+            self.assertIn("9.3.2", {r["number"] for r in self._run(md, ch=9, ncomp=3)})
+        finally:
+            T._SHELL_CMDS = old
+
+    def test_shell_only_difference_pairing_is_silent(self):
+        r"""Koopman (6.10) 端到端形态：印面用 `\mathfrak`、交付用 `\mathbf`，
+        另一枚号的同族式给到 0.82 —— 折叠后自己那格就配上，整条不判。"""
+        neigh = r"\mathbf{h}\circ\mathbf{g}=\mathbf{f}_{2},\ |x_{1}|+|x_{2}|=|x_{3}|"
+        self._write_pages({
+            1: _page(1, [(100, "(2.6.1)"), (300, "(2.6.2)")],
+                     [(100, self.FRK_PRINTED), (300, neigh)]),
+            2: _page(2, [(100, "(2.6.3)")], [(100, E3)]),
+        })
+        md = self._write_md([(self.FRK_DELIVERY, "2.6.1"), (E1, "2.6.2"),
+                             (E3, "2.6.3")])
+        self.assertNotIn("2.6.1", {r["number"] for r in self._run(md)})
+
+    # ---- 对手侧账身下限（残段不得冒充「另一枚号的载体」）----
+    FRAG = r"\phi \bigcup n i"                       # norm 11 < min_body
+    DELIV = r"\phi \bigcup_{n i n n} u"              # norm 14 ≥ min_body
+
+    def test_sub_min_body_fragment_is_not_a_claimed_owner(self):
+        r"""Koopman ch5 (5.32) / ch16 (16.24) 实测形态：入账门槛 `_record` 只有 8
+        字符，交付侧要求 ≥12 —— OCR 切出的半行残段被判据当成另一枚号的载体，短残段
+        与任何正经正文的比值都能上 0.8（分母小），把**正确**的交付读成配错号。"""
+        self._write_pages({
+            1: _page(1, [(100, "(2.6.1)"), (300, "(2.6.2)")],
+                     [(100, E1), (300, self.FRAG)]),
+            2: _page(2, [(100, "(2.6.3)")], [(100, E3)]),
+        })
+        md = self._write_md([(self.DELIV, "2.6.1"), (E2, "2.6.2"), (E3, "2.6.3")])
+        # 前置事实：残段确实「高匹配」交付正文——静音只能来自下限闸，不是配不上
+        self.assertGreaterEqual(_ratio(norm_math(self.DELIV), norm_math(self.FRAG)),
+                                self.HI)
+        self.assertEqual(self._run(md), [])
+        # 反向钉：把 `min_body` 降到残段长度以下 = 关掉下限闸 → 原假阳必须复现
+        self.assertIn("2.6.1", {r["number"] for r in self._run(md, min_body=8)})
+
+    # ---- 同式误读豁免（containment ≥ 0.90）----
+    OWN_MISREAD = r"L_{i}V_{i}=V_{i}A_{i}"           # OCR 把 \Lambda 读成拉丁 A
+    BODY_MISREAD = r"L_i V_i = V_i \varLambda_i"
+    NEIGH_MISREAD = r"L_{i}=V_{i}\Lambda_{i}V_{i}^{-1}"
+
+    def test_same_formula_misread_is_exempted(self):
+        r"""Koopman (5.32) 实测：自己那格印面只有 8 字符（希腊字母被读成形近拉丁
+        字母），长度惩罚把 `_ratio` 压到 0.76 < `hi`，而邻号 (5.17) 的同族短式给到
+        0.82 → 正确的交付被读成配错号。非对称包含度认「同一枚式子的两种转写」。"""
+        self._write_pages({
+            1: _page(1, [(100, "(5.32)"), (300, "(5.17)")],
+                     [(100, self.OWN_MISREAD), (300, self.NEIGH_MISREAD)]),
+            2: _page(2, [(100, "(5.18)")], [(100, E3)]),
+        })
+        md = self._write_md([(self.BODY_MISREAD, "5.32"), (E1, "5.17"),
+                             (E3, "5.18")])
+        kw = dict(ch=5, ncomp=2)
+        self.assertEqual(self._run(md, **kw), [])
+        # 反向钉：阈值抬到 >1（关掉豁免）→ 原假阳必须复现，证明静音来自这一支
+        import tag_formula_pairing as T
+        old = T._CONTAINMENT_EXEMPT
+        try:
+            T._CONTAINMENT_EXEMPT = 1.01
+            self.assertIn("5.32", {r["number"] for r in self._run(md, **kw)})
+        finally:
+            T._CONTAINMENT_EXEMPT = old
+
+    def test_garbled_fragment_does_not_exempt_a_real_shift(self):
+        r"""🔴 阈值的另一半：Lee ch9 (9.25)→(9.26) 真移位。自己那格印面只剩一条
+        11 字符残段，对交付正文（(9.26) 的整式）包含度 **0.818**——落在 `hi`(0.80)
+        与豁免阈值(0.90) 之间：既不足以证明「同式」，又短于 `min_body` 而不能被
+        「同式两印」一支吸收。**这一条必须继续开报**（阈值取 0.80 就把它静音了）。"""
+        self.assertLess(_containment(norm_math(r"\phi \bigcup z q"),
+                                     norm_math(WHOLE926)), _CONTAINMENT_EXEMPT)
+        self._write_pages({
+            1: _page(1, [(100, "(9.25)"), (300, "(9.26)")],
+                     [(100, r"\phi \bigcup z q"), (300, WHOLE926)]),
+            2: _page(2, [(100, "(9.27)")], [(100, E3)]),
+        })
+        # 交付：(9.26) 的整式被贴在 (9.25) 上，(9.26) 那一格装的是别的式子 = 移位链
+        md = self._write_md([(WHOLE926, "9.25"), (E1, "9.26"), (E3, "9.27")])
+        rows = {r["number"]: r for r in self._run(md, ch=9, ncomp=2)}
+        self.assertIn("9.25", rows)
+        self.assertIn("(9.26)", rows["9.25"]["source_text"])
+
+
+WHOLE926 = r"\phi=\bigcup_{n\in\mathbb{N}}\left(U_{n}\cap F_{s}\right)^{s}"
 
 
 if __name__ == "__main__":

@@ -54,7 +54,7 @@ from verify.script.struct_labels import (
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
 )
 from lib.regexlib import G_HEAD, FMT_HR_RE, FMT_SEC_RE
-from long_row_check import check_long_formula_rows  # 显示公式行过长（tag 重叠）WARN
+from long_row_check import check_long_formula_rows, LONG_FORMULA_CHECK_ENABLED  # 显示公式行过长（tag 重叠）WARN；受开关控制
 
 
 # ===========================================================================
@@ -1269,7 +1269,8 @@ class FLayer(VerifyLayer):
         return LayerResult(code=self.code, metadata={
             'katex_errors': katex_errors,
             'katex_lines': katex_lines,
-            'long_formula_rows': check_long_formula_rows(_md_lines),
+            'long_formula_rows': (check_long_formula_rows(_md_lines)
+                                  if LONG_FORMULA_CHECK_ENABLED else []),  # 开关关闭时恒空（键仍在，WARN 非阻断）
             'quote_gaps': check_g_quote_continuity(ctx.md_file),
             'nested_bq': check_nested_blockquotes(ctx.md_file),
             'ex_proof_gaps': check_example_proof_gap(ctx.md_file),

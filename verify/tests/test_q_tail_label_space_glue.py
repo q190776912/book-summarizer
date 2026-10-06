@@ -89,6 +89,30 @@ class TestGluedLeftRejected(unittest.TestCase):
         self.assertIsNotNone(_tail_num(r'在线性空间中 \phi ( 2 )'))
         self.assertIsNone(_tail_num(r'then \sin(2) vanishes'))
 
+    def test_braced_group_symbol_argument_is_rejected(self):
+        # 群表示论 Introduction to representation theory ch1 实测 2026-10-03：
+        # 显示块 `{ \mathfrak { s l } } ( 2 )` = `\mathfrak{sl}(2)`，`(2)` 是**维数
+        # 自变量**（`sl` 是名）——整块就是一个带花括号名的李代数记号、以 `}` 收尾，
+        # 空格躲过了 ① 的黏着拒收与 ③ 的「孤立大写字母」群记号拒收，曾被当成
+        # §1.1 的右缘标签 `(2)`，抢走真 Jacobi 恒等式 `(2)`（p15/§1.9）的定义节 →
+        # 忠实 `\tag{2}` 误判 MISPLACED。判据收紧后须拒收这类「裸名字 + 括号自变量」。
+        for line in (r'{ \mathfrak { s l } } ( 2 )',
+                     r'\mathfrak { s l } ( 2 )',
+                     r'\mathcal { O } ( 3 )',
+                     r'\operatorname { char } ( 2 )',
+                     r'\mathrm { Hom } ( 1 )'):
+            with self.subTest(line=line):
+                self.assertIsNone(_tail_num(line))
+
+    def test_genuine_labels_next_to_braced_group_still_accepted(self):
+        # 反向：真右缘标签的左邻含等式内容（`=`/数字/`(`）或是**无花括号**裸命令，
+        # 新判据一律放行，不被误伤。
+        for line, want in ((r'he - eh = 2e, \quad ( 1 )', '( 1 )'),
+                           (r'x^{2} + y^{2} = z ( 3 )', '( 3 )'),
+                           (r'f : V \to W \quad ( 5 )', '( 5 )')):
+            with self.subTest(line=line):
+                self.assertEqual(_tail_num(line), want)
+
 
 class TestGuardPredicateShape(unittest.TestCase):
     def test_raw_prefix_is_the_input(self):

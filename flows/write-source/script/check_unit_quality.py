@@ -1321,8 +1321,8 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     if utype == "exercise" and content_blocks and \
             not exercise_item_numbers(body_clean) and \
             not (key and re.search(
-                r"(?m)^\s{0,3}(?:>\s*)?\*\*[^*\n]*" + re.escape(str(key).strip())
-                + r"[^*\n]*\*\*", body_clean)) and \
+                r"(?m)^\s{0,3}(?:>\s*)?\*\*[^\n]*?" + re.escape(str(key).strip())
+                + r"[^\n]*?\*\*", body_clean)) and \
             not (key and norm_ordinal(key) in printed_ordinal_heads(body_clean)):
         all_problems.append(
             "契约登记的习题单元正文认不出任何一条习题条目（既无集内序号，也无带契约键 "

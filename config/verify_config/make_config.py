@@ -2342,8 +2342,11 @@ def _ocr_supplement_chapters(extract_dir):
         except Exception:
             continue
         for b in data.get('text', []):
-            txt = b.get('text', '') if isinstance(b, dict) else ''
-            m = _SUPPLEMENT_OCR_RE.match(txt.strip())
+            # 🔴 MM 修复页的行可以是 {"text": {...}} 嵌套对象（周民强《实变函数论》
+            # 实测 1672 条），手写 b.get('text','') 取出 dict 后 .strip() 即崩，
+            # 增量升级（_upgrade_missing_special_keys）整条路径被堵死。blk_text
+            # 是 page 块归一的 SSOT（lib/util.py）：解一层嵌套、非串一律 ''。
+            m = _SUPPLEMENT_OCR_RE.match(blk_text(b).strip())
             if m:
                 letter = m.group(1).upper()
                 if letter not in hits:

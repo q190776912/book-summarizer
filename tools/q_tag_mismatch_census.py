@@ -30,6 +30,7 @@ import lib.boot as _boot
 _boot.setup()
 
 from lib.numbering import resolve_formula_type                      # noqa: E402
+from chapter_map import load_chapter_records                        # noqa: E402
 from tag_formula_pairing import (pairing_problems,                  # noqa: E402
                                  printed_tag_bodies)
 from verify_chapter import chapter_md_groups                        # noqa: E402
@@ -79,26 +80,38 @@ def census_book(book_dir, hi, min_body, only_lang=None, verbose=False):
     cfg = json.load(io.open(cfp, encoding="utf-8"))
     if "ch" not in cfg:            # 老平铺格式：整体即正文配置
         cfg = {"ch": cfg}
-    cmap = json.load(io.open(mfp, encoding="utf-8"))
-    chapters = cmap.get("chapters") or []
-    if isinstance(chapters, dict):
-        chapters = [dict(v, num=k) for k, v in chapters.items()]
+    # 🔴 必须走 `chapter_map.iter_chapter_records` 的归一化通道：磁盘上有三种形态
+    # （canonical `num` / legacy list `ch` / legacy flat dict），手写 `info.get("num")`
+    # 会把 legacy 形态**整本静默跳过**并报 0 行——2026-10-04 实测：语料 51 本里
+    # 只有 8 本用 canonical `num`，其余 30+ 本（含 Koopman，其 ch2/ch11/ch16 的
+    # TAG_MISMATCH 在交付物里明明存在）全被读成 0，据此得出的「阈值安全」结论无效。
+    chapters = load_chapter_records(mfp)
     out = []
+    examined = 0
+    skipped = []
     for info in chapters:
         ch = info.get("num")
         if ch is None:
+            skipped.append("no-num")
             continue
         kind = int(info.get("kind") or 1)
         fblock = _formula_for_kind(cfg, kind)
         if not fblock or fblock.get("type") is None:
+            skipped.append("%s:no-formula-cfg" % ch)
             continue
         lead, ncomp = resolve_formula_type(
             fblock.get("type"), letter_ch=bool(fblock.get("letter_ch")))
         ign = _ignore_for_chapter(ext, str(ch), fblock)
         start, end = info.get("start"), info.get("end")
         if start is None or end is None:
+            skipped.append("%s:no-page-window" % ch)
             continue
-        for grp in chapter_md_groups(book_dir, ch):
+        groups = list(chapter_md_groups(book_dir, ch))
+        if not groups:
+            skipped.append("%s:no-md" % ch)
+            continue
+        examined += 1
+        for grp in groups:
             lang = "cn" if os.path.basename(grp[0]).startswith("第") else "en"
             if only_lang and lang != only_lang:
                 continue
@@ -111,6 +124,7 @@ def census_book(book_dir, hi, min_body, only_lang=None, verbose=False):
                                         min_body=min_body, printed=printed)
                 for r in rows:
                     out.append((ch, lang, os.path.basename(md), r))
+    census_book.last = (examined, len(chapters), skipped)
     return out
 
 
@@ -131,6 +145,8 @@ def main(argv):
         sub = argv[argv.index("--book") + 1]
     total = 0
     books = 0
+    seen_ch = 0
+    skip_notes = []
     for bd in _book_dirs(root):
         if sub and sub.lower() not in bd.lower():
             continue
@@ -142,6 +158,12 @@ def main(argv):
             continue
         if rows is None:
             continue
+        ex, nch, skipped = getattr(census_book, "last", (0, 0, []))
+        seen_ch += ex
+        if ex < nch:
+            skip_notes.append("%s: %d/%d 章有账, 跳过 %s"
+                              % (os.path.relpath(bd, root), ex, nch,
+                                 ",".join(skipped[:6]) + ("…" if len(skipped) > 6 else "")))
         n = len(rows)
         total += n
         if n or verbose:
@@ -150,8 +172,11 @@ def main(argv):
             for ch, lang, md, r in rows:
                 print("   ch%s [%s] (%s) %s" % (ch, lang, r["number"],
                                                 r["source_text"]))
-    print("\ncensus: %d books, %d TAG_MISMATCH rows (hi=%.2f min_body=%d lang=%s)"
-          % (books, total, hi, min_body, only_lang or "both"))
+    print("\ncensus: %d books, %d 章实际有账, %d TAG_MISMATCH rows "
+          "(hi=%.2f min_body=%d lang=%s)"
+          % (books, seen_ch, total, hi, min_body, only_lang or "both"))
+    for s in skip_notes:
+        print("   [SKIP] %s" % s)
     return 0
 
 

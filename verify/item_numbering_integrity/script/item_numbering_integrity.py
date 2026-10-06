@@ -40,7 +40,8 @@ from dataclasses import dataclass, field
 from verify.script.base import VerifyLayer, LayerResult
 from key_parse import sortkey, _canon_label
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
-from verify_config import ORDINAL_THREE_LEVEL
+from verify_config import (ORDINAL_THREE_LEVEL, ORDINAL_APP, ORDINAL_APP2,
+                           _LABEL_CANON)
 
 # 与 audit_ignore.py 的 _EVIDENCE_TOKENS 对齐：ignore 理由含下列任一证据标记时，
 # 视为 agent 已核对源书、确为共享计数器 / 作者稀疏编号（非真实缺项）。
@@ -143,6 +144,53 @@ def _norm_ex_key_form(raw):
     if len(parts) >= 2 and parts[-1].isdigit():
         return '.'.join(parts[:-1]) + '-' + parts[-1]
     return s
+
+
+def _ex_canon_key(k):
+    """题集键的**两侧同一**归一（A 层 EXTRA 覆盖集专用，suppress-only）。
+
+    md 条头键与契约侧 `_norm_ex_key_form` 的键形分隔符不同族：契约 `问题7-19`
+    （短横）↔ md 条头 `问题7.19`（点式），`_norm_path_labelfree` 只折三段/
+    字母章位形态，两段题集键两侧对不上 → 契约已登记的章末问题仍被报
+    EXTRA-ENTRY（Iwaniec–Kowalski ch7 实测 2026-10-04）。剥标签前缀 +
+    分隔符统一成 `.`：`问题7.19` / `问题7-19` / `Problem 7-19` → `7.19`。
+    """
+    s = re.sub(r'^\D+', '', str(k or '').strip())
+    return s.replace('．', '.').replace('-', '.')
+
+
+def _inline_only_entry_keys(md_lines, keys):
+    """句中加粗键集合：`keys` 里在 md 中**没有任何一行**以含它的粗体头起头者。
+
+    `上式即给出下述 **命题19.5**：…` 的句中强调被 ENTRY_RE 当成独立条头 →
+    直落 extra_entry「契约漏登记」最强信号桶（Iwaniec–Kowalski ch19 实测
+    2026-10-04）。条目级桶的定义本就是「**独立**加粗条头」——只存在于句中
+    的键属行内强调。真条头（`**命题19.5**` 独占行首）必然贡献一处行首命中，
+    不受影响；分隔符两变体（`2.9-1` ↔ `2.9.1`）同认，裸号条头书零回归。
+    模块级纯函数：eqref 隔离测试需与本判据一同关闭才能复原旧桶。
+    """
+    out = []
+    if not md_lines or not keys:
+        return out
+    head_rx = re.compile(r'^\s*>?\s*\*\*')
+    for k in keys:
+        num = re.sub(r'^\D+', '', k)
+        if not num:
+            continue
+        variants = (num, num.replace('-', '.'), num.replace('.', '-'))
+        hit = False
+        for ln in md_lines:
+            if not head_rx.match(ln):
+                continue
+            parts = ln.split('**', 2)
+            if len(parts) < 2:
+                continue
+            if any(v in parts[1][:24] for v in variants):
+                hit = True
+                break
+        if not hit:
+            out.append(k)
+    return out
 
 
 def _contract_exercise_keys(ext_dir, ch):
@@ -878,6 +926,54 @@ def _merge_orphan_ex_windows(entries):
     return entries
 
 
+def _split_restarting_windows(entries):
+    """Counter-reset windows may legitimately restart *within* a window when the
+    author renumbers a group from 1 (ODE《常微分方程》：§4 含三组习题 1..11 / 1..2 /
+    1..8；§14 的例1 在该节内重排两次；跨节 Corollary 也各自从 1 重排)。若不拆分，同窗
+    同号二现 → 误报「疑似幽灵重复节点」。
+
+    判据（机械可验、零回归到 BLOCKING）：沿文档顺序扫描某窗编号序列，遇**下降**时仅当
+    满足「真·计数器重置」形态才切窗：
+      · 被重排号 ≤ 当前段的最小值（即从该组最小号重新计，典型的重排/并行计数器）；
+      · 且下降处条头的 label 与段首一致（同类型项重排——`sub` 不用：本流水线把
+        `## §N` 节头也计入 sub，节间本来就是合法重置边界，用 sub 反而拦住切窗）。
+      `restarted_low` 已足以区分真·重排与真·错位（错位时重排号必 > 段min），无需 sub。
+    切窗后段挂 `<gk>#<k>` 子窗，各段独立查缺/查序。
+      · 真·重排（如 [1,2,3,1,2,3]）：1 ≤ 段min ⇒ 切，两段各单调 ⇒ 无 ghost 无缺号；
+      · 真·错位（如 [1,2,3,5,4] 或 [1,2,3,2,4]）：重排号不 ≤ 段min ⇒ 不切，维持原
+        BLOCKING 顺序错乱，绝不掩盖真错误；
+      · 跨 § 连续计数（如 ch2 习题 1..3 接 4..8）：序列不降 ⇒ 不切，整窗 [1..8] 无缺号。
+    仅作用于「出现下降」的窗；连续窗零改动 ⇒ 其他书（含 scope≠3 的带号书）无回归。
+    """
+    order = defaultdict(list)   # gk -> [(doc_index, num, label), ...] 文档顺序
+    for i, _e in enumerate(entries):
+        order[_e[0]].append((i, _e[1], _e[3]))
+    for gk, lst in order.items():
+        runs, cur = [], [lst[0]]
+        cur_min = lst[0][1]
+        for idx, num, lab in lst[1:]:
+            restarted_low = (num <= cur_min)               # 重排号 ≤ 段内最小 ⇒ 真重置
+            same_identity = (lab == cur[0][2])             # 同类型项重排
+            if num < cur[-1][1] and restarted_low and same_identity:
+                runs.append(cur)
+                cur = [(idx, num, lab)]
+                cur_min = num
+            else:
+                cur.append((idx, num, lab))
+                if num < cur_min:
+                    cur_min = num
+        runs.append(cur)
+        if len(runs) <= 1:
+            continue                                  # 单调 ⇒ 不切
+        for k, run in enumerate(runs):
+            if k == 0:
+                continue                              # 首段保留原 gk
+            for idx, _n, _l in run:
+                _e = entries[idx]
+                entries[idx] = (f"{_e[0]}#{k}",) + tuple(_e[1:])
+    return entries
+
+
 def _source_item_comps_label(it, cfg):
     """Map an extraction item (ctx.items, the source contract) to
     (comps, label, group) using the SAME wildcard separator and the item's
@@ -955,6 +1051,25 @@ def _md_tail_blocking(ctx, cfg, groups):
         if num > src_max.get(key, 0):
             src_max[key] = num
 
+    # 🔴 ODE《常微分方程》根治（2026-10-06）：`_split_restarting_windows` 把「节内/
+    # 跨节多重排」的计数器窗沿重置点切成 `<gk>#<k>` 子窗，使缺号/顺序/幽灵各查各的
+    # 单调子窗（零误报）。但 TAIL 比对的是「.md 最大号 vs 源契约最大号」：子窗局部最大
+    # （如 Corollary#3 的 6）远小于契约全局最大（11）→ 误报 TAIL。故此处把 `#<k>` 子窗
+    # 还原回基窗再取全局最大，恢复切窗前行为；真实尾部漏项（全局最大 < 源最大）仍照常报。
+    def _base_gk(gk):
+        if '#' in gk:
+            head, _, tail = gk.rpartition('#')
+            if tail.isdigit():
+                return head
+        return gk
+
+    agg_max = {}
+    for gk, pairs in groups.items():
+        b = _base_gk(gk)
+        m = max(n for n, _ in pairs)
+        if m > agg_max.get(b, 0):
+            agg_max[b] = m
+
     blocking = []
     for gk, pairs in sorted(groups.items()):
         # 🔴 练习/问题独立窗（ex:）不做 TAIL 比对：源侧 ctx.items 的分组尚未按
@@ -963,9 +1078,12 @@ def _md_tail_blocking(ctx, cfg, groups):
         # 人工或后续源侧分组适配。
         if ':ex:' in gk:
             continue
+        # 🔴 还原基窗（剥离 _split_restarting_windows 注入的 `#<k>`），TAIL 比对以基窗
+        # 全局最大为准（见上方 agg_max 注释），子窗号只用于展示无意义。
+        base = _base_gk(gk)
         # `gk` is "{gi}:<body>" where <body> is the numeric prefix string,
         # "file" (uncat), or "file:<label>".
-        body = gk.split(':', 1)[1] if ':' in gk else gk
+        body = base.split(':', 1)[1] if ':' in base else base
         if body == 'file':
             prefix_str, label = '', 'uncat'
         elif body.startswith('file:'):
@@ -975,7 +1093,7 @@ def _md_tail_blocking(ctx, cfg, groups):
             prefix_str, label = body[len('ex:'):], 'exercise'
         else:
             prefix_str, label = body, 'uncat'
-        last = max(n for n, _ in pairs)
+        last = agg_max[base]
         try:
             prefix = tuple(int(x) for x in prefix_str.split('.')) if prefix_str else ()
         except ValueError:
@@ -983,30 +1101,30 @@ def _md_tail_blocking(ctx, cfg, groups):
             # heading used as a scope-3 window id): no numeric source-side
             # counterpart exists, so tail comparison is meaningless — skip.
             continue
-        gi = int(gk.split(':', 1)[0]) if ':' in gk else 0
+        gi = int(base.split(':', 1)[0]) if ':' in base else 0
         smax = src_max.get((gi, prefix), 0)
         if smax <= last:
             continue
         # TAIL:{gk} in ignore -> agent verified section ends here, suppress all
-        if f"TAIL:{gk}" in ignore or f"TAIL:{gk}" in known:
+        if f"TAIL:{base}" in ignore or f"TAIL:{base}" in known:
             continue
         gap = smax - last
         if gap > _TAIL_GAP_CAP:
             blocking.append(
-                f"  WARN (BLOCKING): TAIL {gk}: 源最大 {smax} 远大于 md 最大 {last}（差距 {gap}）"
+                f"  WARN (BLOCKING): TAIL {base}: 源最大 {smax} 远大于 md 最大 {last}（差距 {gap}）"
                 f"— 疑似 OCR 幻影或异源编号，请核实该组是否即止；"
-                f"确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json")
+                f"确认无误请登记 \"TAIL:{base}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json")
             continue
         for n in range(last + 1, smax + 1):
             full = (prefix_str + '-' if prefix_str else '') + str(n)
             token = f"{label} {full}" if label and label != 'uncat' else full
             token_norm = f"{_norm_label(label)} {full}" if label and label != 'uncat' else full
             if (token in known or token_norm in known
-                    or f"{gk}:{n}" in known or f"{gk}:{n}" in ignore):
+                    or f"{base}:{n}" in known or f"{base}:{n}" in ignore):
                 continue
             blocking.append(
-                f"  WARN (BLOCKING): TAIL {gk} 缺尾部号 {n}（md 最大 {last}，源最大 {smax} — "
-                f"请核实章/节是否即止；确认无误请登记 \"TAIL:{gk}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json）")
+                f"  WARN (BLOCKING): TAIL {base} 缺尾部号 {n}（md 最大 {last}，源最大 {smax} — "
+                f"请核实章/节是否即止；确认无误请登记 \"TAIL:{base}\" 到 ignore_ch{{N}}.json / ignore_appendix{{X}}.json）")
     return blocking
 
 
@@ -1285,6 +1403,7 @@ def _md_gap_blocking(ctx):
     _resolve_bare_ex_candidates(entries, _bare_pending)
     _resolve_demoted_entries(entries, _demoted)
     _merge_orphan_ex_windows(entries)
+    _split_restarting_windows(entries)
 
     groups = defaultdict(list)
     # 🔴 顺序错乱检测必须按 (prefix, type) 分组，不能仅按 prefix_str 混排所有类型。
@@ -1633,18 +1752,46 @@ def _scan_book_category_items(ch, start, end, ext_dir):
 #   也可能是定理号），实测 chaos 634 个提及键里 627 个（99%）、Strogatz 全部 525 个
 #   都属于**别的层已负责**的领域 → 真正「契约漏登记条目」的信号被上千行良性噪声淹没。
 #   判据：一个提及键**只有在其全部出现位置**都属于下列领域时才从报告桶剔除——
-#     tag    : 位于 `\tag{...}` 内部（Q 层 formula_tag 的辖域）；
-#     figref : 紧跟 图/表/Figure/Fig./Plate/Table/`…_fig` 文件名（图像域——writing-rules
-#              规定图只在正文引用、从不作条目登记，`extracted` 也按 label=='uncat' 剔它们）；
-#     eqref  : 被括号包住 `(1.2.8)` / `（1.2.8）`（印刷公式回指形态）；**开括号前是条目词**
-#              （`Definition (5.6.5)` / `定理（5.6.5）`）时不算，那正是条目引用形态。
+#     tag       : 位于 `\tag{...}` 内部（Q 层 formula_tag 的辖域）；
+#     figref    : 紧跟 图/表/Figure/Fig./Plate/Table/`…_fig` 文件名（图像域——writing-rules
+#                 规定图只在正文引用、从不作条目登记，`extracted` 也按 label=='uncat' 剔它们）；
+#     eqref     : 被括号包住 `(1.2.8)` / `（1.2.8）`（印刷公式回指形态；字母后缀分图/分部
+#                 号 `(8.4.3a)` 同认）；**开括号前是条目词**（`Definition (5.6.5)` /
+#                 `定理（5.6.5）`）时不算，那正是条目引用形态。
+#     exref     : 紧跟 习题/练习/问题/作业 / Exercise(s)/Problem(s)/Question(s)（题集域，
+#                 与 `_EXM_DROP_RE` 同源——题集内容在本管线从不作契约条目登记）；
+#     formulref : 紧跟 方程/公式/等式 / equation/formula（公式域，与 `_LABEL_BEFORE_PAREN_RE`
+#                 删 `Equation` 同一条理由：编号公式归 Q 层 formula_tag，不作条目）；
+#     bibref    : 紧跟 文献[n]/参考答案/References/Bibliography（书目域：引文里的号是
+#                 **外书**条目号，本书契约无从在账）；
+#     chref     : 条目词引导，且首分量既≠本章号、又≠该处章标题锚点的章号（跨章回指——
+#                 该条目属别章契约辖域，本层只对「本章契约 ↔ 本章 md」负责）；
+#     title     : 号直接落在 `### §2.3.3 应用` 的小节标题行上，**且该号在本章契约里登记为
+#                 section 节点**（小节序标域；条目标头从不用 `§` 起头，而契约作证让
+#                 「条目被错写成标题」这种形态照常报出，见 `_contract_section_keys`）。
+#                 🔴 **散文行的同形回指同归此域**（`See Miscellanea 7.5.5` / `in §2.2.4`，
+#                 2026-10-04 51 书对拍补）：号必须**在契约小节名册里**且**号前不得是条目词**
+#                 （`Definition 4.9.1` 同形撞车仍 real）；标题行一律不走这一支（`_HEAD_LINE_RE`）。
+#     xref      : 号被 `§` 锚点**限定**——不可扫描的「标签+单号」键（`如 §1.3 的例 3 所证`）
+#                 或散文里 `§` 紧贴号前（`我们会在 §11.3.11 中…`，跨章小节号无法用本章契约
+#                 作证，故只认锚点字面）。同受 `_HEAD_LINE_RE` 边界约束。
+#   🔴 **列表续列继承同域**：`Exercises 2.8.7 and 2.8.8` 的第二项之前只有连接词，标签在
+#   上一项前面。辖域判据因此只看**本行前缀**，并先剥去连续的「上一项 + 连接词」
+#   （`_strip_conj_run`，最多三跳；连接词前**必须有数字**才剥，散文里裸一个「和/，」不动）
+#   → 上一项的域即本项的域，不引入新语义。
+#   🔴 **同章跨节回指不属于任何豁免域**（chref 的第二支守卫）：实测 chaos 印面自身的
+#   `(Definition 5.6.5)` 指向一个原书并不存在的条目、交付逐字照抄——这类残留必须留在
+#   报告桶里走取证通道（`mention_ignore` + 印面确证），禁止用放宽判据静音。
 #   任何一处出现在其他上下文（裸号散文提及、条目头、带标签引用）→ 照旧报；md 里根本
 #   扫不到该号（跨语言/跨文件带进来的键）→ 不判。
 #   🔴 只影响 `extra` / `extra_mention` 两个**非阻断**报告桶；`all_keys` 原样不动，
 #   故 truly_missing、整类首项缺失等阻断判据逐字节不变。
 _TAG_SPAN_RE = re.compile(r'\\tag\s*\{[^{}]*\}')
 _FIGREF_TAIL_RE = re.compile(
-    r'(?<![a-z])(?:Figure|Fig\.?|Plate|Table|Tab\.?)\s*[:：.．]?\s*$'
+    # 🔴 复数形态 `Figures 6.4.1 and 6.4.4` / `Tables …` / `Plates …`（2026-10-04
+    # nonlinear ch6/ch9 实测：v1 只认单数，于是英文侧一整族图号引用被判 real，
+    # 与 CN 侧 `图 6.4.1 至 6.4.4` 不对称——同 chaos v1 的 `Equation` 双语不对称）。
+    r'(?<![a-z])(?:Figures?|Figs\.?|Fig\.?|Plates?|Tables?|Tab\.?)\s*[:：.．]?\s*$'
     r'|(?:图|圖|图例|插图|表)\s*[:：.．]?\s*$',
     re.IGNORECASE)
 _FIGFILE_TAIL_RE = re.compile(r'(?:fig|figure|img)[-_/]*$', re.IGNORECASE)
@@ -1661,57 +1808,571 @@ _LABEL_BEFORE_PAREN_RE = re.compile(
     re.IGNORECASE)
 _OPEN_PAREN_RE = re.compile(r'[(（]\s*$')
 _CLOSE_PAREN_RE = re.compile(r'^\s*[)）]')
+# 字母后缀形态的公式回指 `(8.2.6a)` / `（5.1.5c）`（2026-10-04 nonlinear ch8 实测：
+# 印面把同一图的三个分图写成 Figure 8.4.3a/c/d，公式同理带 a/b/c 后缀；旧闭合判据
+# 只认 `)`，于是 `8.4-3` 的那一处出现被判 real，全键永不豁免）。只放宽**闭合侧**，
+# 「开括号前是条目词 → real」的否决分支照旧先判。
+_CLOSE_PAREN_SUF_RE = re.compile(r'^\s*[A-Za-z]?\s*[)）]')
 _NUM_SEP = r'[.\-·．–—]'
-_MENTION_DOMAIN_EXPLAINED = frozenset(('tag', 'figref', 'eqref'))
+# 🔴 题集域（2026-10-04 动力系统书架根治）：`Exercises 2.8.7 and 2.8.8` 里的
+# `2.8.8` 是**裸号键**（键里没有「习题」二字），故 `_EXM_DROP_RE`（按键形剥）看不见它，
+# 而提及桶的辖域判据此前只认图/公式，于是每一处「列表第二项」都被报成待核对提及。
+# 判据与 `_EXM_DROP_RE` 同源：题集内容在本管线里从不作契约条目（load_contract 对
+# exercise/problem 直接 return），其编号在正文出现必为合法引用。🔴 **不含** `例`/
+# `Example`——例题在多数书里是**真条目**，只能由 chref/条头否决通道处置。
+_EXREF_TAIL_RE = re.compile(
+    r'(?<![a-z])(?:Exercises?|Exs?\.?|Ex\.?|Problems?|Questions?)\s*[:：.．]?\s*$'
+    r'|(?:习题|練習|练习|難題|难题|問題|问题|作業|作业|思考題|思考题)'
+    r'\s*[:：.．]?\s*$',
+    re.IGNORECASE)
+# 公式词域：与 `_LABEL_BEFORE_PAREN_RE` 的删词同一条理由（全链从不把 equation 登记为
+# 条目类型，编号公式归 Q 层 formula_tag）。拦 `参见方程 7.6.10` / `cf. equation 7.6.10`
+# 一类**括号外**的公式回指（chaos ch7/ch6 实测，含图注 `alt="… equation 6.2.13 …"`）。
+_FORMULREF_TAIL_RE = re.compile(
+    r'(?<![a-z])(?:Equations?|Eqn\.?|Eq\.?|Formulas?|Formulae)\s*[:：.．]?\s*$'
+    r'|(?:方程|公式|等式|關係式|关系式)\s*[:：.．]?\s*$',
+    re.IGNORECASE)
+_BIBREF_TAIL_RE = re.compile(
+    r'(?:文献|參考文獻|参考文献|参考答案|答案|解答)\s*[(（\[［【]?\s*\d{0,4}\s*[)）\]］]?\s*$'
+    r'|(?<![a-z])(?:Bibliography|References?)\s*[:：]?\s*(?:\[\d+\])?\s*$',
+    re.IGNORECASE)
+# 跨章回指的**标签词**表（比 `_LABEL_BEFORE_PAREN_RE` 宽：含 `例子` 与英文复数形态）。
+_CHREF_LABEL_TAIL_RE = re.compile(
+    r'(?:定义|定理|引理|推论|例|例子|例題|例题|性质|注|注记|注記|评注|評註|练习|习题|命题|算法|'
+    r'观察|问题|断言|猜想|公理|系|定義|'\
+    r'Definitions?|Theorems?|Lemmas?|Lemma|Corollaries|Corollary|Examples?|Exercises?|'
+    r'Propositions?|Remarks?|Notes?|Problems?|Algorithms?|Assertions?|Conjectures?|'
+    r'Axioms?|Remarks?)\s*$',
+    re.IGNORECASE)
+# 列表/连接词回指的**前一跳**：`Exercises 2.8.7 and <本号>` / `图 6.4.1 至 <本号>` /
+# `Exercises 1.1.1, 1.1.2 and <本号>`——号本身不带标签词，标签在**上一项**之前，
+# 故剥掉「上一项 + 连接词」让标签词重新落到辖域判据的尾部上（最多三跳）。
+# 🔴 强制要求连接词前有数字：无数字的 `和 `/`，` 剥了会把散文里的任意连接词当成续列。
+_CONJ_RUN_RE = re.compile(
+    r'\d[\d.\-·．]*[A-Za-z]?\s*(?:and|or|&|to|through|,|，|;|；|、|至|到|和|与|及|或)\s*$')
+# 小节标题域：号直接落在 `### §2.3.3 应用` 的标题行上（`§` 必须出现——条目标头从不
+# 用 `§` 起头，故这一支不可能洗掉真条目；带标签词的标题 `#### 定理 5.6.5` 不匹配，
+# 照旧交给 chref/real 判定）。
+_TITLE_HEAD_RE = re.compile(r'^#{1,6}\s*(?:第\s*\d+\s*章\s*)?[§]\s*$')
+# **标题行**（`#` 起）——两支新增豁免（`§` 紧贴号前 / 名册内散文小节回指）的共同边界：
+# 标题行上的号只能由 `_TITLE_HEAD_RE` + 契约名册那一支处置，否则 v2 的「契约名册外的
+# 号形标题可疑、照旧报」不变式会被洗掉。
+_HEAD_LINE_RE = re.compile(r'^#{1,6}\s')
+# 行首粗体条头（`**` 起、到本号之间没有再出现 `*`）——判据见 `_mention_occurrence_domain`。
+_BOLD_HEAD_PREFIX_RE = re.compile(r'^(?:>\s*)*\*\*[^*\n]*$')
+# 粗体跨度的**开口**（`>` 引用标记 + `**`）：剥掉它才能看「本号之前有没有别的数字」。
+_BOLD_HEAD_OPEN_RE = re.compile(r'^(?:>\s*)*\*\*')
+_CH_HEAD_RE = re.compile(r'^#{1,6}\s*(?:第\s*(\d+)\s*章|Chapter\s*(\d+))', re.IGNORECASE | re.M)
+# **小节锚定语**（`xref` 支）：号之前紧跟着一个 `§`/`Sect.`/`第 … 节` 锚点
+# （`如 §1.3 的例 3 所证` / `一文 §9 的注 7 中` / `### §D 例 4：保守系`）。
+# 判据语义：该号被**另一个小节的锚点限定**，是结构性交叉引用而非「本章正文提到一个
+# 条目而本章契约无记录」。只服务**不可按号扫描**的标签键（`例3`/`评注7` 这类
+# 「标签 + 单段号」形态，`_mention_num_regex` 返回 None），故不可能洗掉三段号条目。
+_XREF_ANCHOR_TAIL_RE = re.compile(
+    r'(?:§|Sect(?:ion)?\.?\s*|第)\s*[0-9A-Za-z][0-9A-Za-z.\-·．]*\s*'
+    r'(?:节|小节|章)?\s*(?:的|之中|里|中)?\s*$')
+# **紧贴号前**的小节锚点（2026-10-04 51 书普查补）：`我们会在 §11.3.11 中把这一点说精确`
+# ——锚点与号之间没有别的字符，故 `_XREF_ANCHOR_TAIL_RE`（要求锚点后带号）在这一形态上
+# 落空，那一处被当成散文条目提及。判据语义同 `xref`：作者自己用 `§` 宣告「这是小节/段落号」。
+_SEC_ADJACENT_ANCHOR_RE = re.compile(
+    r'(?:(?:§|Art\.?|Sect(?:ion)?\.?)\s*)$', re.IGNORECASE)
+_MENTION_DOMAIN_EXPLAINED = frozenset(
+    ('tag', 'figref', 'eqref', 'exref', 'formulref', 'bibref', 'chref', 'title',
+     'xref'))
+
+
+def _tag_num_set(txt):
+    r"""本文件里所有 `\tag{…}` 的号（分隔符归一）= **公式域在册真值**。
+
+    用途见 `_mention_occurrence_domain` 的「带标签括号回指 + 号在 tag 名册」一支：
+    印面把一个编号公式写成 `$$…\tag{4.2.7}$$`，回指一律是 `由 (4.2.7)` /
+    `第二个性质 (4.2.7)` 这种「(号)」形态；条目回指在印面则是「标签词 + 空格 + 裸号」
+    （`Definition 5.6.5` / `定理 3.2.1`），括号不贴着号。两种形态的**形状**在原文里
+    本来就不会混，此前混的是「括号前恰好有一个条目词」——`性质 (4.2.7)`、
+    `证明 (7.3.5) 中的分岔…` 里的「性质/证明」是**散文词**，不是条目标签。
+    """
+    out = set()
+    for m in _TAG_SPAN_RE.finditer(txt or ''):
+        mm = re.search(r'\\tag\s*\{([^{}]*)\}', m.group(0))
+        if not mm:
+            continue
+        t = re.sub(r'[.\-·．–—]', '-', mm.group(1)).strip()
+        if t:
+            out.add(t)
+    return out
+
+
+# 键 = 「标签词 + 号」的拆分。标签段**不得含数字或点**（`Proposition A.1.2` 一类
+# 字母章位键的 `A.` 属于号而非标签，本判据不碰，行为回到出厂的 noscan）。
+_KEY_SPLIT_RE = re.compile(r'^(?P<label>[^\d.]*?)(?P<num>\d[\d.\-·．–—]*)$')
+# `_LABEL_CANON` 的规范值 → 该类型的全部拼写（CN + EN）；用作标签锚定的交替分支。
+_LABEL_VARIANTS_CACHE = {}
+
+
+def _label_variants(canon):
+    if canon not in _LABEL_VARIANTS_CACHE:
+        spellings = {canon}
+        for raw, c in _LABEL_CANON.items():
+            if c == canon:
+                spellings.add(raw)
+        _LABEL_VARIANTS_CACHE[canon] = sorted(
+            (re.escape(s) for s in spellings if s.strip()), key=len, reverse=True)
+    return _LABEL_VARIANTS_CACHE[canon]
 
 
 def _mention_num_regex(key):
-    """提及键 → 只匹配「该号本身」的正则（分量间分隔符走全书统一通配）。
+    r"""提及键 → 匹配「该号本身」的正则（分量间分隔符走全书统一通配）。
 
-    非纯数字键（`性质1` / 罗马 / 字母形态）返回 None = 不判，照旧报。
-    前后守卫禁邻数字/分隔符，避免 `1.2.11` 被 `11.2.11`、`1.2.115` 里的片段冒充。
+    无数字主体、或号只有**一段**（`性质1` / `断言1` / `例3`——单号键的号在 md 里
+    与页码/列表号/年份无从区分）→ 返回 None = 不判，照旧报。
+    🔴 **标签引导键一律锚定标签**（2026-10-04 动力系统书架根治）。两件事同时修：
+    ① 改前 `定理1.6` / `引理20.3` 这类键因 `parts` 含非数字分量而返回 None，于是
+    **永远**进不了豁免判据（`noscan` 族实测 39 行：文兰 27 / 微分遍历论 6 / Koopman 1），
+    其中 `参见文献[20] 定理3.4`（bibref）、`由定理 1.6`（跨章 chref）本属别的辖域；
+    ② 只剥标签、按**裸号**匹配会把同号异类的条目读成同一实体（Koopman 本书按类型
+    分计数器，`**定理20.3**` / `**定义20.3**` / `图 20.3` / `## §20.3` 全是别家实体，
+    裸号匹配让 `引理20.3` 的辖域清单失真）。锚定写法：标签（`_LABEL_CANON` 的该类型
+    全部拼写，大小写不敏感）+ 号，号仍走同一套深度守卫；**号的位置**取 `num` 组
+    （`_num_span`），标签留在号的左侧 → `left` 前缀照旧供 chref / bibref / eqref
+    各支识别引导词，域判据逐字节不改。
+    🔴 **三段标签键沿用出厂的折号裸号匹配**（`_norm_path` 已把 `定义1.1.1` 折成
+    `1.1-1`）：本行的锚定只作用于出厂根本扫不到的「标签 + 两段及以上」键，
+    故跨书普查的 GAINED 不变式方向上不可能倒退（扫不到的键改前一律照报）。
+    尾侧守卫（2026-10-04 同批）：`(?![\d.])` 会把**句末句号**读成「更深一层号」，
+    于是 `见习题 12.2.9 和 12.2.10。` / `Exercise 5.1.10.` 里的号扫不到 → `absent`
+    → 该键全族无法豁免（实测 nonlinear 4 行）。改成「后邻数字」或「后邻 分隔符+数字」
+    才拦，即只拦真正的更深一层号（`1.2.3.4` / `10.1-10.5` 截断），放行句末 `。`/`.`。
     """
-    parts = re.split(r'[.\-]', _norm_path(key))
+    k = key or ''
+    folded = _norm_path(k)
+    label = ''
+    num_src = k
+    if folded != k:                      # 三段标签键：出厂口径（裸号，不锚标签）
+        num_src = folded
+    else:
+        mm = _KEY_SPLIT_RE.match(k)
+        if not mm:
+            return None
+        label, num_src = mm.group('label'), mm.group('num')
+    parts = re.split(r'[.\-·．–—]', num_src)
     if len(parts) < 2 or not all(p.isdigit() for p in parts):
         return None
     body = _NUM_SEP.join(re.escape(p) for p in parts)
-    return re.compile(r'(?<![\d.])' + body + r'(?![\d.])')
+    tail = r'(?!\d)(?!' + _NUM_SEP + r'\s*\d)'
+    if label.strip():
+        alts = _label_variants(_canon_label(label.strip()))
+        if not alts:
+            return None
+        return re.compile(r'(?:' + '|'.join(alts) + r')[sS]?\s*(?P<num>' + body + r')' + tail,
+                          re.IGNORECASE)
+    return re.compile(r'(?<![\d.])(?P<num>' + body + r')' + tail)
 
 
-def _mention_occurrence_domain(txt, m, tag_spans):
-    s, e = m.start(), m.end()
+def _num_span(m):
+    """出现位置中**号本身**的 (start, end)——标签锚定时排除标签字符。"""
+    try:
+        return m.span('num')
+    except (IndexError, ValueError):
+        return m.span()
+
+
+def _key_num_body(key):
+    """键的数字主体（`引理20.3` → `20.3`；无数字主体 → None）。诊断/文案用。"""
+    mm = _KEY_SPLIT_RE.match(key or '')
+    return mm.group('num') if mm else None
+
+
+def _key_label_body(key):
+    """键的 (标签词, 数字主体)；无法拆分 → (None, None)。"""
+    mm = _KEY_SPLIT_RE.match(key or '')
+    if not mm:
+        return None, None
+    return mm.group('label').strip(), mm.group('num')
+
+
+def _contract_type_vocab(config):
+    """本书 config **宣告的条目计数器词表**（`_canon_label` 归一后的标签集）。
+
+    🔴 含 `uncat` 兜底组 → 返回 None = 词表不闭合（任何标签都可能落进兜底计数器），
+    「类型未宣告」的推断不成立，`untyped` 一支整体关闭。
+    读不出 ordinal 组同样返回 None（fail-closed：宁可照报，不静音）。
+    """
+    try:
+        groups = list(getattr(config, 'ordinal', None) or [])
+        vocab = set()
+        for g in groups:
+            names = list(getattr(g, 'name', None) or [])
+            if 'uncat' in names:
+                return None
+            for n in names:
+                vocab.add(_canon_label(n))
+        return vocab or None
+    except Exception:
+        return None
+
+
+def _untyped_single_mention(key, type_vocab):
+    """**标签 + 单段号**的提及键，且该条目类型未被本书计数器词表宣告。
+
+    为什么可以豁免（2026-10-04 动力系统书架根治，文兰 `断言1` / Arnold `命题4`）：
+    提及桶的语义是「正文提到一个条目而本章契约无记录」。一个标签若在本**书**的
+    config 里根本没有宣告计数器组（且无 `uncat` 兜底），分章契约就**不可能**为它开出
+    槽位（`group_for_label` → uncat → 无 uncat 组即不建键），于是「契约漏登记」这一
+    救济在本层没有落点；而单段号（`断言 1` / `例 3`）在 md 里与列表号/页码无从区分，
+    各支辖域判据（tag/figref/eqref/…）也一概不适用。真救济 = 给该书**补宣告**该类型
+    的计数器组（补了词表本支即自动关闭，键照常报出）。
+    🔴 多段号键（`定理1.6`）不走本支——它们有辖域判据可用，且标签锚定后信号准确。
+    """
+    if not type_vocab:
+        return False
+    label, num = _key_label_body(key)
+    if not label or not num:
+        return False
+    if re.search(r'[.\-·．–—]', num):
+        return False                      # 多段号：交给辖域判据
+    return _canon_label(label) not in type_vocab
+
+
+def _unscannable_mention_regex(key):
+    """给**不可按号扫描**的标签键造「标签 + 原文号（含字母后缀）」的字面正则。
+
+    `_mention_num_regex` 对 `例3` / `定义5.6.5a` 这类号返回 None（单段号与页码/列表号
+    无从区分、字母后缀非纯数字），于是各支辖域判据一概看不见它们。本函数只为
+    `xref` 一支补上「先找到这一串标签+号，再判它的上下文」的能力：号按**字面**匹配
+    （保留键里的原始分隔符），并暴露 `num` 组以复用 `_mention_occurrence_domain`。
+    """
+    label, num = _key_label_body(key)
+    if not label or not num:
+        return None
+    alts = _label_variants(_canon_label(label))
+    if not alts:
+        return None
+    try:
+        return re.compile(r'(?:' + '|'.join(alts) + r')[sS]?\s*(?P<num>'
+                          + re.escape(num) + r')', re.IGNORECASE)
+    except re.error:
+        return None
+
+
+def _unscannable_mention_domains(txt, key, tag_spans, sec_keys=None, tag_nums=None):
+    """不可扫描标签键在 md 里的逐出现域（`mention_domains_of` 的姊妹支）。
+
+    🔴 三支否决照旧优先：粗体条头 / 契约在册小节标题 / 条目词贴括号 → `real`。
+    本支只在这些否决都不成立、且号被 `§`/`Sect.`/`第 … 节` 锚点限定时给 `xref`。
+    🔴 **不给 chref 支喂章号**：单段号键（`例3`）的号是**计数器值**不是章号，喂进去
+    会把「本章自己的例 3」读成跨章回指 → 假豁免。跨章一支对不可扫描键整体关闭。
+    """
+    rx = _unscannable_mention_regex(key)
+    if rx is None:
+        return ['absent']          # 连「标签+原文号」的字面串都构造不出（字母后缀键）
+    out = []
+    for m in rx.finditer(txt or ''):
+        d = _mention_occurrence_domain(txt, m, tag_spans, None, [], sec_keys,
+                                       tag_nums)
+        if d == 'real':
+            line_start = (txt or '').rfind('\n', 0, m.start()) + 1
+            if _XREF_ANCHOR_TAIL_RE.search((txt or '')[line_start:m.start()]):
+                d = 'xref'
+        out.append(d)
+    return sorted(set(out)) or ['absent']
+
+
+def _xref_anchored_only(txt, key, tag_spans, sec_keys, tag_nums):
+    """该标签键在 md 里的**每一处**出现都是交叉引用域 → 可豁免。"""
+    doms = _unscannable_mention_domains(txt, key, tag_spans, sec_keys, tag_nums)
+    return bool(doms) and set(doms) <= _MENTION_DOMAIN_EXPLAINED
+
+
+def _strip_conj_run(left):
+    """剥掉行首方向连续的「上一项 + 连接词」（最多三跳），返回新的 left。"""
+    cur = left
+    for _ in range(3):
+        m = _CONJ_RUN_RE.search(cur)
+        if not m:
+            break
+        cur = cur[:m.start()]
+    return cur
+
+
+def _heading_anchors(txt):
+    """章标题锚点 [(位置, 章号)]——跨章判据用它核对「这段正文当前属于第几章」。"""
+    out = []
+    for m in _CH_HEAD_RE.finditer(txt):
+        n = m.group(1) or m.group(2)
+        if n:
+            out.append((m.start(), int(n)))
+    return out
+
+
+def _anchor_chapter(anchors, pos, default):
+    cur = default
+    for a_pos, n in anchors:
+        if a_pos <= pos:
+            cur = n
+        else:
+            break
+    return cur
+
+
+def b_mention_ignore_path(ext_dir, ch):
+    """印面确证豁免侧车路径：`<extract>/ignore_b_mention_{chapter_label}.json`。
+
+    与 `subitem_continuity.o_tail_ignore_path` 同一纪律：SSOT 标签优先，缺失时按
+    磁盘物理证据回退其余章型同名文件（进程级 kind 注册表未灌注时只信 SSOT 会让
+    已登记的豁免静默失效）。
+    """
+    cands = []
+    try:
+        from data.book_structure.book_structure import (
+            chapter_label, chapter_ordinal, norm_chapter_key)
+        # 🔴 `chapter_label` 吃的是 **chapter_map 的原始键**（`M` / `7` / `appendix`），
+        # 而 CLI 侧用户传的是文件名形态（`appendixM`）。直接喂 `appendixM` 会得到
+        # `appendix` + 回声序标 = `appendixappendixM`（实测 2026-10-04 Arnold 附录M），
+        # 于是侧车名对不上、已登记的豁免静默失效。先剥已知前缀归回原始键。
+        raw = str(ch).strip()
+        for pre in ('appendix', 'supplement'):
+            if raw.lower().startswith(pre) and len(raw) > len(pre):
+                raw = raw[len(pre):]
+                break
+        else:
+            if re.match(r'(?i)^ch(?=[\dA-Za-z])', raw) and len(raw) > 2:
+                raw = raw[2:]
+        key = norm_chapter_key(raw)
+        primary = chapter_label(key)
+        ordv = chapter_ordinal(key)
+        cands = [primary] + [f"{p}{ordv}" for p in ('ch', 'appendix', 'supplement')
+                             if f"{p}{ordv}" != primary]
+    except Exception:
+        cands = ['ch%s' % ch]
+    for lbl in cands:
+        fp = os.path.join(ext_dir, f"ignore_b_mention_{lbl}.json")
+        if os.path.exists(fp):
+            return fp
+    return os.path.join(ext_dir, f"ignore_b_mention_{cands[0]}.json")
+
+
+def load_b_mention_exemptions(ext_dir, ch):
+    """该章**印面确证**豁免表 -> {键: 理由}。
+
+    缺文件 / 坏 JSON / 不是字典 -> 空表（判据照常报，fail-open 到告警侧）。
+    🔴 **理由为空的登记一律不生效**：豁免必须携带印面取证，否则等于把报告通道
+    静默关掉（与 `audit_ignore` 的「无证据标记即 SUSPECT」、`attest_o_tail` 同源纪律）。
+    """
+    if not ext_dir or ch is None:
+        return {}
+    fp = b_mention_ignore_path(ext_dir, ch)
+    if not os.path.exists(fp):
+        return {}
+    try:
+        with open(fp, encoding='utf-8-sig') as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for k, v in data.items():
+        k = str(k).strip()
+        reason = v if isinstance(v, str) else ''
+        if k and str(reason).strip():
+            out[k] = str(reason).strip()
+    return out
+
+
+def _attested_extra_keys(extras, table):
+    """按**键形**（原样 + `_norm_path` 折号形）配对已登记豁免，返回命中的报告键。"""
+    if not table:
+        return set()
+    by_norm = {}
+    for k in table:
+        by_norm.setdefault(_norm_path(k), k)
+        by_norm[k] = k
+    hit = set()
+    for k in extras:
+        kk = str(k)
+        if kk in table or _norm_path(kk) in by_norm:
+            hit.add(k)
+    return hit
+
+
+def _contract_section_keys(ext_dir, ch):
+    """本章契约里 `type == 'section'` 的节点键（归一分隔符，title 域的在册真值）。
+
+    契约缺失 / 读不出 → 空集 = title 支不判（小节标题豁免必须有契约小节作证，
+    「条目被错写成 `### §5.6.5` 标题」这类形态照旧报）。
+    """
+    if not ext_dir or ch is None:
+        return set()
+    try:
+        from data.book_structure.book_structure import (
+            norm_chapter_key, resolve_chapter_json_path)
+        fp = resolve_chapter_json_path(ext_dir, norm_chapter_key(ch))
+        if not os.path.isfile(fp):
+            return set()
+        with open(fp, encoding='utf-8') as f:
+            root = json.load(f)
+        out = set()
+
+        def _walk(node):
+            if not isinstance(node, dict):
+                return
+            if node.get('type') == 'section' and node.get('key') is not None:
+                out.add(re.sub(r'[.\-·．–—]', '-', str(node['key'])))
+            for c in node.get('sub_sec') or []:
+                _walk(c)
+        _walk(root)
+        return out
+    except Exception:
+        return set()
+
+
+def _mention_occurrence_domain(txt, m, tag_spans, ch=None, anchors=None,
+                               sec_keys=None, tag_nums=None):
+    # 🔴 号的 (start, end) 一律走 `_num_span`：标签锚定的匹配把引导词也吞进 match，
+    # 而各支判据要的「号」只是数字段（`left` 因此仍以标签词结尾 → chref/bibref 照判）。
+    s, e = _num_span(m)
     if any(ts <= s and e <= te for ts, te in tag_spans):
         return 'tag'
-    left = txt[max(0, s - 24):s]
+    line_start = txt.rfind('\n', 0, s) + 1
+    head = txt[line_start:s]
+    # 小节标题域须**契约作证**：`### §2.3.3` 里的号必须是本章契约在册的 section 键，
+    # 否则「条目被错写成标题」的形态会被本支洗掉（无 sec_keys = 不判这一支）。
+    if sec_keys is not None and _TITLE_HEAD_RE.match(head):
+        _canon = re.sub(r'[.\-·．–—]', '-', txt[s:e])
+        if _canon in sec_keys:
+            return 'title'
+    # 🔴 **粗体条头否决**（2026-10-04 chref 支上线时补）：`**定理 6.1.2**` 写在第 5 章
+    # 的 md 里 = 条目内容**放错了章**（该条本属第 6 章契约），是真缺陷而不是回指。
+    # 判据只看形状：行首（可带 `>` 引用标记）的 `**` 之后到本号之间再无 `*`，即本号
+    # 落在一个**起始于行首的粗体跨度内**——那正是 `ENTRY_RE` 认条头的形状。第一版校准
+    # 过的假跨度形态（`> **证明**：1. 由 (4.2.6) … $f^{*}$`）行首粗体已在 `证明**` 处
+    # 闭合，`[^*\n]*$` 吃不下中间的 `*`，故不受本支影响，照旧走 eqref 豁免。
+    # 🔴 **本号必须是该粗体跨度的序标本身**（2026-10-04 51 书普查补）：`**17.4.9
+    # Revisiting Example 9.3.3.**` 的跨度序标是 `17.4.9`，`9.3.3` 只是标题正文里的
+    # 跨章条目回指——旧判据按「落在行首粗体内」一并否决，造出真阳不存在的假阳。
+    # 故再加一条：`**` 与本号之间不得出现**别的数字**（有则本号非跨度序标）。
+    if _BOLD_HEAD_PREFIX_RE.match(head) and not re.search(
+            r'\d', _BOLD_HEAD_OPEN_RE.sub('', head, count=1)):
+        return 'real'
+    # 辖域判据一律只看**本行**前缀（跨行会把上一段的标签词错接给本号），并先剥
+    # 「上一项 + 连接词」使列表续列继承同域。
+    left = _strip_conj_run(head)[-60:]
     if _FIGREF_TAIL_RE.search(left) or _FIGFILE_TAIL_RE.search(left):
         return 'figref'
+    if _EXREF_TAIL_RE.search(left):
+        return 'exref'
+    if _FORMULREF_TAIL_RE.search(left):
+        return 'formulref'
+    if _BIBREF_TAIL_RE.search(_CHREF_LABEL_TAIL_RE.sub('', left.rstrip(), count=1)):
+        return 'bibref'
+    # 🔴 **小节锚点紧贴号前**（Vakil ch4 实测 `我们会在 §11.3.11 中把这一点说精确` /
+    # `We will make this precise in §11.3.11.`）：作者用 `§` 亲自宣告该号是**小节/段落号**，不是条目。
+    # 🔴 **只判散文行**（`_HEAD_LINE_RE`）：`### §N.M.K` 标题行归上面 `title` 支——在这里放行会把
+    # v2 的硬不变式「契约名册外的号形标题可疑、照旧报」整支洗掉（v2 测试逐条钉住）。
+    # 跨章小节号无法用「本章」契约作证（本层只载入本章），故散文侧只认锚点字面；
+    # 条目标头从不写成 `§定理 4.9.1`，故本支不可能洗掉真条目；无 `§` 的裸号仍照判 real。
+    if _SEC_ADJACENT_ANCHOR_RE.search(left.rstrip()) and not _HEAD_LINE_RE.match(head):
+        return 'xref'
     prev = txt[max(0, s - 8):s]
     pm = _OPEN_PAREN_RE.search(prev)
-    if pm and _CLOSE_PAREN_RE.match(txt[e:e + 8]):
+    if pm and (_CLOSE_PAREN_RE.match(txt[e:e + 8])
+               or _CLOSE_PAREN_SUF_RE.match(txt[e:e + 8])):
         open_idx = s - len(prev) + pm.start()
         before = txt[max(0, open_idx - 24):open_idx]
         if _LABEL_BEFORE_PAREN_RE.search(before):
+            # 🔴 **tag 名册推翻条目词否决**（2026-10-04 动力系统书架根治）：号贴着括号
+            # `(4.2.7)` 且该号在本文件 `\tag{}` 名册里 = 印面的**编号公式回指**；括号前的
+            # 「性质/证明/注」是散文词（`第二个性质 (4.2.7)`、`证明 (7.3.5) 中的分岔…`），
+            # 不是条目标签。条目回指的印面形态是「标签 + 裸号」（`Definition 5.6.5`），
+            # 号不贴括号 → 本支不触及，chaos 那条原书自己的误指照旧留在报告桶走举证通道。
+            # 号不在 tag 名册（`Definition (5.6.5a)` / 字母后缀分步号）→ 否决照常生效。
+            if tag_nums and (re.sub(r'[.\-·．–—]', '-', txt[s:e]) in tag_nums):
+                return 'eqref'
             return 'real'          # `Definition (5.6.5)`：条目引用形态
         return 'eqref'
+    # 🔴 跨章回指域（2026-10-04 动力系统书架根治，文兰/微分遍历论/孙文祥 105 键）：
+    # `定理 5.1.2` 出现在**第 6 章**的 md 里时，该号所属条目根本不在本章契约的辖域内
+    # ——本层对「本章契约 vs 本章 md」负责，跨章号既不是本章的漏登记条目，也不该占用
+    # 提及桶。守卫三支缺一不可：① 必须是**条目词引导**的引用（裸号散文提及仍照报，
+    # 那是「正文提到一个条目而契约无记录」的原始信号）；② `lead != 本章`；③ `lead !=
+    # 该出现位置所在章标题的章号`（合并/按节拆分文件里正文可能跨章，两支都拦才放行）。
+    # 🔴 **同章跨节回指一律不豁免**（chaos `定义 5.6.5` 实测：印面自身那条回指指向一个
+    # 不存在的 Definition 5.6.5，交付逐字照抄——这正是本层要留下的信号，走取证通道
+    # 登记 `mention_ignore`，不许靠放宽判据静音）。
+    if ch is not None and str(ch).isdigit() and left.rstrip():
+        if _CHREF_LABEL_TAIL_RE.search(left.rstrip()):
+            pm2 = re.match(r'(\d+)', txt[s:s + 12])
+            if pm2:
+                lead = int(pm2.group(1))
+                cur = _anchor_chapter(anchors or [], s, int(ch))
+                if lead != int(ch) and lead != cur:
+                    return 'chref'
+    # 🔴 **散文里的小节回指**（2026-10-04 51 书普查补，Evans / statistical-inference
+    # 实测）：`8. Prove Theorem 15 in §2.2.4.` / `See Miscellanea 7.5.5.` /
+    # `Referring to Miscellanea 4.9.1.` 的号是**契约在册的 section 键**（`_TITLE_HEAD_RE`
+    # 一支只认 `### §N.M` 的标题行形态，散文里的同一号于是全被判 real）。守卫两支：
+    # ① 归一后的号必须**在契约小节键名册里**（无 sec_keys = 不判这一支）；② 本号之前
+    # 不得是条目标签词（`Definition 4.9.1` 这类同形撞车的条目回指仍照判 real/chref）。
+    # 🔴 同形撞车否决照旧：`Definition 4.9.1` 的号前是条目标签词 → 不进本支。
+    # 🔴 同样**只判散文行**：无 `§` 的 `## 5.6.5 一个标题` 属「条目被错写成标题」形态，
+    # 由 `_TITLE_HEAD_RE` 一支的契约名册规则处置（v2 测试钉住），本支不得越权。
+    if (sec_keys is not None and not _HEAD_LINE_RE.match(head)
+            and not _CHREF_LABEL_TAIL_RE.search(left.rstrip())
+            and re.sub(r'[.\-·．–—]', '-', txt[s:e]) in sec_keys):
+        return 'title'
     return 'real'
 
 
-def domain_suppressed_mentions(md_text, keys):
-    """返回可归入公式/图像领域的提及键（判据见 `_TAG_SPAN_RE` 上方注释）。"""
+def domain_suppressed_mentions(md_text, keys, ch=None, sec_keys=None,
+                               type_vocab=None):
+    """返回可归入公式/图像/题集/文献/跨章/标题/未宣告类型/§ 锚定领域的提及键。
+
+    判据见 `_TAG_SPAN_RE` 上方注释。`ch`（本章章号）只服务跨章回指一支，`sec_keys`
+    （本章契约在册的小节键）只服务小节标题一支，`type_vocab`（本书 config 宣告的
+    计数器标签词表）只服务 `untyped` 一支；三者缺省即不判相应支，行为回到改前。
+    **不可按号扫描**的「标签 + 单段号」键走 `untyped`（词表未宣告）或 `xref`
+    （每一处出现都被 § 锚点限定）两支，判据见 `_unscannable_mention_domains`。
+    """
     txt = md_text or ''
     tag_spans = [(m.start(), m.end()) for m in _TAG_SPAN_RE.finditer(txt)]
+    tag_nums = _tag_num_set(txt)
+    anchors = _heading_anchors(txt) if (ch is not None and str(ch).isdigit()) else []
     out = set()
     for k in keys:
         rx = _mention_num_regex(k)
         if rx is None:
+            if _untyped_single_mention(k, type_vocab):
+                out.add(k)
+            elif _xref_anchored_only(txt, k, tag_spans, sec_keys, tag_nums):
+                out.add(k)
             continue
         ms = list(rx.finditer(txt))
         if not ms:
             continue
-        doms = {_mention_occurrence_domain(txt, m, tag_spans) for m in ms}
+        doms = set()
+        for m in ms:
+            doms.add(_mention_occurrence_domain(
+                txt, m, tag_spans, ch, anchors, sec_keys, tag_nums))
         if doms and doms <= _MENTION_DOMAIN_EXPLAINED:
             out.add(k)
     return out
+
+
+def mention_domains_of(md_text, key, ch=None, sec_keys=None, type_vocab=None):
+    """单个提及键在 md 里的**全部**出现域（留痕/普查用：豁免必须可追溯到判据）。"""
+    txt = md_text or ''
+    rx = _mention_num_regex(key)
+    tag_spans = [(m.start(), m.end()) for m in _TAG_SPAN_RE.finditer(txt)]
+    tag_nums = _tag_num_set(txt)
+    if rx is None:
+        if _untyped_single_mention(key, type_vocab):
+            return ['untyped']
+        return _unscannable_mention_domains(txt, key, tag_spans, sec_keys, tag_nums)
+    anchors = _heading_anchors(txt) if (ch is not None and str(ch).isdigit()) else []
+    doms = [_mention_occurrence_domain(txt, m, tag_spans, ch, anchors, sec_keys,
+                                       tag_nums)
+            for m in rx.finditer(txt)]
+    return sorted(set(doms)) or ['absent']
 
 
 def _norm_path(k):
@@ -1871,13 +2532,22 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # 塞进去就是拿放宽判据造假的「整条漏写」。习题**内容**是否在账由闸门⑩ /
         # `check_structure_completeness` 负责，本行只声明「该键契约已登记，不是孤儿条头」。
         _ext_norm |= _contract_exercise_keys(ctx.ext_dir, ctx.ch)
+        # 🔴 题集键**分隔符同口径**归一（2026-10-04 Iwaniec–Kowalski ch7 实测）：
+        # 契约侧 `_norm_ex_key_form` 产 `问题7-19`（短横），md 条头键是 `问题7.19`
+        # （点式），`_norm_path_labelfree` 只折三段/字母章位形态 → 两段题集键两侧
+        # 永远对不上，契约已登记的章末问题仍被报 EXTRA-ENTRY。剥离标签 +
+        # 分隔符统一成 `.` 后两侧同折。suppress-only：只进覆盖集，绝不进 `extracted`。
+        _ex_canon = {_ex_canon_key(k)
+                     for k in _contract_exercise_keys(ctx.ext_dir, ctx.ch)}
         _all_norm = {_norm_path_labelfree(k) for k in all_keys}
         truly_missing = sorted(k for k in extracted
                                if _norm_path_labelfree(k) not in _all_norm)
         mentioned_only = sorted((extracted & all_keys) - entry_keys, key=sortkey)
         # EXTRA: suppress md keys whose normalized path matches a contract key
         # (merely a label-variant of a registered item); keep only genuine orphans.
-        _covered = {k for k in all_keys if _norm_path_labelfree(k) in _ext_norm}
+        _covered = {k for k in all_keys
+                    if _norm_path_labelfree(k) in _ext_norm
+                    or _ex_canon_key(k) in _ex_canon}
         all_keys_eff = set(all_keys) - _covered
         # 🔴 EXTRA 分桶（判据见 `_split_extra`）。混在一行时报告文案
         # "usually correctly-filtered cross-refs" 会把**契约漏登记的真条目**说成
@@ -1918,6 +2588,9 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # tag/figref/eqref 才剔除——真条头（`**定义 4.2.6**`）必然自己贡献一处
         # `real` 出现，故本行不可能洗掉真漏登记。只动非阻断的 EXTRA 三桶，
         # 被剔除的键照旧进 `extra_mention_domain` 清单打印，不静默消失。
+        # （2026-10-04 顺序约定：本块必须先于下方三支**桶内收窄**——句中加粗
+        # 降级若先跑，会把 eqref 键从 extra_entry 抽走，dom_sup 就看不见它、
+        # 无法从 `extra` 剔除并留痕，隔离测试也随之失效。）
         _dom_sup = set()
         if extra_mention or extra_entry:
             try:
@@ -1925,11 +2598,109 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             except Exception:
                 _md_txt = ''
             _dom_sup = domain_suppressed_mentions(
-                _md_txt, set(extra_mention) | set(extra_entry))
+                _md_txt, set(extra_mention) | set(extra_entry), ctx.ch,
+                _contract_section_keys(ctx.ext_dir, ctx.ch),
+                _contract_type_vocab(ctx.config))
             if _dom_sup:
                 extra_mention = [k for k in extra_mention if k not in _dom_sup]
                 extra_entry = [k for k in extra_entry if k not in _dom_sup]
                 extra = [k for k in extra if k not in _dom_sup]
+        # 🔴 题集**条头**桶豁免（2026-10-04 Iwaniec–Kowalski 实测：16 章节末
+        # `**练习1**`…成排 ×中英 158 行）：节末习题在本管线里是**所在条目/小节
+        # 单元的体内内容**（无独立单元；契约登记反而触发闸⑩索要单元记录），
+        # 文案里的「register it (contract node / manual_overrides)」救济在数据侧
+        # 无落点（ctx.items 只读契约，overrides 不再进 A 层）。与提及侧
+        # `_EXM_DROP_RE` 同一判据把题集条头从 extra_entry 桶剔除；`extra` 并集
+        # **不动**（老消费者逐字节不变），只是不再打印 EXTRA-ENTRY 块。习题内容
+        # 是否漏写仍由闸⑩ / check_structure_completeness 负责。
+        _drop_entry = {k for k in extra_entry if _EXM_DROP_RE.search(k)}
+        if _drop_entry:
+            extra_entry = [k for k in extra_entry if k not in _drop_entry]
+        # 🔴 **句中加粗**降级（2026-10-04 Iwaniec–Kowalski ch19 实测）：
+        # `上式即给出下述 **命题19.5**：对任意…` 的句中强调被 ENTRY_RE 当成
+        # 独立条头 → 直落 extra_entry「契约漏登记」最强信号桶。条目级桶的定义
+        # 本就是「**独立**加粗条头」——键在 md 里**没有任何一行**以含它的粗体
+        # 头起头时，它只存在于句中，属行内强调而非条目。真条头（`**命题19.5**`
+        # 独占行首）必然贡献一处行首命中，不受影响；分隔符两变体（`2.9-1` ↔
+        # `2.9.1`）同认，裸号条头书零回归。suppress-only：只出 extra_entry 桶，
+        # `extra` 并集不动。
+        if extra_entry:
+            try:
+                _md_lines = ctx.read_md_lines()
+            except Exception:
+                _md_lines = []
+            _inline_only = _inline_only_entry_keys(_md_lines, extra_entry)
+            if _inline_only:
+                extra_entry = [k for k in extra_entry if k not in _inline_only]
+        # 🔴 **字母序标条头**在数字体例书不可机器对账（2026-10-04 Iwaniec–Kowalski
+        # ch5 实测：章内附录 Definition A.1，契约数字家族无此键；契约登记反而触发
+        # 闸⑩索要单元记录）。与 Q 层 LETTER-LED 探针同一哲学：该部分序标降级不判，
+        # 绝不逼写手改稿。真字母体例书（primary_type=ORDINAL_APP/APP2）的此类键
+        # 已由 `_norm_path_labelfree` 的字母折并与契约对上、到不了这里——判据必须
+        # 按体例门控（Katok 附录折顺测试：关折后字母键必须照旧报 EXTRA-ENTRY）。
+        _drop_letter = set()
+        if getattr(ctx.config, 'primary_type', None) not in (ORDINAL_APP, ORDINAL_APP2):
+            _drop_letter = {k for k in extra_entry
+                            if re.match(r'^[^\d]*[A-Za-z][.．]\d', k)}
+        # 🔴 字母序标头的**解析兄弟键**（2026-10-04 Iwaniec–Kowalski ch5 实测）：
+        # `**Definition A.1.**` / `**定义A.1**` 一条头被三族正则各拆键
+        # （'Definition A.1' / 'Definition A' / '定义1'…），且各键未必都落进
+        # extra_entry（规范键常在别层已消）。字母序标键被上一支豁免；同头的
+        # 兄弟键（标签同、号是单字母短横或数字残迹）在数字体例书同为解析伪影
+        # → 一并豁免。触发源有二：extra_entry 里的字母序标键，以及 md 行首的
+        # 字母序标条头本身（规范键不在 extra_entry 时仍要掩护兄弟）。标签归一
+        # = 剥**尾部**「空白+可选字母+可选点+数字」（'Definition A' /
+        # 'Definition A.1' / '定义1' / '定义 A.1' → 'Definition' / '定义'）——
+        # EN 标签本身含字母，不能按「首个字母前」切。字母体例书（APP/APP2）
+        # 两源皆有真键 → 整支跳过；纯数字体例且 md 无字母序标条头的书两源皆
+        # 空 → 零影响。
+        def _led_label(k):
+            # 键侧：剥尾部序标（可选空白+可选字母+可选点+可选数字，全可选）——
+            # '定义 A' / '定义A.1' / '定义1' / 'Definition A' → '定义' /
+            # 'Definition'；再 _canon_label 译标签（EN 书的键在解析时已 canon 成
+            # 中文，这里对未译形态兜底）。⚠️ 只用于**键**：md 头的 group(1) 是
+            # 纯标签（序标已被正则吃掉），直接 canon，不能再剥（会把
+            # 'Definition' 剥成 'Definitio'）。
+            s = re.sub(r'\s*[A-Za-z]?[.．]?\d*$', '', str(k or '').strip())
+            return _canon_label(s) if s else ''
+        _led_labels = {_led_label(k) for k in _drop_letter}
+        if extra_entry and not _led_labels and getattr(
+                ctx.config, 'primary_type', None) not in (ORDINAL_APP, ORDINAL_APP2):
+            try:
+                _md_lines_led = ctx.read_md_lines()
+            except Exception:
+                _md_lines_led = []
+            _led_head = re.compile(r'^\s*>?\s*\*\*([^\d]*?)[A-Za-z][.．]\d')
+            for _ln in _md_lines_led:
+                _hm = _led_head.match(_ln)
+                if _hm:
+                    _led_labels.add(_canon_label(_hm.group(1).strip()))
+        if _led_labels:
+            extra_entry = [k for k in extra_entry
+                           if _led_label(k) not in _led_labels]
+
+        # 🔴 **印面确证豁免**（2026-10-04 动力系统书架收尾：Koopman ch20 `引理 20.3`
+        # 印面笔误、chaos ch5 `Definition 5.6.5` 原书误指、Arnold 附录M 英译者脚注里
+        # 的「本文定理 3.1」= 另一篇论文的号）：这一族的**形状**与「本章正文提到一个
+        # 条目而契约无记录」完全相同——同章、带条目词、号不在任何名册里。判据侧没有
+        # 可机械收窄的余地（放宽任何一支都会洗掉真漏登记，Apostol ch9 例1 的教训），
+        # 故走**取证通道**：回源 PDF 逐页核对确为印面形态后，用
+        # `verify/item_numbering_integrity/script/attest_b_mention.py` 登记「键 -> 印面
+        # 页码取证」；空理由/无签名一律不生效。豁免键照旧逐条打印（EXTRA-MENTION ·
+        # 印面确证），不静默消失；`extra` 并集与阻断桶一概不动。
+        _att_tbl = load_b_mention_exemptions(ctx.ext_dir, ctx.ch)
+        _att_hit = _attested_extra_keys(set(extra_mention) | set(extra_entry),
+                                        _att_tbl)
+        extra_attested = []
+        if _att_hit:
+            for k in _att_hit:
+                kk = str(k)
+                extra_attested.append(
+                    (kk, _att_tbl.get(kk)
+                     or _att_tbl.get(_norm_path(kk), '')))
+            extra_mention = [k for k in extra_mention if k not in _att_hit]
+            extra_entry = [k for k in extra_entry if k not in _att_hit]
+            extra = [k for k in extra if k not in _att_hit]
 
         # --- P2：提取侧查漏（Q 类整项缺失 + over-mark 守卫，归 B 层统一处理）---
         blocking = []
@@ -2009,4 +2780,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
             'extra_entry': extra_entry,
             'extra_mention': extra_mention,
             'extra_mention_domain': sorted(_dom_sup, key=sortkey),
+            'extra_attested': [k for k, _r in sorted(extra_attested,
+                                                     key=lambda x: sortkey(x[0]))],
+            'extra_attested_reasons': {k: r for k, r in extra_attested},
         })

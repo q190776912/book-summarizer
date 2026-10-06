@@ -70,8 +70,10 @@ class _Src:
 
 
 # Apostol ch3 §3.11 实测位置（页, 块序）
+# 2026-10-04：同页 y 倒挂带锚定偏斜容限 300（见 formula_tag ORDER 支）——
+# (18) 的 y 从 300 抬到 600，使第二枚 17 的倒挂差 400 > 容限、照旧可判。
 _POS = {('3.11', '16'): (78, 100), ('3.11', '17'): (78, 200),
-        ('3.11', '18'): (78, 300), ('3.11', '19'): (79, 400)}
+        ('3.11', '18'): (78, 600), ('3.11', '19'): (79, 400)}
 _TAGS = ['16', '17', '18', '17', '19']
 
 
@@ -113,8 +115,10 @@ class TestSectionedReprint(unittest.TestCase):
 
 class TestPlainPathReprint(unittest.TestCase):
     def _src(self, limits=None):
+        # 2026-10-04：(18) y 从 300 抬到 600——plain 支同页 y 倒挂带锚定偏斜
+        # 容限 300（见 formula_tag ORDER 支），第二枚 17 的倒挂差须 >300 才照判。
         return _Src(['16', '17', '18'],
-                    primary={'16': (78, 100), '17': (78, 200), '18': (78, 300)},
+                    primary={'16': (78, 100), '17': (78, 200), '18': (78, 600)},
                     label_limit=limits)
 
     def test_chapter_scoped_repeat_attested(self):

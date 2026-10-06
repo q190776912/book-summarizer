@@ -84,6 +84,25 @@ ENTRY_RE_2 = re.compile(
 # 与 ENTRY_RE_EN_SINGLE_C 的 `(\d+)(?!\d)(?!\s*SEP\s*\d)` 同一手法。
 _NOT_DEEPER = r'(?!\d)' + r'(?!' + SEP_TIGHT + r'\s*\d)'
 
+# 🔴 **裸三段号扫描**（`keys_in_md` 三级分支的 `KEY_RE`）同一族缺陷的**区间形态**
+# （2026-10-04 动力系统书架根治）：`KEY_RE` 两端无守卫，而 `finditer` 只产出**不重叠**
+# 匹配，于是印面/交付里的**小节区间写法** `第 10.4-10.6 节` / `Sections 7.2-7.4`
+# 被切成一个假三段键 `10.4-10` / `7.2-7`（`10.4` + `-` + `10`，尾巴 `.6` 白送）。
+# 该号契约永不可能在册 → B 层每一处区间引用都刷一条 EXTRA-MENTION（实测 chaos ch10
+# 中英 2 行、nonlinear ch7·ch10 4 行；与上面「标签+三段截断成二级」是同一类幻影，
+# 只是这次由**无标签**的裸号正则造成，且在 md 侧）。
+# 🔴 **左守卫缺一不可**：只加右守卫时正则会**错位重切**——`10.4-10.6` 在 idx0 被右侧
+# `.6` 挡下后，退到 `4-10.6` 仍能凑出三段 → 造出更假的键 `4.10-6`。故左端同样要求
+# 起点前既不是数字、也不是任何分隔符（即本号是一段**独立号码 token** 的开头）。
+# 左守卫里的 `/ _ ~` 顺带把**文件名/路径**里的号（`ch05_1.2.3.png`）排除在条目键之外
+# ——那是图像域，本来就不作契约条目。
+_KEY_DEEP_RE = re.compile(
+    r'(?<![\d' + SEP_TIGHT[1:-1] + r'])'
+    + r'(\d+)' + SEP_TIGHT + r'(\d+)' + SEP_TIGHT + r'(\d+)'
+    + _NOT_DEEPER)
+# 与 `_NOT_DEEPER` 同源的另一收益：`1.2.3.4`（更深一层号）不再被截成 `1.2-3`。
+# 🔴 只作用于 `keys_in_md` 的这一处调用点：共享件 `KEY_RE` 模式与其余消费者逐字节不动。
+
 # Prose / cross-reference mentions:  定义1.3, 由定理5.2 / by Theorem 5.2 ...
 # 2026-08-27 补齐 例/Example/公理/Axiom/问题/Problem/示例 的 ENTRY_RE_2+PROSE_RE_2 覆盖
 # （之前仅含 定义|定理|引理|推论|命题|注记|评注|注|Remark，中文书籍的
@@ -479,7 +498,9 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
             else:
                 for m in ENTRY_RE.finditer(line):
                     entries.add(normkey(m.group(1)))
-                for m in KEY_RE.finditer(line):
+                # 🔴 带深度守卫的三段号扫描（判据见 `_KEY_DEEP_RE` 上方注释）：
+                # 区间写法 `第 10.4-10.6 节` / 更深一层 `1.2.3.4` 不再被截成假三段键。
+                for m in _KEY_DEEP_RE.finditer(line):
                     allk.add(normkey(f'{m.group(1)}.{m.group(2)}-{m.group(3)}'))
                 # EN3 / CN3LAB（原 ORDINAL_EN3=9 / ORDINAL_CN3LAB=10，已并入 type 3）：
                 # 标签在前三段式 Label C.S.N（如 Lasota & Mackey `Remark 1.1.1` /

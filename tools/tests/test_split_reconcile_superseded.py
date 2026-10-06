@@ -106,5 +106,83 @@ class ReconcileSupersededTest(unittest.TestCase):
         self.assertIsNone(SC.section_file_key('补篇S_Things.md'))
 
 
+class ReconcileMergedTest(unittest.TestCase):
+    """同章两份**合并稿**的回收判据（IntroDS 第9章 实测形态）。
+
+    合并稿改名后旧名同样不会被覆盖；这里不能要求逐字相同（旧名那份往往是折行/修订
+    之前的版本），判据改为「较早那份的 `\\tag` 集合是保留者的子集」——即同一交付的
+    早期版本；含保留者没有的 tag 者一律保留待人工裁决。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='bks_merged_')
+        self.now = time.time()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _root_md(self):
+        return sorted(f for f in os.listdir(self.dir) if f.endswith('.md'))
+
+    def test_subset_tags_is_archived_not_deleted(self):
+        new = ('# 第9章\n\n$$\nh_\\mu(T) = \\sup h(T,\\alpha)\n\\tag{9.2}\n$$\n'
+               '$$\n\\text{folded}\n\\end{aligned}\n\\tag{9.3}\n$$\n')
+        old = ('# 第9章\n\n$$\nh_\\mu(T) = \\sup h(T,\\alpha)\n\\tag{9.2}\n$$\n'
+               '$$\nh_{\\mu}(T)=\\sup h(T,\\alpha)\n\\tag{9.3}\n$$\n')
+        _write(self.dir, '第9章_Measure-Theoretic_Entropy.md', new, self.now)
+        _write(self.dir, '第9章_测度论熵.md', old, self.now - 100)
+        moved, diverged = SC.reconcile_merged_files(self.dir)
+        self.assertEqual((moved, diverged), (1, 0))
+        self.assertEqual(self._root_md(), ['第9章_Measure-Theoretic_Entropy.md'])
+        arch = os.path.join(self.dir, '_extract', '_superseded_split_md')
+        found = [os.path.join(r, f) for r, _d, fs in os.walk(arch) for f in fs]
+        self.assertEqual([os.path.basename(p) for p in found], ['第9章_测度论熵.md'])
+
+    def test_extra_tag_in_older_is_kept_for_adjudication(self):
+        new = '# Ch9\n\n$$\nx = y\n\\tag{9.2}\n$$\n' + 'filler paragraph. ' * 30 + '\n'
+        old = '# Ch9\n\n$$\nx = y\n\\tag{9.2}\n$$\n$$\nz = w\n\\tag{9.7}\n$$\n'
+        _write(self.dir, 'Chapter9_New.md', new, self.now)
+        _write(self.dir, 'Chapter9_Old.md', old, self.now - 100)
+        moved, diverged = SC.reconcile_merged_files(self.dir)
+        self.assertEqual((moved, diverged), (0, 1))
+        self.assertEqual(len(self._root_md()), 2)
+
+    def test_same_mtime_tie_breaks_on_larger_delivery(self):
+        # 复制/还原过的文件 mtime 会并列：此时以内容更完整（字节更多）者为交付
+        t = self.now
+        _write(self.dir, 'Chapter9_B_fat.md', BODY + 'extra row\n' * 20, t)
+        _write(self.dir, 'Chapter9_A_thin.md', BODY, t)
+        moved, _d = SC.reconcile_merged_files(self.dir)
+        self.assertEqual(moved, 1)
+        self.assertEqual(self._root_md(), ['Chapter9_B_fat.md'])
+
+    def test_one_per_language_is_not_a_duplicate(self):
+        _write(self.dir, 'Chapter9_Title.md', BODY, self.now)
+        _write(self.dir, '第9章_标题.md', BODY, self.now)
+        _write(self.dir, 'AppendixA_Back.md', BODY, self.now)
+        _write(self.dir, '附录A_背景.md', BODY, self.now)
+        moved, diverged = SC.reconcile_merged_files(self.dir)
+        self.assertEqual((moved, diverged), (0, 0))
+        self.assertEqual(len(self._root_md()), 4)
+
+    def test_dry_run_moves_nothing(self):
+        _write(self.dir, 'Chapter9_New.md', BODY, self.now)
+        _write(self.dir, 'Chapter9_Old.md', BODY, self.now - 100)
+        moved, _d = SC.reconcile_merged_files(self.dir, dry_run=True)
+        self.assertEqual(moved, 1)
+        self.assertEqual(len(self._root_md()), 2)
+
+    def test_merged_file_head_shapes(self):
+        self.assertEqual(SC.merged_file_head('Chapter9_Title.md'), ('en', 'Chapter9'))
+        self.assertEqual(SC.merged_file_head('第9章_标题.md'), ('zh', '第9章'))
+        self.assertEqual(SC.merged_file_head('附录A_背景.md'), ('zh', '附录A'))
+        self.assertEqual(SC.merged_file_head('SupplementS_Things.md'), ('en', 'SupplementS'))
+        self.assertEqual(SC.merged_file_head('附录.md'), ('zh', '附录'))
+        # 节文件与不相关文件名一律不归桶
+        self.assertIsNone(SC.merged_file_head('Chapter1_1.1_Newtitle.md'))
+        self.assertIsNone(SC.merged_file_head('README.md'))
+        self.assertIsNone(SC.merged_file_head('第9章_9.2_标题.md'))
+
+
 if __name__ == '__main__':
     unittest.main()

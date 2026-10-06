@@ -115,7 +115,7 @@ def print_result(r):
         print(f"\nMENTIONED-ONLY ({len(r['mentioned_only'])}): in .md as prose/cross-ref, not as own entry (review):")
         for k in r['mentioned_only']:
             print(f"  ~ {k}")
-    if r['extra'] or r.get('extra_mention_domain'):
+    if r['extra'] or r.get('extra_mention_domain') or r.get('extra_attested'):
         # 条目级 / 提及级分桶（判据与文案见 item_numbering_integrity.py 的
         # `extra_entry` / `extra_mention` 注释）：旧报告把两类混在一行且文案写着
         # "usually correctly-filtered cross-refs"，于是「契约漏登记的真条目」被
@@ -139,13 +139,33 @@ def print_result(r):
         _emd = r.get('extra_mention_domain')
         if _emd:
             print(f"\nEXTRA-MENTION · 领域归属豁免 ({len(_emd)}, 非阻断、不计数): 这些编号在 .md 里"
-                  f"**只**出现在公式标签 `\\tag{{}}` / 图表号 / 括号公式回指形态里，分属 Q 层"
-                  f"(formula_tag) 与图像域的辖域，不是条目域漏登记（判据 "
-                  f"`item_numbering_integrity.domain_suppressed_mentions`）：")
+                  f"**每一处**出现都属别的层/别的章已负责的领域——公式标签 `\\tag{{}}`、图表号、"
+                  f"括号公式回指（含 `(8.4.3a)` 字母后缀）、题集引用 `Exercises 2.8.7 and 2.8.8`、"
+                  f"公式词回指 `方程 7.6.10`、书目标记 `文献[21] Theorem 3.3.3`、跨章条目回指"
+                  f"（首分量既非本章号亦非该处章标题的章号）、契约在册小节（标题行 `### §2.3.3`，"
+                  f"或散文回指 `See Miscellanea 4.9.1`——号在契约小节名册里且号前非条目词）、"
+                  f"散文里 `§` 紧贴号前的小节回指（`我们会在 §11.3.11 中…`）、"
+                  f"本书 config **未宣告该条目类型**的「标签+单号」键（`untyped`：契约无从开槽，"
+                  f"救济 = 给该书补宣告该计数器组），或不可按号扫描的「标签+单号」键且**每一处**"
+                  f"出现都被小节锚点限定（`xref`：`如 §1.3 的例 3 所证` / `一文 §9 的注 7` / "
+                  f"`### §D 例 4：保守系`）；"
+                  f"分属 Q 层 (formula_tag)、图像域、题集/书目域与**别章契约**辖域，不是本章条目域"
+                  f"漏登记（判据 `item_numbering_integrity.domain_suppressed_mentions`；"
+                  f"逐键域归属可用 `mention_domains_of` 复核）：")
             for k in _emd[:40]:
                 print(f"  · {k}")
             if len(_emd) > 40:
                 print(f"  · …（其余 {len(_emd) - 40} 个从略）")
+        _att = r.get('extra_attested')
+        if _att:
+            _ars = r.get('extra_attested_reasons') or {}
+            print(f"\nEXTRA-MENTION · 印面确证豁免 ({len(_att)}, 非阻断、不计数): 已回源 PDF 逐页"
+                  f"核对，形状虽与「正文提到而契约无记录」相同，印面确为**原书笔误/误指/引他文之号**"
+                  f"（登记处 `<extract>/ignore_b_mention_{{章}}.json`，CLI "
+                  f"`verify/item_numbering_integrity/script/attest_b_mention.py`；🔴 空理由不生效，"
+                  f"真漏登记一律补登记/补写正文，禁止用本通道消音）：")
+            for k in _att:
+                print(f"  ✓ {k} — {_ars.get(str(k), '')}")
     if r['blocking']:
         problems += 1
         print(f"\nB-LAYER BLOCKING ({len(r['blocking'])}): extraction may have missed items — resolve before writing:")

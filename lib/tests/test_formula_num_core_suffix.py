@@ -70,6 +70,16 @@ class SingleSegmentRejectsSuffix(unittest.TestCase):
         self.assertEqual((got[0] if isinstance(got, tuple) else got), "3")
         self.assertIsNone(formula_trailing_tag("k(n) (s)(2s)x(3s) (2s)", ncomp=1))
 
+    def test_trailing_tag_adjacent_label_rejected(self):
+        # Silverman《数论之美》ch15 实测 2026-10-03：σ(800000) 展示式分母
+        # `(2-1)(5-1)` 被 OCR 读成独立块，尾 `(5-1)` 紧挨另一完整数字形标签
+        # ——是公式内容，不是印刷编号（旧白名单 `)` 放行 → 幻影 tag `5-1`）。
+        self.assertIsNone(formula_trailing_tag("(2-1)(5-1)", ncomp=None))
+        self.assertIsNone(formula_trailing_tag("(2-1)(5-1)", ncomp=2))
+        # 嵌套括号收尾的真例：前缀 `(x)` 非数字形标签，不受影响
+        got = formula_trailing_tag("f(x))(3.5)", ncomp=2)
+        self.assertEqual((got[0] if isinstance(got, tuple) else got), "3.5")
+
 
 class MultiSegmentKeepsSuffix(unittest.TestCase):
     """子式后缀是真体例的书（ncomp>=2）零回归。"""

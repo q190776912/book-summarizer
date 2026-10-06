@@ -200,6 +200,23 @@ def _tail_pre_guard(raw_pre: str) -> bool:
         s = s[:m.start()].rstrip()
         if _run >= 2:
             return False
+    # 🔴 花括号群/李代数记号的「自变量括号」漏网（群表示论 Introduction to
+    # representation theory ch1 实测 2026-10-03）：显示块 `{ \mathfrak { s l } } ( 2 )`
+    # = `\mathfrak{sl}(2)`（special linear 李代数，`sl` 是名、`(2)` 是维数**自变量**），
+    # 因 `\mathfrak{sl}` 被 OCR 拆排、`}` 与 `(2)` 之间恰有一个空格，既躲过 ① 的
+    # 「黏着」拒收、又不落进 ③ 的「孤立**大写**字母 token」（这里是小写 `sl` 塞在
+    # 字体命令的花括号里）→ 被当成 §1.1 的右缘标签 `(2)`，把全书真正的 Jacobi 恒等式
+    # `(2)`（p15 / §1.9）的定义节抢到 §1.1，于是忠实落在 §1.9 的 `\tag{2}` 被误判
+    # MISPLACED。判据：行尾 `(N)` 的左邻**去空白后**若整体只是「`\命令`+花括号+ASCII
+    # 字母」的裸名字、且以 `}` 收尾——即整个式子就是一个带花括号名的群/代数记号
+    # （`\mathfrak{sl}` / `\mathcal{O}` / `\operatorname{char}` / `\mathrm{Hom}`…），
+    # 其后括号是它的**自变量**而非印刷编号，拒收。真右缘标签左邻必含等式内容或算子
+    # （`b = 2 (2)` 含 `=` 与数字、`f(x) \le M (9)` 含 `(`/`\le`、`x^{2} (3)` 花括号内
+    # 是数字、`\quad (8)`/`\circ (3)` 是**无花括号**裸命令不以 `}` 收尾）——一律不受影响。
+    _blob = re.sub(r'\s+', '', pre)
+    if (_blob.endswith('}')
+            and re.fullmatch(r'(?:\\[a-zA-Z]+|[{}]|[a-zA-Z])+', _blob)):
+        return False
     return True
 
 
@@ -331,10 +348,23 @@ def _heading_num(s: str) -> Optional[str]:
     # 不影响其余判据强度。
     _tail_pre = s[hm.end():].strip().strip('.').strip()
     _greek_runin = bool(re.fullmatch(r'[a-z]{1,5}-[A-Z][A-Za-z]{2,}', _tail_pre))
-    if re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b', s) and not _greek_runin:
+    # 🔴 2026-10-04 收窄（Iwaniec–Kowalski ch19/ch23 实测）：守卫原形 `\d[-.]\s*[A-Za-z]\b`
+    # 连「N.M. A xxx」形态的**英文节标题**一并吞掉——"23.2. A partition of…" 的
+    # "2. A" 恰好撞上 `6.A` 图号子标形态，于是 §23.2 / §19.3 / §23.6（"A" 起头的
+    # 节题）全书永不识别，节游标停在上一节，整节忠实 `\tag` 被判 MISPLACED。
+    # 真「数字-分隔-字母」子标（`6.A` / `3.4.B`）里字母是**孤立 token**；标题里
+    # 字母后面跟着「空白 + 更多字母」（"A partition"）= 标题词。负向先行
+    # `(?! [A-Za-z])` 只放行后者；`6.A 图变换`（字母后接中文）照旧拒绝，零回归。
+    if re.search(r'\d\s*[-.\u2013]\s*[A-Za-z]\b(?!\s+[A-Za-z])', s) and not _greek_runin:
         return None
     # 编号后紧跟闭括号/逗号/分号 = OCR 断行的引用残行，绝非标题。
-    if s[hm.end():hm.end() + 1] in (')', '）', ',', '，', ';', '；'):
+    # 🔴 2026-10-04 放宽一个身位（空格后括号同拒，Iwaniec–Kowalski ch10/ch26
+    # 实测）：散文回指行 "9.7 (or Theorem 9.16) together with…" 与
+    # "26.2 (non-vanishing…) can be done…" 以**空格+括号**续接，旧检查只看
+    # 紧邻字符被放行 → 被当成节标题，节游标倒退回上一章的 §9.7 / 伪 §26.2，
+    # 其后整段忠实 `\tag` 错归。真标题在节号后是「. Title」「: Title」或直接
+    # 结尾；「N.M (句子…)」是回指/散文形态。
+    if s[hm.end():].lstrip()[:1] in (')', '）', '(', '（', ',', '，', ';', '；'):
         return None
     tail = s[hm.end():]
     if not tail.strip() and s.startswith('§'):
@@ -695,7 +725,7 @@ class SourceFormulaIndex:
                 # _locate_tail_anchor），其余页整页剔除。
                 if self._in_exercise_tail(pg, y):
                     continue
-                self._track_heading(txt)
+                self._track_heading(txt, pg)
                 self._scan_text(txt, nums, pg, y)
                 # 🔴 Number-in-latex guard（2026-09-09 Han–Lin / 2026-09-29 阿诺尔德）：
                 # OCR 有时把显示公式**连同其编号**一起捕获进 `formulas[].latex`，
@@ -760,6 +790,21 @@ class SourceFormulaIndex:
         # build 末尾并入**章级 union**（供 FABRICATED 免疫），但**不进**分节 S
         # （不新增 MISSING / 不动 ORDER·MISPLACED 证据）——最小侵入、零回归。
         self._standalone_labels: Set[str] = set()
+        # 🔴 内联粘连印刷号（本卷统计书 ch6 (7.9) / ch7 (6.6) 实测）：OCR 把显示
+        # 公式**右缘编号**并进相邻的**纯散文** text 块（如「for every bounded
+        # B-measurable Z; (7.9)」——公式正文另在 formulas[] latex 块且不含编号），
+        # sectioned 路径的 `not _block_has_math` 分支此前**只**收「整块即一个编号」
+        # 的 standalone 与「条目词紧邻」的裸号，对这种「散文 + 括号编号」尾随形态
+        # 一律丢弃 → 忠实的 `\tag{7.9}` 被误判 FABRICATED。**plain 路径靠
+        # `_is_strong_signal` + `keep_cross_refs` 无条件保留带括号命中，两路口径
+        # 不一致**（正是本文件既有补救反复强调的同一条不对称）。补救：仅当
+        # `keep_cross_refs` 为真（书已声明「忠实转写括号回指/编号」体例）时，把
+        # 这类**强信号（带括号 / Eq. 前缀）**、通过 `_plausible`、且非双括号残迹的
+        # 编号收进 `_cross_ref_union`。build 末尾并入**章级 union**（FABRICATED
+        # 免疫），但**不进**分节 S、不 `_count_label`、不登记位置证据 → 不新增
+        # MISSING / 不动 ORDER·MISPLACED / 不放宽 INCONSISTENT，与 `_standalone_labels`
+        # 同一「最小侵入、零回归」口径；keep_cross_refs=False 的书维持原丢弃行为。
+        self._cross_ref_union: Set[str] = set()
         if md_sections:
             self._sec_start_page[md_sections[0]] = int(start)
         cur = 0  # index into md_sections
@@ -813,6 +858,49 @@ class SourceFormulaIndex:
                     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', _tail0):
                         _titled_secs.add(_head_norm(_hm0.group(1)))
             _is_toc_page = len(_titled_secs) >= 4
+            # 🔴 Evans PDE ch1 p19（2026-10-03）：章首页「目录 + 首节正文」二合一
+            # ——它既列满 §1.1–§1.6 节头（≥4 个带标题短头 → `_is_toc_page=True`），
+            # 又在这一页 §1.1 的显示公式右缘**真印**了公式编号 `(1)`（夹在
+            # 「DEFINITION. An expression of the form」与其方程「F(D^k u,…)=0」之间）。
+            # 而下面 `for block in _blocks` 的循环遇 `_is_toc_page` 会**整页跳过**（见
+            # `if not txt or _is_toc_page: continue`），于是这个真实印刷号从未进入
+            # 章级 union → 总结忠实的 `\tag{1}` 被误判 FABRICATED。
+            # 补救（与下方 `not _block_has_math` 分支处理右缘独立编号块同一 sanctioned
+            # 通道，只是把它延伸到「被目录判定牺牲的页」）：**仅当本页确为混合页**
+            # （既有目录式节头、又真有数学正文）时，才回收「整块就是一个印刷编号」的
+            # 裸标签块（strip 尾点后对任一 pattern **fullmatch** → 散文/节头/交叉引用
+            # 块都不可能整块等于编号）收进 `_standalone_labels`。**页级数学前置条件**
+            # 是关键护栏：Fraleigh/Ross 式**纯目录页**只有短标题、无任何数学块，其
+            # 偶发裸 `(7)` 仍须抑制（见 `SectionedTocPageGateTest`），故 `_has_math=False`
+            # 时整段回收跳过；Evans p19 含 `F(…)=0` 数学块 → 放行回收 `(1)`。
+            # `_standalone_labels` 在 `build_sectioned` 末尾并入**章级 union**（FABRICATED
+            # 免疫），但**不进**分节 S（不新增 MISSING）、**不调** `_count_label`
+            # （`label_limit` 仍回 1 → 单处 tag 不触发 INCONSISTENT）。判据只此一份：
+            # 复用 `self.patterns`/`norm`/`ignore`/`_plausible`，与正文通道一致；且仅在
+            # `_is_toc_page` 且本页有数学时运行，绝不重复处理普通页、绝不误伤纯目录页。
+            _bare_lbl_re = re.compile(r'[（(]\s*\d+(?:[.\-–]\d+)*[a-zA-Z]?\s*[）)]')
+            _has_math = bool(data.get('formulas')) or any(
+                self._block_has_math(_b0.get('text', ''))
+                and not _bare_lbl_re.fullmatch(
+                    _b0.get('text', '').strip().rstrip('.。').strip())
+                for _b0 in (data.get('text', []) or []) if isinstance(_b0, dict))
+            if _is_toc_page and _has_math:
+                for _bl0 in data.get('text', []) or []:
+                    _t0 = _bl0.get('text', '') if isinstance(_bl0, dict) else ''
+                    if not _t0:
+                        continue
+                    _sa0 = _t0.strip().rstrip('.。').strip()
+                    if not re.fullmatch(r'[（(]\s*\d+(?:[.\-–]\d+)*[a-zA-Z]?\s*[）)]',
+                                        _sa0):
+                        continue  # 快速预筛：非「整块即一个编号」的块直接跳过
+                    for _pat0 in self.patterns:
+                        _mm0 = _pat0.fullmatch(_sa0)
+                        if _mm0:
+                            _n0 = self.norm(_mm0.group(1))
+                            if (_n0 and _n0 not in self.ignore
+                                    and self._plausible(_n0, _mm0.group(1))):
+                                self._standalone_labels.add(_n0)
+                            break
             # 🔴 编号被吞进 formulas[].latex 的兜底（与 plain 路径共用
             # `latex_label_candidates`，判据只此一份）：把「以印刷编号收尾」的
             # latex 作为**等价文本块**追加到本页趟尾——正文趟已推进过 `cur`，
@@ -1000,6 +1088,23 @@ class SourceFormulaIndex:
                                                 and self._plausible(_n_lbl, _m_lbl.group(1))):
                                             self._count_label(_n_lbl, pg, sec)
                                             getattr(self, '_scan_label_nums', set()).add(_n_lbl)
+                    # 🔴 内联粘连印刷号 → 章级 union（FABRICATED 免疫，见 __init__ 注记）：
+                    # keep_cross_refs 为真时，纯散文块里**带括号 / Eq. 前缀**的强信号编号
+                    # （如「…measurable Z; (7.9)」）是印刷公式号被 OCR 并进相邻散文行的形态，
+                    # plain 路径无条件保留、sectioned 却会丢弃，两路须一致。只进 union，
+                    # 不进分节 S / 不 _count_label / 不登记位置 → 不新增 MISSING、不动
+                    # ORDER·MISPLACED、不放宽 INCONSISTENT。keep_cross_refs=False 维持原丢弃。
+                    if self.keep_cross_refs and (self._ncomp is None or self._ncomp >= 2):
+                        for _pat_x in self.patterns:
+                            for _m_x in _pat_x.finditer(txt):
+                                if _m_x.start() > 0 and txt[_m_x.start() - 1] in '(（':
+                                    continue  # 双括号 OCR 残迹，与下面主提取同判据
+                                if not self._is_strong_signal(_m_x.group(0)):
+                                    continue  # 只认带括号 / Eq. 前缀的强信号（印刷号形态）
+                                _n_x = self.norm(_m_x.group(1))
+                                if (_n_x and _n_x not in self.ignore
+                                        and self._plausible(_n_x, _m_x.group(1))):
+                                    self._cross_ref_union.add(_n_x)
                     continue
                 # extract formula numbers and attach to the current section
                 for pat in self.patterns:
@@ -1178,6 +1283,15 @@ class SourceFormulaIndex:
         for _n in getattr(self, '_standalone_labels', set()) or set():
             union.add(_n)
             self._by_chapter.setdefault(ch, set()).add(_n)
+        # 🔴 常庚哲/随机过程 inline-glued 边栏编号（本卷 ch6 (7.9) / ch7 (6.6)）：
+        # 印在散文段旁、强信号括号编号但所在块无数学 → sectioned 的
+        # `not _block_has_math` 分支此前直接丢弃 → 忠实 \tag 被误判 FABRICATED。
+        # 与 plain 路径不对称。仅在 keep_cross_refs 下收集（见 _scan_text 分支），
+        # 只并入章级 union 供 FABRICATED 免疫，**不进**分节 S——因此不新增
+        # MISSING、不动 ORDER·MISPLACED 证据。
+        for _n in getattr(self, '_cross_ref_union', set()) or set():
+            union.add(_n)
+            self._by_chapter.setdefault(ch, set()).add(_n)
         return {'_sectioned': sectioned, '_union': union}
 
     def _kb_applies(self, num: str, ch, legacy_ok: bool) -> bool:
@@ -1240,15 +1354,50 @@ class SourceFormulaIndex:
         return set(self._primary_pos.keys())
 
     # -- helpers ------------------------------------------------------------
-    def _track_heading(self, txt: str) -> None:
+    @staticmethod
+    def _sec_sort_key(h):
+        """节号 → 可比较键（逐段数值化，'7.10' > '7.9'；非数字段按原样排在
+        同位数字之后）。节头游标「只进不退」守卫的排序基准。"""
+        parts = []
+        for p in str(h).split('.'):
+            if p.isdigit():
+                parts.append((0, int(p), ''))
+            else:
+                parts.append((1, 0, p))
+        return tuple(parts)
+
+    def _track_heading(self, txt: str, pg=None) -> None:
         """Update the running nearest-preceding-heading from a short numbered
         line (e.g. "2.3.2 Preliminaries").  A formula's enclosing section is the
         nearest preceding heading line.
+
+        🔴 **只进不退**（2026-10-04 Iwaniec–Kowalski ch7 实测）：扫描书每页**书眉**
+        重印本节（或更早节）的标题（p184 顶部 "7.4.Applications…" 出现在 p183 的
+        "7.5. Multiplicative…" 之后），旧写法照单全收 → 游标**倒退**回 §7.4，
+        p184 起的忠实 `\tag{7.33}` 全部错归 §7.4。正文节号单调递增，倒退只可能
+        来自书眉/交叉引用残行 → 小于等于当前游标的节号一律不收（同号重复书眉
+        无害，本就等值）。
+
+        🔴 **契约页锚核伪节头**（2026-10-04 Iwaniec–Kowalski ch5 实测）：散文回指
+        行 ``"5.12. This covers most cases…"``（句首恰是公式号引用、OCR 丢了括号）
+        被认成节标题 → 游标从 §5.1 一步跳到 §5.12，又被上面的单调守卫把真节头
+        §5.2-§5.11 全部锁在门外直到 §5.13@p146 —— §5.2-§5.11 的忠实 `\tag`
+        整段错归 §5.12。核：识别出的节号在本页出现，须与契约该节 page_start
+        相距 ≤2 页（OCR 分页漂移容忍），超出即散文回指残行，不收。契约不可用
+        （`_sec_ranges` 空）时无锚可核 → 维持旧行为放行。
         """
         h = _heading_num(txt)
         if h is None:
             return
-        self._cur_heading = self._repair_heading(h)
+        h = self._repair_heading(h)
+        if (self._cur_heading is not None
+                and self._sec_sort_key(h) <= self._sec_sort_key(self._cur_heading)):
+            return
+        if pg is not None and self._sec_ranges:
+            _rng = self._sec_ranges.get(str(h))
+            if _rng and abs(int(pg) - int(_rng[0])) > 2:
+                return
+        self._cur_heading = h
 
     def _load_sec_keys(self, ch) -> None:
         """Section keys of THIS chapter (plus the consolidated-exercise tail
@@ -1261,6 +1410,7 @@ class SourceFormulaIndex:
         self._sec_keys = None
         self._tail_exer_page = None
         self._tail_exer_anchor_y = None
+        self._sec_ranges = {}
         try:
             from data.book_structure.book_structure import chapter_json_path
             fp = chapter_json_path(self.extract_dir, ch)
@@ -1296,7 +1446,27 @@ class SourceFormulaIndex:
                     continue
                 if node.get('type') == 'section' and node.get('key'):
                     keys.add(str(node['key']))
+                    # 🔴 节起始页播种账本（2026-10-04 Iwaniec–Kowalski ch5 实测）：
+                    # 扫描书的印刷节头行常被 OCR 整块丢失，行走只能靠 1-2 页后的
+                    # 书眉认节 → 游标整章滞后，几十枚忠实 `\tag` 错归上一节。契约
+                    # 的 section.page_start 来自内容锚定，是节起始页的最佳真值；
+                    # build() 逐页据此把游标推进到「本页起始的、大于当前游标的」
+                    # 最大节号。页级粒度意味着交界页上前一节末尾的公式会被算给
+                    # 新节——比游标滞后一整段轻得多，且交界页残渣由逐章 ignore
+                    # 台账兜底（『cannot tell』语义）。
                     _p0 = node.get('page_start')
+                    if isinstance(_p0, int):
+                        _pe = node.get('page_end')
+                        _pe = _pe if isinstance(_pe, int) else _p0
+                        # 🔴 账本必须是 `self._sec_ranges`（上面刚初始化、except 里同样
+                        # 复位的那个）。写成裸名 `_ranges` 是未定义名 → NameError 被本函数
+                        # 末尾的 `except Exception` 整段吞掉 → `_sec_keys` /
+                        # `_tail_exer_page` / `_tail_exer_anchor_y` 全部退回 None，即
+                        # 「章末集中习题页剔除」判据**静默失效**（fail-open）。实测代价：
+                        # Strogatz 第三版 ch13 习题块 13.6.5 内印 `z(t)=α*(-iγ,t) (13)` /
+                        # `r(K)=√(1-2γ/K) (14)`，习题号列被当成书真相集 → 正文忠实
+                        # `\tag` 止于 (13)，报 Q-LAYER FORMULA MISSING (14) 阻断。
+                        self._sec_ranges[str(node['key'])] = (_p0, _pe)
                     _pe = node.get('page_end')
                     _pe = _pe if isinstance(_pe, int) else (
                         _p0 if isinstance(_p0, int) else None)
@@ -1336,6 +1506,7 @@ class SourceFormulaIndex:
             self._sec_keys = None
             self._tail_exer_page = None
             self._tail_exer_anchor_y = None
+            self._sec_ranges = {}
 
     def _locate_tail_anchor(self, ch, tail: Optional[int],
                             tail_names: Set[str]) -> Optional[float]:
@@ -2151,6 +2322,49 @@ def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
                 continue
             for m in _LETTER_LED_RE.finditer(t):
                 found.add(m.group(0).strip())
+    # 🔴 单字母章头**不在本书章键集**的命中 = 对书外附录/其他书的**交叉引用**，
+    # 不是本书体例（2026-10-04 Iwaniec–Kowalski 实测：ch4 p78 全书唯一一处
+    # "(A.36)" 是对书末 Appendix A 的散文回指，而 chapter_map 里根本没有附录章
+    # ——提示设 letter_ch 反而会把散文引用收进 S 造 MISSING/FABRICATED）。
+    # 真字母章位书的附录就是章键（Lee ISM 的 appendixA → 'A'），提示照常发出。
+    # 只过滤**单字母**头；罗马头（II.5）的章键形态多样，保持原样不动。
+    if found:
+        try:
+            from data.book_structure.book_structure import list_chapter_keys as _lck
+            # 🔴 用**裸章键**（'1' / 'A' / 'appendix'）而非 chapter_label（'ch1' /
+            # 'appendixA'）：探针命中的章头就是裸形态（'(A.36)' → 'A'）。
+            _keys = {str(k) for k in _lck(ext_dir)}
+        except Exception:
+            _keys = None
+        if _keys:
+            def _head(tok: str) -> str:
+                _inner = tok.strip().strip('（）()')
+                return _inner.split('.')[0].strip()
+            # 🔴 附录/补篇字母章由各自独立 config（letter_ch）校验；数字体例的 ch
+            # 配置下命中其交叉引用（如主章正文回指 (B.3)）属正常，不应误报 LETTER-LED。
+            # 仅当字母头确属本书附录/补篇章键才排除——纯数字书若真出现未配置的字母
+            # 章位编号（head 在 _keys 内但非附录/补篇），仍照常告警（暴露真实缺配）。
+            _appendix_heads: Set[str] = set()
+            try:
+                from data.book_structure.book_structure import (
+                    chapter_kind, KIND_APPENDIX, KIND_SUPPLEMENT,
+                    prime_chapter_kinds)
+                try:
+                    prime_chapter_kinds(ext_dir)
+                except Exception:
+                    pass
+                for _k in _keys:
+                    try:
+                        if chapter_kind(_k) in (KIND_APPENDIX, KIND_SUPPLEMENT):
+                            _appendix_heads.add(_k)
+                    except Exception:
+                        pass
+            except Exception:
+                _appendix_heads = set()
+            found = {t for t in found
+                     if not (_LETTER_LED_RE.fullmatch(t)
+                             and (_head(t) not in _keys
+                                  or _head(t) in _appendix_heads))}
     return found
 
 
@@ -2672,6 +2886,20 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             continue  # FABRICATED handled elsewhere; skip here
         if (sec, n) in (scoped_ignore or set()):
             continue
+        # 🔴 弱证据不判序/位（2026-10-04 Iwaniec–Kowalski ch1 实测，plain 支）：
+        # 位置若来自**纯散文回指**（`_pos_strong` 从未登记——印面标签块被 OCR
+        # 整块丢失，S 里只剩回指），它不是定义位置只是无锚点的弱命中；拿它当
+        # 顺序游标必然在「强标签先印、弱回指后提」的页面布局里造出假倒挂
+        #（(1.7) 强标签 p17 先印、(1.6) 弱回指 p18 后提 → 总结忠实的 1.6→1.7
+        # 被判 ORDER_MISMATCH）。与 scope==3 的「无节内证据不判」同一约定：
+        # 既不判倒挂/错位也不推进游标。只减少告警——被跳过者原本拿到的也是
+        # 不可信位置，判出的告警本就无据；strong 标签的判定一字未动。
+        # 🔴 门控在「src 真带强弱分级账本」上：真 `SourceFormulaIndex` 恒有
+        # `_pos_strong`；无该属性的旧测试替身（无强弱信息可言）保持原行为。
+        _strong_map = getattr(src, '_pos_strong', None)
+        if (not reset_on_section and _strong_map is not None
+                and not _strong_map.get(n)):
+            continue
         # ORDER-window reset on summary-section change (only for per-section
         # restart books, where numbers repeat across sections).
         if reset_on_section and sec != prev_sec:
@@ -2724,7 +2952,25 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                     and not _dup_beyond_source(src, _occ, _ok, n,
                                                sec if reset_on_section else None))
         if cur is not None and not _reprint:
-            if _pos_before(cur, prev_pos):
+            # 🔴 同页 y 倒序的**锚定偏斜容限**（2026-10-04 Iwaniec–Kowalski
+            # ch1/ch3/ch12 实测，plain 支）：同页上公式印刷顺序必然随号递增，但
+            # 标签块的 y ≠ 公式顶——多行/高个公式的右缘标签落在末行或行心，把
+            # 该号的 y 拉到比下一个单行公式**更低**处（(1.100)@y408 vs
+            # (1.101)@y363、(12.26)@y1071 vs (12.27)@y803，实测偏斜 45~268）。
+            # 同页 y 倒挂只有超出锚定偏斜容限（300，约一个多行公式标签的下沉
+            # 量）才算真倒挂；容限内视为「无法分辨先后」，不判也不回退游标。
+            # 跨页倒挂照旧全判。scope==3 分节支的位置语义不同（节内重启），不
+            # 适用本容限，维持原判。
+            _same_page = False
+            if not reset_on_section:
+                _same_page = (prev_pos is not None and cur is not None
+                              and cur[0] is not None and prev_pos[0] is not None
+                              and cur[0] == prev_pos[0])
+                if _same_page:
+                    _prev_y = prev_pos[1] if prev_pos[1] is not None else 0
+                    _cur_y = cur[1] if cur[1] is not None else 0
+                    _same_page = not (_prev_y - _cur_y > 300)
+            if _pos_before(cur, prev_pos) and not _same_page:
                 if n not in seen_om:
                     seen_om.add(n)
                     om.append({
@@ -2782,6 +3028,19 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
             flagged = (bsec is not None and not _self_reported
                        and not _section_prefix_compatible(bsec, sec))
+            # 🔴 契约页窗核（2026-10-04 Iwaniec–Kowalski ch4/ch5 实测）：扫描书的
+            # 印刷节头行常被 OCR 整块丢失（或只剩滞后 1-2 页的书眉），行走游标
+            # 滞后 → 忠实 `\tag` 被「错归上一节」。页级播种游标会毁掉节头可见章
+            # 的块级精度（实测 ch1/ch2 全域错归），故救济放在**判定时**：标签的
+            # 印面页落在**总结所在节**的契约页窗 [page_start, page_end] 内 =
+            # 书侧无法证明放错 → 跳过不判（与本支既有『bsec is None 不判』同一
+            # fail-open 约定）。伪锚（如 (4.75) 的 p74 碎片）页在窗外，照判，
+            # 由逐章 ignore 台账按印面取证豁免。
+            if flagged:
+                _rng = (getattr(src, '_sec_ranges', None) or {}).get(sec)
+                if (_rng and cur is not None and cur[0] is not None
+                        and _rng[0] <= int(cur[0]) <= _rng[1]):
+                    flagged = False
         if flagged and n not in seen_mp:
             seen_mp.add(n)
             mp.append({

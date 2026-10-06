@@ -83,7 +83,36 @@ _SHELL_CMDS = re.compile(
     r'qquad\\*|;|,|!|nonumber|notag)\b\s*|'
     r'\\(?:Biggl|Biggr|biggl|biggr|Biglm|Bigrm|biglm|bigrm|Bigl|Bigr|bigl|bigr|'
     r'Bigg|bigg|Big|big|left|right)\b\s*|'
-    r'\\(?:left|right)?[.,;:!]\s*')
+    r'\\(?:left|right)?[.,;:!]\s*|'
+    # 🔴 以下两支是 Koopman《Koopman Operator》实测（2026-10-04）补齐的同族壳：
+    # ① **旧式字体开关**（`{\bf x}` / `\it …`，无花括号组、只管到定界符为止）。
+    #    交付侧一律写 `\mathbf{x}` 现代形式，印面 OCR 却常输 `\bf`——壳名不剥则
+    #    书侧多 `bf` 两字符，p316 的 (11.17) 自身匹配被压到 0.78（差 0.02 就误报）。
+    #    `\\(?:...)` 已要求命令名字母边界，`\bf` 不会吃掉 `\bm`/`\boldsymbol`。
+    # ② **定界符命令**（`\lvert`/`\rvert`/`\Vert`/`\mid`/`\langle`…）。它们与裸
+    #    `|`/`\|`/`<` 是同一数学内容的两种写法（交付用 `\lVert…\rVert`，OCR 输 `|`），
+    #    而非字母数字的裸符已被 `_NON_ALNUM` 抹掉，命令名必须同族剥净才可比
+    #    （Koopman p447 (16.24) 实测：留着 `lrvert` 六字符把 r=1.00 压成假「配错号」）。
+    r'\\(?:boldmath|unboldmath|rmfamily|bfseries|mdseries|itshape|scshape|'
+    r'tiny|small|footnotesize|scriptsize)\b\s*|'
+    r'\\(?:bf|it|rm|sf|tt|cal|mit|os)\b|'
+    r'\\(?:lvert|rvert|Lvert|Rvert|vert|Vert|lVert|rVert|lmoustache|rmoustache|'
+    r'langle|rangle|lfloor|rfloor|lceil|rceil|ulcorner|urcorner|llcorner|lrcorner|'
+    r'backslash|setminus|mid|divideontimes)\b\s*|'
+    # ③ **花体/字母族**（`\mathcal`/`\mathbb`/`\mathscr`/`\mathfrak`，Koopman ch6
+    # (6.10)·ch16 (16.40) 实测，2026-10-04）：印面 OCR 输 `\mathfrak { p } _ { 0 }`，
+    # 交付侧写 `\mathbf{p}_0`（同一枚哥特体字母的两种转写）。留着 `mathfrak` 六个
+    # 字符把 r=1.00 的同一条式子压到 0.78（差 0.02 就误报）。字体壳一律不携带数学内容。
+    r'\\(?:mathcal|mathbb|mathscr|mathfrak|mathbold|mathsfit|mathnormal|'
+    r'mathrlap|mathllap|mathclap|ClassOperatorName)\b\s*|'
+    # ④ **记号别名壳 `\prime`**（Katok ch9 (9.3.2) 实测，2026-10-04）：印面把导数撇
+    #    排成 `x ^ { \prime }`、交付侧写 `x'`——裸 `'` 是非字母（`_NON_ALNUM` 抹掉）、
+    #    `prime` 却是五个字母，于是**同一条式子**的自身匹配从 r=1.00 被压到 0.45，
+    #    反被「只差 `partial` 骨架」的邻号 (9.4.2) 配到 0.82 → 正确的交付读成配错号。
+    #    `\prime` 与 `'` 同义、`\nolimits`/`\strut` 纯排版，一律不携带数学内容
+    #    （`\displaystyle`/`\textstyle`/`\limits`/`\ensuremath` 第一支已在管，此处只补
+    #    同族漏项）。
+    r'\\(?:prime|nolimits|strut|mathstrut|scriptscriptstyle)\b\s*')
 # 🔴 排版环境壳必须整体剥掉（Katok §2.6 实测）：OCR 把「两行共用一个编号」的
 # 显示式存成一条 `\begin{array}{r} 行1 \\ 行2 \end{array}`，交付侧同一条式子却常写成
 # 裸的两行。留着 `beginarrayr`/`endarray` 这 15 个字符会把本来**逐字相同**的正文
@@ -92,6 +121,19 @@ _SHELL_CMDS = re.compile(
 _ENV_SHELL = re.compile(
     r'\\(?:begin|end)\s*\{[a-zA-Z*]+\}\s*(?:\{[^{}]*\}\s*)?')
 _NON_ALNUM = re.compile(r'[^0-9A-Za-z]+')
+# 🔴 「同式误读/残缺」豁免的包含度下限（见 `pairing_problems` 里的同式误读豁免）。
+# 必须**高于** `hi`：真移位的两格印面是不同式子，包含度上不去（Lee (9.25) 的印面残段
+# 对 (9.26) 整式恰好 0.800）；而同一枚式子的两种转写（希腊字母被 OCR 读成形近拉丁
+# 字母、矩阵式只读到上半）包含度 ≈ 1.0。51 书普查两样本之间无数据，取 0.90。
+_CONTAINMENT_EXEMPT = 0.90
+
+# 🔴 同一个希腊字母的**斜体/正体两种命令名**折成同一个记号（Koopman p447 实测，
+# 2026-10-04）：印面排 `\varPhi`，OCR 有时输 `\varPhi`、有时输 `\Phi`，交付侧统一写
+# `\Phi`；`varphi`(6) vs `phi`(3) 的差异把两条本来同一枚字母的串拉开。词表**封闭**
+# （只列 LaTeX 标准 `\var*` 变体），避免 `\variable` 之类被误折。
+_VAR_GREEK = re.compile(r'\\var(e(?:psilon|ll)?|phi|rho|theta|varepsilon|pi|kappa|'
+                        r'sigma|delta|Gamma|Delta|Lambda|Phi|Pi|Sigma|Upsilon)'
+                        r'(?![A-Za-z])')
 
 # 🔴 连字/堆叠命令**词表**（Leinster《Basic Category Theory》ch5 交换图实测，
 # 2026-10-03）：OCR 读交换图时把整条展示式写成命令名串，归一化后大部分字符是命令名
@@ -135,7 +177,8 @@ def norm_math(s: str) -> str:
     """latex -> 仅字母数字的小写串（书侧 OCR 与交付侧手写可比的同一形态）。"""
     if not s:
         return ''
-    s = _ENV_SHELL.sub(' ', str(s))
+    s = _VAR_GREEK.sub(r'\\\1', str(s))
+    s = _ENV_SHELL.sub(' ', s)
     s = _SHELL_CMDS.sub('', s)
     return _NON_ALNUM.sub('', s).lower()
 
@@ -278,6 +321,14 @@ def printed_tag_bodies(extract_dir: str, ch, start, end,
             # 2026-10-03）：OCR 把同一行公式重复输出（raw-latex 双检），并窗把重复
             # 行也拼进账身 → 书侧串长一倍 → r_self 系统性偏低 → 明明配对了自己
             # 的条目反被读成「配错号」。归一化相同即视为同一行。
+            # 🔴 曾试过把这条去重放宽到「近似重复」（归一化 r ≥ 0.80 视作同一次读取）
+            # 并把窗口内的每一行**额外单列成候选**（Koopman p61/p447 实测思路）：
+            # 51 书普查里它确实静音了 Koopman 的几条假阳，但**同时吞掉了真缺陷**——
+            # Lee ch9 (9.25) 一整格从印面账里消失（该号在账里查无载体 → 判据按
+            # 「无证据不判」放行），而那一格正是交付把 (9.26) 的式子贴在 (9.25) 上的
+            # 实证。账身归属一旦被动过，判据的证据基础就不再是可复核的书侧真值，故
+            # **保持逐字去重 + 整块并入**，错配噪声改由 `pairing_problems` 侧的
+            # 「包含度闸」处理（见 `_containment`）。
             joined: List[str] = []
             seen_lines: Set[str] = set()
             for lx in owned:
@@ -365,6 +416,34 @@ def _ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
 
 
+def _containment(a: str, b: str) -> float:
+    r"""`a` 被 `b` 覆盖的比例：两侧匹配到的字符数 / `len(a)`（非对称，0~1）。
+
+    `_ratio` 是 `2M/(|a|+|b|)`，对「一条完整 + 一条残缺/字母形状误读」的同一条式子会
+    被长度差单方面压低（Koopman (5.32)/(16.40) 实测 0.76 / 0.75）。本函数把分母换成
+    **被检查的那一侧**，于是同一枚式子的两种转写 ≈ 1.0，而两枚不同的式子仍很低。
+    """
+    if not a or not b:
+        return 0.0
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return sum(bl.size for bl in sm.get_matching_blocks()) / float(len(a))
+
+
+def _containment(a: str, b: str) -> float:
+    r"""`a` 被 `b` **包含**的程度：a 里能被匹配进 b 的字符占 `len(a)` 的比例（0~1）。
+
+    `_ratio` 是对称的长度归一比值（`2M/(|a|+|b|)`），一条**残缺**的印面正文与它的
+    完整版本比，分母被完整版撑大 → 明明逐字包含也只能到 0.75 上下（Koopman p447
+    (16.40) 实测）。本函数将 `M` 除以**较短的那一侧**（被检查包含者），于是
+    「同一式子的两种不等长转写」≈ 1.0，而「两条不同的式子」仍然很低。
+    """
+    if not a or not b:
+        return 0.0
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    matched = sum(bl.size for bl in sm.get_matching_blocks())
+    return matched / float(len(a))
+
+
 def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
                      ncomp: Optional[int] = None,
                      ignore: Optional[Set[str]] = None,
@@ -406,6 +485,17 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
     # 此时任何「配错」结论都没有根据 —— 无证据不判。
     if len(printed) < 3:
         return []
+    # 🔴 **对手号一侧的账身下限与正文下限对称**（Koopman ch5 (5.32) / ch16 (16.24)
+    # 实测，2026-10-04）：入账门槛 `_record` 只有 8 字符，交付侧却要求 ≥ `min_body`(12)。
+    # 于是 OCR 切出的半行残段（几个字母）能进账，被判据当成「另一枚号的载体」：短残段
+    # 与任何正经正文的 `SequenceMatcher` 比值都能到 0.8+（分母小），把**正确**的交付读成
+    # 配错号。**只筛对手侧**：`own`（自己那号的载体）必须留全，因为「该号在印面存在」
+    # 这件事本身就是判据的前提，残段也是存在的证据（Lee ch9 (9.25) 实测：自己那号只有
+    # 一条短残段可读，而交付正文与邻号 (9.26) **逐字相符** r=1.00 —— 这一支正是真移位
+    # 的铁证，若把残段一并筛掉就退化成「无载体不判」而整条漏放）。
+    claim_side = {k: [p for p in v if len(norm_math(p)) >= min_body]
+                  for k, v in printed.items()}
+    claim_side = {k: v for k, v in claim_side.items() if v}
     ign: Set[str] = set()
     for k in (ignore or set()):
         nn = SourceFormulaIndex.norm(str(k).split('#')[-1])
@@ -431,8 +521,25 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
         self_r = max(_ratio(nb, norm_math(p)) for p in own)
         if self_r >= hi:
             continue                      # 配上自己 = 正常
+        # 🔴 **同式误读豁免（containment）**（Koopman p? (5.32) 实测，2026-10-04）：
+        # 印面把大写希腊字母 `\Lambda` 的 OCR 读成拉丁 `A`，于是自己那格的账身
+        # `L_iV_i=V_iA_i`（归一化 8 字符）与交付正文 `L_iV_i=V_i\varLambda_i`（13 字符）
+        # 只差**一枚字母的形状**，`_ratio` 却被长度惩罚压到 0.76 < `hi`；与此同时邻号
+        # (5.17) 的同族短式 `L_i=V_i\varLambda_iV_i^{-1}`（14 字符）反而配到 0.81 ≥
+        # `hi`。判据于是把**完全正确**的一格读成配错号。
+        # 用**非对称包含度**认这条：自己那格的印面正文（或其被交付正文包含的部分）
+        # 与交付正文互为子序列形态（`_containment ≥ _CONTAINMENT_EXEMPT`）= 同一枚式子
+        # 的两种转写（差在字母形状/长度壳），不是「另一号的式子被贴过来」。
+        # 阈值必须**高于** `hi`，且经普查标定不能吃掉真移位：Lee ch9 (9.25) 那格真缺陷
+        # 的印面残段 `aubufusphi` 对交付正文（(9.26) 的整式）包含度**恰好 0.800**，
+        # 取 0.80 即把这条铁证静音；取 0.90 则保留它（真移位两侧的包含度 ≤ 0.80）、
+        # 又静音 Koopman (5.32)（同式误读包含度 1.000）。51 书普查里 23 行的两侧包含度
+        # 全部 ≤ 0.800 或全部 = 1.000，两支在 0.80~0.90 之间**无样本**（标定探针
+        # `动力系统/…Katok/_extract/_tm_contain_calib.py`）。
+        if any(_containment(norm_math(p), nb) >= _CONTAINMENT_EXEMPT for p in own):
+            continue
         best_m, best_r = None, 0.0
-        for m, bodies in printed.items():
+        for m, bodies in claim_side.items():
             if m == n or m in ign:
                 continue
             r = max(_ratio(nb, norm_math(p)) for p in bodies)
@@ -440,16 +547,32 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
                 best_m, best_r = m, r
         if best_m is None or best_r < hi:
             continue                      # 哪边都配不上 = 内容改写，本族不判
+        # 🔴 **同式残缺闸（containment）**（Koopman p447 (16.40) 实测，2026-10-04）：
+        # 印面 OCR 常把同一条式子读成**两份不等长的账身**——(16.40) 那行只读上半
+        # （`[f(X)]~N(0,[k(Φ,Φ) k(Φ,Ψ(x')]`，34 字符），(16.41) 的窗口里却混进一条
+        # `cls=None` 的**完整 k 型读**（48 字符，实为上一行的重复幻觉）。于是交付里配对
+        # 正确的 (16.40) 正文对邻号 r=0.97 > 对自己 r=0.70，`_ratio` 的对称差被**长度差**
+        # 单方面拉低——这不是「配错号」，是「自己那号的账身残缺」。
+        # 判据：若自己那号的某条印面正文（≥ `min_body`，排除残段碰巧被包含）与 claimed
+        # owner 的正文**互相包含**（`_containment ≥ hi`，即一方的匹配字符几乎全落在
+        # 另一方里），则两格装的是同一条式子，账本无法分辨归属 → 无证据不判。
+        # 真移位（Katok (9.3.2) 配 (9.4.2)、Lee (9.25) 配 (9.26)）的两侧是**不同**的
+        # 式子，互相包含率远低于 `hi`，故不受影响。
+        claim = max((norm_math(p) for p in claim_side[best_m]),
+                    key=lambda pm: _ratio(nb, pm), default='')
+        if any(_containment(op, claim) >= hi or _containment(claim, op) >= hi
+               for op in (norm_math(p) for p in own)
+               if len(op) >= min_body):
+            continue
         # 🔴 **账本判别力闸**： claimed owner `(best_m)` 的印面正文若与**别的印面号**
         # 也高度相似，那本账对 `(best_m)` 就没有判别力——「b 像 (m)」不构成「b 属于
         # (m)」的证据（Leinster ch5 实测：交换图被 OCR 读成 `xlongrightarrowatopiotaatop`
         # 一类的乱码串，归一化后 20/26 个字符是箭头命令名，任两张图之间都能配到
         # 0.83-0.85；Apostol 的同骨架短式族同理）。无证据不判，与账太薄 / 过短两支
-        # 同一约定。
-        claim = max((norm_math(p) for p in printed[best_m]),
-                    key=lambda pm: _ratio(nb, pm), default='')
+        # 同一约定。两侧都用 `claim_side`（≥ `min_body`）：残段之间的 0.8+ 是长度差的
+        # 产物，不构成「账本失去判别力」的证据。
         if any(_ratio(claim, norm_math(p)) >= hi
-               for m2, bodies in printed.items()
+               for m2, bodies in claim_side.items()
                if m2 != best_m for p in bodies):
             continue
         # 🔴 归属仲裁：`(best_m)` 那一格自己配得好 = `b` 只是「另一个长得像的式子」
@@ -458,7 +581,7 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
         if holder is not None and holder is not body:
             hn = norm_math(holder)
             if len(hn) >= min_body:
-                holder_r = max(_ratio(hn, norm_math(p)) for p in printed[best_m])
+                holder_r = max(_ratio(hn, norm_math(p)) for p in claim_side[best_m])
         if best_r <= holder_r:
             continue
         seen.add(n)

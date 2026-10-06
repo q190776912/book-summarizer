@@ -269,10 +269,22 @@ def section_file_key(fn):
     return (lang, int(m.group(1) or m.group(2)), m.group(3))
 
 
+def _delivery_rank(book_dir, name):
+    """「当前交付」排序键（配合 `list.sort(..., reverse=True)`）。
+
+    主键 = mtime（最新者为当前交付）；mtime 并列时（文件被复制/还原过，时间戳
+    拉平）以字节数更多者为次键——更完整的一份才是真正交付，且裁决确定可回演，
+    不受文件名先后这类偶然因素影响。
+    """
+    st = os.stat(os.path.join(book_dir, name))
+    return (st.st_mtime, st.st_size)
+
+
 def reconcile_section_files(book_dir, dry_run=False):
     """回收「同一节号多份交付物」的残档（标题改名后旧文件名不会被覆盖）。
 
-    每组 (lang, 章, 节) 以 mtime 最新者为当前交付，其余**逐字相同**者移入
+    每组（同节号 ≥2 份）以「当前交付」= mtime 最新者为保留者，mtime 并列
+    （复制/还原过的文件）时取字节更多者，保证裁决确定可回演；其余**逐字相同**者移入
     `<book>/_extract/_superseded_split_md/<日期>/`（移动不删，可回滚）；
     内容分叉者保留并报告——那需要人工判断哪一份才是正文。
     """
@@ -291,7 +303,7 @@ def reconcile_section_files(book_dir, dry_run=False):
                         time.strftime('%Y%m%d'))
     moved = kept_diverged = 0
     for (lang, num, key), names in sorted(dup.items()):
-        names.sort(key=lambda f: os.path.getmtime(os.path.join(book_dir, f)), reverse=True)
+        names.sort(key=lambda f: _delivery_rank(book_dir, f), reverse=True)
         cur, rest = names[0], names[1:]
         cur_text = open(os.path.join(book_dir, cur), encoding='utf-8').read()
         print(f"  {lang} ch{num} sec{key}: 保留 {cur}")
@@ -333,11 +345,17 @@ def merged_file_head(fn):
     return ('zh' if head[:1] in ('第', '附', '补') else 'en', head)
 
 
+def _read_md(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
 def reconcile_merged_files(book_dir, dry_run=False):
     """回收「同一章同语种两份合并稿」的旧名残档（改名后旧文件不会被覆盖）。
 
-    每组以 mtime 最新者为当前交付；其余者**当且仅当其 `\tag` 集合是被保留者的
-    子集**（= 同一交付的较早版本，不含保留者没有的编号公式）时移入
+    「当前交付」= mtime 最新者；mtime 并列（复制/还原过的文件）时取字节更多者，
+    保证裁决确定可重演。其余者**当且仅当其 `\tag` 集合是保留者的子集**（= 同一
+    交付的较早版本，不含保留者没有的编号公式）时移入
     `<book>/_extract/_superseded_split_md/<日期>/`（**移动不删**，可回滚）。
     tag 集合不是子集关系者一律保留并报告——那两份正文真的分叉，须人工裁决。
     """
@@ -354,12 +372,12 @@ def reconcile_merged_files(book_dir, dry_run=False):
                         time.strftime('%Y%m%d'))
     moved = kept = 0
     for (lang, head), names in sorted(dup.items()):
-        names.sort(key=lambda f: os.path.getmtime(os.path.join(book_dir, f)), reverse=True)
+        names.sort(key=lambda f: _delivery_rank(book_dir, f), reverse=True)
         cur, rest = names[0], names[1:]
-        cur_tags = set(TAG_RE.findall(open(os.path.join(book_dir, cur), encoding='utf-8').read()))
-        print(f"  {lang} {head}: 保留（最新）{cur}")
+        cur_tags = set(TAG_RE.findall(_read_md(os.path.join(book_dir, cur))))
+        print(f"  {lang} {head}: 保留 {cur}")
         for name in rest:
-            other = set(TAG_RE.findall(open(os.path.join(book_dir, name), encoding='utf-8').read()))
+            other = set(TAG_RE.findall(_read_md(os.path.join(book_dir, name))))
             if not other <= cur_tags:
                 kept += 1
                 print(f"     ⚠ 分叉保留（含保留者没有的 tag: "
@@ -382,7 +400,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不写文件")
     ap.add_argument("--keep", action="store_true", help="拆分后保留源合并文件（默认删除）")
     ap.add_argument("--reconcile", action="store_true",
-                    help="只回收「同一节号多份交付物」的旧名残档（移入 _extract/_superseded_split_md/，不删除），不做拆分")
+                    help="只回收旧名残档（同节号多份 / 同章同语种两份合并稿），移入 _extract/_superseded_split_md/ 不删除；有内容分叉则 exit 1，不做拆分")
     args = ap.parse_args()
 
     book_dir = args.book_dir

@@ -202,6 +202,22 @@ EN_LAB_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 🔴 乱码**全大写**标签兜底（Evans PDE2e §6.4.2 实测 2026-10-05）：印刷条目头是
+# 全大写 `THEOREM 3`，OCR 啃成 `THIEOREM 3`（H→I、E→I，编辑距离 2）。EN_LAB_RE
+# 的精确标签表匹配不到 → 该条目连号带正文整块漏采，契约里 §6.4 变成 1,2,4,5
+# （印面序列 1,2,3,4,5），节级断号无人报警（B 层章级判重被别节的 `定理3` 掩盖）。
+# 模糊解析早就存在（`_resolve_label` / `_LABEL_FUZZY_THRESHOLD = 2`），但**只**接在
+# number-first 路径 EN_LAB_RE_NF 上，label-first 这条主干没有。
+# 为什么这里安全、不会引入 Fraleigh「Exercise N」那类无中生有：那条 bug 的前提是
+# **精确**标签词在正文交叉引用里出现；本兜底只认**全大写**词（≥4 字母）+ 紧随数字，
+# 散文里的 Let/Then/Apply/Exercise（首字母大写但非全大写）一概不进；再叠上与主干
+# 同款的散文守卫（号后接右括号类闭合符、首个词为小写、引用动词表）才收。
+# 阈值沿用 2：do Carmo 全系列乱码（DEFINrTION / PROPOSrTION / BxAMPLE…）实测都 ≤2，
+# 而普通散文词到最近标签词的距离 ≥3（Let→? / Then→?），不越界。
+EN_LAB_RE_CAPS_GARBLE = re.compile(
+    r'\b([A-Z]{4,})\b\s*(?:\([^)]*\))?\s*(' + EN_OCR_NUM + r')',
+)
+
 # Section-scoped EN books (e.g. Fraleigh): the FIRST number is the SECTION, not
 # the chapter, and the source additionally prints NUMBER-FIRST headings
 # ("26.4 Lemma", "24.2 Corollary") alongside label-first ones, plus numbered
@@ -632,6 +648,51 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     if _comp <= _max_per_label.get(_bucket, (-(1 << 30),)):
                         continue
                     _max_per_label[_bucket] = _comp
+                seen_keys.add(_gkey)
+                snippet = txt[max(0, m.start() - 5):_mend + 90].replace("\n", " ")
+                items.append({"key": key, "label": label,
+                              "page": p, "text": snippet})
+            # 🔴 乱码全大写标签兜底（判据见 EN_LAB_RE_CAPS_GARBLE 定义处）。
+            # 主干 `lab_re` 跑完后单独一趟：只认「全大写词 + 紧随编号」，再把该词
+            # 过 `_resolve_label`（阈值 2）；散文守卫与单调游标与主干同款，故不会
+            # 造出比主干更宽松的幻影面。seen_keys / _max_per_label 共用同一账本，
+            # 精确匹配先跑 → 同一真身不会被记两遍。
+            for m in EN_LAB_RE_CAPS_GARBLE.finditer(txt):
+                if txt[:m.start()].strip():
+                    continue                      # 真条头以块首起（与主干同判据）
+                label = _resolve_label(m.group(1), lab_labels)
+                if label is None or (label == "Example" and not want_examples):
+                    continue
+                _mend = m.end()
+                n1 = _ocr_int_glue(m.group(2), txt[_mend:_mend + 1])
+                if n1 is None:
+                    continue
+                _after = txt[_mend:_mend + 1]
+                if _after and _after in ")]},;:":
+                    continue                      # 闭合定界符 → 引用残片
+                if txt[_mend:_mend + 2] in (".]", ".)"):
+                    continue
+                _rest = txt[_mend:]
+                _wm = re.match(r"\s*([A-Za-z]+)", _rest)
+                _wd = _wm.group(1) if _wm else ""
+                # 号后接引用动词（shows / will illustrate …）或小写起头 = 正文回指
+                if _wd and _wd[0].isascii() and _wd[0].islower():
+                    continue
+                key = f"{label} {n1}"
+                _rb = _rst_bucket_for(p) if _rst_labels else None
+                _rst_on = _rb is not None and \
+                    str(label).strip().lower() in _rst_labels
+                _nkey = re.sub(r'\s+', ' ', key).lower()
+                _gkey = (_rb, _nkey) if _rst_on else _nkey
+                if _gkey in seen_keys:
+                    continue
+                if not section_scoped:
+                    _bucket = (str(label).strip().lower(),)
+                    if _rst_on:
+                        _bucket = _bucket + (_rb,)
+                    if (n1,) <= _max_per_label.get(_bucket, (-(1 << 30),)):
+                        continue
+                    _max_per_label[_bucket] = (n1,)
                 seen_keys.add(_gkey)
                 snippet = txt[max(0, m.start() - 5):_mend + 90].replace("\n", " ")
                 items.append({"key": key, "label": label,

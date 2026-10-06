@@ -208,6 +208,20 @@ def read_structure_items(ext_dir, ch, primary_type=None):
         # 「标签 + 数字 + 单字母」形态，命中则直接用 公理/例/命题 规范标签。
         else:
             _ross_m = re.match(r'^[A-Za-z]+\s+(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$', raw.strip())
+            # 🔴 **中文标签型**字母位键（do Carmo 实测 2026-10-05）：契约键内嵌中文
+            # 标签且**无空格**（`定理1a` / `定义8a` / `例1a`），上面 EN 分支要求
+            # `\s+` 故一律漏判 → 落到通用「首个数字串」分支把字母截掉
+            # （`定理1a` → `定理1`），与 md 侧照印面写的 `定理1a` 永不交集 →
+            # 每章成排 EXTRA-ENTRY「契约漏登记印面条目」（do Carmo ch4/ch5 六键
+            # × 中英；Ross 契约键 `例1a`… 同族、同因）。此处按同构输出
+            # 「规范标签 + 数字 + 字母」，与 key_parse 的 md 侧键 1:1 对齐。
+            # 🔴 只对**中文标签**开（EN 标签仍要求空格）：`D34a` 这类
+            # 「单字母 + 数字 + 字母」的非条目键（Shafarevich《Basic AG 1》ch1）
+            # 不得被误吃成条目键。
+            if not _ross_m:
+                _ross_m = re.match(
+                    r'^[\u4e00-\u9fff]+\s*(\d{1,2}(?:\.\d{1,3})?)([A-Za-z])$',
+                    raw.strip())
             if _ross_m:
                 _canon = TYPE_TO_LABEL.get(n.type, 'uncat') + _ross_m.group(1) + _ross_m.group(2).lower()
                 # 同 § 分支：字母位键没有 `num_raw`，必须自己收尾（否则落到下面的

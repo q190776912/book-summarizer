@@ -556,6 +556,18 @@ def formula_trailing_tag(text, ncomp=None, letter=False, bare=True, lead=None):
     # 右单引号 ’ / 右双引号 ” / 直角引号 ’（实测 Koopman 15.57 写作 `…z2’(15.57)`）。
     if m.start() > 0 and not re.match(r"[\s,，.。;；:：)\]】、’”'\"）]", s[m.start() - 1]):
         return None
+    # 🔴 尾号紧挨**另一个完整数字形标签** = 公式内容自身的括号因子，不是印刷编号
+    # （Silverman《数论之美》ch15 实测 2026-10-03：σ(800000) 展示式分母
+    # `(2-1)(5-1)` 被 OCR 读成独立文本块，尾 `(5-1)` 的前一字符恰是 `)`，旧白名单
+    # 放行 → 幻影 tag `5-1` 进契约对账真值，反逼写手凭空 `\tag{5-1}`）。真
+    # 「公式文本+尾号」块里，尾号之前是公式正文（字母/运算符/标点），不会**紧贴**
+    # 另一个完整编号标签；公式以嵌套括号收尾的真例（`…(x))(3.5)`）前缀 `(x)` 非
+    # 数字形标签，不受影响。宁可漏挂，不可误挂。
+    if m.start() > 0 and s[m.start() - 1] in '）)':
+        pre = s[:m.start()].rstrip()
+        if formula_tag_tail_re(ncomp, bare=bare, letter=letter,
+                               lead=lead).search(pre):
+            return None
     raw = m.group(0).strip()
     if len(raw) > 1 and raw[0] in '（(' and raw[-1] in '）)':
         return raw[1:-1].strip(), raw

@@ -166,5 +166,51 @@ class StillReportedTest(unittest.TestCase):
         self.assertNotIn('3', listed)
 
 
+class StyleSplitTest(unittest.TestCase):
+    """版式切换切段（茆诗松《概率论与数理统计教程》ch3/ch5 章末习题实测）。
+
+    形态：一道大题的子项 `(1)(2)` 与**下一道大题号** `30.` 行距 ≤4，被并进同一块。
+    旧判据只在「数值下降」处切段，而这里数值是上升的（2 → 30），于是整块按
+    1..30 求缺 → 凭空造出 3..29 一串幽灵号并判 blocking（x 行）。
+    子项清单与顶层大题号是两条**不同层级**的序列，版式切换处必须再切一刀。
+    """
+
+    MD = ("# 第5章\n\n"
+          "**习题 5.3**\n\n"
+          "29. 设总体 $X$ 服从 $N(0,1)$，从此总体获得一组样本观测值。\n\n"
+          "(1) 计算 $x_{(6)}$ 处的期望；\n\n"
+          "(2) 计算 $F(x_{(6)})$ 的分布函数值。\n\n"
+          "30. 在下列密度函数下分别寻求样本中位数的渐近分布：\n\n"
+          "(1) $p(x)=6x(1-x)$；\n\n"
+          "(2) $p(x)=2x$。\n\n"
+          "31. 设总体 $X$ 服从双参数指数分布。\n")
+
+    def test_no_phantom_gap_across_subitem_and_exercise(self):
+        self.assertEqual(_gaps(self.MD), [])
+
+    def test_style_change_splits_runs(self):
+        items = [(0, 1, 'paren'), (1, 2, 'paren'), (3, 30, 'dot')]
+        runs = _o_split_restarts(items)
+        self.assertEqual([[v for _, v in r] for r in runs], [[1, 2], [30]])
+
+    def test_same_style_keeps_one_run(self):
+        # 2 元组（版式未知）与同版式都不得产生额外切点 —— 既有调用方零回归。
+        self.assertEqual(len(_o_split_restarts(
+            [(0, 1), (1, 2), (2, 3)])), 1)
+        self.assertEqual(len(_o_split_restarts(
+            [(0, 1, 'paren'), (1, 2, 'paren'), (2, 3, 'paren')])), 1)
+
+    def test_real_hole_in_subitem_run_still_reported(self):
+        # 负向：子项序列自己真缺 (2)，切段不得把它吃掉。
+        md = ("**习题**\n\n"
+              "29. 设总体 $X$ 服从 $N(0,1)$。\n\n"
+              "(1) 计算期望；\n\n"
+              "(3) 计算方差。\n\n"
+              "(4) 计算协方差。\n")
+        got = _gaps(md)
+        self.assertTrue(any('INTERNAL gap' in g and 'missing: (2)' in g
+                            for g in got), got)
+
+
 if __name__ == '__main__':
     unittest.main()

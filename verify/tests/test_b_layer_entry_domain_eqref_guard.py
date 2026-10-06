@@ -113,11 +113,18 @@ class EntryDomainGuardTest(unittest.TestCase):
         if guard:
             return mgr.verify_one(4, 4, 4, md, ext)
         orig = MOD.domain_suppressed_mentions
-        MOD.domain_suppressed_mentions = lambda txt, keys: set()
+        MOD.domain_suppressed_mentions = (
+            lambda txt, keys, ch=None, sec_keys=None, type_vocab=None: set())
+        # 2026-10-04 起条目桶还有第二道收窄（`_inline_only_entry_keys`：句中加粗
+        # 降级——4.2-6 在本 md 里同样没有行首条头，会被它独立移出）。隔离
+        # dom_sup 的判定必须两道一同关闭，否则本测试测不到东西。
+        orig_inline = MOD._inline_only_entry_keys
+        MOD._inline_only_entry_keys = lambda lines, keys: []
         try:
             return mgr.verify_one(4, 4, 4, md, ext)
         finally:
             MOD.domain_suppressed_mentions = orig
+            MOD._inline_only_entry_keys = orig_inline
 
     def test_math_asterisk_eqref_leaves_entry_bucket(self):
         """负向 1：假粗体跨度的公式回指离开条目桶，但仍在豁免清单里可见。"""

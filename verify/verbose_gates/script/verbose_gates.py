@@ -110,7 +110,7 @@ _CONTRACT_EXER_HEAD_RE = re.compile(
 # 习题…，则任何语言的等价译题都不是「无中生有的归拢块」。词表含 problems/questions，
 # 但只用于豁免，不会新增任何违规（Leinster ch4、Weibel ch5 那类「契约无据」的自建块照拦）。
 _CONTRACT_EXER_NAME_RE = re.compile(
-    r'^\s*(?:§?\s*\d+(?:[.．\-]\d+)*\s*)?'
+    r'^\s*(?:§?\s*(?:\d+(?:[.．\-]\d+)*|[A-Za-z](?:[.．\-]\d+)+)\s*)?'
     r'(?:练习|习题|问题|难题|exercises?|problems?|questions?)\s*$',
     re.I)
 
@@ -199,7 +199,8 @@ def _section_ancestors(sec):
     return {".".join(parts[:i]) for i in range(1, len(parts) + 1) if parts[:i]}
 
 
-_MD_SECTION_HEAD_FOR_EXER_RE = re.compile(r'^#{1,4}\s*§?\s*(\d+(?:\.\d+)*)')
+_MD_SECTION_HEAD_FOR_EXER_RE = re.compile(
+    r'^#{1,4}\s*§?\s*(\d+(?:\.\d+)*|[A-Za-z](?:\.\d+)+)')
 
 
 def check_exer_blocks(lines, ext_dir=None, ch=None):
@@ -235,11 +236,15 @@ NOISE_RES = [
     re.compile(r'^\s*[A-Z][A-Z ]{13,}[A-Z]\s*$'),
 ]
 
-#: 参考文献条目的行首引用键形态（`[CE] …` / `[Bourbaki] …`）。此类行是
-#: 正文书目而非页眉/版权噪声，check_noise 对其豁免（Weibel 附录 A 参考文献实测：
-#: "[CE] Cartan … Princeton: Princeton University Press, 1956." 被
-#: 'Princeton University Press' 判据误伤）。
-BIB_ENTRY_RE = re.compile(r'^\[[A-Za-z][A-Za-z0-9]{0,11}\]\s')
+#: 参考文献条目的行首引用键形态（`[CE] …` / `[Bourbaki] …`，以及编号书目的
+#: `- [8] …` / `[8] …` 列表项）。此类行是正文书目而非页眉/版权噪声，check_noise 对其
+#: 豁免（Weibel 附录 A 参考文献实测："[CE] Cartan … Princeton: Princeton University
+#: Press, 1956." 被 'Princeton University Press' 判据误伤；underactuated 附录/章末
+#: REFERENCES 实测：`- [8] Carsten Scherer … , Online Draft, pp. 293, 2015.` 被
+#: `\bdraft\b` 判据误伤——书目里的 "Online Draft" 是引文著录项，不是页眉草稿标记）。
+#: 有序列表标记（`- `/`* `）与数字键一并认，故只放宽书目一类行首形态、不放宽噪声词表。
+BIB_ENTRY_RE = re.compile(
+    r'^\s*(?:[-*]\s*)?\[(?:[A-Za-z][A-Za-z0-9]{0,11}|\d{1,3})\]\s')
 
 # ── number-first 裸编号（条目标题缺失） ──────────────────────────────────
 BARE_ITEM_3 = re.compile(r'^\*\*(\d{1,2})\.(\d{1,2})\.(\d{1,3})\*\*\s*$')

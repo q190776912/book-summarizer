@@ -112,6 +112,29 @@ class TestDroppedCrossrefProblems(unittest.TestCase):
                                        "$$\\tag{2}$$"), "ch1")
         self.assertEqual(probs, [])
 
+    def test_ref_inside_text_span_counts_as_retained(self):
+        # 实测成因（Underactuated ch18 §18.1）：印面把回指渲进展示式那一行的 `\\text{}`，
+        # 旧判据剥掉整个数学区 → 假阳「号消失了」，并逼写手在数学区外凭空补一句。
+        tree = _chapter([
+            _sec("1.1", [_txt("minimize the cost"), _txt("subject to (1)."),
+                         _formula("x' = f(x)", "1")]),
+        ])
+        probs = dropped_crossref_problems(
+            tree, {"1.1": ["$$\\min_\\alpha \\sum_n \\ell \\qquad "
+                           "\\text{subject to (1)} .$$\n"]}, "ch1")
+        self.assertEqual(probs, [])
+
+    def test_ref_dropped_from_text_span_still_reported(self):
+        # 反向：契约散文（含 `\\text{}` 形态）回指了 (1)，单元把整个引用删光 → 仍须报。
+        tree = _chapter([
+            _sec("1.1", [_txt("$$\\text{subject to (1)}$$"),
+                         _formula("x' = f(x)", "1")]),
+        ])
+        probs = dropped_crossref_problems(
+            tree, {"1.1": ["minimize the cost with no reference at all.\n"
+                           "$$\\tag{1}$$"]}, "ch1")
+        self.assertEqual(len(probs), 1)
+
     def test_target_not_in_section_exempt(self):
         tree = _chapter([
             _sec("1.1", [_txt("As shown in (9) elsewhere.")]),

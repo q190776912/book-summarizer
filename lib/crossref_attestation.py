@@ -13,8 +13,9 @@ governing equation…`，那个 `(2)` 就消失了。⑭/⑱ 两个 tag 对账�
    `(1)-(3)` 的右端是范围尾巴，都不算回指；
 ② 编号形态干净（`^[1-9][0-9]{0,2}[a-z]?$`）：`(0)` 多是 `x(0)` 一类函数自变量、四位
    数字是文献年份，均不参与；扫描前先剥掉数学片段（`$$…$$` / `$…$` / `\\tag{…}`），
-   免得把 `O ( 1 )` 这类行内式当成引用；且 `(` 前不得紧贴字母/数字/点（`4.4(1)` 是
-   实验误差记法、`In(1)` 是 OCR 把 `ln` 认成 `In`，都不是回指）；
+   免得把 `O ( 1 )` 这类行内式当成引用；🔴 但数学片段内的 `\\text{...}` **不剥**（那是
+   排进公式行的散文，实测 `\\text{subject to (1)}` 被剥光后判成假阳）；且 `(` 前不得紧贴
+   字母/数字/点（`4.4(1)` 是实验误差记法、`In(1)` 是 OCR 把 `ln` 认成 `In`，都不是回指）；
 ③ 该号须在**同节单元正文的 `\\tag` 池**里在账——目标公式确实还在笔记里，回指才有意义；
    跨节引用因目标不在本节池中自动豁免；
 ④ 该号在本节单元正文的**散文引用池**里一次都没出现（写手换句式保留了引用的不算丢）。
@@ -42,13 +43,29 @@ _TAG_NUM_RE = re.compile(r"\\tag\s*\{\s*([0-9]{1,3}[a-z]?)\s*\}")
 _DISPLAY_RE = re.compile(r"\$\$.*?\$\$", re.S)
 _INLINE_MATH_RE = re.compile(r"\$[^$]*\$")
 _TAG_SPAN_RE = re.compile(r"\\tag\s*\{[^}]*\}")
+# 🔴 数学区里的 `\\text{...}` / `\\mbox{...}` 排的是**散文**。实测成因（Underactuated ch18
+# §18.1）：印面把回指排在展示式同一行 `min ... subject to (1)`，写手照印面渲进 `\\text{}`，
+# 而旧判据把整个数学区剥光 → 号「消失」→ 假阳，还会逼写手在数学区外凭空另造一句「见式 (1)」。
+# 故剥数学时**先把 `\\text{}` 内容抽出来当散文**；契约侧与单元侧共用本函数，对称生效
+# （收紧方向只可能新增「真丢了」的站点，不会新增误报）。
+_MATH_REGION_RE = re.compile(r"\$\$[\s\S]*?\$\$|\$[^$\n]*\$")
+_TEXT_SPAN_RE = re.compile(r"\\(?:text|textrm|mbox)\s*\{((?:[^{}]|\{[^{}]*\})*)\}")
+
+
+def _text_spans(region):
+    return " ".join(_TEXT_SPAN_RE.findall(region))
 
 
 def _strip_math(text):
-    """剥掉行间/行内数学与 `\\tag{}`，只留散文，供回指扫描。"""
+    """剥掉行间/行内数学与 `\\tag{}`，但保留其中的 `\\text{}` 散文，供回指扫描。"""
     s = str(text or "")
-    s = _DISPLAY_RE.sub(" ", s)
-    s = _INLINE_MATH_RE.sub(" ", s)
+
+    def _keep_text(m):
+        return " " + _text_spans(m.group(0)) + " "
+
+    s = _MATH_REGION_RE.sub(_keep_text, s)
+    s = _DISPLAY_RE.sub(_keep_text, s)
+    s = _INLINE_MATH_RE.sub(_keep_text, s)
     return _TAG_SPAN_RE.sub(" ", s)
 
 

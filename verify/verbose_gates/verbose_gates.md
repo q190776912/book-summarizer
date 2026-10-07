@@ -11,8 +11,9 @@
 - **七道闸门**：
   1. `p_exer_block`：独立 `### 练习/习题/Exercises` 归拢块——专拦「无中生有新建归拢块」的违规（见 SKILL.md 🔴 规则与 [`../../docs/writing-rules.md`](../../docs/writing-rules.md) 习题规则）。策略为：**穿插在小节中的习题原位内联保留**（`**练习 N.M.X（Exercise N.M.X）：**`），**章末整块习题省略不写**；无论哪种，都禁止把原书穿插内容抽出来归拢成块。
      - 🔴 **契约在账例外**（2026-09-27 Rosen 8e ch10 实测）：不少教材**每一节末自己印** `EXERCISES` 标题 + 1..N 题（Rosen 8e 全书如此）。抽取期该标题作为一整行内容块 `{"text": "Exercises"}` 进分章契约，写手照原书位置渲染成 `**习题**`（中文版）是忠实，而这条题集又被 `lib/problem_coverage` 系闸门（⑫⑬⑮）要求**必须整块在位、题号连续** —— 只按 md 文本判会把两条判据逼成无解矛盾（§10.7/§10.8 实测 2 条 BLOCKING 假阳）。现判据先取真值源 `contract_exer_heading_sections`（契约中印有整行习题标题的节号，按祖先匹配），该节放行；**契约无据的自建块照旧拦截**（豁免非橡皮图章，见 `verify/tests/test_p_layer_exer_block_contract.py` 的负向用例）。
+     - 节号取值同时支持**数字节**与**附录字母节**（`B.5` / `A.2.1`）：md 节首扫描 `_MD_SECTION_HEAD_FOR_EXER_RE` 与契约节名前缀 `_CONTRACT_EXER_NAME_RE` 均接受 `[A-Za-z](?:.\\d+)+`，否则附录里印面自带的 `## §B.5 EXERCISES`（契约名 `B.5 EXERCISES` 在账）取不到豁免证据而假阳（underactuated Appendix B 实测）。
      - ⚠️ 已知偏松（**故意不改**）：`EXER_BOLD_RE` 的 `exercise\b` 在 `**Exercises**`（复数）里失配 → 英文复数标题逃检而中文 `**习题**` 命中。补上复数后会在已收官的 Leinster BCT ch4、Weibel ch5 等书新报 4 处（那些书的契约标题不以此形态单独成块，取不到豁免证据），故只修假阳、把偏松一侧留给上面的题号连续性对账兜底（详见实现处注释）。
-  2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。
+  2. `p_noise`：OCR 噪声——页眉/页脚/版权行混进正文。**豁免**：>120 字长句、以及参考文献条目行 `BIB_ENTRY_RE`（行首可带列表符 `- `/`* `，键为字母 `[CE]`/`[Bourbaki]` 或数字 `[8]`）——书目里的 "Online Draft"/"Princeton University Press" 是引文著录项，不是页眉/版权标记（underactuated ch14/ch15 `REFERENCES` 实测被 `\bdraft\b` 误伤）。
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见分章契约 `book_structure/ch{N}.json`（经 `BookStructure.load` 聚合），由 `build_structure` 生成，SSOT 见 `flows/write-source/structure/structure.md`）。
      - `section_types` 不含 `0`（标准书，原书小节带序标）：该层级 `## §N[.M...]` 的数字须**逐一对齐**契约 `sub_sec` 编号（`present` 集合包含契约每个非习题节号）。

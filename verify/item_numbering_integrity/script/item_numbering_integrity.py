@@ -951,10 +951,29 @@ def _split_restarting_windows(entries):
     for gk, lst in order.items():
         runs, cur = [], [lst[0]]
         cur_min = lst[0][1]
-        for idx, num, lab in lst[1:]:
+        for pos, (idx, num, lab) in enumerate(lst[1:], start=1):
             restarted_low = (num <= cur_min)               # 重排号 ≤ 段内最小 ⇒ 真重置
             same_identity = (lab == cur[0][2])             # 同类型项重排
             if num < cur[-1][1] and restarted_low and same_identity:
+                # 🔴 2026-10-08 真·重排**第二闸门**（判据收窄，修「切窗吞掉真错位」回归）：
+                #    `restarted_low` 以「当前段最小值」为锚，仅当窗口恰从该组最小号起步时
+                #    才是有效锚点。主序列不从最小号起步时它会失真——实测 [41,42,35,43]：
+                #    窗起步 41 ⇒ cur_min=41，35 ≤ 41 被判成「重排」⇒ 切成 [41,42] 与
+                #    [35,43] 两段，各自单调 ⇒ 下方 `顺序错乱` BLOCKING 分支永不启用，
+                #    真错位被静默吞掉（由 verify/tests/test_item_numbering_primed_entry.py
+                #    ::test_real_misplacement_still_blocks 抓出）。
+                #    真·重排的第二条硬特征：**下沉之后的号不再爬回下沉点之上**。并行/重启
+                #    计数器在新段从低锚重新往上数，绝不会越过下沉前已见的最大值（ODE《常微分
+                #    方程》§4 三组习题 1..11 / 1..2 / 1..8；Arnold §14.B 例1..4 与 §14.D
+                #    例1..2 均如此）。反之若后续有号 > 下沉前已见最大值 ⇒ 这根计数器从未
+                #    重启，只是把某条 item 印错了位置 ⇒ **拒绝切窗**，维持单一窗口交
+                #    BLOCKING 顺序错乱处理（与本函数「绝不掩盖真错误」的既定契约一致）。
+                _prev_max = max(n for _i, n, _l in lst[:pos])
+                if any(n > _prev_max for _i, n, _l in lst[pos:]):
+                    cur.append((idx, num, lab))
+                    if num < cur_min:
+                        cur_min = num
+                    continue
                 runs.append(cur)
                 cur = [(idx, num, lab)]
                 cur_min = num

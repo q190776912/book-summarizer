@@ -2340,31 +2340,18 @@ def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
             def _head(tok: str) -> str:
                 _inner = tok.strip().strip('（）()')
                 return _inner.split('.')[0].strip()
-            # 🔴 附录/补篇字母章由各自独立 config（letter_ch）校验；数字体例的 ch
-            # 配置下命中其交叉引用（如主章正文回指 (B.3)）属正常，不应误报 LETTER-LED。
-            # 仅当字母头确属本书附录/补篇章键才排除——纯数字书若真出现未配置的字母
-            # 章位编号（head 在 _keys 内但非附录/补篇），仍照常告警（暴露真实缺配）。
-            _appendix_heads: Set[str] = set()
-            try:
-                from data.book_structure.book_structure import (
-                    chapter_kind, KIND_APPENDIX, KIND_SUPPLEMENT,
-                    prime_chapter_kinds)
-                try:
-                    prime_chapter_kinds(ext_dir)
-                except Exception:
-                    pass
-                for _k in _keys:
-                    try:
-                        if chapter_kind(_k) in (KIND_APPENDIX, KIND_SUPPLEMENT):
-                            _appendix_heads.add(_k)
-                    except Exception:
-                        pass
-            except Exception:
-                _appendix_heads = set()
+            # 🔴 修正记录（2026-10-08）：此处曾额外排除「字母头确属本书附录/补篇章键」
+            #    的命中，理由是「附录由各自独立 config（letter_ch）校验」。该分支与 SSOT
+            #    （`verify/formula_tag/formula_tag.md` 「S 为空降级」段：数字家族书源检出
+            #    字母/罗马编号 ⇒ 必须 emit mis-config WARN）直接冲突，且会把探针判死：
+            #    保留条件退化成「字母头是普通章键」，而字母头几乎只在附录/补篇出现 ⇒
+            #    探针永不发信。更严重的是它豁免的恰是**最可能漏配 letter_ch 的当事章**——
+            #    附录自己是数字家族配置、(A.36) 印面无人校验时，本提示正是唯一线索。
+            #    故删除该分支；「书外附录交叉引用」仍由 `head not in _keys` 一条拦住
+            #    （Iwaniec–Kowalski 原始事故：chapter_map 无附录章 ⇒ head∉_keys ⇒ 沉默）。
             found = {t for t in found
                      if not (_LETTER_LED_RE.fullmatch(t)
-                             and (_head(t) not in _keys
-                                  or _head(t) in _appendix_heads))}
+                             and _head(t) not in _keys)}
     return found
 
 

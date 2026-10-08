@@ -30,7 +30,8 @@ from verify.script.structure_io import read_structure_items, md_keys_for_chapter
 #     ctx.items       书的编号项真相集（非 exercise/chapter/section 节点）
 #     ctx.entry_keys  md 中加粗独立条目 **标签N.N**
 #     ctx.all_keys    md 中出现过的一切键（含正文/交叉引用里的 mention）
-#     ctx.label_warns 标签(定义/定理)与正文不符告警（report 打印，非阻断）
+#     ctx.label_warns 契约标签与**印面条头标签**不符告警（report 打印，非阻断）；
+#                   只比对条头，不扫描正文中段（避免交叉引用/专名/动词误报）
 #
 # 不参与：truly_missing / mentioned_only / extra（现由 B 层负责）、
 #         提取侧查漏(整类首项缺失 + over-mark 守卫)（现由 B 层负责）、
@@ -55,13 +56,32 @@ def _dispatch_items(ctx):
     return items
 
 
+# 条头标签词表（仅用于「条头位置」比对，见 check_label_consistency）。
+# 🔴 判据根治（2026-10-07）：只认 text **开头**的标签词，绝不扫描正文中段。
+#    旧判据在 text[:60] 的**任意位置**搜 `定理[（(]` 等，把三类良性用法误报成
+#    LABEL MISMATCH（基础目录 17 本全量普查共 5 条，逐条核源书确认全为假阳）：
+#      ① 交叉引用：`例5.5 同质放大存在性定理（定理5.6）的超幂证明`      （条头=例）
+#      ② 定理专名：`推论9.3（塔尔斯基-赛登伯格定理（Tarski…）…）`      （条头=推论）
+#      ③ 普通动词：`例9.1.1 设R_n…定义(α,β)=x1y1+…，则在此定义下…`     （条头=例）
+#    这些「定理 / 定义」都不宣告项目自身的类别，只有条头才有此权威，故判据收紧为
+#    「首标签」。收紧后全目录告警 5 → 0，未掩盖任何真实不符（差分普查已证）。
+_HEAD_LABEL_RE = re.compile(r'^\s*(定\s*义|定\s*理|引\s{0,2}理)')
+
+
 def check_label_consistency(items):
-    """Return list of warning strings for items with label-vs-text mismatch."""
-    LABEL_TEXT_PATTERNS = {
-        '定义': r'定义[（(]',
-        '定理': r'定理[（(]',
-        '引理': r'引.{0,2}理[（(]',
-    }
+    """Return list of warning strings for items with label-vs-**head** mismatch.
+
+    判据（SSOT）：契约项 `label` 与**印面条头标签**不符时告警。条头标签取 `text`
+    **开头**处出现的标签词（前导空白可容忍；词内空格如 `定 理` 归一化后比对）——
+    条头是「本项目叫什么」的唯一权威宣告。
+
+    🔴 绝不扫描正文中段：正文中段出现的同类词语既可能是交叉引用（「…（定理5.6）」）、
+    定理专名（「塔尔斯基-赛登伯格定理」），也可能是普通动词（「定义(α,β)=…」），
+    一律不作判据（旧判据即因扫描中段而误报，见 `_HEAD_LABEL_RE` 上方注释）。
+
+    `label` 为 'uncat' / 空 → 类别未知，不是不符，跳过（避免出现 '裸' 式假告警）。
+    条头无标签词（裸号 / 外文条头等）→ 无从判断，同样跳过。
+    """
     warns = []
     for it in items:
         text = it.get('text', '')
@@ -72,12 +92,13 @@ def check_label_consistency(items):
         # not a mismatch; skip so the verify output never shows a spurious '裸'-style alert.
         if extracted in ('uncat', '', None):
             continue
-        for kw, pat in LABEL_TEXT_PATTERNS.items():
-            if re.search(pat, text[:60]):
-                if extracted != kw:
-                    warns.append(f"  LABEL MISMATCH: {it['key']} has label='{extracted}' "
-                                 f"but text contains '{kw}' (text: {text[:60]})")
-                break
+        m = _HEAD_LABEL_RE.match(text)
+        if not m:
+            continue
+        head = re.sub(r'\s+', '', m.group(1))   # '定 理' / '引 理' → '定理' / '引理'
+        if head != extracted:
+            warns.append(f"  LABEL MISMATCH: {it['key']} has label='{extracted}' "
+                         f"but its head label is '{head}' (text: {text[:60]})")
     return warns
 
 

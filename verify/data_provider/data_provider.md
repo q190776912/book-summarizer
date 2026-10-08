@@ -11,7 +11,10 @@
 - 读分章契约（`book_structure/ch{N}.json` / `appendix{X}.json`，SSOT，经 `BookStructure.load` 聚合）→ `ctx.items`（非 exercise/chapter/section 节点）。
 - 解析 md 得 `ctx.entry_keys`（加粗独立条目 `**标签N.N**`）与 `ctx.all_keys`（md 中出现过的一切键，含正文/交叉引用里的 mention）。
 - EN 书分支（`ctx.config.ordinal == ORDINAL_EN`）：md 侧 `entry_keys`/`all_keys` 限制到当前章（`_first_num(k) == ctx.ch`）。
-- 标签一致性检查 `check_label_consistency` → `ctx.label_warns`（标签(定义/定理)与正文前 60 字不符告警，report 打印、非阻断）。
+- 标签一致性检查 `check_label_consistency` → `ctx.label_warns`（**契约标签 vs 印面条头标签**不符告警，report 打印、非阻断）。
+  - 🔴 **判据（2026-10-07 根治）**：只取 `text` **开头**的标签词（`定\s*义|定\s*理|引\s{0,2}理`）与契约 `label` 比对，**不扫描正文中段**。条头是「本项目叫什么」的唯一权威宣告。
+  - 旧判据在 `text[:60]` 的**任意位置**搜 `定理[（(]` 等，把三类良性用法误报成 `LABEL MISMATCH`：① 交叉引用 `例5.5 同质放大存在性定理（定理5.6）…`；② 定理专名 `推论9.3（塔尔斯基-赛登伯格定理…）`；③ 普通动词 `例9.1.1 …定义(α,β)=…`。基础目录 17 本全量普查共 5 条，逐条核源书确认全为假阳，收紧后 5 → 0（差分普查证明未掩盖任何真实不符）。
+  - 跳过：`label` 为 `uncat` / 空 → 类别未知（避免 '裸' 式假告警）；条头无标签词（裸号 / 外文条头）→ 无从判断。
 
 ## 本阶段规则（阻断性 / 可修复）
 - 本身不是 pass/fail 判定层，但分章契约缺失 / 无 `page_*.json` → 数据缺失 → 下游 FAIL。

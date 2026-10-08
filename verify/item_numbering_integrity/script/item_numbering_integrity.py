@@ -2528,6 +2528,15 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # not as labeled `**...**` entries, so they must not count as
         # truly-missing items. (Definition/Theorem/Example/etc. are kept.)
         extracted_raw = {it['key'] for it in items if it.get('label') != 'uncat'}
+        # 🔴 uncat 条目覆盖集（2026-10-08 根治 methods / Rising Sea 非阻塞
+        # EXTRA-ENTRY）：结构探测对「无类别词的真实编号条目」（Gelfand–Manin /
+        # Vakil 体例，如 "1.1-1 Main Definitions"、"1.2-3 Nerve of Covering"）
+        # 落 `type='uncat'`。这些节点是书中**确有的**编号条目、在 md 中以加粗条头
+        # 出现，契约已登记，应视为「已覆盖」而非「契约漏登记」——否则其 md 条头被
+        # 误报 EXTRA-ENTRY。仅扩展覆盖集 `_ext_norm`（用于 EXTRA 抑制），**不**进
+        # `extracted`（truly_missing 书真相集），以保留上方「图/表(uncat) 仅在正文
+        # 引用、不算缺项」的语义。本批 7 书契约普查均无 figure/table 型节点，故无回归。
+        _uncat_keys = {it['key'] for it in items if it.get('label') == 'uncat'}
         ignored_hit = sorted(extracted_raw & ignore_keys, key=sortkey)   # stage1：噪声键
         extracted = extracted_raw - ignore_keys                          # 剔噪书集
         # Label-tolerant presence matching for three-level items: a contract bare
@@ -2537,6 +2546,7 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # false truly-missing.  Genuinely-absent entries (their normalized path is
         # found nowhere in the md) are still reported as truly-missing.
         _ext_norm = {_norm_path_labelfree(k) for k in extracted}
+        _ext_norm |= {_norm_path_labelfree(k) for k in _uncat_keys}
         # 🔴 契约里的习题/问题节点键同样算「已在账」（2026-10-02 Katok 264 行
         # EXTRA-ENTRY 根治）。`load_contract` 对 exercise/problem 直接 return，于是
         # `ctx.items` **永不含**习题节点，而 md 照印面写的习题条头（`**练习 0.2.1**` /

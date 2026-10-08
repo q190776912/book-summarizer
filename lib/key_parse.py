@@ -219,7 +219,7 @@ PROSE_RE_EN_C = re.compile(
 # `**Label N.N**` (already captured by ENTRY_RE_EN_C) so it is NOT also emitted
 # as a spurious single-level key `Label N`.
 ENTRY_RE_EN_SINGLE_C = re.compile(
-    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\d)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
+    r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')\s*(\d+)(?!\d)(?!\s*' + SEP_TIGHT + r'\s*\d+)(?![A-Za-z])',
     re.IGNORECASE)
 
 # --- Ross（ORDINAL_ROSS = 11）：节内作用域编号，例题带字母位 ----------------
@@ -227,6 +227,8 @@ ENTRY_RE_EN_SINGLE_C = re.compile(
 # `**Proposition 4.1**`。点分两段形态由 ENTRY_RE_EN_C 覆盖；此处补两类：
 #   * 字母位键 `Label N<letter>`——必须先于单数字形态匹配，否则
 #     ENTRY_RE_EN_SINGLE_C 会把 "**Example 2a**" 截成 幻影键 "例2"；
+#     （2026-10-09 落实：给 ENTRY_RE_EN_SINGLE_C 末尾补 `(?![A-Za-z])` 负向断言，
+#       与 ENTRY_RE_ROSS_SINGLE_C 同构。只删幻影键，绝不新增键。）
 #   * 单数字键 `Label N`——负向断言同时拒绝 后随字母（那是字母键）与
 #     后随分隔符+数字（那是点分键），避免同一物理条目被重复/错形收录。
 ROSS_LAB = '|'.join(COMBINED_LABEL_KINDS)
@@ -269,6 +271,33 @@ ENTRY_RE_EN3_APP_C = re.compile(
     r'\*\*(' + '|'.join(COMBINED_LABEL_KINDS) + r')'
     r'\s*([A-Z])' + SEP_TIGHT + r'(\d+)',
     re.IGNORECASE)
+
+# --- 节内无前缀单号 Example/Corollary 条头（Vakil《Rising Sea》体例）--------
+# 书内把 §3.2 下的例子写成 `**Example 1**`…`**Example 8**`（不带头节的
+# 三段号），而结构探测按「节内顺序」把它们登记为 `3.2-1`…`3.2-8`（type-8
+# uncat 节点）。`keys_in_md` 须沿用行级「当前节号」上下文 cur_sec 把无前缀
+# 单号头规整成 `标签C.S.N`（点式），交给 B 层 `_norm_path` 剥标签并折成
+# `C.S-N`，与契约 1:1 对齐。仅作用于「确处于某节内」的情形；不在任何节内的
+# 单号头（如章节级单号书 Karlin & Taylor 例题全章单号）退化为旧行为（裸
+# `例1`），零回归。
+# 节头：`**3.2.3 ...**`（裸号起始，区别于 `**Example 3.1.1**` 这类带标签
+# 条头）。`>` 前缀与 `**` 之间允许空白，兼容引用块。
+_SEC_HEAD_RE = re.compile(r'^\s*>*\s*\*\*(\d+)\.(\d+)')
+# 无前缀单号 Example/Corollary 家族（其余标签如 Definition/Theorem 在
+# Rising Sea 里始终带节号，不会落进此正则）。`(?!\d)(?!\s*SEP\s*\d+)` 拒绝
+# 后随数字/分隔符数字，于是 `Example 3.1.1`（三段号）由 EN3_C 处理、不被本
+# 正则误截成单号。
+_SEC_SINGLE_EX_LABELS = ('Example', 'Corollary', '例', '推论')
+_SEC_SINGLE_EX_RE = re.compile(
+    r'\*\*\s*(' + '|'.join(_SEC_SINGLE_EX_LABELS) + r')\s*(\d+)'
+    r'(?!\d)(?!\s*' + SEP_TIGHT + r'\s*\d+)',
+    re.IGNORECASE)
+# Figure-only 组（name ⊆ 此集）不应再用「单号 EN 正则」抓非图条头：Rising
+# Sea 书 type-2 组 name=['Fig','Figure']，却被 ENTRY_RE_EN_SINGLE_C 把
+# `**Example 1**` 当成两级单号条目抓成 `例1`，而契约把该例登记为 `3.2-1`
+# （三级 uncat）→ md 侧凭空多一个与契约对不上的 `例1` 键。figure-only 组跳过
+# 单号 EN 正则（两段 ENTRY_RE_2 / ENTRY_RE_EN_C 本就不含 Fig/Figure，跳过零损失）。
+_FIGURE_LABELS = {'fig', 'figure', '图', '图形'}
 
 # --- ORDINAL_APP (type 13)：附录字母章号三级体例 --------------------------------
 # 附录标签集 = COMBINED_LABEL_KINDS（含 Exercise / 练习）去重后的元组：附录练习
@@ -375,7 +404,12 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
     for g in groups:
         t = g.type
         cur_sec = None
+        _fig_only = bool(getattr(g, 'name', None)) and set(
+            x.lower() for x in g.name) <= _FIGURE_LABELS
         for line in lines:
+            msec = _SEC_HEAD_RE.match(line)
+            if msec:
+                cur_sec = f"{msec.group(1)}.{msec.group(2)}"
             if t == ORDINAL_TWO_LEVEL:
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
@@ -389,9 +423,13 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
+                    if _fig_only:
+                        continue
                     key = f"{_canon_label(m.group(1))}{m.group(2)}"
                     entries.add(key); allk.add(key)
                 for m in ENTRY_RE_EN_NF_C.finditer(line):
+                    if _fig_only:
+                        continue
                     key = f"{_canon_label(m.group(3))}{m.group(1)}.{m.group(2)}"
                     entries.add(key); allk.add(key)
                 # 纯字母序标条头（`**Theorem A (Chevalley's theorem)**` → `定理 A`）：
@@ -522,6 +560,17 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     allk.add(f"{_cn}{m.group(3)}")
                     entries.add(f"{_cn} {m.group(2)}.{m.group(3)}")
                     allk.add(f"{_cn} {m.group(2)}.{m.group(3)}")
+                # 🔴 节内无前缀单号 Example/Corollary 条头（Vakil《Rising Sea》）
+                # 见 _SEC_SINGLE_EX_RE 上方注释。仅当当前组是 uncat（Rising Sea
+                # type-8 三级 uncat 组）且确处于某节内（cur_sec 非空）时，把
+                # `**Example 1**` 规整成 `例C.S.1`（点式）→ B 层 `_norm_path` 剥
+                # 标签折成 `C.S-N`，与契约的 `C.S-N` uncat 节点 1:1 对齐。其余书/
+                # 情形（cur_sec 空、或非 uncat 组）不触发，退化为旧行为（裸 `例1`），
+                # 对「章节级单号书」零回归。
+                if cur_sec and 'uncat' in (g.name or []):
+                    for m in _SEC_SINGLE_EX_RE.finditer(line):
+                        key = f"{_canon_label(m.group(1))}{cur_sec}.{m.group(2)}"
+                        entries.add(key); allk.add(key)
     return entries, allk
 
 def sortkey(k):

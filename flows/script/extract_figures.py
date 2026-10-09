@@ -284,20 +284,34 @@ def load_chapter_map(out_dir):
 
 
 def chapter_for_page(pno, chap_map):
-    """Return chapter number (1-based) for a 1-based page, or 0 if outside all ranges."""
+    """Return chapter number (1-based) for a 1-based page, or 0 if outside all ranges.
+
+    🔴 根因修复（Evans 附录 B/C 错挂）：旧实现按 dict 迭代顺序返回**第一个**覆盖该页
+    的章，于是章区间一旦重叠（附录边界 OCR 校正前后、或夹页归属歧义），结果随插入
+    顺序漂移——一张实际属于附录 C 的图会被判给附录 B。现在收集**所有**覆盖该页的章，
+    取**区间最窄**的那个（最具体、最贴近图实际所在的小节），再按「起点靠后 → 章键
+    字典序」稳定打破平局。非重叠章集下只有唯一命中，返回值与旧行为逐字一致（零回归）；
+    仅在存在重叠时给出确定答案，而不是赌迭代顺序。"""
     if not chap_map:
         return 0
+    best_ch = None
+    best_key = None
     for ch, info in chap_map.items():
         if ch is None:
             continue
         s = info.get("start")
         e = info.get("end")
         if s and e and s <= pno <= e:
-            try:
-                return int(ch)
-            except (TypeError, ValueError):
-                return ch   # appendix letter chapter ("A") — pass through
-    return 0
+            # (区间宽度, -起点, 章键) 最小 = 最窄区间优先，同宽取起点更靠后者，再按章键稳定
+            key = (e - s, -s, str(ch))
+            if best_key is None or key < best_key:
+                best_key, best_ch = key, ch
+    if best_ch is None:
+        return 0
+    try:
+        return int(best_ch)
+    except (TypeError, ValueError):
+        return best_ch   # appendix letter chapter ("A") — pass through
 
 
 def load_layout_model(weights, device):

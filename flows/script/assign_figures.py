@@ -65,7 +65,10 @@ import numpy as np
 # ----------------------------------------------------------------------------
 # reuse detection helpers (kept in extract_figures.py)
 # ----------------------------------------------------------------------------
-from extract_figures import load_ocr_text, center_of_poly, parse_fig_label  # noqa: E402
+from extract_figures import (  # noqa: E402
+    load_ocr_text, center_of_poly, parse_fig_label,
+    chapter_for_page, load_chapter_map,
+)
 from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re, figure_dir  # noqa: E402
 
 
@@ -137,6 +140,33 @@ def gather_refs(out_dir, start, end):
                     break
             refs.append((fig_label_from_match(m), pno, y))
     return refs
+
+
+def _refresh_chapters(det_all, out_dir):
+    """用**当前** chapter_map.json 就地重算每条检测的所属章，消除检测期烘焙的
+    陈旧 `chapter`（🔴 根因修复 Evans 附录 B/C：附录边界在 figure_detection 跑完后
+    才被修正，figure_detect.json 里页 719/720 仍记着旧章 "B"，assign 只是照抄，于是
+    属于附录 C 的边界拉直图被错挂到附录 B）。
+
+    保守：仅当新推导出的章是一个**确定命中**（非 0/None 的区间覆盖）且与存储值不同
+    时才改写；落在所有区间之外的页保留原值，绝不把有主图甩成孤儿。无 chapter_map
+    或读失败时原样返回，行为与旧版一致。"""
+    cm = load_chapter_map(out_dir)
+    if not cm:
+        return det_all
+    changed = 0
+    for e in det_all:
+        try:
+            pg = int(e.get("page"))
+        except (TypeError, ValueError):
+            continue
+        newch = chapter_for_page(pg, cm)
+        if newch not in (0, None) and newch != e.get("chapter"):
+            e["chapter"] = newch
+            changed += 1
+    if changed:
+        print(f"[assign] 依当前 chapter_map 重挂 {changed} 条陈旧检测章号")
+    return det_all
 
 
 def bbox_center(bbox):
@@ -320,6 +350,8 @@ def run_book(pdf_path, out_dir):
     if det is None:
         print("ERROR: figure_detect.json not found — run extract_figures.py --book first")
         sys.exit(2)
+    # 🔴 先按当前 chapter_map 重挂陈旧检测章号，再据章分组（见 _refresh_chapters）
+    det = _refresh_chapters(det, out_dir)
     chap_map = {}
     cm_path = os.path.join(out_dir, "chapter_map.json")
     if os.path.exists(cm_path):
@@ -377,6 +409,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end):
     if det is None:
         print("ERROR: figure_detect.json not found — run extract_figures.py --book first")
         sys.exit(2)
+    det = _refresh_chapters(det, out_dir)
     assigned = assign_chapter(det, ch, start, end, out_dir)
     merge_index(out_dir, ch, assigned)
     write_figure_index_md(out_dir)

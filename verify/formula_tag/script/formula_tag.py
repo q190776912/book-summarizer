@@ -3001,16 +3001,7 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         # 集合成员（FABRICATED/MISSING）与顺序（ORDER_MISMATCH）两支不受影响。
         _self_reported = bool(sec) and n.startswith(sec + '.')
         if reset_on_section:
-            rng = _section_page_range(src, sec)
-            npages = getattr(src, '_n_pages', {}).get(n) or set()
-            # ①最强证据：趟本身把 (n) 归在 sec 这一桶（块序 + 节头推进，能分辨
-            #   「节在页中间起头」）→ 书与总结同判，谈不上放错。
-            # ②回退：标签被 OCR 并进公式行而漏记 (sec, n) 时，用整页页跨宽松核。
-            # ③两者都无 → 无证据不判（见上）。
-            if (not _self_reported
-                    and getattr(src, '_pos_sec', {}).get((sec, n)) is None):
-                if rng is not None and npages:
-                    flagged = not any(rng[0] <= p <= rng[1] for p in npages)
+            flagged = _reset_on_section_misplaced(src, sec, n, _self_reported)
         else:
             bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
             flagged = (bsec is not None and not _self_reported
@@ -3060,6 +3051,105 @@ def _section_page_range(src: 'SourceFormulaIndex',
     later = [p for p in starts.values() if p > lo]
     hi = min(later) if later else getattr(src, '_walk_last_page', lo)
     return (lo, hi)
+
+
+def _spanned_section_count(src: 'SourceFormulaIndex', n: str) -> int:
+    """How many DISTINCT summary-section page-spans contain at least one page
+    on which the book printed a **standalone** label `(n)`.
+
+    This is the discriminator behind the recurrence-aware MISPLACED skip for
+    per-section-restart (``scope == 3``) books.  A bare number such as ``(1)``
+    is *reused* across every section (each ``## §N.M`` restarts at 1), so its
+    `_n_pages` set is the union of standalone `(1)` pages from ALL sections —
+    the count is >= 2 exactly when the number is ambiguous across sections.  A
+    multi-component number (`(2.5.12)`, `(8.11a)` …) is unique to one section,
+    so its pages all fall inside that one span — count == 1.  The count is
+    therefore a proxy for "this number's page evidence identifies a single
+    owning section" (verdict trustworthy) vs "spans several sections" (page
+    evidence cannot tell which section the summary tag belongs to).
+
+    Spans are taken from `_section_page_range` (walk-derived, the SAME
+    definition the decision path uses — a boundary page shared by two adjacent
+    sections counts for both, which is the lenient/fail-open direction and only
+    ever raises the count, never lowers it).  Returns 0 when the walk never
+    recorded any section start (no evidence to bin the pages into).
+    """
+    npages = getattr(src, '_n_pages', {}).get(n) or set()
+    if not npages:
+        return 0
+    pages = [p for p in npages if p is not None]
+    if not pages:
+        return 0
+    starts = getattr(src, '_sec_start_page', None) or {}
+    cnt = 0
+    for s in starts:
+        rng = _section_page_range(src, s)
+        if rng is None:
+            continue
+        lo, hi = rng
+        # A degenerate span (unknown tail — the LAST section when the walk never
+        # recorded `_walk_last_page`) carries no usable page evidence: skip it
+        # rather than compare against None.  Real books always set an integer
+        # tail, so this branch is exercised only by minimal test fixtures and
+        # never lowers a genuine multi-span count.
+        if lo is None or hi is None:
+            continue
+        if any(lo <= p <= hi for p in pages):
+            cnt += 1
+    return cnt
+
+
+def _reset_on_section_misplaced(src: 'SourceFormulaIndex', sec: str, n: str,
+                                self_reported: bool) -> bool:
+    """Per-section-restart (``scope == 3``) MISPLACED predicate — extracted so
+    it is unit-testable and so a cross-book census can swap the OLD vs NEW rule
+    while every surrounding guard stays byte-identical.
+
+    True => flag the summary `\tag{n}` sitting under `## §sec` as (WARN)
+    MISPLACED.  Fully evidence-driven and fail-open (never invents a placement
+    the book cannot prove):
+
+      1. self-reported label (`C.S.i` whose middle names `sec`) -> not misplaced
+         (Katok ch1: the label testifies to its own section).
+      2. the walk itself bucketed a standalone `(n)` into `sec`
+         (`_pos_sec[(sec, n)]` present) -> book and summary agree -> not
+         misplaced (strongest, block-order evidence, distinguishes a mid-page
+         section start).
+      3. no page span for `sec` (`rng is None`, section head never recognised
+         / page judged a TOC) or no page anywhere carries a standalone `(n)`
+         (back-reference-only / `known_book` whitelist) -> cannot tell -> skip.
+      4. some standalone `(n)` page falls INSIDE `sec`'s own span -> placement
+         confirmed -> not misplaced.
+      5. 🔴 recurrence-aware skip (2026-10-09 Evans/Strogatz/Kreyszig根治): if the
+         number's standalone label is captured across >= 2 distinct section
+         spans, the page evidence cannot single out which section owns the
+         summary tag — for a bare per-section book this is indistinguishable
+         from the label having been OCR-merged into its equation line (the
+         exact false-positive family this branch kept emitting).  No
+         unambiguous evidence -> skip, exactly the layer's standing principle.
+         Genuine misplacements SURVIVE when the number is unique to one span
+         (count == 1) yet the summary sits under a different span.
+    """
+    if self_reported:
+        return False
+    if getattr(src, '_pos_sec', {}).get((sec, n)) is not None:
+        return False
+    rng = _section_page_range(src, sec)
+    npages = getattr(src, '_n_pages', {}).get(n) or set()
+    if rng is None or not npages:
+        return False
+    lo, hi = rng
+    if lo is None or hi is None:
+        # Unknown span tail (last section, walk never recorded a tail page): the
+        # in-span confirmation cannot be made, so — per the layer's fail-open
+        # "no evidence never flags" principle — skip rather than assert a
+        # placement the book cannot prove.  Real books set an integer tail.
+        return False
+    if any(lo <= p <= hi for p in npages if p is not None):
+        return False
+    if _spanned_section_count(src, n) >= 2:
+        return False
+    return True
 
 
 def _split_scoped_ignore(keys) -> tuple:

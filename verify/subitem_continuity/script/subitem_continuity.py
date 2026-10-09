@@ -756,23 +756,38 @@ def _o_tail_ocr_scan(ext_dir, ch, start, end, md_nums, ctx_label):
                 data = PageJson.load(fp).data
         except Exception:
             continue
-        full_text = '\n'.join(t.get('text', '') for t in data.get('text', []))
+        line_items = [t.get('text', '') or '' for t in data.get('text', [])]
+        full_text = '\n'.join(line_items)
         # Only scan pages that contain the context keyword
         if ctx_kw and ctx_kw not in full_text:
             continue
-        for m in ocr_num_re.finditer(full_text):
-            num = int(m.group(1))
-            if num > max_num and num <= max_num + 10 and num not in num_set:
-                # Verify it's in a sequence context (nearby numbers from md_nums)
-                # Check +-200 chars for at least one known number
-                lo = max(0, m.start() - 200)
-                hi = min(len(full_text), m.end() + 200)
-                vicinity = full_text[lo:hi]
-                has_neighbor = any(
-                    re.search(rf'[（(]{n}[)）]', vicinity) for n in md_nums
-                )
-                if has_neighbor:
-                    tail_candidates.add(num)
+        gpos = 0  # 当前行首在 full_text 中的全局偏移（join 用 '\n'，故每行 +1）
+        for line_text in line_items:
+            for m in ocr_num_re.finditer(line_text):
+                num = int(m.group(1))
+                if num > max_num and num <= max_num + 10 and num not in num_set:
+                    # 🔴 根因修复（Evans ch11 幻影 (18)）：OCR 括号数字有两类噪声——
+                    # 行内回指（'deduce (18)'、'remembering (16)'、'series (6)'、'级数 (6)'）
+                    # 与**独立编号公式页边标签**（整块只有 '(18)'，前后皆无正文）。两者都
+                    # 不是清单尾项。复用子项判定的同一把尺 `_o_is_seq_marker`（HEAD/INTERNAL
+                    # gap 也用它的正向前缀判据）——非子项一律否决，令尾缺扫描与本层其余判定
+                    # 口径一致，只减少假阳、绝不新增告警。行首真尾项 '(17) Show …' 仍被保留。
+                    if not _o_is_seq_marker(line_text, m.start()):
+                        continue
+                    # Verify it's in a sequence context (nearby numbers from md_nums)
+                    # Check +-200 chars for at least one known number（窗口按全局偏移
+                    # 落在 joined full_text 上，与逐行前的实现逐字节等价）。
+                    abs_start = gpos + m.start()
+                    abs_end = gpos + m.end()
+                    lo = max(0, abs_start - 200)
+                    hi = min(len(full_text), abs_end + 200)
+                    vicinity = full_text[lo:hi]
+                    has_neighbor = any(
+                        re.search(rf'[（(]{n}[)）]', vicinity) for n in md_nums
+                    )
+                    if has_neighbor:
+                        tail_candidates.add(num)
+            gpos += len(line_text) + 1
 
     return sorted(tail_candidates)
 

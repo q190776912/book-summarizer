@@ -186,7 +186,7 @@ ORDINAL_NAME = {
 # Numbering depth (numeric components) per ordinal code.
 # 🔴 唯一真源在 `lib.numbering`：此处只做再导出，禁止就地改
 # 这个字典——改了会让 config 侧与 lib 侧（attach_content / figure_io）漂移。
-from lib.numbering import (ORDINAL_DEPTH, ordinal_depth,  # noqa: F401  (re-exported)
+from lib.numbering import (ORDINAL_DEPTH, ordinal_depth, resolve_formula_type,  # noqa: F401  (re-exported)
                           is_fig_group)
 from data.chapter_map.chapter_map import normalize_kind  # noqa: E402
 from data.book_structure.book_structure import (  # noqa: E402
@@ -1699,20 +1699,53 @@ class ConfigLoader:
         抽出 0 条、整附录塞进单个 description 节点，而所有下游都以为"附录本来就没
         条目"。这里对每一次静默回退发一条 stderr 警告（进程级去重），把错配显性化。
         """
-        base = self.book
         kind = self.chapter_kind(ch)
-        if kind == KIND_SUPPLEMENT:
-            if self.supplement_book is not None:
-                base = self.supplement_book
-            else:
-                _warn_missing_special_config(
-                    "supplement", ch,
-                    declared="supplement" in self.special_same_style)
-        elif kind == KIND_APPENDIX:
-            if self.appendix_book is not None:
-                base = self.appendix_book
-            else:
-                _warn_missing_special_config(
-                    "appendix", ch,
-                    declared="appendix" in self.special_same_style)
+        base = self._governing_base_for_kind(kind)
+        # 🔴 静默回退必须可见：kind=2/3 章却没有对应子配置 → 落到正文（ch）数字
+        # 配置，正是 Lee 2e 全灭错配；除非 make_config 已裁决「与正文同体例」，
+        # 否则发一条（进程级去重）stderr 警告，把错配显性化。
+        if base is self.book and kind in (KIND_APPENDIX, KIND_SUPPLEMENT):
+            _name = "supplement" if kind == KIND_SUPPLEMENT else "appendix"
+            _warn_missing_special_config(_name, ch, declared=_name in self.special_same_style)
         return replace(base, ignore=list(self.ignore_for_chapter(ch)))
+
+    def _governing_base_for_kind(self, kind: int) -> 'BookConfig':
+        """kind → 管辖基底 BookConfig（**不加** ignore、**不发**回退警告）。
+
+        kind=3→supplement、kind=2→appendix（对应子配置缺省即回退正文 ch）、
+        kind=1→ch。作为 `config_for_chapter`（叠加 ignore + 可见回退警告）与
+        `alpha_led_special_head_keys`（静默判据）共用的**唯一路由表**，避免两处
+        kind→段映射漂移。
+        """
+        if kind == KIND_SUPPLEMENT and self.supplement_book is not None:
+            return self.supplement_book
+        if kind == KIND_APPENDIX and self.appendix_book is not None:
+            return self.appendix_book
+        return self.book
+
+    def alpha_led_special_head_keys(self) -> Set[str]:
+        """附录/补篇章里，其**管辖公式段已选用 alpha-led 家族**（字母
+        ``letter_ch``/type 15/17 或罗马 type 16/18）的章键（裸 str，如 'A'/'B'）。
+
+        Q 层 letter-led 探针据此把「数字正文章只是交叉回指某条**已按字母/罗马家族
+        配置**的附录公式」（Lee ISM ch7 引用 ``(B.3)``——该号由附录 B 段自己机器校验）
+        这类**假阳**告警豁免掉。正文章（kind=1）以及回退到数字配置的附录/补篇章
+        **绝不纳入**，故真正漏配 letter_ch 的附录仍照常报警（守住 2026-10-08 的
+        「附录数字家族配置、(A.36) 印面无人校验时本提示是唯一线索」判据）。
+        """
+        out: Set[str] = set()
+        for k in self.chapters:
+            kind = self.chapter_kind(k)
+            if kind not in (KIND_APPENDIX, KIND_SUPPLEMENT):
+                continue
+            f = getattr(self._governing_base_for_kind(kind), 'formula', None)
+            if not isinstance(f, dict) or f.get('type') is None:
+                continue
+            try:
+                lead, _ = resolve_formula_type(
+                    f.get('type'), letter_ch=bool(f.get('letter_ch')))
+            except Exception:
+                continue
+            if lead in ('letter', 'roman'):
+                out.add(str(k))
+        return out

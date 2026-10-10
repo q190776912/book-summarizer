@@ -245,7 +245,7 @@ class VerifyContext:
 
     def __init__(self, ch, start, end, md_file, ext_dir, config: BookConfig,
                  figure_index=None, manual_overrides=None, ignore_fig=None,
-                 src_pair_md=None):
+                 src_pair_md=None, loader=None):
         self.ch = ch
         self.start = start
         self.end = end
@@ -255,6 +255,10 @@ class VerifyContext:
         self.figure_index = figure_index
         self.manual_overrides = manual_overrides
         self.ignore_fig = ignore_fig or set()
+        # 🔴 loader：跨段配置路由判据的唯一入口（Q 层 letter-led 探针据此判断
+        # 「字母章头归属的附录/补篇段是否已按 alpha 家族配置」，与 config_for_chapter
+        # 同源，绝不在层内复刻 kind→段路由表）。None → 探针退回原行为（照常告警）。
+        self.loader = loader
         # 译本的**源语言配对 md**（同一章另一语言组，由 `verify_chapter.verify_all` 解析）。
         # F 层「结构继承源本」豁免判据的唯一入口（见 format_verify 同名小节）：None = 没有
         # 配对（中文原书 / 三语歧义 / 单语言组）→ 一条都不豁免。
@@ -332,6 +336,7 @@ class VerifyManager:
             figure_index=self.loader.figure_index,
             manual_overrides=manual,
             src_pair_md=src_pair_md,
+            loader=self.loader,
         )
         merged: Dict[str, Any] = {}
         for layer in self.registry.all_ordered():

@@ -906,6 +906,16 @@ _SEC_TITLE_FUNC_WORDS = {
     'see', 'than', 'that', 'the', 'their', 'them', 'then', 'there', 'these',
     'this', 'those', 'to', 'we', 'were', 'when', 'where', 'which', 'while',
     'with', 'without', 'also', 'thus', 'hence'}
+# 🔴 从句续行否决（Bass《Real Analysis》ch21 p306 实测 2026-10-10）：跨行散文续句
+# 被 OCR 断块后**行首恰好是一个交叉引用编号**（前句 "we will see in Remark" 换行 →
+# 续块 "21.30 later on that N < ∞o a.s., but E Mv = 1 ≠ 0 = E Mo."）→ 通用节检测器
+# 把 "21.30" 当节号、余下当标题；小写首词 "later" 不在虚词表、句中数学变量 "Mv/Mo"
+# 又冒充 Title-Case 延续词，令「技术术语首词豁免」误放行 → 幻影节 §21.30。真节标题
+# 是「小写首词 + Title-Case 名词短语」（Rosen "n-ary Relations and Their
+# Applications" / "gcds as Linear Combinations"），**从不含**「句读 + 空格 + 小写词」
+# 的从句连接；散文续句必有逗号/分号引出的小写子句。故一旦命中即判散文，撤销该豁免。
+# 仅在「技术术语首词豁免」分支前收紧（不触序位+白名单 `_waive` 通道）→ 其余书零回归。
+_SEC_TITLE_CLAUSE_PROSE = re.compile(r'[，,;；]\s+[a-z]')
 
 
 def _proof_title_is_prose(rest_stripped):
@@ -1189,7 +1199,8 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
                 _w0 = re.match(r"[a-z][a-zA-Z'\-]*", rest.strip())
                 if (_w0 and _w0.group(0).lower() not in _SEC_TITLE_FUNC_WORDS
                         and re.search(r'\b[A-Z][a-zA-Z]',
-                                      rest.strip()[_w0.end():])):
+                                      rest.strip()[_w0.end():])
+                        and not _SEC_TITLE_CLAUSE_PROSE.search(_rest_stripped)):
                     _accept_lc = True
             if not _accept_lc:
                 return None

@@ -770,6 +770,12 @@ class SourceFormulaIndex:
         self._sec_strong = {}
         self._full_keys = set()
         self._pos_sec = {}
+        # 🔴 per-(sec, n) 「本节该号的锚定位置是否来自一个纯独立编号块」——
+        # ORDER 支的位置游标只认「整块即一个印刷编号」这种真正的定义标签；
+        # 若某号的节内最早命中是 OCR 把回指/散文粘成行首 `(1) onto …` 的
+        # 合并块（form2/form3 通道），它不是定义位置、不可作顺序锚点。见
+        # `_pos_sec_standalone` 写入点与 `_compute_order_and_section` 消费点。
+        self._pos_sec_standalone = {}
         self._sec_start_page = {}
         self._n_pages = {}
         self._label_pages = {}
@@ -1185,6 +1191,13 @@ class SourceFormulaIndex:
                             _pp = self._pos_sec.get(_pk)
                             if _pos_better((pg, y), _pp):
                                 self._pos_sec[_pk] = (pg, y)
+                                # 锚定位置与「该位置出自纯独立编号块」同步登记：
+                                # 只有整块即一枚 `(N)` 的印刷标签才配当定义顺序
+                                # 锚点；OCR 把回指/公式行粘成 `(1) onto…` 形态时
+                                # 记下 False，ORDER 支据此不判序、不回退游标
+                                # （与 plain 支 `_pos_strong` 弱证据不判同一约定）。
+                                self._pos_sec_standalone[_pk] = \
+                                    self._is_standalone_label_block(txt)
                         self._n_pages.setdefault(n, set()).add(pg)
                         if pg > self._walk_last_page:
                             self._walk_last_page = pg
@@ -1905,6 +1918,34 @@ class SourceFormulaIndex:
             return True
         return False
 
+    _STANDALONE_LABEL_BLOCK_RE = re.compile(
+        r'[（(]\s*\d+(?:[.\-–]\d+)*[a-zA-Z]?\s*[）)]')
+
+    @classmethod
+    def _is_standalone_label_block(cls, txt: str) -> bool:
+        """True 当整块**就是一枚纯印刷公式编号** `(N)` / `（N）` / `(C.N)` /
+        `(N.M-K)` / `(8a)`——右缘/左缘独立标签块，块内除这枚编号外别无他物。
+        这是 ORDER 支「真正的定义位置」的形态判据；散文回指 `(1) onto the
+        finite-dimensional subspace…`、章节号、交叉引用都不可能是「整块等于一个
+        编号」。
+
+        🔴 **句末标点即非标签**（2026-10-09 Evans ch9 §9.1/§9.2 边界实测）：
+        显示公式的右缘编号**不带句点**（Evans 印面恒为 `(1)`/`(21)`），而
+        OCR 把「…only one weak solution of\n`(1).`」句末那枚对问题 (1) 的**回指**
+        切成独立块时，块里带了句子收尾的「.」——它形态上「整块≈一个编号」，
+        却是散文回指不是定义标签。故本判据**拒绝**带尾点「.。」的块（不 strip
+        尾点，要求整块对纯编号 fullmatch）。真编号永不以句点收尾；误伤
+        「(N).」式带点标签的书只会**少判**（该号不获顺序锚定），绝不新增告警。
+
+        集合成员 S / MISSING 仍走 `build_sectioned` 的宽松式（允许尾点），二者
+        判据**刻意不同**：能「算作一个印刷号」（进 S）≠ 能「充当可信定义顺序锚点」。
+        """
+        _sa = (txt or '').strip()
+        if not _sa:
+            return False
+        return bool(cls._STANDALONE_LABEL_BLOCK_RE.fullmatch(_sa))
+
+
     @staticmethod
     def _plausible(n: Optional[str], raw: Optional[str] = None) -> bool:
         """Reject normalised numbers that cannot be genuine per-section
@@ -2292,7 +2333,8 @@ def _validate_formula_config(ctx, formula, ncomp, patterns):
     return None
 
 
-def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
+def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None,
+                                alpha_led_heads=None) -> Set[str]:
     """Letter / Roman-led probe: find alpha-led formula numbers in the book
     source (e.g. `(A.3)` / `（II.5）`).
 
@@ -2322,13 +2364,27 @@ def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
                 continue
             for m in _LETTER_LED_RE.finditer(t):
                 found.add(m.group(0).strip())
-    # 🔴 单字母章头**不在本书章键集**的命中 = 对书外附录/其他书的**交叉引用**，
-    # 不是本书体例（2026-10-04 Iwaniec–Kowalski 实测：ch4 p78 全书唯一一处
-    # "(A.36)" 是对书末 Appendix A 的散文回指，而 chapter_map 里根本没有附录章
-    # ——提示设 letter_ch 反而会把散文引用收进 S 造 MISSING/FABRICATED）。
-    # 真字母章位书的附录就是章键（Lee ISM 的 appendixA → 'A'），提示照常发出。
-    # 只过滤**单字母**头；罗马头（II.5）的章键形态多样，保持原样不动。
+    # 🔴 命中的章头是否应豁免，分两条正交判据：
+    #  (1) 单/多字母头**不在本书章键集** = 对书外附录/其他书的**交叉引用**，
+    #      不是本书体例（2026-10-04 Iwaniec–Kowalski 实测：ch4 p78 全书唯一一处
+    #      "(A.36)" 是对书末 Appendix A 的散文回指，而 chapter_map 里根本没有附录章
+    #      ——提示设 letter_ch 反而会把散文引用收进 S 造 MISSING/FABRICATED）。
+    #      真字母章位书的附录就是章键（Lee ISM 的 appendixA → 'A'），故 (1) 拦不住它。
+    #  (2) 该字母/罗马头**归属某附录/补篇章、且该段的 formula 已选用 alpha 家族**
+    #      （`letter_ch`/type15/16/17/18）→ 这类编号已被**附录段自身**机器校验，
+    #      数字正文章里出现它只是**交叉回指**（2026-10-09 Lee ISM ch7 p186
+    #      "(B.3) expresses det(In + tA)…"，附录 B 段已 letter_ch:true、QF 干净）。
+    #      此时正文段再报「未启用 letter_ch」是假阳，应豁免。
+    # 🔴 与 2026-10-08 判据一致：附录/补篇**自身是数字家族配置**（或根本没有该段、
+    #    静默回退正文数字配置）时，(2) 不触发 → 告警照常发出——那才是「印面无人
+    #    校验」的真漏配。只过滤真被 alpha 段接管者；罗马头与字母头同一判据。
     if found:
+        _suppress_heads = {str(h) for h in (alpha_led_heads or set())}
+
+        def _head(tok: str) -> str:
+            _inner = tok.strip().strip('（）()')
+            return _inner.split('.')[0].strip()
+
         try:
             from data.book_structure.book_structure import list_chapter_keys as _lck
             # 🔴 用**裸章键**（'1' / 'A' / 'appendix'）而非 chapter_label（'ch1' /
@@ -2336,22 +2392,18 @@ def _detect_letter_led_formulas(ext_dir: str, start, end, ch=None) -> Set[str]:
             _keys = {str(k) for k in _lck(ext_dir)}
         except Exception:
             _keys = None
-        if _keys:
-            def _head(tok: str) -> str:
-                _inner = tok.strip().strip('（）()')
-                return _inner.split('.')[0].strip()
-            # 🔴 修正记录（2026-10-08）：此处曾额外排除「字母头确属本书附录/补篇章键」
-            #    的命中，理由是「附录由各自独立 config（letter_ch）校验」。该分支与 SSOT
-            #    （`verify/formula_tag/formula_tag.md` 「S 为空降级」段：数字家族书源检出
-            #    字母/罗马编号 ⇒ 必须 emit mis-config WARN）直接冲突，且会把探针判死：
-            #    保留条件退化成「字母头是普通章键」，而字母头几乎只在附录/补篇出现 ⇒
-            #    探针永不发信。更严重的是它豁免的恰是**最可能漏配 letter_ch 的当事章**——
-            #    附录自己是数字家族配置、(A.36) 印面无人校验时，本提示正是唯一线索。
-            #    故删除该分支；「书外附录交叉引用」仍由 `head not in _keys` 一条拦住
-            #    （Iwaniec–Kowalski 原始事故：chapter_map 无附录章 ⇒ head∉_keys ⇒ 沉默）。
-            found = {t for t in found
-                     if not (_LETTER_LED_RE.fullmatch(t)
-                             and _head(t) not in _keys)}
+
+        def _should_drop(tok: str) -> bool:
+            if not _LETTER_LED_RE.fullmatch(tok):
+                return False
+            h = _head(tok)
+            if _keys and h not in _keys:      # (1) 书外/他书交叉引用
+                return True
+            if h in _suppress_heads:           # (2) 归属段已 alpha 配置
+                return True
+            return False
+
+        found = {t for t in found if not _should_drop(t)}
     return found
 
 
@@ -2938,7 +2990,24 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
         _reprint = (_occ[_ok] > 1
                     and not _dup_beyond_source(src, _occ, _ok, n,
                                                sec if reset_on_section else None))
-        if cur is not None and not _reprint:
+        # 🔴 scope==3 顺序锚点须出自**纯独立编号块**（2026-10-09 Evans ch9 §9.1
+        # 实测）：per-section 重启书某号的节内最早命中，可能是 OCR 把句中回指
+        # 切成行首块的 `(1) onto the finite-dimensional subspace…`（真定义标签
+        # `(1)` 印在本节起始页、却因该页是「目录+首节正文」混合页被整页跳过，
+        # 只剩这枚回指作位置证据）。拿它当顺序游标，就会让**忠实**的 (1)→(2)
+        # 被判 (2) ORDER_MISMATCH 假阳（(2)@540 早于回指 (1)@541）。这与 plain
+        # 支既有的 `_pos_strong`「纯散文回指不当定义位置、不判序」是同一约定，
+        # 只是分节支的强弱分级落在 per-(sec,n) 的**形态**上（整块是否就是一枚
+        # 编号）。不可信锚点：既不判倒挂、也不回退游标（`prev_pos` 不动），MISPLACED
+        # 支另用 `_pos_sec`/`_n_pages` 证据、不受本门影响。🔴 门控在「src 真带
+        # 该账本」上：真 `SourceFormulaIndex` 恒有 `_pos_sec_standalone`；无该
+        # 属性的旧测试替身（无从分辨形态）保持原行为。
+        _anchor_trusted = True
+        if reset_on_section:
+            _ss = getattr(src, '_pos_sec_standalone', None)
+            if _ss is not None and (sec, n) in _ss and not _ss[(sec, n)]:
+                _anchor_trusted = False
+        if cur is not None and not _reprint and _anchor_trusted:
             # 🔴 同页 y 倒序的**锚定偏斜容限**（2026-10-04 Iwaniec–Kowalski
             # ch1/ch3/ch12 实测，plain 支）：同页上公式印刷顺序必然随号递增，但
             # 标签块的 y ≠ 公式顶——多行/高个公式的右缘标签落在末行或行心，把
@@ -3308,6 +3377,21 @@ class QLayer(VerifyLayer):
         # 字母/罗马编号=配错提示）。旧写法只看 `letter`，roman 书（lead='roman'、
         # letter=False）会被探针误判「罗马尚未支持」而阻断。
         alpha_led = lead in ('letter', 'roman')
+        # 🔴 探针豁免集（**跨段路由判据**，见 _detect_letter_led_formulas 注记 (2)）：
+        # 本书附录/补篇章里「管辖公式段已选用 alpha 家族」的裸章头集合。数字正文
+        # 章只是交叉回指这些段的编号（Lee ISM ch7 p186 `(B.3)`——附录 B 段已
+        # letter_ch:true、该号由其自身机器校验）时，正文段不该再报「未启用
+        # letter_ch」假阳。判据走 ConfigLoader.alpha_led_special_head_keys（与
+        # config_for_chapter 同源），绝不在层内复刻 kind→段路由表。
+        # ctx.loader 为 None（无路由入口的调用路径）→ 空集 → 探针退回原行为照常告警，
+        # 且当前段已是 alpha_led 时本被 `[] if alpha_led` 短路，不影响。
+        _ll_alpha_heads: Set[str] = set()
+        _ll_loader = getattr(ctx, 'loader', None)
+        if _ll_loader is not None:
+            try:
+                _ll_alpha_heads = set(_ll_loader.alpha_led_special_head_keys())
+            except Exception:
+                _ll_alpha_heads = set()
         # `formula.bare_number` (default True): when False, the bare ``N.M``
         # variant is dropped from the source-extraction patterns.  Books whose
         # prose is full of numbered cross-references (Lee: ``(Fig. 1.2)``,
@@ -3392,7 +3476,9 @@ class QLayer(VerifyLayer):
                 # normal path; the probe only fires for digit books as a
                 # mis-config hint.  A letter-led book must not silently pass.
                 _ll_sec = ([] if alpha_led else
-                           _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
+                           _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end,
+                                                       ch=ctx.ch,
+                                                       alpha_led_heads=_ll_alpha_heads))
                 ll_note_sec = _letter_led_note(_ll_sec)
                 if ll_note_sec is not None:
                     print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note_sec}",
@@ -3422,7 +3508,9 @@ class QLayer(VerifyLayer):
         # numbers sitting in the source as a mis-config hint pointing at the fix.
         # See _letter_led_note for the branches.
         _ll = ([] if alpha_led else
-               _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end, ch=ctx.ch))
+               _detect_letter_led_formulas(ctx.ext_dir, ctx.start, ctx.end,
+                                           ch=ctx.ch,
+                                           alpha_led_heads=_ll_alpha_heads))
         ll_note = _letter_led_note(_ll)
         if ll_note is not None:
             print(f"[Q-LAYER LETTER-LED *WARN*] {ll_note}", file=sys.stderr)

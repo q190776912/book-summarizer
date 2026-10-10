@@ -46,6 +46,8 @@ from section_continuity import check_d_layer          # D 层：section-continui
 from item_numbering_integrity import ItemNumberingIntegrityLayer  # B 层：item-numbering-integrity（条目编号完整性）
 from verify.script.base import VerifyContext   # B 层 run() 所需的精简运行时载体
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
+from check_section_attribution import (        # 条目↔节归属闸（锚点晚于最早节头 → 条目漂到节外）
+    section_attribution_problems)
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2, ORDINAL_VAKIL,
@@ -1709,8 +1711,20 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         anchor_problems = check_contract_anchors(ch_node_after.to_dict())
     except Exception as e:
         anchor_problems = ["契约锚点自查执行失败（fail-closed）：%r" % (e,)]
+    # 🔴 条目↔节归属闸（见 check_section_attribution 模块 docstring）：某节锚点被
+    # 抓到**后现的页眉/复本行**（真节头在更早页以「裸号块+标题块」两行形态出现），
+    # 于是夹在「最早节头页 ~ 锚点页」之间的编号条目被甩到本节之外（漂到章前言）。
+    # D 层（节号存在/连续）、check_contract_anchors（前序页码单调）、
+    # subsection_order_problems（小节键递增）三者对此形态全部失明——real-analysis
+    # ch2 §2.1 实测（2026-10-10）门控一路放绿、内容不缺但归属错。此处补拦。
+    try:
+        attribution_problems = section_attribution_problems(
+            ext, ch, start, end, ch_node_after)
+    except Exception as e:
+        attribution_problems = ["条目↔节归属自查执行失败（fail-closed）：%r" % (e,)]
     passed = (not sec_left) and (not readable_left) and (not real_b_blocking) \
-        and (not order_problems) and (not anchor_problems)
+        and (not order_problems) and (not anchor_problems) \
+        and (not attribution_problems)
     return {
         "passed": passed,
         "residual_sections": sec_left,
@@ -1719,6 +1733,7 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         "b_gap_ordinal_occupancy": b_gap_occupancy,
         "residual_section_order": order_problems,
         "residual_anchor_order": anchor_problems,
+        "residual_attribution": attribution_problems,
     }
 
 
@@ -1960,6 +1975,10 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         print("  BLOCKING(节序): " + p)
     for p in gate.get('residual_anchor_order') or []:
         print("  BLOCKING(锚点): " + p)
+    if gate.get('residual_attribution'):
+        print(f" | ATTRIBUTION({len(gate['residual_attribution'])})")
+    for p in gate.get('residual_attribution') or []:
+        print("  BLOCKING(归属): " + p)
     return report
 
 

@@ -1817,6 +1817,70 @@ def _find_numbered_heading_page(ext, num, lo, hi, min_y=None, page_dir=None,
     return None
 
 
+# 条头（标签词 + 章内编号）：正文页判据（与 verify/check_section_attribution.py
+# 的 _ITEM_HEAD 同源——「闸拦什么、build 就修什么」由同一形态定义保证一致）。
+_SPLIT_ITEM_HEAD = re.compile(
+    r'(?:Definition|Theorem|Lemma|Proposition|Corollary|Example|Remark|'
+    r'Axiom|Exercise|定义|定理|引理|命题|推论|例|评注|注|公理|练习|猜想)'
+    r'\s*[\*\uff1a:]?\s*\d{1,2}[.\-·．]\d{1,2}')
+
+
+def _find_split_heading_page(ext, num, lo, hi, page_dir=None):
+    """在 [lo, hi] 找节号 num 的「两行拆分节头」最早所在**正文页**。
+
+    形态：一个**独立成块的裸节号**（整块恰为 ``num``，可带尾随分隔符/空白），
+    其**下一块**是标题（长度 3~60、字母/CJK 起头、本身非裸号）。这是 OCR 把真
+    节头切成「号块 + 标题块」两行的产物——scan_skeleton 的单行节头检测器（要求
+    号+标题同行）看不见它，于是该节 SEC 首现会撞到后文页顶的**全大写页眉复本**
+    （``2.1. ALGEBRAS AND σ-ALGEBRAS``）→ 锚点偏晚，节前的编号条目整批漂到章级。
+
+    **只认此两行形态、不认单行**（``num + 标题``）：单行会撞上以节号起头的交叉
+    引用句（``4.2 shows that μ* is an outer measure, …`` = 正文散文，非节头）。
+    而「整块恰为裸节号」几乎只可能由拆分真节头而来，交叉引用永远内联句中、不
+    独占一块。另要求本页含 ≥1 条「标签+编号」条头 = 正文页，排除纯目录/扉页。
+
+    与 ``verify/script/check_section_attribution.py::_earliest_heading_pages`` 逐
+    字同源，确保归属闸拦下的形态，本函数恰好能定位并修好。命中返回
+    ``(page, 裸号块 y)``，否则 None（调用方保持原锚，不比旧行为差）。
+    """
+    _bare = re.compile(r'^[\*§]?\s*' + re.escape(str(num)) + r'[.\s·．]?$')
+    _dir = page_dir or ext
+    for p in range(int(lo), int(hi) + 1):
+        fp = os.path.join(_dir, 'page_%03d.json' % p)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = scan_skeleton.PageJson.load(fp).data
+        except Exception:
+            continue
+        raw = d.get('text', []) if isinstance(d, dict) else []
+        seq = []                      # [(text, y)]，去空
+        for b in raw:
+            if isinstance(b, dict):
+                t = blk_text(b)
+                poly = b.get('poly') or []
+                try:
+                    y = float(poly[1]) if len(poly) >= 8 else None
+                except Exception:
+                    y = None
+            else:
+                t, y = b, None
+            t = (t or "").strip()
+            if t:
+                seq.append((t, y))
+        # 正文页判据：本页至少一个条头（否则是纯目录/扉页，跳过）。
+        if not any(_SPLIT_ITEM_HEAD.search(t) for (t, _y) in seq):
+            continue
+        for i, (t, y) in enumerate(seq):
+            if _bare.match(t) and i + 1 < len(seq):
+                nxt = seq[i + 1][0]
+                if (3 <= len(nxt) <= 60
+                        and re.match(r'^[A-Z一-鿿]', nxt)
+                        and not _bare.match(nxt)):
+                    return p, y
+    return None
+
+
 def _seq_filter_letter_blocks(cands):
     """裸字母子块候选的**序列过滤**（Arnold 体例专用）。
 
@@ -2375,6 +2439,35 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                 print(f"[build_structure] ch{ch} 节序锚点修复：§{_b} 由 p{_pg} "
                       f"改锚到 p{_rep}（同页标题 y 倒挂，回扫真节头 "
                       f"{_ttl!r}）")
+
+    # 🔴 两行拆分节头补锚（2026-10-10 Bass《Real Analysis for Graduate
+    # Students》ch2 §2.1 实测）：OCR 把真节头切成「裸节号块 + 标题块」两行
+    # （p29 blk `2.1` + blk `Algebras and σ-algebras`），scan_skeleton 的**单行**
+    # 节头检测器（要求号+标题同行）看不见 → 该节 SEC 首现撞到后文页顶的**全大写
+    # 页眉复本**（p31 `2.1. ALGEBRAS AND σ-ALGEBRAS`）→ 锚点偏晚 2 页，定义2.1 /
+    # 例2.2–2.6 / 引理2.7 整批被甩到章级、漂在 §2.1 之前（内容不缺，**归属**错了）。
+    # 主循环只对「扉页目录污染」回扫，对「拆分正文节头 ↔ 页眉复本」这一形态无免疫。
+    # 此处为**每个已存在的点分带点小节**回扫 [章首, 现锚点) 内最早的两行真节头
+    # （_find_split_heading_page：只认「裸号块紧跟标题块」的正文页，与 verify 归属闸
+    # check_section_attribution.py 逐字同源），命中更早页即下修锚点。⚠️ 只改**已存在**
+    # 节的 sec_pages/sec_pos，绝不新建幻影节——与上方节序修复同源、零回归（无更早
+    # 拆分手节头 → None → 保持原锚；锚点已在章首 → 跳过）。
+    def _is_dotted_num_sec(n):
+        return bool(re.match(r'^\d+(?:[.\-·．]\d+)+$', str(n).strip()))
+
+    for _n in list(sec_pages):
+        if not _is_dotted_num_sec(_n):
+            continue
+        _cur = sec_pages[_n]
+        if _cur <= start:
+            continue                                  # 已锚到章首，无从更早
+        _hit = _find_split_heading_page(
+            ext, _n, start, _cur - 1, page_dir=page_dir)
+        if _hit and int(_hit[0]) < int(_cur):
+            sec_pages[_n] = int(_hit[0])
+            sec_pos[_n] = (int(_hit[0]), float(_hit[1] or 0.0))
+            print(f"[build_structure] ch{ch} 两行拆分节头补锚：§{_n} 由 p{_cur} "
+                  f"下修到真节头 p{_hit[0]}")
 
     # 🔴 字母子块窗口（Arnold《经典力学的数学方法》体例，config role 5）：
     # 节内印有小写字母块标题（§8 C. 微分形式 / D. 外微分 …），而例/问题/系

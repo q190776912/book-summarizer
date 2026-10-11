@@ -571,6 +571,16 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     for m in _SEC_SINGLE_EX_RE.finditer(line):
                         key = f"{_canon_label(m.group(1))}{cur_sec}.{m.group(2)}"
                         entries.add(key); allk.add(key)
+                else:
+                    # 「退化为旧行为（裸 `例1`）」此前从未落地——只有 if、没有 else：
+                    # 非 uncat 组（或不在任何节内）的裸单号条头 `**例1**` 会被**整体丢弃**，
+                    # 契约侧忠于印面登记的键 `例1` 在 md 侧永不产出 → A 层判
+                    # TRULY MISSING（阻断）。微分遍历论 ch2 §2.2.2 的 例1/例2 正是此形态：
+                    # 书的例子在 §2.2.2 里按印面原生顺序编号 例1/例2，不属 C.S-N 三级体系。
+                    # 兑现上方注释所述语义：产出印面原生的裸单号键（规范标签 + 数字）。
+                    for m in _SEC_SINGLE_EX_RE.finditer(line):
+                        key = f"{_canon_label(m.group(1))}{m.group(2)}"
+                        entries.add(key); allk.add(key)
     return entries, allk
 
 def sortkey(k):

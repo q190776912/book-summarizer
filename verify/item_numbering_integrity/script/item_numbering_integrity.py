@@ -98,6 +98,32 @@ _TAIL_GAP_CAP = 5
 _SPAN_RE = re.compile(r'\*\*([^\n]*?)\*\*')
 _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)')
 
+
+def _is_block_start(txt, pos):
+    """Return True iff a `**…**` span at `pos` is a *block-level* heading.
+
+    Real item headings sit at the start of a content line (after optional
+    leading whitespace) or inside a blockquote (a single `>` marker at the line
+    start).  They are NEVER inline bolds embedded in prose, nor bullet-list
+    items introduced by a list marker (`-` / `*` / `+`).  Treating inline or
+    list-marker bolds as headings manufactures false entries — e.g. a
+    LaTeX superscript `V^{**}` straddling a sentence, or a bullet term
+    `- **1 型文法**` (a "type-1 grammar" concept, not the item `13.1.1`) — which
+    then collide with genuine numbered items and trigger a spurious
+    「疑似幽灵重复节点」 WARN.  Require block-level placement to keep only true
+    heading spans."""
+    # Walk back to the start of the CURRENT line (the last '\n' before pos), then
+    # check that everything between the line start and the '**' is whitespace
+    # (or a single '>' blockquote marker plus whitespace).
+    line_start = txt.rfind('\n', 0, pos)
+    line_start = 0 if line_start == -1 else line_start + 1
+    segment = txt[line_start:pos]
+    stripped = segment.strip()
+    if stripped == '' or stripped == '>':
+        return True
+    return False
+
+
 # 证明标题（"X.Y-Z 的证明" / "X.Y-Z Proof."）是证明小节，不是被定义的条目，
 # 不得计入条目序列（既会污染缺号 present 集合，也会在顺序校验里制造伪回归）。
 _PROOF_RE = re.compile(r'^(证明|的证明|proof|beweis|demonstration|dem\b)', re.IGNORECASE)
@@ -1326,6 +1352,11 @@ def _md_gap_blocking(ctx):
     # 🔴 契约习题键（无标签条头的路由真值，判据见 `_contract_exercise_keys`）
     _ex_keys = _contract_exercise_keys(ctx.ext_dir, ctx.ch)
     for span in _SPAN_RE.finditer(txt):
+        # 🔴 仅把「块级」加粗（`**…**` 位于行首或块引用 `>` 内）当作条头；
+        # 行内加粗（如 LaTeX 上标 `V^{**}` 跨句、或 `- **1 型文法**` 列表项里的
+        # 术语）不是条头，误当成条头会与真条目撞号、假报「疑似幽灵重复节点」。
+        if not _is_block_start(txt, span.start()):
+            continue
         inner = span.group(1).strip()
         parsed = None
         for lv in _depth_candidates:

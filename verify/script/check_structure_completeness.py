@@ -2049,7 +2049,11 @@ def main():
             e = cc.get("end", cc.get("end_page"))
             if s is None or e is None:
                 continue
-            rng[int(kk)] = (int(s), int(e))
+            try:
+                key = int(kk)
+            except (TypeError, ValueError):
+                key = str(kk).strip()  # 字母章号（附录 A/B…）/ 裸名附录 "appendix"
+            rng[key] = (int(s), int(e))
 
     def _rng_sort_key(k):
         try:

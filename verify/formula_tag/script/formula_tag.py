@@ -1977,6 +1977,27 @@ class SourceFormulaIndex:
             return False
         if core.isdigit() and int(core) > 99:
             return False
+        # 🔴 算术演算串被误当公式编号（2026-10《概率论与数理统计教程》根治，
+        #   book-agnostic）：统计 / 微积分例题里 OCR 常把带括号的小数减法或乘法
+        #   `(239.5-240)`、`(1-0.8)`、`(101-104.25)` 整块读成一个 token，而 norm()
+        #   把 `-` 折成分隔符 → 伪造成一枚「多段编号」注入书源集合 S，MISSING 硬闸
+        #   反过来逼写手凭空补 `\tag{239.5.240}`（假阳）。此前只能逐号塞 `ignore`
+        #   （症状补丁）；根因在检测器，故在 `_plausible` 这一 S 成员唯一闸口集中拦截。
+        #   两条互斥守卫，只杀演算串、绝不杀真印刷号：
+        #   (G1) 多段号首分量 ≥3 位：任何书都没有 100+ 章，首分量（章号 / 首段）到
+        #        三位必是演算值（239 / 101 / 315）。单段 >99 已由上支拦，末段大
+        #        item 号（如 (5.120) 的 120）不受影响。
+        #   (G2) 原文里连字符 / 短横 `[-–]` 之后又出现分隔符（点 / 逗号）=「X-Y(.Z)」
+        #        的减法式形态；真 `C.S-N` 连字符恒为**末段**分隔（点在前、dash 在后），
+        #        绝不会在 dash 之后再现一个点，故 `11.1-1` / `8.5-2` 一律放过。
+        _comps = [c for c in re.split(r'[.\-·,]', core) if c]
+        if len(_comps) >= 2 and _comps[0].isdigit() and len(_comps[0]) >= 3:
+            return False
+        if raw:
+            _r = str(raw)
+            _h = re.search(r'[-–]', _r)
+            if _h and re.search(r'[.·,]', _r[_h.end():]):
+                return False
         return True
 
     @staticmethod

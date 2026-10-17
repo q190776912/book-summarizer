@@ -238,6 +238,40 @@ EN_LAB_RE_NF = re.compile(
     re.IGNORECASE,
 )
 
+# 🔴 BARE-RESULT extraction (Axler《Measure, Integration & Real Analysis》体例,
+# config_setting 规则5 增量扩展): 结果印成 `2.3 Example finite sets…` /
+# `2.5 outer measure preserves order`(章.号 + 可选标签词 + 标题), 大多**无标签词**。
+# 启用 `bare_results` 时单独一趟扫描: 抓 `N.M` 起的条目头, 若号后首词是可识别
+# 标签词(Definition/Theorem/Example…)→ 按标签条目键 `Label 2.3`; 否则 → `uncat 2.5`。
+# 与主干 label-first 抽取互不重叠(主干只认 `Label N.M` 形态), 共用 seen_keys / _
+# max_per_label 去重与单调守卫, 默认 False → 零回归。OCR 易混字母(b/d/g/…)经
+# EN_OCR_NUM 进入编号串, 由 _ocr_int 归一。
+_BARE_RES_RE = re.compile(
+    r'^(' + EN_OCR_NUM + r')\s*' + SEP_TIGHT + r'\s*(\d{1,3})[ \t]*'
+    r'(?:\([^)]*\)\s+)?([^\W\d_][\w]*)',
+    re.IGNORECASE,
+)
+
+# 🔴 号后紧跟的非标题词（合体头/公式号粘连时的误抓）：`2.NProof…`、`2.NSolution…`
+# 等号后是下一个证明/解答标记而非本结果标题，一律跳过。
+_BARE_NONTITLE = frozenset({"proof", "proofs", "solution", "solutions",
+                            "qed", "answer", "answers", "qqedsymbol"})
+
+# 🔴 裸号结果首词引用动词集 (Axler 体例 bare_results 趟专用)：仅当「号后首词」
+# 是这些强引用动词时, 才判为正文交叉引用残句("2.5 shows that …")而跳过。
+# 名词/形容词起头的标题("2.17 nontrivial intervals…" / "2.2 Definition length…")
+# 首词永不在此集合内, 故不会被误杀。旧版查「号后第二个词」小写与否, 对 Axler
+# 名词短语标题全盘误杀 (Definition length… / nontrivial intervals…), 已废弃。
+_BARE_REF_VERBS = frozenset({
+    "shows", "show", "implies", "imply", "follows", "follow", "gives", "give",
+    "proves", "prove", "proved", "means", "yields", "yield",
+    "illustrates", "illustrate", "indicates", "indicate", "suggests", "suggest",
+    "demonstrates", "demonstrate", "states", "guarantees", "ensures",
+    "requires", "provides", "characterizes",
+    "characterize", "describes", "describe", "concludes", "conclude",
+    "see", "sees", "define", "defines",
+})
+
 
 def _poly_band(poly):
     """OCR poly（扁平 ``[x0,y0,…]`` 或点列 ``[[x,y],…]``）→ ``(x0, x1, y0, y1)``；
@@ -305,7 +339,8 @@ def _formula_slot_subject(txt, mend, blk, formulas):
 
 
 def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped=False,
-                     single=False, extra_labels=None, restart_per_section=None):
+                     single=False, extra_labels=None, restart_per_section=None,
+                     bare_results=False):
     """Extract English item headings from OCR pages.
 
     ``single``: when True (single-level EN books, e.g. Silverman's "A Friendly
@@ -730,6 +765,76 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
     # twice (a printing off-by-one).  Genuine headings are already pre-filtered
     # above (only block-start matches survive), so any same-key collision with a
     # different heading text is a distinct item.
+    # 🔴 BARE-RESULT 二次趟扫描 (Axler 体例, config_setting 规则5 增量扩展):
+    # `N.M` 起的条目头(号后首词可能是标签词或裸标题), 主干 label-first 抽取器
+    # 抓不到(它要求标签词在前)。本趟与主干共用 seen_keys / _max_per_label 账本,
+    # 故同一真身只记一次; 标签词可识别 → `Label 2.3`, 否则 → `uncat 2.5`。
+    # 默认 bare_results=False → 整段跳过, 零回归。
+    if bare_results:
+        for p in range(start, end + 1):
+            fp = os.path.join(extract_dir, f"page_{p:03d}.json")
+            if not os.path.exists(fp):
+                continue
+            try:
+                data = PageJson.load(fp).data
+            except Exception:
+                continue
+            for t in data.get("text", []):
+                txt = t.get("text", "")
+                if not txt:
+                    continue
+                # 按**换行行首**匹配（而非仅块首）：既抓独立成块的条目头
+                # (`2.8 countable…`)，也抓被 OCR 并进正文段、落在换行行首的中段
+                # 条目头；号与标题 OCR 粘连(`2.4countable…`/`2.11Example…`)经
+                # 正则 `[ \t]*` 放行。
+                for line in txt.split("\n"):
+                    ls = line.strip()
+                    if not ls:
+                        continue
+                    m = _BARE_RES_RE.match(ls)
+                    if not m:
+                        continue
+                    n1, n2, word = m.group(1), m.group(2), m.group(3)
+                    _mend = m.end()
+                    _after = ls[_mend:_mend + 1]
+                    if _after and _after in ")]},;:":
+                        continue                    # 闭合定界符 → 引用残片
+                    if ls[_mend:_mend + 2] in (".]", ".)"):
+                        continue
+                    if word.lower() in _BARE_NONTITLE:
+                        continue                    # 号后为 Proof/Solution 等, 非标题
+                    label = _resolve_label(word, EN_LABELS)
+                    if label is None or (label == "Example" and not want_examples):
+                        label = "uncat"
+                    # 🔴 仅「号后首词」是引用动词时才判为交叉引用残句("2.5 shows
+                    # that…")跳过; 名词/形容词起头的真标题(2.17 nontrivial… /
+                    # 2.2 Definition length…)首词不在 _BARE_REF_VERBS, 一律保留。
+                    # 旧版查「号后第二个词」小写与否, 对 Axler 名词短语标题全盘
+                    # 误杀 (Definition length… / nontrivial intervals…), 已弃用。
+                    if label == "uncat" and word.lower() in _BARE_REF_VERBS:
+                        continue
+                    try:
+                        _n1 = _ocr_int(n1)
+                        _n2 = _ocr_int(n2)
+                    except Exception:
+                        continue
+                    if _n1 is None or _n2 is None:
+                        continue
+                    # 同标签编号严格递增单调守卫(uncat 用独立桶)
+                    _lab_norm = "uncat" if label == "uncat" else str(label).strip().lower()
+                    _bucket = (_lab_norm, n1)
+                    _comp = (_n1, _n2)
+                    if _comp <= _max_per_label.get(_bucket, (-(1 << 30),)):
+                        continue
+                    _max_per_label[_bucket] = _comp
+                    key = f"{label} {_n1}.{_n2}"
+                    _nkey = re.sub(r'\s+', ' ', key).lower()
+                    if _nkey in seen_keys:
+                        continue
+                    seen_keys.add(_nkey)
+                    snippet = ls[:150]
+                    items.append({"key": key, "label": label,
+                                  "page": p, "text": snippet})
     # 🔴 section_scoped 书例外（Hilton & Stammbach 实测）：编号首段即节号，
     # 同一章内同 key 的第二个"条目头"必是句尾换行恰好落在 "Theorem 2.4." 的
     # 引用残行（其后内容块属前一条目的尾随散文），绝无"同号双印"。故唯一化。

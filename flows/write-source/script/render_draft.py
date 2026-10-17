@@ -369,8 +369,8 @@ def _walk_mixed(node, out, quote=False, lang="cn", top=False):
             continue
         _flush(buf, out, quote)
         t = el.get("type")
-        if t in ("exercise", "problem") and el.get("consolidated"):
-            i += 1                        # 章末「集中习题块」省略（writing-rules 习题收录）
+        if el.get("consolidated") and t in ("exercise", "problem", "section"):
+            i += 1                        # 章末「集中习题块 / 整节习题」省略（writing-rules 习题收录）
             continue
         if top and t != "section":
             # V-F：item↔item、item↔描述 之间必须有 ---；标题之下第一个元素、

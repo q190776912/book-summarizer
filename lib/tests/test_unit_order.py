@@ -11,6 +11,9 @@ Regression guardrails encoded here (all learned calibrating Lee《Smooth Manifol
   * ties (same page) are ALLOWED;
   * chapter-head units are skipped;
   * chapter-end dash Problems (raw key ``N-M``) are EXEMPT and must not touch the cursor;
+    the exemption is **narrowed by node type** (Lehmann ch4): a dash key whose node type is
+    a numbered result (``example`` / ``theorem`` / …) is an ordinary body item and is NOT
+    exempt, while unknown / ``uncat`` / exercise types keep the old exemption;
   * an unresolvable key is skipped WITHOUT resetting the running max (so a later genuine
     scramble is still caught);
   * the dash-vs-dotted distinction is decided on the RAW key BEFORE norm_secnum collapses
@@ -32,8 +35,8 @@ import lib.boot as b
 b.setup()
 
 from lib.unit_order import (check_contract_anchors, check_section_key_page_order,
-                            check_unit_order, is_dash_problem, iter_unit_nodes,
-                            resolve_unit_anchors, _anchor_tables)
+                            check_unit_order, dash_exempt, is_dash_problem,
+                            iter_unit_nodes, resolve_unit_anchors, _anchor_tables)
 
 
 def _contract(nodes):
@@ -505,3 +508,68 @@ def test_legacy_dash_item_key_after_exercise_sibling_keeps_item_anchor():
     # 连字符键按设计豁免页码单调（章末习题体例），但习题块插到条目之前仍被其它记录暴露
     probs = check_unit_order(c, swapped)
     assert len(probs) == 1 and "引理6.2.6" in probs[0] and "p263" in probs[0]
+
+
+# ------------------------------------------------ dash exemption narrowed by node type
+def _typed_ch(kids, start=1):
+    """``_ch`` 的章头页码写死 550，会让契约锚点自查先把「章头晚于其内容」报一轮——
+    与本题无关。这里给一个页码自洽的章头，使 ``check_contract_anchors`` 的断言只反映
+    被测形态。"""
+    return {"key": "4", "type": "chapter", "name": "Ch", "page_start": start,
+            "page_end": start + 100, "sub_sec": kids}
+
+
+def test_dash_keyed_numbered_item_is_not_exempt():
+    # Lehmann ch4 实测形态：条目按节起号写成 ``4.2-2``，契约把 p250 那条登记在 p249
+    # 那条之前。旧判据把 dash 键**整族**豁免 ⇒ 门控 ⑪ 与契约锚点自查同时报 0，
+    # 合并 md 阅读顺序倒退无人看见。收窄后两侧都必须点名。
+    kids = [_node("theorem", "4.2-1", 248),
+            _node("example", "4.2-2", 250),
+            _node("example", "4.2-3", 249),
+            _node("example", "4.2-4", 251)]
+    c = _typed_ch(kids, start=245)
+    units = [{"type": "item", "ntype": "theorem", "key": "4.2-1"},
+             {"type": "item", "ntype": "example", "key": "4.2-2"},
+             {"type": "item", "ntype": "example", "key": "4.2-3"},
+             {"type": "item", "ntype": "example", "key": "4.2-4"}]
+    probs = check_unit_order(c, units)
+    assert len(probs) == 1, probs
+    assert "4.2-3" in probs[0] and "p249" in probs[0] and "p250" in probs[0]
+    anchors = check_contract_anchors(c)
+    assert len(anchors) == 1, anchors
+    assert "4.2.3" in anchors[0], anchors[0]
+
+
+def test_dash_keyed_exercise_stays_exempt():
+    # 章末习题：dash 键 + 习题类型 → 维持豁免（page_start 指正文首现页，按设计排章末）
+    c = _typed_ch([_node("theorem", "11.1", 11), _node("theorem", "11.2", 12),
+                   _node("exercise", "11-5", 11)], start=10)
+    units = [{"type": "item", "ntype": "theorem", "key": "11.1"},
+             {"type": "item", "ntype": "theorem", "key": "11.2"},
+             {"type": "item", "ntype": "exercise", "key": "11-5"}]
+    assert check_unit_order(c, units) == []
+    assert check_contract_anchors(c) == []
+
+
+def test_dash_type_lookup_falls_back_to_contract_but_stays_conservative():
+    # 清单不带 ``ntype``（老清单 / 合并 md 反推）→ 退回契约**原始键全等**查类型
+    c = _ch([_node("example", "4.2-2", 250), _node("example", "4.2-3", 249)])
+    units = [{"type": "item", "key": "4.2-2"}, {"type": "item", "key": "4.2-3"}]
+    assert len(check_unit_order(c, units)) == 1
+    # 类型取不到（契约里没有这个原始键，如 Katok 的旧连字符键对带前缀节点）
+    # → 维持旧豁免，绝不给这类书新增误报
+    legacy = [{"type": "item", "key": "6.2-5"}, {"type": "item", "key": "6.2-6"}]
+    assert check_unit_order(
+        _ch([_node("corollary", "推论6.2.5", 262), _node("lemma", "引理6.2.6", 263)]),
+        legacy) == []
+
+
+def test_dash_exempt_helper():
+    assert dash_exempt("11-5", "exercise") is True
+    assert dash_exempt("11-5", "problem") is True
+    assert dash_exempt("11-5", None) is True          # 类型取不到 = 保守豁免
+    assert dash_exempt("11-5", "uncat") is True       # 形状不明 = 保守豁免
+    assert dash_exempt("4.2-2", "example") is False   # 编号结果条目 = 不再豁免
+    assert dash_exempt("4.2-2", "Theorem") is False   # 大小写无关
+    assert dash_exempt("4.2.2", "example") is False   # 非 dash 键本来就不豁免
+

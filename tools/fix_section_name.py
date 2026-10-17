@@ -23,7 +23,8 @@
 保险：
   - 默认 dry-run，`--apply` 才写盘；写盘前把每个受影响文件备份到 `<extract>/_bak_section_names/<时间戳>/`。
   - **锚定字节替换**（不做 json.dump 重写），契约/manifest 的缩进与其余字节一字节不变；
-    锚点 `"key": "<sec>"` 命中数 ≠ 1、或锚点后 400 字节内找不到 `"name":` → 拒绝写出。
+    锚点 `"key": "<sec>"` 命中数 ≠ 1 时先用 `"type": "section"` 收窄（同名节与章末编号习题
+    撞键是常态），收窄后仍非唯一、或锚点后 400 字节内找不到 `"name":` → 拒绝写出。
   - 写后 `json.load` 复算：全树与该节相关的差异必须**只有 name 一个字段**，否则报错退出。
   - `--name` 必须以节序标开头（除非 `--allow-bare`），且不得含 `$`（账目面存印刷裸文本/KaTeX
     之外的排版标记 = 把 OCR 损伤换成 LaTeX 损伤；比对两侧 `norm_title` 会折形，写裸字符即可）。
@@ -102,21 +103,70 @@ def unit_dir(extract_dir, ch_key, side="units"):
     return hits[0] if hits else None
 
 
-def _find_name_after_key(raw, sec_key, label):
-    """返回 [(anchor_idx, name_value_idx, old_name)]；锚点须唯一命中。"""
+def _name_value_after(raw, anchor):
+    """锚点后一个键窗口里的 `"name"` 字面量 → (value_idx, value)；找不到给 (None, None)。"""
+    seg = raw[anchor:anchor + _KEY_WINDOW]
+    m = re.search(r'"name":\s*"', seg)
+    if not m:
+        return None, None
+    vstart = anchor + m.end() - 1
+    return vstart, _DEC.raw_decode(raw, vstart)[0]
+
+
+def _section_node_names(raw, sec_key, label):
+    """解析树里 key=sec_key 且 **type=section** 的节点名列表（键撞车时的定位真值）。"""
+    try:
+        tree = json.loads(raw)
+    except Exception:
+        raise Refuse("%s：key=%r 锚点重复命中且 JSON 解析失败，无法收窄（拒绝猜）" % (label, sec_key))
+    found = []
+
+    def walk(n):
+        if isinstance(n, dict):
+            if str(n.get("key") or "") == sec_key and str(n.get("type") or "") == "section":
+                found.append(n.get("name"))
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+
+    walk(tree)
+    return found
+
+
+def _find_name_after_key(raw, sec_key, label, want_type="section"):
+    """返回 (anchor_idx, name_value_idx, old_name)；锚点须唯一命中。
+
+    🔴 键撞车是常态而非意外：印面把章末习题按节号起号（Lehmann ch1 §1.7 的 `Problem 1.1`），
+    于是同一账目里 `"key": "1.1"` 既有**节**节点又有**习题**节点，光按 key 定位两命中→拒绝，
+    该节的印刷残缺标题永远修不了（实测 ch1 1.1 / ch2 2.7 / ch7 7.5 三处全卡在这一步）。
+    收窄判据：**解析树**给出该键的 section 节点名（该侧才是本工具的修法对象），再取
+    「锚点后 name 字面量 == 该节点名」的那一个锚点。为何不直接在锚点前后找
+    `"type": "section"`：账目面字段顺序不保证（契约 key 在前、manifest 记录 type 在前），
+    固定方向的窗口只会让同一修名通道在其中一侧假死。仍不唯一（0 或 ≥2）→ 照旧拒绝，绝不猜。
+    """
     anchors = [m.start() for m in re.finditer(r'"key":\s*"%s"' % re.escape(sec_key), raw)]
     if not anchors:
         raise Refuse("%s：找不到 key=%r 的节点" % (label, sec_key))
     if len(anchors) > 1:
-        raise Refuse("%s：key=%r 锚点命中 %d 次，无法定位唯一节点（拒绝猜）"
-                     % (label, sec_key, len(anchors)))
-    seg = raw[anchors[0]:anchors[0] + _KEY_WINDOW]
-    m = re.search(r'"name":\s*"', seg)
-    if not m:
-        raise Refuse("%s：key=%r 锚点后 %d 字节内没有 \"name\" 字段" % (label, sec_key, _KEY_WINDOW))
-    vstart = anchors[0] + m.end() - 1
-    old, _ = _DEC.raw_decode(raw, vstart)
-    return anchors[0], vstart, old
+        names = _section_node_names(raw, sec_key, label)
+        if len(names) != 1:
+            raise Refuse("%s：key=%r 锚点命中 %d 次，type=%r 节点 %d 个，"
+                         "无法定位唯一节点（拒绝猜）"
+                         % (label, sec_key, len(anchors), want_type, len(names)))
+        picked = [a for a in anchors if _name_value_after(raw, a)[1] == names[0]]
+        if len(picked) != 1:
+            raise Refuse("%s：key=%r 锚点命中 %d 次，其中 name 与该节契约记录相等的 %d 个，"
+                         "无法定位唯一节点（拒绝猜）"
+                         % (label, sec_key, len(anchors), len(picked)))
+        anchors = picked
+    anchor = anchors[0]
+    vstart, old = _name_value_after(raw, anchor)
+    if vstart is None:
+        raise Refuse("%s：key=%r 锚点后 %d 字节内没有 \"name\" 字段"
+                     % (label, sec_key, _KEY_WINDOW))
+    return anchor, vstart, old
 
 
 def _node_name(tree, sec_key):

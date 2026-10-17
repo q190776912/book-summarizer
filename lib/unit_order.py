@@ -33,6 +33,12 @@
 4. **章末 dashes 习题豁免**：原书把 Problems 汇总到章末，但每道题的 ``page_start`` 指向
    其在正文中的**首次出现页**（早于章末内容），必然被页码单调判据误伤——键形 ``N-M``
    （原始键含连字符，归一前判定）一律跳过，不推进也不受限于页码游标。
+   🔴 但**豁免按节点类型收窄**（2026-10-17 Lehmann ch4 实测）：``N.M-k`` 这一键形在条目
+   按节起号的书里就是普通编号项（``4.2-2`` = Example 4.2.2），整体豁免会让门控对这类书
+   **完全失明**（实测 ch4 把 p250 的条目登记在 p249 之前，门控 ⑪ 与契约锚点自查均报 0）。
+   故类型属编号结果条目（``definition/theorem/lemma/proposition/corollary/example/remark/
+   axiom/property``）的 dash 键**不再豁免**；类型取不到、或属习题族 / ``uncat`` / ``item``
+   的一律维持豁免原状（保守侧，不给类型奇怪的书新增误报）。判据只此一份：:func:`dash_exempt`。
 5. 解析不到页码的单元（契约无该键 / 幻影 / 老键形对不上）→ **跳过**（既不当问题也不
    重置游标），避免因锚点缺失产生连锁误报。
 6. **续接单元（manifest 记录带 ``"continuation": true``）**复用「同键最近一次正常消费
@@ -71,6 +77,35 @@ except ImportError:  # pragma: no cover - 取决于入口 bootstrap
 # 关键：必须在 norm_secnum 之前判定——归一会把 '-' 折成 '.'，与真点分序标（习题 5.10）
 # 撞车，届时无法区分「章末 problem」与「点分 exercise」。
 _DASH_PROBLEM_RE = re.compile(r"\d+(?:\.\d+)*-\d+")
+
+# 🔴 **编号结果条目**的节点类型（2026-10-17 Lehmann ch4 实测根治）：dash 键形
+# ``N.M-k`` 在**条目按节起号**的书里就是普通编号项（``4.2-2`` = Example 4.2.2），
+# 与「章末习题」毫无关系，此前却被 ``is_dash_problem`` **整体**豁免 ⇒ 门控 ⑪ 与契约
+# 锚点自查对这类书完全失明。实测：Lehmann ch4 契约把 Example 4.2.2 (continued)（p250）
+# 登记在 Example 4.2.3（p249）之前，合并 md 阅读顺序倒退，两道闸都报 0。
+# 跨书普查（corpus 全部契约，dash 键节点 6000+ 条）：definition 905 / theorem 1300 /
+# example 1466 / proposition 392 / remark 310 / lemma 371 / corollary 289 / axiom 17 /
+# property 47 属编号项，exercise 651 / problem 398 属习题；description 17 / uncat 1077 /
+# section 38 形状不明。判据因此**只收回编号结果条目这一族**：类型落在下面集合里的 dash
+# 键不再豁免（照常参与页码/前序单调），其余（含 ``uncat``/``item``/类型取不到）
+# **维持旧豁免** = 不给类型奇怪的书新增误报。
+_NUMBERED_NTYPES = frozenset({
+    "definition", "theorem", "lemma", "proposition", "corollary",
+    "example", "remark", "axiom", "property",
+})
+
+
+def dash_exempt(raw_key: Any, ntype: Any = None) -> bool:
+    """该 dash 键是否享受「章末习题」豁免（= 不参与页码单调判定）。
+
+    键形不是 dash → ``False``（本来就不该豁免）。键形是 dash 而节点类型属**编号结果条目**
+    （:data:`_NUMBERED_NTYPES`）→ ``False``（那是正文条目，次序错乱必须被看见）。
+    类型未知（``None`` / ``uncat`` / ``item`` / 习题族）→ ``True``（保守，维持豁免原状）。
+    """
+    if not is_dash_problem(raw_key):
+        return False
+    return str(ntype or "").strip().lower() not in _NUMBERED_NTYPES
+
 
 # 单元类型里不参与页码单调判定的（章头本身只有一条、恒在最前，无意义）。
 _SKIP_TYPES = frozenset({"chapter"})
@@ -147,6 +182,11 @@ def check_unit_order(
     tables = _anchor_tables(contract)
     if not tables[0]:
         return []
+    # 单元记录没带 ``ntype`` 时（老清单 / 合并 md 反推），退回契约**原始键全等**查节点类型。
+    # 只在唯一类型时采信，混用同键多类型（条目 + 同号习题）宁可维持旧豁免 = 不误报。
+    _key_types: Dict[str, set] = {}
+    for _d in iter_unit_nodes(contract):
+        _key_types.setdefault(str(_d["key"]).strip(), set()).add(str(_d.get("type") or ""))
 
     consumed: Dict[int, int] = {}
     follow: Dict[str, Tuple[int, int]] = {}
@@ -160,8 +200,13 @@ def check_unit_order(
         if u.get("type") in _SKIP_TYPES:
             continue
         raw_key = u.get("key")
-        if is_dash_problem(raw_key):        # 章末习题：豁免，不推进游标
-            continue
+        if is_dash_problem(raw_key):
+            nt = u.get("ntype")
+            if not nt:
+                ts = _key_types.get(str(raw_key).strip())
+                nt = next(iter(ts)) if ts and len(ts) == 1 else None
+            if dash_exempt(raw_key, nt):     # 章末习题：豁免，不推进游标
+                continue
         nk = norm_secnum(raw_key)
         if u.get("continuation") and nk in follow:
             anchor = follow[nk]             # 续接单元：复用父单元锚点，不消费列表
@@ -263,7 +308,7 @@ def check_contract_anchors(contract: Optional[Dict[str, Any]]) -> List[str]:
                 if ntype in _EXERCISE_TYPES else "")
 
     for node, nk, page, pkey in _iter_anchor_nodes(contract):
-        if is_dash_problem(node.get("key")):
+        if dash_exempt(node.get("key"), node.get("type")):
             continue
         if page < max_page:
             if pending_ref == max_ref:

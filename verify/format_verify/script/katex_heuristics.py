@@ -278,7 +278,21 @@ _PROB_OP_GLOSS_RE = re.compile(r'\s*[A-Za-z]{4,}')
 # (B) single-letter function call: name is ONE letter, arg is math-like.
 # Lookbehind (?<![A-Za-z$0-9.]) excludes citation sub-refs like "1.7.H(c)",
 # "2(a)", "Figure 3(b)" — these are label references, not math calls.
-_FUNC_CALL_RE = re.compile(r'(?<![A-Za-z$0-9.])([A-Za-z])\s*\(([^)]{0,25})\)')
+# 🔴 The class must also cover **accented LATIN letters**: a romanised name ending
+# in one — `Cramér (1946)` (Lehmann ch5/0058, ch6/0022, ch7/0002), `Erdős (who died
+# in 1996)` (Rosen ch10/0113) — put the ASCII tail letter right in front of the
+# paren, so the old ASCII-only class read "Cramér (1946)" as a bare call `r (1946)`
+# and writers corrupted the printed name into "Cramer" to get past the gate. Same
+# forcing that `_VAR_DIGIT_RE` already documents for `[Hén76]`.
+# 🔴 Deliberately NOT the full Unicode letter class: a corpus-wide scan (77 005 md,
+# 2026-10-17) showed CJK/Greek precede a genuinely bare call 200+ times
+# (`设f(x)` / `则T(x)` / `πo(X)`) — those ARE defects this check must keep catching.
+# Relaxing to all letters would open a hole in every CN book. Latin-only delta:
+# 11 matches dropped, 0 lines newly flagged, dropped prev-chars = {é, ő} only.
+# Judgement test: verify/tests/test_rule17_latin_name_lookbehind.py
+_FUNC_CALL_RE = re.compile(
+    u'(?<![A-Za-z\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u024f0-9.$])'
+    u'([A-Za-z])\\s*\\(([^)]{0,25})\\)')
 
 # (B) variable + subscript-digit token (x0 t1 y2 ...), standalone math variable.
 # 🔴 The look-around classes are Unicode LETTER classes ([^\W\d_$\\] = letters plus

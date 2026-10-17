@@ -44,7 +44,8 @@ NEW = "2.3 The Euler totient function φ(n)"
 H2 = "## §2.3 The Euler totient function $\\varphi(n)$"
 
 
-def _mk(extract, h2=H2, contract_name=OLD, manifest_name=OLD, dup_key=False):
+def _mk(extract, h2=H2, contract_name=OLD, manifest_name=OLD, dup_key=False,
+        cross_type_key=False):
     bs = os.path.join(extract, "book_structure")
     u = os.path.join(bs, "units", "ch2")
     os.makedirs(u)
@@ -63,12 +64,24 @@ def _mk(extract, h2=H2, contract_name=OLD, manifest_name=OLD, dup_key=False):
     if dup_key:
         tree["sub_sec"].append({"key": "2.3", "type": "section", "name": contract_name,
                                 "page_start": 39, "sub_sec": []})
+    if cross_type_key:
+        # 印面把章末习题按节号起号 → 同键的**习题**节点与节共存（Lehmann ch1 §1.1 与
+        # §1.7 的 Problem 1.1）；节名修复必须只按 type 命中节节点，不碰习题那侧。
+        tree["sub_sec"].append({"key": "2.3", "type": "exercise",
+                                "name": "EXERCISE NAME THAT MUST NOT MOVE",
+                                "page_start": 47, "consolidated": True,
+                                "sub_sec": [{"type": "text", "text": "2.3 Prove it."}]})
     with io.open(os.path.join(bs, "ch2.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(tree, f, ensure_ascii=False, indent=2)
     man = {"chapter_key": "2", "language": "en", "units": [
         {"id": "0008", "file": "0008_section_2_3.md", "type": "section", "ntype": "section",
          "key": "2.3", "name": manifest_name, "tags": [], "images": [], "content": 5,
          "hash": "deadbeef"}]}
+    if cross_type_key:
+        man["units"].append({"id": "0117", "file": "0117_exercise_2_3.md",
+                             "type": "exercise", "ntype": "exercise",
+                             "key": "2.3", "name": "EXERCISE NAME THAT MUST NOT MOVE",
+                             "tags": [], "images": [], "content": 1, "hash": "feedface"})
     with io.open(os.path.join(u, "manifest.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(man, f, ensure_ascii=False, indent=2)
     with io.open(os.path.join(u, "0008_section_2_3.md"), "w", encoding="utf-8",
@@ -138,6 +151,25 @@ class FixSectionNameTest(unittest.TestCase):
         _mk(self.E)
         self.assertEqual(_run(self.E, apply=True), 0)
         self.assertEqual(_run(self.E, apply=True, extra=["--check"]), 0)
+
+    def test_apply_when_key_collides_with_exercise_number(self):
+        """同键的节与章末习题共存（Lehmann ch1 1.1 / ch2 2.7 / ch7 7.5 实测）：
+        旧锚点判据「key 命中数≠1 即拒绝」让这三处印刷残缺节名永远修不了；
+        现按 `"type": "section"` 收窄，只动节那一侧，习题节点名一字节不变。"""
+        _mk(self.E, cross_type_key=True)
+        cpath = os.path.join(self.bs, "ch2.json")
+        mpath = os.path.join(self.u, "manifest.json")
+        craw, mraw = _read(cpath), _read(mpath)
+        self.assertEqual(_run(self.E, apply=True), 0)
+        new_craw, new_mraw = _read(cpath), _read(mpath)
+        self.assertEqual(new_craw, craw.replace(json.dumps(OLD, ensure_ascii=False),
+                                                json.dumps(NEW, ensure_ascii=False)))
+        self.assertEqual(new_mraw, mraw.replace(json.dumps(OLD, ensure_ascii=False),
+                                                json.dumps(NEW, ensure_ascii=False)))
+        self.assertEqual(new_craw.count("EXERCISE NAME THAT MUST NOT MOVE"), 1)
+        tree = json.loads(new_craw)
+        ex = [n for n in tree["sub_sec"] if n.get("type") == "exercise"][0]
+        self.assertEqual(ex["name"], "EXERCISE NAME THAT MUST NOT MOVE")
 
     # ── 负向：一律 exit 2 且零写入 ──────────────────────────────────────
     def _assert_refuse(self, code, argv_name=NEW, evidence="fitz 300dpi 裁物理页37标题行，印面作 φ(n)",

@@ -447,6 +447,13 @@ def unit_node_entries(root: Dict[str, Any]) -> List[Tuple[str, str]]:
             if t == "proof":
                 continue
             if t == "section":
+                # 🔴 章末**集中习题节**（整节都是习题、`consolidated` 由 build_structure
+                # 按 `exercise_region_headings` 判据打标）与 consolidated 习题块同理**不出
+                # 单元**——它是 writing-rules V-I「集中习题块一律省略」的形态之一；节点保留
+                # 只为占住内容窗（删掉会把习题散文漏给上一节），故这里连子树一起跳过，
+                # 否则门控反向对账（⑩）会索要一条永远不该存在的单元。
+                if c.get("consolidated"):
+                    continue
                 out.append(("content", str(c.get("key") or "")))
                 _w(c)
                 continue

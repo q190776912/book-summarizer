@@ -196,6 +196,9 @@ def _emit_units(node, lang):
                 continue
             t = child.get("type")
             if t == "section":
+                if child.get("consolidated"):
+                    # 章末集中习题**节**（V-I 整节省略）：不出单元、不下钻。
+                    continue
                 emit("section", str(child.get("key") or ""),
                      (child.get("name") or "").strip(),
                      _render_section(child, lang), child)
@@ -247,8 +250,29 @@ def _body_lines(lines):
     return out
 
 
+def _done_keys(recs):
+    """按文档顺序给每条单元记录分配身份键 ``(单元类型, 节点类型, 键, 同身份出现序号)``。
+
+    🔴 必须带 ``ntype`` + 出现序号：条目编号在多数教材里**按编号家族各自重启**，
+    同一章会出现单元类型与 ``key`` 全同、但节点类型不同的多个单元（``3.1-1`` 同时是
+    Definition / Theorem / Lemma / Example）。旧版只用 ``(type, key)``，撞键即「整桶
+    丢弃」，于是这些家族里**所有**已改好单元被静默打回 DRAFT——契约修正后重建 = 成批
+    销毁 agent 劳动（Lehmann《Elements of Large-Sample Theory》ch3 实测：49 个 DONE
+    只留住 29 个，其中 20 个正文源逐字节未变，纯属身份撞键误伤）。
+    身份漂移不会误保旧稿：调用方还要求「旧记录 hash == 新渲染 hash」（正文源逐字节
+    未变）才搬迁，对不上就保守回 DRAFT 重写。
+    """
+    cnt, out = {}, []
+    for u in recs:
+        base = (u.get("type"), u.get("ntype") or "", str(u.get("key")))
+        occ = cnt.get(base, 0)
+        cnt[base] = occ + 1
+        out.append(base + (occ,))
+    return out
+
+
 def _load_done_index(out_dir):
-    """旧 manifest → ``{(type, key): 旧单元记录}``；键冲突的条目整桶丢弃（宁可不保留）。
+    """旧 manifest → ``{身份键: 旧单元记录}``（身份键见 `_done_keys`）。
 
     只登记首行确为 `DONE` 的单元——`DRAFT` 单元没有劳动可保护，重建本就是目的。
     """
@@ -260,8 +284,10 @@ def _load_done_index(out_dir):
             old = json.load(f)
     except Exception:
         return {}
-    out, dup = {}, set()
-    for u in old.get("units") or []:
+    old_units = old.get("units") or []
+    keys = _done_keys(old_units)
+    out, seen = {}, set()
+    for k, u in zip(keys, old_units):
         fn = os.path.join(out_dir, u.get("file") or "")
         if not u.get("file") or not os.path.exists(fn):
             continue
@@ -272,14 +298,14 @@ def _load_done_index(out_dir):
             continue
         if not _is_done_first_line(text.split("\n", 1)[0]):
             continue
-        k = (u.get("type"), str(u.get("key")))
         if k in out:
-            dup.add(k)
+            # 旧 manifest 自身身份重复（正常流程产不出，损坏账本才可能）：该键整桶丢弃。
+            seen.add(k)
             continue
         # 连正文一起读进内存：调用方随后可能整目录清空重建（--force），
         # 届时旧文件已不在磁盘上。
         out[k] = dict(u, _text=text)
-    for k in dup:
+    for k in seen:
         out.pop(k, None)
     return out
 
@@ -329,13 +355,14 @@ def split_chapter(ext, ch_key, language, force=False, keep_done=False):
         "units": [],
     }
     kept = 0
+    new_keys = _done_keys(units)
     for i, u in enumerate(units, start=1):
         fn = _unit_filename(i, u["type"], u["key"], u["name"])
         body = _body_lines(u["lines"])
         h = _hash_text("\n".join(body))
         mark = DRAFT_MARK.replace("DRAFT unit", "DONE unit").format(
             id="%04d" % i, type=u["type"], key=u["key"], name=u["name"])
-        old_u = _done_idx.get((u["type"], str(u["key"]))) if keep_done else None
+        old_u = _done_idx.get(new_keys[i - 1]) if keep_done else None
         if old_u and old_u.get("hash") == h:
             # 🔴 正文源逐字节未变 ⇒ 该单元的已改好稿子仍然有效：原样搬迁（只换
             # 文件名 / id），DONE 标记与正文一并保留，manifest 记回旧 hash。

@@ -210,8 +210,14 @@ def sync_side(ext, sub, ch, apply_changes=False):
             with open(p, "wb") as f:
                 f.write(new)
             chk = MARK_RE.match(new.split(nl, 1)[0].decode("utf-8"))
-            if not chk or chk.group(1) != "DONE":
-                raise SystemExit("BUG: %s 复位后首行仍非 DONE 标记，已中止" % p)
+            # 🔴 复位后的断言只要求「首行是合法标记且与本侧 manifest 记录逐字一致」，
+            #   **不得硬要 DONE**：写源期（write-source 步骤 5）源单元的合法状态就是 DRAFT，
+            #   按 DONE 断言会让「修节名 → 复位第④本账」这条正规通道在第一个尚未改完的单元
+            #   处中止（Lehmann ch2/0091 实测：契约名已按印刷证据修好、正文一字节未动，
+            #   工具却报「复位后首行仍非 DONE 标记」并整章拒绝继续）。
+            first = new.split(nl, 1)[0].decode("utf-8")
+            if not chk or first != want:
+                raise SystemExit("BUG: %s 复位后首行仍与本侧 manifest 记录不一致，已中止" % p)
             if len(new) - len(want.encode("utf-8")) != len(raw) - len(head):
                 raise SystemExit("BUG: %s 复位改动了首行以外的字节，已中止" % p)
     if skipped:

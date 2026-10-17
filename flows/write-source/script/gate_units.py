@@ -104,6 +104,11 @@
 ----
     python flows/write-source/script/gate_units.py <extract_dir> [ch ...] [--units-dir <sub>]
     # 不传 <ch> 即全部章；<sub> 默认 units（翻译单元传 units-translate）
+    python flows/write-source/script/gate_units.py <extract_dir> <ch> --unit <file.md>
+    # 🔴 逐单元自检：**复用本章那一套装配参数**（tag 真值与噪声过滤、契约正文、
+    #   散文照抄闸、源语言闸、标签对账…），只跳过与别的单元有关的章级闸。
+    #   写手改完一个单元先用它自检，别拿整章门控当噪音源，更不要另写 check_body 调用
+    #   ——参数少一个就是一片假绿（成因见 gate_chapter 的 only_unit 说明）。
 输出
 ----
     通过：exit 0；未通过：exit 1 并打印未处理 / 缺失单元清单（逐章）。
@@ -621,12 +626,20 @@ def _gate_cleanup_tmpdir():
 atexit.register(_gate_cleanup_tmpdir)
 
 
-def gate_chapter(ext, ch_key, units_sub="units"):
+def gate_chapter(ext, ch_key, units_sub="units", only_unit=None):
     """门控单章。返回 (ok, detail)。detail 为逐条问题或通过说明。
 
     ``units_sub``：单元子目录名——``units``（源语言单元，默认）或
     ``units-translate``（翻译单元；2026-09-03 起翻译并入本流程，
     与源单元共用同一门控与同一套单元级质量校验，语言无关不重复造轮子）。
+
+    ``only_unit``：文件名（manifest 的 `file`）。**逐单元自检**模式——只跑该单元的
+    单元级校验（同一套装配参数：tag 真值/噪声过滤、契约正文、照抄闸、语言闸、标签对账）
+    与该单元的真实 KaTeX 渲染，跳过与别的单元有关的章级闸（图片全集、⑩⑪⑫⑬⑱⑲）。
+    给写手用的入口必须由**本门控自己**提供：外部脚本另起一次 `check_body` 调用少传一个
+    参数就是一片假绿——实测 Lehmann ch1 `tools/_selfcheck_unit.py` 不传 `ext_dir`/`ch`
+    ⇒ 第 19 项「顶层散文照抄」整个缺席，写手据此翻 DONE，章门控再把同一单元打回
+    （0013/0026/0035 三例），平白多一轮返工。
 
     🔴 **翻译前置硬闸（源先于译）**：``units_sub="units-translate"`` 时**先跑
     源章门控**——源单元未全部修正完成（源门控未通过）即拒绝放行翻译门控。
@@ -690,7 +703,11 @@ def gate_chapter(ext, ch_key, units_sub="units"):
         if u["type"] in ("item", "desc", "exercise"):
             img_units_by_key.setdefault(str(u["key"]), []).append(u["file"])
     observed_imgs = set()
+    matched = False
     for u in units:
+        if only_unit and u["file"] != only_unit:
+            continue
+        matched = True
         up = os.path.join(out_dir, u["file"])
         if not os.path.exists(up):
             problems.append("缺失单元文件 %s（%s %s）" % (u["file"], u["type"], u["key"]))
@@ -816,6 +833,20 @@ def gate_chapter(ext, ch_key, units_sub="units"):
                 if lang_probs:
                     problems.append("单元 %s（%s %s）翻译语言残留：%s" % (
                         u["file"], u["type"], u["key"], "；".join(lang_probs)))
+    if only_unit:
+        # 逐单元自检：章级闸与别的单元无关，到此为止（见函数 docstring）。
+        if not matched:
+            return False, ("%s 单元 %s 不在 %s/manifest.json 里（先核对 file 名或重跑拆分）。"
+                           % (chapter_label(ch_key), only_unit, units_sub))
+        # 🔴 真实 KaTeX 渲染**照跑**（只喂这一个单元）：它是逐单元属性，只是章门控为了
+        #   省 node 启动次数才批量做——自检不跑它等于继续给假绿。
+        problems.extend(_render_check_chapter(
+            ext, out_dir, [u for u in units if u["file"] == only_unit]))
+        if problems:
+            return False, "%s/%s 单元级门控未通过（%d 处）：\n  %s" % (
+                chapter_label(ch_key), only_unit, len(problems), "\n  ".join(problems))
+        return True, "%s/%s 单元级门控通过（与章门控同一套装配）" % (
+            chapter_label(ch_key), only_unit)
     # 🔴 章级图片覆盖闸（契约图片全集 =「一个不漏」真值）：契约任一图未被任何
     # 单元嵌入 = 图片被整体删除（ch2 事故：步骤 5 清噪时图块连正文一起删光，
     # tag 有对账、图片没有 → 一路绿灯到 merge）；单元嵌契约外图 = 编造/引用未
@@ -972,6 +1003,14 @@ def gate_chapter(ext, ch_key, units_sub="units"):
 def main():
     argv = sys.argv[1:]
     units_sub = "units"
+    only_unit = None
+    if "--unit" in argv:
+        i = argv.index("--unit")
+        if i + 1 >= len(argv):
+            print("[gate_units] --unit 缺参数（manifest 里的单元文件名）。")
+            return 2
+        only_unit = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
     if "--units-dir" in argv:
         i = argv.index("--units-dir")
         if i + 1 >= len(argv):
@@ -991,6 +1030,12 @@ def main():
         chapters = argv[1:]
     keys = [k for k in list_chapter_keys(ext)
             if not chapters or k in {str(c) for c in chapters}]
+    if only_unit and len(keys) != 1:
+        # 🔴 自检模式必须**指定章**：单元文件名不含章信息，跨章扫会把每章都判成
+        # 「不在 manifest」，几十条噪音里真正的 FAIL 反而看不见。
+        print("[gate_units] --unit 需要且只需要一个章键："
+              "python flows/write-source/script/gate_units.py <extract_dir> <ch> --unit <file>")
+        return 2
     if not keys:
         print("[gate_units] 无章节可门控。")
         return 2
@@ -998,7 +1043,7 @@ def main():
         print("[gate_units] 门控目录：%s（翻译单元）" % units_sub)
     all_ok = True
     for k in keys:
-        ok, detail = gate_chapter(ext, k, units_sub=units_sub)
+        ok, detail = gate_chapter(ext, k, units_sub=units_sub, only_unit=only_unit)
         print(("[PASS] " if ok else "[FAIL] ") + detail)
         if not ok:
             all_ok = False

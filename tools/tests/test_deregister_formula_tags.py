@@ -16,6 +16,12 @@
 负向（一律 exit 2 且零写入）：①⑭ 未判毒（页窗有 `(N)` 锚点）②缺 --evidence
 ③号已登记进 `formula.known_book`（豁免后 ⑭ 不再判毒 → 工具也拒绝删，两处共用一份登记）
 ④manifest 非标准 indent=2 形却要改 `tags` 账。幂等：契约与正文都无该 tag → NO-OP exit 0。
+
+🔴 `--mispaired`（第三类缺陷：号**真印**但挂在了**错误的块**上，2026-10-16 Lehmann ch6
+实测 (6.5.10) 被从概率表 `text` 块错挂到上方无号展示式）是「⑭ 不判毒」时唯一合法的摘除出口：
+必须配 `--host <契约节点 key | non-display>`、该号须在契约里**恰好登记一处**，台账另记
+`mode`/`mispaired_from`/`host` 并在待办里先打印回填命令（真主为展示块时）。
+负向：缺 --host / --host 不在契约 / 同一号两处登记 / `--host` 漏配 `--mispaired`（防静默忽略）。
 """
 import io
 import json
@@ -46,6 +52,8 @@ _SPEC.loader.exec_module(dft)
 BOGUS = "28"
 REAL = [str(n) for n in range(20, 28)]
 EV = "fitz 文字层全章页窗 p36-p38：28 只作为条目号出现，从未印作 (28) 编号"
+EV_MIS = ("fitz 200dpi p38：(27) 标在概率表 bbb/bbc 行左，契约里该表只是 text 块；"
+          "被误挂的展示式 x_{27}=f^{n}(y)+27 印面无号")
 MARK = "<!-- book-summarizer DONE unit: id=0001 type=item key=定理2.4 name=定理2.4 -->"
 
 
@@ -134,11 +142,16 @@ def _snap(extract, stem="ch2"):
     return {p: _rb(p) for p in _paths(extract, stem)}
 
 
-def _run(extract, numbers=(BOGUS,), apply=False, evidence=EV, key="2"):
+def _run(extract, numbers=(BOGUS,), apply=False, evidence=EV, key="2",
+         mispaired=False, host=""):
     argv = [extract, key]
     for n in numbers:
         argv += ["--number", n]
     argv += ["--evidence", evidence]
+    if mispaired:
+        argv.append("--mispaired")
+    if host:
+        argv += ["--host", host]
     if apply:
         argv.append("--apply")
     return dft.main(argv)
@@ -317,6 +330,118 @@ class DeregisterFormulaTagsTest(unittest.TestCase):
     def test_refuses_when_page_window_unreadable_and_tag_therefore_unknown(self):
         """页文件缺失 = ⑭ 无从判毒（fail-open）→ 工具拒绝，逼先补页证据。"""
         self._assert_refused(mkw={"page_anchor": False})
+
+    # ── `--mispaired`：号真印但**挂错了块**（第三类缺陷，Lehmann ch6 实测）────
+    def test_mispaired_non_display_clears_all_four_ledgers(self):
+        """27 在页窗里有 `(27)` 锚点 → 幻影通道必拒；`--mispaired --host non-display`
+        是它唯一的合法出口：四本账同步摘掉、台账记 mode/mispaired_from/host。"""
+        _mk(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=("27",), apply=True,
+                                           mispaired=True, host="non-display",
+                                           evidence=EV_MIS))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("APPLIED", out)
+        self.assertIn("--mispaired（号真印但挂错块）", out)
+        self.assertIn("错挂块    = (27) 在节点 定理2.4", out)
+        self.assertIn("契约无展示块可挂", out)
+        tree = json.loads(_text(self.c))
+        tags = [b.get("tag") for b in tree["sub_sec"][0]["sub_sec"] if "formula" in b]
+        self.assertEqual(tags, REAL[:-1] + ["", BOGUS])
+        for side in ("units", "units-translate"):
+            d = os.path.join(self.bs, side, "ch2")
+            self.assertNotIn("\\tag{27}", _text(os.path.join(d, "0001_item.md")))
+            self.assertIn("\\tag{28}", _text(os.path.join(d, "0001_item.md")))
+            man = json.loads(_text(os.path.join(d, "manifest.json")))
+            self.assertEqual(man["units"][0]["tags"], REAL[:-1] + [BOGUS])
+        rec = json.loads(io.open(
+            os.path.join(self.E, "_formula_tag_deregistrations.jsonl"),
+            encoding="utf-8").read().strip().split("\n")[-1])
+        self.assertEqual(rec["mode"], "mispaired")
+        self.assertEqual(rec["host"], "non-display")
+        self.assertEqual(rec["numbers"], ["27"])
+        self.assertEqual(rec["mispaired_from"]["27"]["node"], "定理2.4")
+        self.assertEqual(rec["mispaired_from"]["27"]["at"], "tag")
+        self.assertIn("x_{27}", rec["mispaired_from"]["27"]["formula_head"])
+
+    def test_mispaired_with_display_host_prints_backfill_todo(self):
+        """真主是契约里的展示块时，待办必须先给回填命令（含 --node 真主），
+        否则摘完就是「号从账上消失」而不是「号回到正确块」。"""
+        _mk(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=("27",), apply=True,
+                                          mispaired=True, host="定理2.4",
+                                          evidence=EV_MIS))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("backfill_formula_tags.py", out)
+        self.assertIn("--number 27 --node 定理2.4", out)
+        self.assertIn("gate_units.py", out)
+
+    def test_mispaired_still_uses_phantom_semantics_for_condemned(self):
+        """混批：⑭ 判毒的 28 不因 --mispaired 改变行为（mode=unattested、不打印错挂块）。"""
+        _mk(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=(BOGUS,), apply=True,
+                                          mispaired=True, host="non-display"))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("⑭ 判毒（幻影）", out)
+        self.assertNotIn("错挂块", out)
+        rec = json.loads(io.open(
+            self.E + os.sep + "_formula_tag_deregistrations.jsonl",
+            encoding="utf-8").read().strip().split("\n")[-1])
+        self.assertEqual(rec["mode"], "unattested")
+        self.assertEqual(rec["mispaired_from"], {})
+
+    def test_second_mispaired_run_is_noop(self):
+        _mk(self.E)
+        self._quiet(lambda: _run(self.E, numbers=("27",), apply=True, mispaired=True,
+                                 host="non-display", evidence=EV_MIS))
+        before = _snap(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=("27",), apply=True,
+                                           mispaired=True, host="non-display",
+                                           evidence=EV_MIS))
+        self.assertEqual(rc, 0)
+        self.assertIn("NO-OP", out)
+        self.assertEqual(_snap(self.E), before)
+
+    def _assert_mis_refused(self, numbers=("27",), host="", **kw):
+        _mk(self.E, **kw)
+        before = _snap(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=numbers, apply=True,
+                                           mispaired=True, host=host,
+                                           evidence=EV_MIS))
+        self.assertEqual(rc, 2)
+        self.assertIn("REFUSE", out)
+        self.assertEqual(_snap(self.E), before)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.E, "_formula_tag_deregistrations.jsonl")))
+
+    def test_mispaired_requires_host(self):
+        self._assert_mis_refused(host="")
+
+    def test_mispaired_rejects_unknown_host_node(self):
+        """真主 key 不在契约里 = 无法回填 → 拒绝，并指路 non-display。"""
+        self._assert_mis_refused(host="不存在的节点")
+
+    def test_mispaired_rejects_ambiguous_double_registration(self):
+        """同一号在契约里登记两处 → 「挂错块」无从唯一指认，要求逐条处理。"""
+        _mk(self.E)
+        tree = json.loads(_text(self.c))
+        dup = {"formula": "x_{27} = duplicate", "display": True, "tag": "27"}
+        tree["sub_sec"][0]["sub_sec"].append(dup)
+        _w(self.c, json.dumps(tree, ensure_ascii=False, indent=2))
+        before = _snap(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, numbers=("27",), apply=True,
+                                           mispaired=True, host="non-display",
+                                           evidence=EV_MIS))
+        self.assertEqual(rc, 2)
+        self.assertIn("登记 2 处", out)
+        self.assertEqual(_snap(self.E), before)
+
+    def test_host_without_mispaired_is_not_silently_ignored(self):
+        _mk(self.E)
+        before = _snap(self.E)
+        rc, out = self._quiet(lambda: _run(self.E, apply=True, host="定理2.4"))
+        self.assertEqual(rc, 2)
+        self.assertIn("--host 只在 --mispaired 通道有意义", out)
+        self.assertEqual(_snap(self.E), before)
 
 
 if __name__ == "__main__":

@@ -196,6 +196,17 @@ F_ROMAN_RE = re.compile(
 # 消费方：`config/verify_config/make_config.detect_formula`（择族）、
 # `tools/census_alpha3_formula.py`（跨书普查）。捕获组 (head, section, number)。
 _F3_SEP = r'[.·]'
+# 数字三段候选：与 F_DOT_RE **同纪律**（必须带半/全角括号 + 负向后顾排除词内/
+# 汉字粘连），只是多要一个数字段。实测成因：Lehmann《Elements of Large-Sample
+# Theory》印 `(1.1.5)`…`(5.3.36)` 共 2323 处，而 F_DOT_RE 在第二个数字段后就要求
+# 闭括号（`1.1` 后是 `.` 不是 `)`）→ 一个也匹配不到，F_SINGLE_RE 只吃到末尾的
+# `5`（522 条里多数还是文献年份括号 `(1979)`）→ 探测器误选 `formula.type 1`，
+# Q 层对全书三级公式整体失明。裸排 `1.1.5` 与小节标题/条目号不可分，故宁缺勿滥。
+# 消费方：`config/verify_config/make_config.detect_formula`（择族）、
+# `tools/census_digit3_formula.py`（跨书普查）。捕获组 (chapter, section, number)。
+F_DIGIT3_RE = re.compile(
+    r'(?<![\w一-鿿])[（(]\s*(\d+)\s*' + _F3_SEP + r'\s*'
+    r'(\d+)\s*' + _F3_SEP + r'\s*(\d+)\s*[）)]')
 F_LETTER3_RE = re.compile(
     r'(?<![\w\u4e00-\u9fff])[（(]\s*([A-Z])\s*' + _F3_SEP + r'\s*'
     r'(\d+)\s*' + _F3_SEP + r'\s*(\d+)\s*[）)]')

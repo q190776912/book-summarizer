@@ -194,8 +194,20 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
     # 附录字母章位：字母章（chapter="A"/"B"/…）抽取**本字母**的条目；
     # 数字章保持 legacy 只认 "A"（正文章页区间内不应出现附录条目，防御性保留）。
     # 旧实现硬编码 "A"，有 Appendix B 的书（如 Weibel 同型书）会整附录漏抽。
+    # 🔴 无编号附录（章键是词而非序标：`appendix` / `supplement`，见 chapter_map
+    # 「无号附录」总则）旧实现把**整个键词**大写当字母位（"APPENDIX"），字母位
+    # 过滤恒假 → 附录条目整章漏抽（Lehmann《Elements of Large-Sample Theory》
+    # 附录实测 16 条印面 `Theorem A.1.1` / `Example A.2.1` 全灭，契约 items=0）。
+    # 该键本身就代表「本章即本书唯一的附录/补篇」，其**页窗内**出现的字母章位必属
+    # 本章（章页窗互不相交），故 None = 不做字母过滤，只保留条头形态判据。
     _ch_s = str(chapter).strip()
-    _app_letter = _ch_s.upper() if (_ch_s and _ch_s[:1].isalpha()) else "A"
+    if _ch_s and _ch_s[:1].isalpha():
+        _app_letter = _ch_s.upper() if len(_ch_s) == 1 else None
+    else:
+        _app_letter = "A"
+
+    def _app_letter_ok(letter):
+        return _app_letter is None or (letter or "").upper() == _app_letter
     # 块首装饰字符（Brin & Stuck 用 * 标记难题："*Exercise 1.2.4 ..."），
     # 不剥离会被「块首判定」整条漏抽；括号 ( 不在白名单——"(Exercise 2.1.3)"
     # 是交叉引用，必须保持拒绝。
@@ -252,7 +264,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         # 字母位只认 A（附录 A 体例）。
         if not _rest_ok(txt, m):
             return
-        if (m.group(2) or "").upper() != _app_letter:
+        if not _app_letter_ok(m.group(2)):
             return
         label = EN3_LABEL_CANON.get(m.group(1).lower(), m.group(1).title())
         if label == "Example" and not want_examples:
@@ -268,7 +280,7 @@ def extract_items_en3(extract_dir, chapter, start, end, want_examples=True):
         # 附录无标签定义（"A.1.4 Small categories" / "Small categories A.1.4"）：
         # 粗体号 + 词目、省略 Definition 词，Weibel 附录惯例归 Definition。仅 A 生效。
         letter = (m.group(1) or "").upper()
-        if letter != _app_letter:
+        if not _app_letter_ok(letter):
             return
         n = m.group(2)
         mpart = m.group(3)

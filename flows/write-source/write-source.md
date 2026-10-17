@@ -350,8 +350,13 @@
 
 ## 已知陷阱（agent 编辑单元 / 跑门控时）
 
-- **🔴 陷阱A — bash heredoc 吞掉 LaTeX 反斜杠**：凡脚本**含 LaTeX 反斜杠**（`\approx` / `\frac` / `\tag` 等），**一律用 Write 工具写成 `.py` 文件再跑**，禁止用 `bash` 的 `python - <<'EOF'` / `python -c "..."` 内联（harness 会把 `\\` 压成 `\`，`\a`→BEL 控制符、`\f`→换页符，使替换 key 永不匹配、把控制符写进单元文件）。写文件时用 **raw string**（`r"..."`）保反斜杠原样。单元级快校验用 `flows/write-source/script/check_one.py`（见 `gate_units.py` 同目录）逐单元迭代，它不触发渲染、零删除，安全。
-- **🔴 陷阱B — 全量门控别在单轮反复跑**：`gate_units.py` 现已把「每章一个临时 md + 逐章 `os.unlink`」改为**单进程临时目录 `_gate_render_tmp_<pid>/` + 末尾一次性 `shutil.rmtree`**（删除操作从「每章 1 次」压到「每轮 1 次」），并在 `main` 开头按 pid 死活扫清上一轮被中断遗留的 `_gate_render_tmp_*` 残留（并行门控的活 pid 目录跳过）。但环境对单轮累计删除有 bulk-delete 安全闸——**单轮内反复跑全量门控仍可能触发**。正确姿势：用 `check_one.py` 紧迭代修单元，全量 `gate_units.py` **一轮只跑一次**确认；跑前遗留的 `_gate_render_tmp_*` 会被本轮 `main` 自动扫清，无需手工删。
+- **🔴 陷阱A — bash heredoc 吞掉 LaTeX 反斜杠**：凡脚本**含 LaTeX 反斜杠**（`\approx` / `\frac` / `\tag` 等），**一律用 Write 工具写成 `.py` 文件再跑**，禁止用 `bash` 的 `python - <<'EOF'` / `python -c "..."` 内联（harness 会把 `\\` 压成 `\`，`\a`→BEL 控制符、`\f`→换页符，使替换 key 永不匹配、把控制符写进单元文件）。写文件时用 **raw string**（`r"..."`）保反斜杠原样。单元级自检用门控**自己**的逐单元模式
+`gate_units.py "<extract_dir>" <章键> --unit <文件名>`（写手入口 = `tools/_selfcheck_unit.py <单元绝对路径>`，
+它就是该模式的一层薄封装）；🔴 **不得**另写脚本自组 `check_body(...)`——少传一个参数
+（`ext_dir`/`ch`、`source_text`、`ord_keys`…）就是一片假绿，实测 Lehmann ch1 三个单元
+（0013 / 0026 / 0035）被自组自检判 `RESULT OK` 后由章门控打回。
+- **🔴 陷阱B — 全量门控别在单轮反复跑**：`gate_units.py` 现已把「每章一个临时 md + 逐章 `os.unlink`」改为**单进程临时目录 `_gate_render_tmp_<pid>/` + 末尾一次性 `shutil.rmtree`**（删除操作从「每章 1 次」压到「每轮 1 次」），并在 `main` 开头按 pid 死活扫清上一轮被中断遗留的 `_gate_render_tmp_*` 残留（并行门控的活 pid 目录跳过）。但环境对单轮累计删除有 bulk-delete 安全闸——**单轮内反复跑全量门控仍可能触发**。正确姿势：用逐单元自检（`tools/_selfcheck_unit.py`，见陷阱A）**紧迭代修单元**，全量 `gate_units.py` **一轮只跑一次**确认；跑前遗留的 `_gate_render_tmp_*` 会被本轮 `main` 自动扫清，无需手工删。
+   ⚠️ 逐单元自检**照跑真实 KaTeX 渲染**（只喂那一个单元）——渲染是逐单元属性，自检跳过它等于继续给假绿；代价是每次自检 = 一次临时目录建/清，所以改完一批问题再自检，别每敲一行就跑一次。
 
 ## 出口条件
 - 出口：**源语言**全部单元改好、源版 md 在步骤 6 拼接并经 `verify --only-lang <源语言>` 通过（进入翻译的前置），且翻译语言（英文书）全部单元改好、源 + 译两组 md 在步骤 8 拼接后经 `verify/script/verify_chapter.py --all` 全量 `exit 0`（`verify PASS + KaTeX OK`；中文书无翻译阶段，步骤 6 源版 `verify --only-lang cn` 通过即为全书完成）。图片由内容化分章契约随单元继承；格式修复在校验失败时按 [`verify/verify.md`](../../verify/verify.md) 修复纪律进行（🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT；B/O 缺号经 `backfill_ordinals.py` 写回归属单元）。
@@ -361,7 +366,7 @@
 - `flows/write-source/structure/script/attach_content`：structure 第 5 步正文内容化 + 按章拆分（步骤 4 单元数据源；见 `flows/write-source/structure/structure.md`）。
 - `flows/write-source/script/render_draft.py`：单元渲染库（拆分 / 拼接脚本复用其纯渲染函数，如 `_chapter_heading` / `_render_item` / `_walk_mixed` / `_tidy_separators`）。
 - `flows/write-source/script/split_draft_units.py`：步骤 4 单元拆分（`ch{N}.json` → `units/ch{N}/` 每 item 一 md + `manifest.json`，首行 DRAFT 标记）。
-- `flows/write-source/script/gate_units.py`：步骤 5 / 7(c) 强制门控（每个单元 DONE + 质量校验通过才 exit 0；`--units-dir units-translate` 用于翻译单元，同一套校验；未过严禁进入拼接）。
+- `flows/write-source/script/gate_units.py`：步骤 5 / 7(c) 强制门控（每个单元 DONE + 质量校验通过才 exit 0；`--units-dir units-translate` 用于翻译单元，同一套校验；🔴 `--unit <文件名>` = **逐单元自检模式**，与章门控同一套装配、只跳过与别的单元有关的章级闸，写手入口 `tools/_selfcheck_unit.py` 即其薄封装；未过严禁进入拼接）。
 - `flows/write-source/script/merge_units.py`：步骤 6（源版）/ 步骤 8（翻译版）拼接（纯脚本；`--all` 批量 + `--units-dir` 选目录（默认 `units` = 源，`units-translate` = 译）；源版 → `ChapterN_*.md`，翻译版 → `第N章_*.md`；按 V-F 重建 `---` 分隔线）。
 - `flows/write-source/script/backfill_ordinals.py`：校验复检的回填落点——把 verify 的 B 层（条目缺号，权威检测在步骤 3 structure 完整性闸门、步骤 6 源版 / 步骤 8 全量复检）/ O 层（子项缺号，仅拼接后章 md 校验）缺口**写回归属单元 `.md`**（门控不冗余重跑 B/O，统一在拼接后校验 + 回填；源版问题在步骤 6 回填修源单元、译文生成前）。`--dry-run` 只报告、`--apply` 写盘、幂等；归属由 `merge_chapter_map` 的 line→unit 映射保证，不跨单元串味。
 - `flows/write-source/script/init_translate_units.py`：步骤 7(a) 翻译清单初始化（仅生成 `units-translate/ch{N}/manifest.json` 元数据 + `src_hash`，**不复制正文**；`--scaffold` 可选补源文骨架；内置源章门控硬闸；中文书自动跳过）。

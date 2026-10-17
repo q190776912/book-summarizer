@@ -1,6 +1,6 @@
-"""test_sync_translate_markers.py — 首行复位工具的三条机械判据（CRLF 判定 + 契约裁决）。
+"""test_sync_translate_markers.py — 首行复位工具的机械判据（CRLF 判定 + 契约裁决 + 状态词保全）。
 
-两条都是实测踩过的坑：
+三条都是实测踩过的坑：
 1. 🔴 **CRLF**：`raw.split(b"\\n",1)[0]` 已经把换行符当分隔吃掉，段内**永远**不含 CRLF，
    用 `in` 判行尾会恒定得出 LF，于是首行留着一个 CR 参与比较——dry-run 时把整本书
    （real-analysis 1560 文件里 757 个、Robinson 全部 1644 个）误报成「脱账」。
@@ -8,6 +8,9 @@
    manifest `name=3.6 Substitutions2`（多一个 2），而**契约与单元首行都是正确的**
    `3.6 Substitutions`。无脑按 manifest 复位 = 把对的一侧改成错的，故工具必须先按契约
    裁决，manifest 与契约脱账者只报告不动盘。
+3. 🔴 **状态词不是 DONE 的专属**：写源期源单元合法状态就是 DRAFT，复位后的自检若硬要求
+   DONE，会让「修节名 → 复位第④本账」这条正规通道在第一个未改完的单元处整章中止
+   （Lehmann ch2/0091 实测）。判据应为「首行仍是合法标记且与本侧 manifest 记录逐字一致」。
 """
 import io
 import json
@@ -117,7 +120,23 @@ def test_body_bytes_untouched_after_repair(tmp_path):
     assert after.split(b"\r\n", 1)[1] == before.split(b"\r\n", 1)[1], "正文/行尾被改动"
 
 
+def test_draft_marker_stays_draft_after_repair(tmp_path):
+    """🔴 写源期（write-source 步骤 5）源单元合法状态就是 DRAFT：复位只按本侧 manifest
+    修 `name=`，**不得**硬要求复位后首行为 DONE——旧断言让「修节名 → 复位第④本账」
+    这条正规通道在第一个尚未改完的单元处整章中止（Lehmann ch2/0091 实测：
+    契约名已按印刷证据修好、正文一字节未动，工具却报「复位后首行仍非 DONE 标记」）。"""
+    ext = _book(tmp_path, "1.1 Definition",
+                "<!-- book-summarizer DRAFT unit: id=0001 type=item key=1.1 name=1.1 Definitio -->")
+    p = os.path.join(ext, "book_structure/units/ch1", REC["file"])
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 1), diffs
+    line = io.open(p, encoding="utf-8").readline().rstrip("\r\n")
+    assert line == LINE.replace("DONE", "DRAFT"), line
+    assert stm._diff(p, REC) is None
+
+
 # ── 3) type 归一裁决（real-analysis ch22/0014 形）───────────────────────────
+
 
 def _book_type(tmp_path, manifest_type, marker_type, contract_type="description"):
     """契约节点 type=`description`（拆分时归一成 `desc`），两侧 type 各给一个。"""

@@ -648,7 +648,23 @@ class physical_evidence:
         容忍尾部括注被省略。
         """
         miss = []
-        for el in physical_evidence._iter_nodes(contract):
+
+        # 🔴 **consolidated 子树整体不入本闸**：章末集中习题块（习题节点）与「整节都是
+        # 习题」的章末节（section 由 build_structure 按 `exercise_region_headings` 打标）
+        # 按 writing-rules V-I 恒不写出，节点只为占住内容窗而留在契约里。本闸只核对
+        # 「应写而未写」——对它索要标题等于**闸逼写手写书里规定要省略的内容**。
+        # 判据与产出侧同源（`split_draft_units` / `unit_node_entries` 同样跳过该子树），
+        # 三处一致才不会出现「不出单元却索要标题」的互相矛盾。
+        def _iter_writable(node):
+            for el in (node.get("sub_sec") or []):
+                if not isinstance(el, dict) or ("key" not in el and "type" not in el):
+                    continue      # 内容块（text/formula/image）
+                if el.get("consolidated"):
+                    continue      # 集中习题块/节：整条子树恒省略
+                yield el
+                yield from _iter_writable(el)
+
+        for el in (_iter_writable(contract) if isinstance(contract, dict) else []):
             t = str(el.get("type", ""))
             # chapter 容器：章标题呈现形态差异大（# 第N章 / # Chapter N: …），不核对；
             # 派生节点（description/proof）与习题（consolidated 省略）非编号项。

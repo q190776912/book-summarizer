@@ -31,8 +31,10 @@ Two modes:
     python assign_figures.py <pdf> --out DIR --book            # assign ALL chapters
     python assign_figures.py <pdf> --out DIR --ch N --start S --end E  # one chapter
 
-(The PDF path is accepted for pipeline symmetry but not used — assignment only
-reads existing crops + OCR JSONs, it does not render.)
+(The PDF path is used only for one thing: re-cropping the UNION of same-label
+disjoint boxes — a multi-panel figure the layout detector emits as one box per
+panel. See `_dedupe_by_label`. Without a readable PDF that step falls back to
+the previous behaviour of keeping the largest single crop.)
 """
 import os
 import sys
@@ -67,7 +69,7 @@ import numpy as np
 # ----------------------------------------------------------------------------
 from extract_figures import (  # noqa: E402
     load_ocr_text, center_of_poly, parse_fig_label,
-    chapter_for_page, load_chapter_map,
+    chapter_for_page, load_chapter_map, render_page,
 )
 from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re, figure_dir  # noqa: E402
 
@@ -173,7 +175,128 @@ def bbox_center(bbox):
     return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
 
 
-def assign_chapter(det_all, ch, start, end, out_dir):
+# Detection bboxes live in the pixel space of `extract_figures.render_page` at
+# its default dpi — a union re-crop must render at the SAME dpi or the crop is
+# offset. Keep the two in sync (extract_figures.run_full_book / run_chapter).
+_DETECT_DPI = 200
+# Two same-label boxes overlapping by at least this IoU are ONE figure seen
+# twice (detector noise); below it they are separate panels of that figure.
+_IOU_DUP = 0.30
+
+
+def _bbox(e):
+    b = e.get("bbox") or [0, 0, 0, 0]
+    return [b[0], b[1], b[2], b[3]]
+
+
+def _area(b):
+    return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+
+
+def _iou(a, b):
+    iw = min(a[2], b[2]) - max(a[0], b[0])
+    ih = min(a[3], b[3]) - max(a[1], b[1])
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = _area(a) + _area(b) - inter
+    return inter / float(union) if union > 0 else 0.0
+
+
+def _union_box(boxes):
+    return [min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes)]
+
+
+def _overlap_clusters(entries):
+    """Greedy clustering of same-label entries whose boxes overlap (>= _IOU_DUP).
+
+    One cluster = the detector seeing the same panel several times; several
+    clusters on one page = several panels of one numbered figure."""
+    clusters = []
+    for e in entries:
+        b = _bbox(e)
+        target = None
+        for c in clusters:
+            if any(_iou(b, _bbox(m)) >= _IOU_DUP for m in c):
+                target = c
+                break
+        if target is None:
+            clusters.append([e])
+        else:
+            target.append(e)
+    return clusters
+
+
+def _union_recrop(pdf_path, page, boxes, dst, dpi=_DETECT_DPI):
+    """Render `page` and save the union of `boxes` over `dst`. True on success."""
+    if not pdf_path or not os.path.exists(pdf_path):
+        return False
+    try:
+        import fitz
+        import numpy as _np
+        from PIL import Image as _PILImage
+        doc = fitz.open(pdf_path)
+        try:
+            arr, (W, H) = render_page(doc, int(page) - 1, dpi)
+        finally:
+            doc.close()
+        x0, y0, x1, y1 = _union_box(boxes)
+        crop = arr[max(0, y0):min(H, y1), max(0, x0):min(W, x1)]
+        if crop.size == 0:
+            return False
+        _PILImage.fromarray(_np.ascontiguousarray(crop[:, :, ::-1])).save(dst)
+        return os.path.exists(dst)
+    except Exception as exc:               # never break assignment over a crop
+        print(f"[assign_figures] 多面板并集重裁失败（退回最大单框）: {exc}")
+        return False
+
+
+def _dedupe_by_label(assigned, fig_dir, pdf_path=None, dpi=_DETECT_DPI):
+    """Collapse same-label detections; fold disjoint panels into one union crop.
+
+    Returns the surviving entries in their original order. Dropped entries have
+    their crop files removed (they are phantom duplicates / already folded into
+    the union image)."""
+    groups = {}
+    for e in assigned:
+        if e.get("label"):
+            groups.setdefault(e["label"], []).append(e)
+    dropped = set()
+    for es in groups.values():
+        if len(es) < 2:
+            continue
+        pages = {e.get("page") for e in es}
+        clusters = _overlap_clusters(es)
+        keep = max(es, key=lambda e: _area(_bbox(e)))
+        if len(pages) == 1 and len(clusters) > 1:
+            # Multi-panel figure: one number, several disjoint boxes on one page.
+            dst = os.path.join(fig_dir, os.path.basename(keep["file"]))
+            if _union_recrop(pdf_path, next(iter(pages)),
+                             [_bbox(e) for e in es], dst, dpi):
+                # `bbox` IS the union — figure_index.json's Figure schema has no
+                # room for a panel count, and the box says it better.
+                keep["bbox"] = _union_box([_bbox(e) for e in es])
+                dropped.update(id(e) for e in es if e is not keep)
+                continue
+        # Genuinely duplicate boxes (or no PDF to re-crop with): the largest
+        # crop is the complete figure, the rest are noise.
+        dropped.update(id(e) for e in es if e is not keep)
+    kept = []
+    for e in assigned:
+        if id(e) in dropped:
+            _fp = os.path.join(fig_dir, os.path.basename(e["file"]))
+            if os.path.exists(_fp):
+                try:
+                    os.remove(_fp)
+                except OSError:
+                    pass
+            continue
+        kept.append(e)
+    return kept
+
+
+def assign_chapter(det_all, ch, start, end, out_dir, pdf_path=None):
     """Assign labels to one chapter's detected figures; rename crops; return
     the list of assigned entries (label-filled) for this chapter."""
     fig_dir = figure_dir(out_dir)      # 书根 figure/（2026-09-01 起与总结 md 同级）
@@ -266,40 +389,18 @@ def assign_chapter(det_all, ch, start, end, out_dir):
 
     # ---- dedupe by (chapter, label) ----
     # The layout detector frequently emits 2-3 overlapping "figure" boxes for a
-    # single actual figure (figure + a nearby formula/diagram box, or a figure
-    # split into sub-boxes). All of them pair with the SAME caption "Fig. 22",
-    # so without dedupe we would emit phantom entries chNN_fig22.png /
-    # chNN_fig22_2.png that the figure (E) layer counts as multiple figures and
-    # marks as missing/extra. Keep the LARGEST-area detection (the complete
-    # figure) and remove the spurious crops. A real book never has two distinct
-    # figures sharing one number, so a label collision within a chapter is
-    # always a duplicate detection, never two genuine figures.
-    best = {}
-    to_drop = []
-    for e in assigned:
-        lab = e.get("label")
-        if not lab:
-            continue
-        b = e.get("bbox") or [0, 0, 0, 0]
-        area = max(0, (b[2] - b[0]) * (b[3] - b[1]))
-        if lab in best:
-            prev_e, prev_area = best[lab]
-            if area > prev_area:
-                to_drop.append(prev_e)
-                best[lab] = (e, area)
-            else:
-                to_drop.append(e)
-        else:
-            best[lab] = (e, area)
-    for e in to_drop:
-        _fp = os.path.join(fig_dir, os.path.basename(e["file"]))
-        if os.path.exists(_fp):
-            try:
-                os.remove(_fp)
-            except OSError:
-                pass
-    assigned = [e for e in assigned if e not in to_drop]
-    return assigned
+    # single actual figure (figure + a nearby formula/diagram box), and all of
+    # them pair with the SAME caption, so without dedupe we would emit phantom
+    # entries chNN_fig22.png / chNN_fig22_2.png that the figure (E) layer counts
+    # as multiple figures and marks as missing/extra.
+    # 🔴 "One number = one figure" does NOT mean "one number = one box": a
+    # multi-panel figure (`FIGURE 1.6.1(a)` + `FIGURE 1.6.1(b)`) is emitted as
+    # two DISJOINT boxes that both belong to that number. Lehmann《Elements of
+    # Large-Sample Theory》 p46 lost panel (b) to the old keep-largest rule
+    # (判据测试 flows/script/tests/test_dedupe_multi_panel_union.py). Hence
+    # `_dedupe_by_label` folds disjoint same-page boxes into one union crop and
+    # only drops genuinely overlapping duplicates.
+    return _dedupe_by_label(assigned, fig_dir, pdf_path=pdf_path)
 
 
 # `merge_index` is defined in `data/figure_index/figure_index.py` (one-JSON-one-directory
@@ -387,7 +488,7 @@ def run_book(pdf_path, out_dir):
             # chapter not in map (e.g. ch00 front matter): use detected page range
             pg = [e["page"] for e in det if e["chapter"] == ch]
             start, end = min(pg), max(pg)
-        assigned = assign_chapter(det, ch, start, end, out_dir)
+        assigned = assign_chapter(det, ch, start, end, out_dir, pdf_path=pdf_path)
         merge_index(out_dir, ch, assigned)
         n_label = sum(1 for e in assigned if e.get("label"))
         print(f"  chapter {ch}: {len(assigned)} figures, {n_label} named, "
@@ -410,7 +511,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end):
         print("ERROR: figure_detect.json not found — run extract_figures.py --book first")
         sys.exit(2)
     det = _refresh_chapters(det, out_dir)
-    assigned = assign_chapter(det, ch, start, end, out_dir)
+    assigned = assign_chapter(det, ch, start, end, out_dir, pdf_path=pdf_path)
     merge_index(out_dir, ch, assigned)
     write_figure_index_md(out_dir)
     n_label = sum(1 for e in assigned if e.get("label"))
@@ -430,6 +531,18 @@ def main():
     args = ap.parse_args()
 
     pdf_path = args.pdf_path
+    if not pdf_path:
+        # The union re-crop needs the PDF; discover it in the book dir (parent
+        # of _extract) instead of silently degrading to the largest single box.
+        parent = os.path.dirname(os.path.abspath(args.out.rstrip("\\/")))
+        cands = [f for f in sorted(os.listdir(parent)) if f.lower().endswith(".pdf")] \
+            if os.path.isdir(parent) else []
+        if len(cands) == 1:
+            pdf_path = os.path.join(parent, cands[0])
+            print(f"[assign_figures] PDF 自动定位: {pdf_path}")
+        elif cands:
+            print(f"[assign_figures] WARN: 书目录有多个 PDF {cands}，"
+                  f"未定位 → 多面板并集重裁将退回最大单框，请显式传 pdf_path")
 
     if args.book:
         run_book(pdf_path, args.out)

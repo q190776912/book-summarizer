@@ -90,7 +90,8 @@ from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_i
 from lib.ordinal_styles import OrdinalStyle
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM,
-                           SCOPE_BOOK, APPENDIX_NAME_RE, SUPPLEMENT_NAME_RE,
+                           SCOPE_BOOK, SCOPE_CHAPTER,
+                           APPENDIX_NAME_RE, SUPPLEMENT_NAME_RE,
                            MAP_KEY_SPECIAL_SAME_STYLE)
 from data.chapter_map.chapter_map import KIND_APPENDIX, KIND_SUPPLEMENT
 
@@ -648,6 +649,7 @@ HEADING_SHORT_MAX = 80   # blocks at/under this length are scanned whole
 # Formula-number detectors — patterns shared from lib/regexlib.py
 from lib.regexlib import (F_SINGLE_RE as _F_SINGLE_RE, F_DOT_RE as _F_DOT_RE,
                           F_EQ_RE as _F_EQ_RE, F_CN_EQ_RE as _F_CN_EQ_RE,
+                          F_DIGIT3_RE as _F_DIGIT3_RE,
                           F_LETTER_RE as _F_LETTER_RE,
                           F_ROMAN_RE as _F_ROMAN_RE,
                           F_LETTER3_RE as _F_LETTER3_RE,
@@ -844,6 +846,46 @@ def _alpha3_scope(hits):
     return 1
 
 
+def _bucket_reset(clean, keyfn):
+    """页序 `(first, second, number)` 三元组里，按 `keyfn` 分桶后是否出现「重启」。
+
+    重启 = 后一桶的**首个**号小于一桶（页面顺序上的前一桶）的最大号。桶按首见
+    顺序排，故读的是原书阅读顺序，而非排序后的数值序列。"""
+    order = []
+    for t in clean:
+        k = keyfn(t)
+        if k not in order:
+            order.append(k)
+    for i in range(1, len(order)):
+        first_of_later = next(t[2] for t in clean if keyfn(t) == order[i])
+        prev_max = max(t[2] for t in clean if keyfn(t) == order[i - 1])
+        if first_of_later < prev_max:
+            return True
+    return False
+
+
+def _digit3_scope(hits):
+    """数字三段 `(章.节.号)` 的重置窗口：跨节重启 → 3，仅跨章重启 → 2，全书连续 → 1。
+
+    与 `_alpha3_scope` 同一「后来桶首号 < 前一桶最大号」判据，差别在于三级体例的
+    窗口有两级（节内重启 / 章内跨节连续而章末重启），故**先判更细的一级**；且
+    「跨节重启」只在**同一章内**观测——跨章那一跳属更粗的窗口，把它当成按节重启
+    的证据会把「章内连续编号、章末重启」(scope 2) 误读成 scope 3。两级都观测不到
+    重启时才是全书连续（scope 1）。"""
+    clean = []
+    for ch, sec, num in hits:
+        try:
+            clean.append((int(ch), int(sec), int(num)))
+        except (TypeError, ValueError):
+            continue
+    for ch in {t[0] for t in clean}:
+        if _bucket_reset([t for t in clean if t[0] == ch], lambda t: t[1]):
+            return 3
+    if _bucket_reset(clean, lambda t: t[0]):
+        return 2
+    return 1
+
+
 def _two_component_scope(pairs):
     """Digit two-component ``(C.N)`` scope — derived from book evidence, NO default.
 
@@ -873,11 +915,19 @@ _BARE_NUMBER_HI = 0.50       # 裸落点占比 >= 此 → 判 true（确有裸�
 _BARE_NUMBER_LO = 0.10       # 裸落点占比 <= 此 且括号落点成规模 → 判 false
 
 
+# 🔴 「显式标记」形态的**唯一清单**（掩码与落点判定共用同一份，判据只此一处）：
+# 含三段核 `F_DIGIT3_RE`——否则 `(1.1.5)` 既不被认作显式、又没被掩掉，裸核
+# `_BARE_NUM_RE` 就会把**每一个括号三段公式号**当成裸排落点（`(` 不是 `[\d.]`），
+# 裸占比恒 ≈1 → `bare_number` 一律误判 true（三级书实测）。
+_EXPLICIT_FORMULA_RES = (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE, _F_DIGIT3_RE)
+
+
 def _mask_explicit_forms(text):
-    """抹掉所有**显式标记**公式号形态（括号 `(N.M)` / `Eq. N.M` / `式（N.M）`），
-    用等长空格替换，只留真正**裸排**的数字供裸落点统计。返回与 `text` 等长字符串。"""
+    """抹掉所有**显式标记**公式号形态（括号 `(N.M)` / `(N.M.K)` / `Eq. N.M` /
+    `式（N.M）`），用等长空格替换，只留真正**裸排**的数字供裸落点统计。
+    返回与 `text` 等长字符串。"""
     chars = list(text)
-    for _rx in (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE):
+    for _rx in _EXPLICIT_FORMULA_RES:
         for m in _rx.finditer(text):
             s, e = m.span()
             for k in range(s, e):
@@ -932,7 +982,7 @@ def detect_bare_number(extract_dir, formula_cfg, pages=None):
             if not text:
                 continue
             hit_explicit = False
-            for _rx in (_F_DOT_RE, _F_EQ_RE, _F_CN_EQ_RE):
+            for _rx in _EXPLICIT_FORMULA_RES:
                 for m in _rx.finditer(text):
                     if _formula_tail_clean(text[m.end():]):
                         hit_explicit = True
@@ -1023,12 +1073,14 @@ def detect_formula(extract_dir, pages=None):
         glob.glob(os.path.join(extract_dir, 'page_*.json')))
     single_count = 0
     dotted_count = 0
+    digit3_count = 0
     letter_count = 0
     roman_count = 0
     letter3_count = 0
     roman3_count = 0
     single_nums = []  # ints in page order, for per-section-reset fallback
     dotted_hits = []  # (first_comp, second_comp) in page order, for 2-comp scope
+    digit3_hits = []  # (chapter, section, number) in page order, for 3-comp scope
     letter_hits = []  # (letter, num) in page order, for letter-ch scope check
     roman_hits = []   # (roman_head, num) in page order, for roman scope check
     letter3_hits = []  # (letter, section, num) — 3-comp letter-ch scope
@@ -1068,6 +1120,23 @@ def detect_formula(extract_dir, pages=None):
                             dotted_hits.append((int(_a), int(_b)))
                         except ValueError:
                             pass
+            # Digit three-component `(1.1.5)` / `（2.3.14）` (formula type 3).
+            # `_F_DOT_RE` demands the closing paren right after the SECOND numeric
+            # segment, so a 3-part series scores ZERO on it, and `_F_SINGLE_RE`
+            # cannot match it either (no `(digits)` substring).  Without this
+            # counter such a book lands in the single branch — where the
+            # parenthesised citation years `(1979)` it does collect win — and the
+            # whole 3-part series then stays invisible to the Q layer (measured:
+            # Lehmann, Elements of Large-Sample Theory, 2323 vs 522).  Same
+            # last-paren + tail-clean discipline as the single scan.
+            d3matches = list(_F_DIGIT3_RE.finditer(text))
+            if d3matches:
+                d3last = d3matches[-1]
+                if _formula_tail_clean(text[d3last.end():]):
+                    digit3_count += 1
+                    digit3_hits.append((int(d3last.group(1)),
+                                        int(d3last.group(2)),
+                                        int(d3last.group(3))))
             # Letter-chapter-led `(A.3)`: same tail-clean discipline as the
             # single-component scan (the block's LAST letter-led paren must be
             # a right-aligned equation number).  Letter-led books (Lee ISM
@@ -1134,7 +1203,8 @@ def detect_formula(extract_dir, pages=None):
     # Cross-calibrated on the 51-book corpus (`tools/census_alpha3_formula.py`):
     # three other books show 1–2 isolated 3-comp hits (prose-shape collisions)
     # and are rejected by both the count floor and the confidence test.
-    _a3_other = (letter_count + roman_count + dotted_count + single_count)
+    _a3_other = (letter_count + roman_count + dotted_count + single_count
+                 + digit3_count)
     if (roman3_count >= _FORMULA3_MIN_COUNT
             and roman3_count > letter3_count
             and roman3_count > _a3_other
@@ -1145,6 +1215,23 @@ def detect_formula(extract_dir, pages=None):
             and letter3_count > _a3_other
             and _alpha3_confident(letter3_hits)):
         return {"type": 17, "scope": _alpha3_scope(letter3_hits), "ignore": []}
+
+    # 🔴 数字三段候选 `(C.S.N)`（formula type 3），在 alpha-3 之后、两段/单段之前。
+    # 为什么必须自己择族：三段形态对 `_F_DOT_RE` / `_F_SINGLE_RE` 完全隐形（见扫描
+    # 处的说明），而散文里的括号年份会被 `_F_SINGLE_RE` 成百收走 → 旧择族把三级
+    # 公式书一路判成 `{"type": 1}`（Lehmann 实测 2323 条三段 vs 522 条年份括号），
+    # Q 层对全书三级序标整体失明。置信 = 条数闸 `_FORMULA_MIN_COUNT`（30，与单段/
+    # 两段同级）+ 对全部数字/字母家族占优 + 「跨桶 + 连续升序」形状判据（与 alpha-3
+    # 共用 `_alpha3_confident`，判据只此一份）。跨 55 书普查校准
+    # （`tools/census_digit3_formula.py`，2026-10-15）：d3>=30 的 7 本里 6 本存量
+    # 配置本就是手工定的 type 3（新判据逐一复现，零回归），`theory-of-point-
+    # estimation`（同作者的另一本，公式只印两段）靠占优 + 形状判据正确地不择。
+    # scope 由重置窗口实测推出（`_digit3_scope`），与其余家族一样绝不默认。
+    if (digit3_count >= _FORMULA_MIN_COUNT
+            and digit3_count > (single_count + dotted_count
+                                + letter_count + roman_count)
+            and _alpha3_confident(digit3_hits)):
+        return {"type": 3, "scope": _digit3_scope(digit3_hits), "ignore": []}
 
     # Roman-chapter-led candidate `(II.5)` (formula type 16, lead='roman').
     # Checked BEFORE the letter branch: elect ROMAN only on positive multi-
@@ -2019,18 +2106,26 @@ _FIG_CAP_RE = re.compile(
 
 
 def _detect_fig_numbering(extract_dir, pages=None):
-    """Return ``(depth, labels)`` describing the book's printed figure scheme.
+    """Return ``(depth, labels, scope)`` describing the book's printed figure scheme.
 
     depth：图号**段数众数**（1=全局整数 / 2=章.图 / 3=章.节.图），无图题系列则 0
     （显式无图编号）。labels：观测到的印刷前缀（"Figure"/"Fig"/"图" 子集）。
     判据要求 **≥2 个不同图号**——正文交叉引用（"see Figure 7"）即便高频也只贡献同号，
     不会伪造出一个体例；真图题天然成系列。
+
+    🔴 scope 同样**从印面证据派生**（`config_setting`「Figure 组 type 与 scope 同值」
+    的落实）：三段图号（`章.节.图`）的计数器窗口有两级——末段跨节重启 → 3，章内跨节
+    连续、换章才重启 → 2。旧实现一律写死 `1 if depth==1 else 2`，depth 3 的书被硬赋
+    scope 2（Lehmann《Elements of Large-Sample Theory》实测图号 `Figure 1.2.1…1.2.4 /
+    1.4.1…1.4.4 / 1.6.1…1.6.2` 每节从 1 重启，旧账却写 2）。末段重启判据与数字三段
+    公式号**共用 `_digit3_scope`**，不另写一份。
     """
     pages = pages if pages is not None else sorted(
         glob.glob(os.path.join(extract_dir, 'page_*.json')))
     seen = set()      # 不同图号（系列判据）
     depths = {}       # 段数 -> 命中数
     labels = set()
+    hits3 = []        # 页序 (章, 节, 图) 三元组，仅纯点分三段（scope 证据）
     for pg in pages:
         try:
             with open(pg, encoding='utf-8') as f:
@@ -2047,6 +2142,9 @@ def _detect_fig_numbering(extract_dir, pages=None):
                 comps = 1 + num.count('.') + num.count('-') + num.count('．')
                 d = max(1, min(3, comps))
                 depths[d] = depths.get(d, 0) + 1
+                if d == 3 and re.fullmatch(r'\d+\.\d+\.\d+', num):
+                    a, s, n = (int(x) for x in num.split('.'))
+                    hits3.append((a, s, n))
                 surf = m.group(0)
                 if '图' in surf or '圖' in surf:
                     labels.add('图')
@@ -2055,10 +2153,15 @@ def _detect_fig_numbering(extract_dir, pages=None):
                 else:
                     labels.add('Fig')
     if len(seen) < 2:
-        return 0, sorted(labels)
+        return 0, sorted(labels), SCOPE_CHAPTER
     # 段数取众数；平票取**更大**段数（三级书常混出两级交叉引用，取大不取小）
     best = sorted(depths.items(), key=lambda kv: (-kv[1], -kv[0]))[0][0]
-    return best, sorted(labels)
+    if best == 1:
+        return 1, sorted(labels), SCOPE_BOOK
+    if best == 3:
+        return 3, sorted(labels), (_digit3_scope(hits3) if len(hits3) >= 2
+                                   else SCOPE_CHAPTER)
+    return best, sorted(labels), SCOPE_CHAPTER
 
 
 # Appendix exercises print a LETTER chapter slot and are NOT part of
@@ -2507,11 +2610,12 @@ def _build_config_dict(extract_dir, cfg_path, *, letter_chapter=False,
     # 整轮 verify。探测/老配置继承两条来源都没有组时，必须显式落组：探到图题系列
     # 按其段数（1/2/3），否则 `type: 0`（UNNUMBERED = 图号零匹配，显式而非默认）。
     if not any(any(_is_fig_kw(nm) for nm in g.get("name", [])) for g in ordinal_arr):
-        _fig_depth, _fig_labels = _detect_fig_numbering(extract_dir, pages=pages)
+        _fig_depth, _fig_labels, _fig_scope = _detect_fig_numbering(
+            extract_dir, pages=pages)
         ordinal_arr.append({
             "type": _fig_depth,
             "name": _fig_labels or ["Figure"],
-            "scope": 1 if _fig_depth == 1 else 2,
+            "scope": _fig_scope,
         })
     # 🔴 计数器边界两补：① 单级探测只有 scope 2/3 两档，先按**结构契约**补判
     # 「跨章连续」= scope 1；② 旧账（含当年人工核准的那份）声明过的 scope 与

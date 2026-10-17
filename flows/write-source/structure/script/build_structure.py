@@ -1224,6 +1224,7 @@ def _single_en_items(ext, start, end, book, sec_windows=None, manual=None):
     items = extract_items_en(ext, start, end, want_examples=True,
                              section_scoped=book.section_scoped, single=True,
                              extra_labels=extra,
+                             bare_results=getattr(book, 'bare_results', False),
                              restart_per_section=(
                                  set(_rst_labels), list(sec_windows or []))
                              if _rst_labels else None)
@@ -1423,6 +1424,7 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None, sec_ke
         items = extract_items_en(_dir, start, end, want_examples=True,
                                  section_scoped=book.section_scoped,
                                  extra_labels=extra,
+                                 bare_results=getattr(book, 'bare_results', False),
                                  restart_per_section=(
                                      set(_en2_rst), list(sec_windows or []))
                                  if _en2_rst else None)
@@ -2060,7 +2062,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                                   chapter_local_numbering=getattr(
                                       book, 'chapter_local_numbering', False),
                                   language=getattr(book, 'language', 'cn'),
-                                  section_whitelist=_wl_scan)
+                                  section_whitelist=_wl_scan,
+                                  letter_sections=getattr(book, 'letter_sections', False))
     # 🔴 章边界尾带（判定与裁剪见 `chapter_boundary`，Etingof 表示论实测
     # 2026-09-27）：上一章的收尾常印在本章起始页的**章标题之上**，章图只到「页」
     # 的粒度 ⇒ 整页归本章时，上一章**整节 + 其编号项**从全书消失（实测丢 §2.10
@@ -2115,7 +2118,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                     chapter_local_numbering=getattr(
                         book, 'chapter_local_numbering', False),
                     language=getattr(book, 'language', 'cn'),
-                    section_whitelist=_wl_scan)
+                    section_whitelist=_wl_scan,
+                    letter_sections=getattr(book, 'letter_sections', False))
             if _ex_region_page is not None:
                 _tr = [r for r in _tr
                        if not (r[1] == "SEC"
@@ -2775,6 +2779,25 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
         node["sub_sec"] = []
         sec_nodes[n] = node
 
+    # 4a-exer) 🔴 章末**集中习题节**（声明了 exercise_region_headings 的书）：
+    #   印面把习题块做成一条带序标的节（Lehmann《Elements of Large-Sample Theory》
+    #   实测 2026-10-16：`2.9 Problems` / `4.5 Problems269` / `A.7 Problems`）。
+    #   writing-rules V-I「有专门习题小标题的集中习题块一律省略；整节都是习题的节
+    #   同理省略」由 `consolidated` 承载——拆分器 / 渲染器 / 覆盖闸⑩ / merge 证据
+    #   与 D 层一律不要求它成单元、不要求它在 md 在位。
+    #   🔴 **节点本身保留、不删**：`attach_content` 的内容窗按锚点页切分，删掉末节
+    #   节点会让它的窗口（习题散文）漏给**上一节**（附录 A.7 之后没有任何习题锚点，
+    #   删节即把 p601-603 的题面挂进 A.6）。保留 = 内容仍入账（独立真值项可核对），
+    #   只在产出侧被 consolidated 跳过。
+    #   判据与块头判据**同源**（`scan_skeleton._exercise_headings_re`，整行锚定 +
+    #   页码粘连尾类），未声明该旗标的书 `_ex_headings` 为 None → 零回归。
+    if _ex_headings:
+        _ex_sec_re = scan_skeleton._exercise_headings_re(_ex_headings)
+        if _ex_sec_re is not None:
+            for _snode in sec_nodes.values():
+                if _ex_sec_re.match((_snode.get("name") or "").strip()):
+                    _snode["consolidated"] = True
+
     # 4a-nums) 数值本地子块（Arnold《ODE》逐 § 重启的裸单号二级小节）：把形如
     #   "<§>.<local>" 的两段号节节点（其单号父 § 存在）标记为**真实 level-2 小节**
     #   —— node["level"]=2（渲染 `###`）+ node["bare_head"]=True（渲染只印裸局部号
@@ -2958,8 +2981,21 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                     pos = _find_title_pos(ext, t_no or t, page, page, page_dir=page_dir) if t else None
                     y = pos[1] if pos else None
             else:
+                # 🔴 必须把 node `type` 一起传给 `_item_pos`（与
+                # attach_content._item_anchor 的调用约定同源）：`_typ` 分支会追加
+                # 「<Label> <号>」印刷头变体（`example 2.3.5`），而只给裸号键时
+                # 标签前置（label-first）书的真条头 `Example 2.3.5 Convergence in
+                # probability…` 永远匹配不到 head 层，只能落到 contain 层——而
+                # contain 取 `min(y)`，于是被**页眉**（y=88 的
+                # `662. Convergence in Probability and in Law`，与本条标题前 24
+                # 字符同形）抢先命中。同节两条目因此与散文回指行
+                # （`2.3.2 only states that…` 命中裸号 head 层）一起构成
+                # 「5 < 定义2 < 4」比较环，B 层报 §2.3 阅读顺序错乱
+                # （Lehmann《Elements of Large-Sample Theory》ch2 实测 2026-10-15）。
                 pos = _item_pos(ext, {"key": ckey, "page": page,
-                                       "text": child.get("name") or ""}, page_dir=page_dir)
+                                      "type": child.get("type"),
+                                      "text": child.get("name") or ""},
+                                page_dir=page_dir)
                 y = pos[1] if pos and pos[1] is not None and pos[1] >= 0 else None
             _doc_y_cache[nid] = float(y) if y is not None else None
         return _doc_y_cache[nid]

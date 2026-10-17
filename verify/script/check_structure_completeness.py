@@ -149,6 +149,32 @@ _REF_RE = re.compile(
     re.I)
 
 
+# 🔴 散文谓语词表（`_prose_predicate_ref` 判据 ①）：编号项**序标后紧跟**的小写词，
+# 若属于「陈述句不可能以它开头」的一类，则该处是散文里的交叉引用而非条头。
+# 实测成因：Lehmann《Elements of Large-Sample Theory》p159（物理 172）段首
+# `Theorem 3.2.2 establishes consistency of the tests in Examples 3.1.3, 3.1.5,
+# and 3.1.6 (Problem 3.2).` —— 全书**没有** Theorem 3.2.2 这个条头（§3.2 只有
+# Example 3.2.1…3.2.6），但标题锚定扫描把它读成 `readable` 遗漏项，闸门 FAIL，
+# 一旦 `--backfill` 就会往契约里插一条「定理3.2.2」，其正文是一句谈论别的例子的
+# 散文（幻影条目 + B 层序列被它撑歪）。
+# 词表刻意只收**报道动词 + 系动词**：定理陈述恒以主语/引导词起头且首词大写
+# （"Theorem 3.1.1 Consider two tests…"、"Theorem 2.7.2 (Liapounov) Let…"、
+# "Definition 2.8.1 (a-mixing.) The sequence…"），收 if/is-of/in-to-we-it 这类
+# 可能真正开陈述的词会把真条头判成散文（漏内容），宁窄勿宽。
+_PROSE_PREDICATE_WORDS = frozenset("""
+establish establishes established show shows showed shown imply implies implied
+prove proves proved give gives gave yield yields yielded state states said says
+follow follows followed hold holds held continue continues continue repeat
+repeats repeat complete completes complete motivate motivates motivate justify
+justifies justify settle settles settle recall recalls recall use uses use
+employ employs employ apply applies apply extend extends extend generalize
+generalizes generalize sharpen sharpens sharpen refine refines refine ensure
+ensures ensure provide provides provide require requires require need needs need
+mention mentions mention assert asserts claim claims claim demonstrate
+demonstrates confirm confirms support supports is are was were be been being
+""".split())
+
+
 def _ocr_int(tok):
     """把 OCR 容错数字串规范化成 int（字母按 OCR_DIGIT 映射：A→4, B→8, ...）。"""
     s = ''.join(str(OCR_DIGIT.get(c, c)) for c in tok)
@@ -1108,6 +1134,113 @@ def _section_title_map(tree):
     return out
 
 
+def _lead_after_ordinal(snippet, canon):
+    """序标之后紧跟的第一个英文词（`"Theorem 3.2.2 establishes …"` → `establishes`）。
+
+    取 snippet 里**第一个**与 canon 段数同形的点分数字串作为序标（条头形态的序标
+    恒在最前），其后首个纯字母词即判据输入；取不到（序标被 OCR 折断、后面直接
+    是符号 `+Poisson` / `(Liapounov)`）返回空串 = 不判。
+    """
+    s = str(snippet or "")
+    n = len(canon or ()) or 2
+    m = re.search(r"\d+(?:[.\-·]\s*\d+){%d}" % (n - 1), s)
+    if not m:
+        return ""
+    t = re.match(r"\s*([A-Za-z]+)\b", s[m.end():])
+    return t.group(1) if t else ""
+
+
+def _same_label_item_in_section(tree, canon, label):
+    """契约里同节（canon 去掉末段）是否已有**同类型**条目。
+
+    散文谓语判据的第二重安全网：同号所在节本就没有该类型的任何条目（如 §3.2 无
+    Theorem）时，孤立出现的「Theorem 3.2.2」几乎只能是引用；同节同类型已有条目在
+    账（序列中间/尾部）则按真条头处理，不降级。
+
+    🔴 契约键形态读不出（非纯点分/破折号数字键，如中文两级 `定理3.2`）时**返回
+    True**：判据失去「本节无同类型条目」这条证据，一律按真条头处理（宁回填一条
+    可复核的项，不可把真条头判成散文而静默丢内容）。"""
+    if not canon or len(canon) < 2:
+        return False
+    want = LABEL_TO_TYPE_LC.get(str(label or "").strip().lower()) \
+        or LABEL_TO_TYPE_LC.get(_canon_label(str(label or "")).lower())
+    if not want:
+        return False
+    prefix = tuple(canon[:-1])
+    last = canon[-1]
+    seen_any_key = [False]
+
+    def walk(n):
+        for c in getattr(n, "sub_sec", None) or []:
+            parts = [p for p in re.split(r"[.\-·，．]+",
+                                         str(getattr(c, "key", "") or "")) if p]
+            if (len(parts) == len(canon) and all(p.isdigit() for p in parts)):
+                seen_any_key[0] = True
+                nums = tuple(int(p) for p in parts)
+                if (nums[:-1] == prefix and nums[-1] != last
+                        and str(getattr(c, "type", "") or "") == want):
+                    return True
+            if walk(c):
+                return True
+        return False
+
+    if walk(tree):
+        return True
+    return not seen_any_key[0]
+
+
+def _prose_predicate_ref(entry, tree, canon):
+    """散文里的交叉引用（非条头）判据：①有序标 + 类型词；②序标后紧跟小写报道/
+    系动词（`_PROSE_PREDICATE_WORDS`）；③契约同节无同类型条目。三条同时成立才判。
+
+    命中归 `reference`（不回填、不拦闸、报告留痕），交 agent 复核——不新造状态，
+    因为分流语义与「强引用标记」完全相同。"""
+    if not entry.get("has_label") or not canon:
+        return None
+    lead = _lead_after_ordinal(entry.get("snippet", ""), canon)
+    if not lead or not lead.islower() or lead not in _PROSE_PREDICATE_WORDS:
+        return None
+    if _same_label_item_in_section(tree, tuple(canon), entry.get("label")):
+        return None
+    return lead
+
+
+def _drop_exercise_region_items(ch, start, end, ext, cfg, items):
+    """剔除「章末集中习题区」内的源条目候选（判据 = 产出侧 `build_structure` 3a-2 同源）。
+
+    仅当本书在 verify_config 声明 `exercise_region_headings`（V-I「整节都是习题的节
+    同理省略」的机器化形态）时生效；块头由 `build_structure._exercise_block_pos`
+    （`scan_skeleton._exercise_headings_re` 整行锚定，跳过页眉带）定位，y 感知与
+    产出侧一致：**同页且块顶在块头之上**的条目属正文，保留。
+    未声明 / 定位失败 → 原样返回（零回归）。
+    """
+    heads = getattr(cfg, "exercise_region_headings", None) or None
+    if not heads:
+        return items
+    try:
+        import build_structure as _bs
+        from lib.page_dir import resolve_page_dir
+    except Exception:
+        return items
+    page_dir = resolve_page_dir(ext, ch)
+    pos = _bs._exercise_block_pos(ext, ch, start, end, heads, page_dir=page_dir)
+    if pos is None:
+        return items
+    ep, ey = pos
+    out = []
+    for it in items:
+        pg = it.get("page") or 0
+        if pg < ep:
+            out.append(it)
+            continue
+        probe = {"page": pg, "key": it.get("key"),
+                 "text": it.get("snippet") or it.get("text") or ""}
+        ip = _bs._item_pos(ext, probe, page_dir=page_dir)
+        if ip is not None and ip[0] == ep and ip[1] is not None and ip[1] < ey:
+            out.append(it)
+    return out
+
+
 def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     """第 3 步：用 item_numbering_integrity（B 层）校验遗漏定义/定理/例等重要概念并回填。
 
@@ -1151,6 +1284,16 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                          if _normkey(str(it.get('key', ''))) not in _ignk]
         except Exception:
             pass
+
+    # 0b) 🔴 章末**集中习题区**（`exercise_region_headings` 声明）里的条目不参与查漏。
+    #     产出侧 `build_structure` 3a-2 用 `_exercise_block_pos` 把块头（含同页块头之下）
+    #     起至章末的条目一律不写进 ITEM 合同 —— 那是 writing-rules V-I 规定的「整块省略」，
+    #     不是漏抽。源侧扫描（scan_raw_items）不认识该声明，会把习题区里的印刷编号项
+    #     （Lehmann《Elements of Large-Sample Theory》ch1 `Theorem 1.7-1` @p52 /
+    #     ch6 @p453 实测）报成「 readable 缺项」并触发 B 层「§1.7 书中含定理 1 条但总结无」
+    #     → 闸门索要**书里规定要省略**的内容。判据与产出侧同源（同一个块头定位器、同一条
+    #     y 感知规则），未声明的书恒等返回 → 零回归。
+    raw_items = _drop_exercise_region_items(ch, start, end, ext, cfg, raw_items)
 
     # 1) set-difference：源有而契约无 → 结构化缺失（驱动回填）。
     #    按 canon 取「最佳代表」去重：前向引用提及(_REF_RE 命中，如 page45
@@ -1302,6 +1445,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
         garbled = not (len(c) >= 1 and all(isinstance(x, int) for x in c)
                        and (len(c) < 2 or c[1] <= 60) and (len(c) < 3 or c[2] <= 200))
         is_ref = bool(_REF_RE.search(it.get("snippet", "")))
+        _prose_lead = _prose_predicate_ref(it, tree, c)
         if cfg.primary_type == ORDINAL_VAKIL and not garbled and \
                 (len(c) == 2 or (len(c) >= 3 and c[-1] == 0)):
             # Vakil 体例结构不可能形态 → 幻影，不回填、不拦闸（Rising Sea 实测）：
@@ -1324,6 +1468,10 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
             # 前向引用提及（see/refer to/cf./in the next…），非定义条头，
             # 不自动回填，交人工/agent 复核。
             status = "reference"
+        elif _prose_lead:
+            # 散文谓语（见 `_PROSE_PREDICATE_WORDS`）：条头位上是「Theorem 3.2.2
+            # establishes …」这种以报道动词开口的句子 → 交叉引用，回填即造幻影条目。
+            status = "reference"
         else:
             # 真实条头（含三级数字前置无显式标签项，Kreyszig 等书此类即真实条目）
             # → 可读、自动回填，不再误判为 reference 漏网。
@@ -1332,6 +1480,10 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
             "key": it["key"], "label": it["label"], "page": it["page"],
             "snippet": it["snippet"], "canon": list(c),
             "has_label": it.get("has_label", False), "status": status,
+            **({"note": "prose predicate %r after the ordinal, and the contract "
+                        "holds no %s item in this section → cross-reference, not "
+                        "an item head" % (_prose_lead, it.get("label"))}
+               if _prose_lead else {}),
         })
 
     # 2) item_numbering_integrity（B 层）：喂合成 md + ctx.items=源条目集

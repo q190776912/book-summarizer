@@ -287,6 +287,14 @@ def _collect_blocks(ext, start, end, ch=None, page_dir=None):
         for b in pg.text_blocks:
             if not isinstance(b, dict):
                 continue
+            # 🔴 MM Repair 判为不可恢复的文本块不得进内容流：`unavailable` 的语义是
+            # 「经视觉审读确认是公式区被重复读出的乱码带 / 无法辨认」，文档
+            # （flows/extract/mm_repair/mm_repair.md 出口节）承诺下游 write-source
+            # 跳过、不污染内容，但此前只有 tools/dump_chapter_ocr.py 兑现了这条，
+            # 本函数（真正给契约喂内容的路径）不看该标记，apply 又只打标记不删条目
+            # ——于是垃圾带会以散文残渣混进单元，与同页 latex 块重复。
+            if b.get("mm_unavailable"):
+                continue
             t = (b.get("text") or "").strip()
             if not t:
                 continue

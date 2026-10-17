@@ -18,6 +18,22 @@ Q 层同一份登记）。于是：
     `known_book`（登记后 ⑭ 与本工具同时看见它，这才是正解，不是删）。
 与 `tools/backfill_formula_tags.py`（回填丢失的号）互为反向通道，两者共用同一批谓词。
 
+🔴 **第三类缺陷 = 「号是真的，但挂错了块」**（`--mispaired`，2026-10-16 Lehmann ch6 实测）：
+上面两条通道各管「缺失」与「幻影」，唯独管不了**配对错**——号在印面确实存在（所以 ⑭ 不判毒、
+常规删除被拒），但它挨着的**不是**契约里被登记的那条展示式。实测 (6.5.10)：印面 p437 该号标在
+一张概率表（`bbb bbc … / 1/27 3/27 …`）左侧，契约里那张表只是 `text` 块，收割器把号给了它上面
+那条**无号**展示式 `P(X*₍₁₎=b, X*₍₂₎=b, X*₍₃₎=c) = 3/27`（机械夹逼判据的盲区：前后两号之间
+「唯一未挂号的展示块」并不等于「印面带号的块」，中间还可以有 text/表格块当真主）。
+后果与幻影相反但同样两头堵：错号成了对账真值 → 那条无号公式被逼写 `\tag`，真主（表）永远补不上。
+
+`--mispaired --host <真主>` 就是这条合法出口，`--host` 取二者之一：
+  * 契约里真主展示块的节点 key（摘完紧接着按该 key 跑 `backfill_formula_tags.py` 落回正确块）；
+  * 字面量 `non-display`：印面真主是表格/纯文字行，契约无展示块可挂 ⇒ 该号**不入账**
+    （与章内其他「印面有号但非展示式」的裁决同一处置；⑱ 只扫契约树，不会因此复发）。
+保险：`--mispaired` 必须配 `--host`（少一个拒）；该号必须在契约里**恰好登记一处**（多处 = 歧义，
+拒，要求逐条处理）；写出前打印被摘块的节点 key + 公式首串，台账记 `mode`/`mispaired_from`/`host`，
+使「摘错了也能反查是谁在何时按什么证据摘的」。
+
 四本账（缺一即漂移）：
   ① 分章契约 `ch{N}.json`（附录 `appendix{X}.json` / 补篇 `supplement{S}.json`）目标公式块
      的 `tag` → `""`（与收割处 `strip_unattested` 同一形态：块留着、只是不再声称带编号）
@@ -37,7 +53,8 @@ Q 层同一份登记）。于是：
     再做锚定字面替换；写出前断言「解析后的新契约树 == 在旧树副本上只清这些 tag 的语义模型」。
     故非标准序列化的契约（indent=1 / ensure_ascii=True / 尾部游离 LF）也能安全修，
     且除目标串外一字节不变。
-  - `--number` 必须在 ⑭ 判毒集合里；契约与两侧正文都没有该 tag → NO-OP（幂等）；
+  - `--number` 必须在 ⑭ 判毒集合里，**或**走 `--mispaired`（号真印但挂错块，见上文第三类缺陷）；
+    契约与两侧正文都没有该 tag → NO-OP（幂等）；
     manifest 的 `tags` 账只在「该文件是标准 indent=2 形」时改写，否则拒绝并说明；
     单元正文替换后断言「再无 `\tag{N}`」且首行 marker 未变。
 
@@ -45,6 +62,8 @@ Q 层同一份登记）。于是：
   python tools/deregister_formula_tags.py <extract_dir> 18 --list          # 该章 ⑭ 判毒清单
   python tools/deregister_formula_tags.py <extract_dir> 18 --number 18.3.1 \\
       --number i' --evidence "fitz 文字层 p586-617 全窗：18.3.1 只作定理号出现，无 (18.3.1)" [--apply]
+  python tools/deregister_formula_tags.py <extract_dir> 6 --number 6.5.10 --mispaired \\
+      --host non-display --evidence "fitz 200dpi p437：(6.5.10) 标在概率表行左，非展示式" [--apply]
 退出码：0 = 已写出 / dry-run 可行 / 已在账（幂等 NO-OP）；2 = 拒绝（未写任何文件）。
 """
 import argparse
@@ -155,6 +174,61 @@ def contract_edit(text, tree, nums):
     return text, counts
 
 
+# ── `--mispaired` 的保险：错挂处必须唯一、真主必须可查 ────────────────────────
+def tag_occurrences(tree, nums):
+    """契约树 → ``{号: [(所属节点 key, 公式首串, 登记位置)]}``（该号在契约里的**每一处**）。
+
+    「挂错块」的判断只在**唯一错挂处**上才成立：同一号在契约里登记两处（`tag` +
+    `tags` 列表、或两个节点各挂一次）时，摘除等于同时改动两处语义，属歧义，
+    要求逐条处理。
+
+    🔴 key 取**最近的有 key 祖先**：契约里的内容块（`{"formula": …, "tag": …}`）自己
+    没有 key，只有所属条目节点有——用块自己的 `key`（恒为 None）打印等于没说，
+    回填也没有可用的坐标（`backfill_formula_tags.py --node` 要的就是条目节点 key）。
+    """
+    out = {}
+
+    def walk(node, own):
+        if isinstance(node, dict):
+            key = node.get("key")
+            own = str(key) if key is not None else own
+            if node.get("formula") is not None:
+                head = str(node.get("formula"))[:70]
+                t = str(node.get("tag") or "").strip()
+                if t in nums:
+                    out.setdefault(t, []).append((own, head, "tag"))
+                for i, x in enumerate(node.get("tags") or []):
+                    if str(x).strip() in nums:
+                        out.setdefault(str(x).strip(), []).append(
+                            (own, head, "tags[%d]" % i))
+            for c in node.get("sub_sec") or []:
+                walk(c, own)
+        elif isinstance(node, list):
+            for c in node:
+                walk(c, own)
+
+    walk(tree, None)
+    return out
+
+
+def contract_node_keys(tree):
+    """契约树 → 全部节点 key 的字符串集合（校验 `--host` 真在契约里）。"""
+    keys = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("key") is not None:
+                keys.add(str(node.get("key")))
+            for c in node.get("sub_sec") or []:
+                walk(c)
+        elif isinstance(node, list):
+            for c in node:
+                walk(c)
+
+    walk(tree)
+    return keys
+
+
 # ── ②③ manifest 的 tags 账 ──────────────────────────────────────────────────
 def manifest_edit(text, path, nums):
     """manifest 文本 → (new_text|None, 说明)。None = 该侧无此账（幂等跳过）。"""
@@ -248,8 +322,14 @@ def main(argv=None):
     ap.add_argument("extract_dir")
     ap.add_argument("ch_key")
     ap.add_argument("--number", action="append", default=[],
-                    help="要摘掉的契约 tag（可重复；必须被闸门 ⑭ 判为无印刷锚点）")
+                    help="要摘掉的契约 tag（可重复；须被闸门 ⑭ 判为无印刷锚点，"
+                         "或给 --mispaired 声明「真印但挂错块」）")
     ap.add_argument("--evidence", default="")
+    ap.add_argument("--mispaired", action="store_true",
+                    help="该号印面真实存在但**挂错了块**（⑭ 不判毒的唯一合法摘除通道）")
+    ap.add_argument("--host", default="",
+                    help="与 --mispaired 同用：真主 = 契约节点 key，或字面量 non-display"
+                         "（印面真主是表格/文字行，该号不入账）")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--list", action="store_true", help="列该章 ⑭ 判毒号 + 两侧正文命中数")
     a = ap.parse_args(argv)
@@ -285,6 +365,14 @@ def main(argv=None):
             raise Refuse("需要 --number（或 --list 看该章 ⑭ 判毒清单）")
         if len(a.evidence.strip()) < 20:
             raise Refuse("--evidence 必填且不少于 20 字（印面出处：页窗 / 该号在印面上的实际形态）")
+        host = a.host.strip()
+        if a.mispaired and not host:
+            raise Refuse("--mispaired 必须配 --host <真主契约 key | non-display>："
+                         "没有真主，摘除就只是将号从账上抹掉，与幻影通道的语义不同，"
+                         "台账必须说清它该落在哪")
+        if host and not a.mispaired:
+            raise Refuse("--host 只在 --mispaired 通道有意义（请同时给 --mispaired），"
+                         "否则该参数会被静默忽略")
 
         # 先扫两侧正文与 manifest（一次读盘，供幂等判定与写出复用）
         bodies, mans = [], []
@@ -306,22 +394,45 @@ def main(argv=None):
 
         registered = {str(n) for _k, n in collect_contract_tags(tree)}
         condemned = {str(x) for x in condemned}
-        nums, absent, blocked = [], [], []
+        nums, absent, blocked, mis = [], [], [], []
         for num in {str(x) for x in a.number}:
             present = (num in registered
                        or any(_in_body(b[2], num) for b in bodies)
                        or any(_in_tags(m[3], num) for m in mans))
             if not present:
                 absent.append(num)
-            elif num not in condemned:
-                blocked.append(num)
-            else:
+            elif num in condemned:
                 nums.append(num)
+            elif a.mispaired:
+                nums.append(num)
+            else:
+                blocked.append(num)
         if blocked:
             raise Refuse("%s：闸门 ⑭ 未判它无毒（本章页窗里找得到印刷锚点）——多半是真编号，"
                          "删除等于毁掉对账真值。确要处理请先目视印面；真印却被抽取器漏挂的号"
-                         "走 config/verify_config/register_formula.py 登记 known_book"
+                         "走 config/verify_config/register_formula.py 登记 known_book；"
+                         "真印但**挂错了块**（该号挨的不是契约里这条展示式）"
+                         "走本工具 --mispaired --host <真主 key|non-display>"
                          % ", ".join(sorted(blocked)))
+        if a.mispaired:
+            # 只有「⑭ 不判毒」那批号才走错挂通道；⑭ 判毒的号仍按幻影语义处理。
+            occ = tag_occurrences(tree, {n for n in nums if n not in condemned})
+            for num in [n for n in nums if n not in condemned]:
+                hits = occ.get(num) or []
+                if len(hits) != 1:
+                    raise Refuse("--mispaired %s：该号在契约里登记 %d 处（%s）——"
+                                 "「挂错块」只在唯一错挂处成立，多处须逐条处理"
+                                 % (num, len(hits),
+                                    ", ".join("%s@%s" % (k, w) for k, _h, w in hits)))
+                mis.append((num, hits[0]))
+            if mis and host != "non-display":
+                keys = contract_node_keys(tree)
+                if host not in keys:
+                    raise Refuse("--mispaired --host %r：契约里查无该节点 key（本章契约可用 key：%s）"
+                                 "——真主若确为表格/文字行（契约无展示块可挂），"
+                                 "请写字面量 non-display"
+                                 % (host, " ".join(sorted(list(keys)[:40]))))
+
         if not nums:
             print("NO-OP     %s：契约、两侧 manifest 与单元正文都没有这个 tag（已摘过），"
                   "无需写出" % " ".join(sorted(absent)))
@@ -352,7 +463,13 @@ def main(argv=None):
                 targets.append({"path": mp, "before": raw, "after": new})
 
         print("章        = %s   契约=%s" % (a.ch_key, os.path.basename(cpath)))
+        print("通道        = %s" % ("--mispaired（号真印但挂错块）" if mis else "⑭ 判毒（幻影）"))
         print("摘除编号  = %s" % " ".join(sorted(nums)))
+        for num, (key, head, where) in mis:
+            print("错挂块    = (%s) 在节点 %s 的 %s：%s" % (num, key, where, head))
+            print("真主      = %s" % ("契约无展示块可挂（表格/文字行），该号不入账"
+                                     if host == "non-display"
+                                     else "契约节点 %s（紧接着按下方命令回填）" % host))
         print("契约删除  = %s" % ", ".join("%s×%d" % (n, c) for n, c in sorted(ccounts.items())))
         print("单元正文  = %s" % (" ".join(touched) or "无命中"))
         print("manifest  = %s" % (" | ".join(man_notes) or "无该侧清单"))
@@ -386,10 +503,25 @@ def main(argv=None):
                                 "contract_removals": ccounts,
                                 "unit_files": touched, "manifest": man_notes,
                                 "evidence": a.evidence.strip(),
+                                "mode": "mispaired" if mis else "unattested",
+                                "mispaired_from": {n: {"node": k, "formula_head": h,
+                                                       "at": w}
+                                                   for n, (k, h, w) in mis},
+                                "host": host if mis else "",
                                 "gate_14_condemned": sorted(str(x) for x in condemned),
                                 "backup": bak}, ensure_ascii=False) + "\n")
         print("APPLIED   备份=%s 台账=%s" % (bak, ledger))
         print("待办（顺序不可颠倒）：")
+        if mis and host != "non-display":
+            for num, (_k, _h, _w) in mis:
+                print("  # (%s) 的真主是契约节点 %s：先把号落回正确块，再让该单元正文补 \\tag"
+                      % (num, host))
+                print("  python tools/backfill_formula_tags.py \"%s\" %s --number %s --node %s \\"
+                      % (ext, a.ch_key, num, host))
+                print("      --evidence \"<印面出处：本次摘除证据同文>\" --apply")
+        if mis and host == "non-display":
+            print("  # 真主是表格/文字行：该号**不入账**，对应单元正文不得写 \\tag，"
+                  "⑱ 只扫契约树故不会复发")
         print("  python flows/write-source/script/gate_units.py \"%s\" %s" % (ext, a.ch_key))
         print("  python flows/write-source/script/init_translate_units.py \"%s\" %s"
               % (ext, a.ch_key))

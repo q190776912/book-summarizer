@@ -36,9 +36,9 @@ DONE_MARK = "<!-- book-summarizer DONE unit: id=0001 type=desc key=D1 name= -->"
 DRAFT_MARK = "<!-- book-summarizer DRAFT unit: id=0001 type=desc key=D1 name= -->"
 
 
-def _unit(lines, utype="desc", key="D1", name=""):
+def _unit(lines, utype="desc", key="D1", name="", ntype="description"):
     return {"type": utype, "key": key, "name": name, "lines": list(lines),
-            "ntype": "description", "ntags": [], "nimages": [], "ncontent": 1}
+            "ntype": ntype, "ntags": [], "nimages": [], "ncontent": 1}
 
 
 class Base(unittest.TestCase):
@@ -115,13 +115,65 @@ class TestKeepDone(Base):
         self.assertIn("契约修正后的新正文", txt)
         self.assertNotIn("agent 改好的稿子", txt)
 
-    def test_duplicate_key_bucket_not_preserved(self):
-        self.emit([_unit(["A"], key="D1"), _unit(["B"], key="D1")])
+    def test_cross_family_shared_key_all_preserved(self):
+        """同一节内 Definition/Theorem 共用编号键 `1.1-1`：两个 DONE 都必须保住。
+
+        🔴 这是旧实现「(type, key) 撞键整桶丢弃」的误伤锁：编号按家族重启时
+        ``item`` + ``key`` 相同而 ``ntype`` 不同属**常态**，丢桶 = 成批作废稿子
+        （Lehmann ch3 实测 49 个 DONE 只留 29 个，20 个纯误伤）。
+        """
+        units = [_unit(["定理正文"], utype="item", key="1.1-1", ntype="theorem"),
+                 _unit(["定义正文"], utype="item", key="1.1-1", ntype="definition")]
+        self.emit(units)
         sdu.split_chapter(self.ext, "1", "en", force=True)
-        for fn in json.load(open(os.path.join(self.dir_of(), "manifest.json"),
-                                 encoding="utf-8"))["units"]:
-            self.mark_done(fn["file"], "稿子")
-        self.assertEqual(sdu._load_done_index(self.dir_of()), {})
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        self.mark_done(recs[0]["file"], "定理的稿子")
+        self.mark_done(recs[1]["file"], "定义的稿子")
+        self.assertEqual(len(sdu._load_done_index(self.dir_of())), 2)
+        self.emit([_unit(u["lines"], utype=u["type"], key=u["key"],
+                         ntype=u["ntype"]) for u in units])
+        sdu.split_chapter(self.ext, "1", "en", force=True, keep_done=True)
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        self.assertIn("定理的稿子", self.read(recs[0]["file"]))
+        self.assertIn("定义的稿子", self.read(recs[1]["file"]))
+
+    def test_same_identity_duplicates_indexed_by_occurrence(self):
+        """连 ntype 也相同的重复身份键（同家族同号两节点）按出现序号区分，各自保留。"""
+        units = [_unit(["第一段"], utype="item", key="1.1-1", ntype="example"),
+                 _unit(["第二段"], utype="item", key="1.1-1", ntype="example")]
+        self.emit(units)
+        sdu.split_chapter(self.ext, "1", "en", force=True)
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        self.mark_done(recs[0]["file"], "第一段稿子")
+        self.mark_done(recs[1]["file"], "第二段稿子")
+        self.emit(units)
+        sdu.split_chapter(self.ext, "1", "en", force=True, keep_done=True)
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        self.assertIn("第一段稿子", self.read(recs[0]["file"]))
+        self.assertIn("第二段稿子", self.read(recs[1]["file"]))
+
+    def test_occurrence_drift_never_keeps_wrong_body(self):
+        """同身份前面多出一个节点 ⇒ 序号整体漂移：hash 对不上就回 DRAFT，不得搬错稿。"""
+        units = [_unit(["甲"], utype="item", key="1.1-1", ntype="example"),
+                 _unit(["乙"], utype="item", key="1.1-1", ntype="example")]
+        self.emit(units)
+        sdu.split_chapter(self.ext, "1", "en", force=True)
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        self.mark_done(recs[0]["file"], "甲的稿子")
+        self.mark_done(recs[1]["file"], "乙的稿子")
+        self.emit([_unit(["丙"], utype="item", key="1.1-1", ntype="example")] + units)
+        sdu.split_chapter(self.ext, "1", "en", force=True, keep_done=True)
+        recs = json.load(open(os.path.join(self.dir_of(), "manifest.json"),
+                              encoding="utf-8"))["units"]
+        # 位置 0 是全新的丙（无旧稿）；位置 1/2 的旧稿源已错位 ⇒ 一律保守回 DRAFT
+        for r in recs:
+            self.assertIn("DRAFT unit:", self.read(r["file"]).splitlines()[0])
+        self.assertIn("丙", self.read(recs[0]["file"]))
 
     def test_draft_units_are_not_indexed(self):
         self.emit([_unit(["A"], key="D1")])

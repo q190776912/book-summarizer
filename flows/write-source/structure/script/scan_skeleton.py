@@ -118,6 +118,30 @@ _EXER_GARBLE_LETTER = {'0': 'O', '1': 'I'}
 # titles are still rejected below (`_sec2_title_ok`).
 SEC_2 = re.compile(r"^(?:['\u2019\u00b6\u00a7\u2020\*]\s*)?(\d{1,2})\.?\s+[+*x\u00d7\u2605\u2606]?\s*([A-Z0-9&].{3,72})$")
 
+# 🔴 LETTER-CODED SECTIONS (Axler《Measure, Integration & Real Analysis》体例,
+# config_setting 规则5 增量扩展): 小节印 `2A Outer Measure on R` /
+# `2B Measurable Spaces and Functions`(章号 + 单大写字母后缀、无分隔符、字母后
+# 接空格 + 标题)。启用 `letter_sections` 时由本正则识别为 SEC 行(键 = "2A"),
+# 并抑制数字 N.M 小节检测(让 2.1/2.2… 等「章.号」结果不被误判为小节)。
+# 默认 False —— 其余书零影响。
+# 🔴 章节首现标题偶用「Section 1A Review: Riemann Integral」式页眉体(尤其 1A
+# 这类 review 小节, 正文内只见该形态, 干净 `1A …` 仅现于目录页, 故章体扫描抓
+# 不到)。故允许可选 `Section ` 前缀; 该前缀不匹配数字 N.M 小节(`Section 1.2`
+# 点号不在 `[A-Z]` 字符类), 不会误伤。
+LETTER_SEC = re.compile(
+    r"^(?:Section\s+)?(?:['\u2019\u00b6\u00a7\u2020\*]\s*)?(\d{1,2})([A-Z])\s*"
+    r"([A-Z0-9&].{3,72})$")
+
+
+def _letter_sec_title_ok(title: str) -> bool:
+    """Reject LETTER_SEC titles that are pure numbering/math fragments."""
+    t = title.strip()
+    if not t:
+        return False
+    if re.fullmatch(r"\d{1,2}(?:[.\uFF0E]\d{1,3})*[.．]?", t):
+        return False
+    return bool(re.search(r"[A-Za-z\u4e00-\u9fff]", t))
+
 
 def _sec2_title_ok(title: str) -> bool:
     """Reject SEC_2 titles that are pure numbering/math fragments ("2.3", "8 12")."""
@@ -763,6 +787,30 @@ def _local_num_title_ok(title):
     return True
 
 
+# 🔴 附录显式节头 `Section A.1. <标题>`（Lehmann《Elements of Large-Sample
+# Theory》附录实测 2026-10-15，全书 7 节 A.1…A.7）：节号首分量是**字母章位**，
+# 且印面在号前冠完整词 `Section`。两条既有通道都看不见它——通用检测器
+# `_SEC_HEAD_RE` 只吃数字起头（词首的 S 被当装饰符吃掉后要求数字，落空），
+# `SUB_GLOBAL` 只吃**裸**字母起头。结果附录契约 sections=0、条目无处可挂，
+# 完整性闸门的「sections=0 → 无可查漏」退化成 vacuous PASS（假绿）。
+# 判据（章末 Problems 分组头 `Section A.1`…`Section A.6` 与真节头**同前缀**，
+# 必须区分；实测 p601–603）：
+#   * 行首 `Section`/`Sections`（大写 S；散文回指常小写或被 OCR 断在句中）；
+#   * 字母 + 分隔符 + 节号，**号后必须有 Title-Case 标题**（分组头是裸
+#     `Section A.1`，无标题）且标题过 `_local_num_title_ok`（无数学运算符、
+#     不含 Chapter/Appendix 页眉词）；
+#   * scan() 内的 (字母, 号) 单调 + 键首现闩锁（见 `SEC_APP_WORD` 消费处）——
+#     重号分组头与页眉复本一律落空。
+SEC_APP_WORD = re.compile(
+    r'^(?:Sections?|SECTIONS?)\s+([A-Z])[.\-–·]?\s*(\d{1,2})\b[.\-–·]?\s+'
+    r'([A-Z][^\n]{2,71})$')
+# 标题**内部**成句否决：「句号 + 空白 + 大写」= 两句之间，真节题是名词短语，
+# 永不含句子边界（散文回指如 `Section A.4. The result follows. Indeed the proof`
+# 才会）。冒号/逗号接续（`The central limit theorem: Sketch of a proof`）不在
+# 本式之内，照旧放行。
+_SEC_SENT_BREAK_RE = re.compile(r'\.\s+[A-Z]')
+
+
 ITEM_CN = re.compile(
     r'^(?:定理|定义|引理|推论|命题|性质|例|注|表|图)\s*[（(]?(\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)]?(?!\d)\s*(.{0,90})')
 BARE_CN = re.compile(r'^[（(](\d{1,2})[\.\．·。](\d{1,2})[\.\．·。](\d{1,3})[）)](?!\d)\s*(.{0,90})')
@@ -796,6 +844,17 @@ EXER_HEADING = re.compile(
 # （如习题行 "3.11 Two cards..." 恰好通过 universal 节检测）都不再重置。
 # 标题行匹配允许 OCR 大小写漂移与标题内部空白折叠；标题前允许页眉碎屑
 # （§/8/S/$ 与可选编号），与 EXER_HEADING 同构。
+# 🔴 尾部碎屑类含**数字**：扫描书把页码与节题**粘进同一块**（Lehmann《Elements of
+# Large-Sample Theory》实测 2026-10-16——印面页眉 "2.9 Problems   121" 被 OCR 连排成
+# `2.9 Problems121` / `1.7 Problems  35`，旧尾类 `[.\s:.]*` 只容标点/空白 → 整行失配，
+# `build_structure` 收割到的 section `name` 无法与块头判据同源认领，章末习题节被当成
+# 普通正文节写出）。只放宽**尾部**：标题词仍须整行锚定，散文回指
+# （"(Problem 8.15)."、"and Problem 2.4.12."）因带句读外的实词照样不匹配。
+# 该判据只在书声明了 `exercise_region_headings`（opt-in）时被构造，其余书零回归。
+# 🔴 序标前缀容**字母章位**（附录 `A.7 Problems`，Lehmann 附录实测 2026-10-16）：
+#   旧前缀只容 `\d{1,2}(\.\d{1,3})?`，字母章位书的章末习题节节头整行失配 → 闩锁不激活、
+#   `build_structure` 的「整节都是习题」认领也落空，题面散文被当正文节写出。
+#   只加一个可选字母 + 分隔符，标题词仍须整行锚定。
 def _exercise_headings_re(headings):
     parts = []
     for h in headings or []:
@@ -806,8 +865,8 @@ def _exercise_headings_re(headings):
     if not parts:
         return None
     return re.compile(
-        r'^[§8Ss$\s]*(?:\d{1,2}(?:[.\-–·]\d{1,3})?[.\s]*)?'
-        r'(?:' + '|'.join(parts) + r')[.\s:.]*$', re.IGNORECASE)
+        r'^[§8Ss$\s]*(?:[A-Za-z]?[.\-–·]?\d{1,2}(?:[.\-–·]\d{1,3})?[.\s]*)?'
+        r'(?:' + '|'.join(parts) + r')[.\s:.0-9]*$', re.IGNORECASE)
 
 # 章末习题块内的数字题号行："3.11. Two cards are ..." / "3.7 The king ..."。
 # 仅当本书声明了 exercise_region_headings（opt-in）且闩锁已激活时捕获为 EXER。
@@ -935,6 +994,58 @@ _SEC_TITLE_LABEL_NUM_RE = re.compile(
     r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)\s*\d')
 
+# ---------------------------------------------------------------------------
+# 🔴 「换行交叉引用」否决（Lehmann《Elements of Large-Sample Theory》ch3 实测
+# 2026-10-17）：印面 p172 是一句**跨行散文**
+#     To see how to choose θ_n, consider the situation assumed in Theorem
+#     3.3.1. Replacing θ by θ_n in (3.3.4) gives
+# 第二行行首恰是「点分编号 + 句点 + 大写词」，于是 universal 节检测器把
+# `3.3.1 Replacing 0 by 0n in (3.3.4) gives` 当成三级小节头发进骨架 → 契约凭空
+# 多出 §3.3.1（自带内容 0 块、只挂一个 description 子节点）。既有守卫全部落空：
+# 首词 "Replacing" 不在句首虚词表、也不是小写；标题无「句读+空格+小写」从句（故
+# `_SEC_TITLE_CLAUSE_PROSE` 不触发，那是 Bass 21.30 的形态）；无尾句读；不含标签词
+# +数字。后果不是「多一个空节」而是**写手无路可走**：门控 `lib/section_titles`
+# 要求单元 H2 与契约 name 互当前缀，照抄残缺名 = 成品里凭空多一行假节题（违反保
+# 真），按印面写 θ/θ_n = 判「互非前缀」FAIL——即该单元不存在任何合法 DONE 写法
+# （2026-10-17 ch3_b01 实报）。
+#
+# 判据取**两条同时成立**（单条都会误杀真节头）：
+#   ① 上一行以条目/章节标签词收尾（含可选尾随逗号/冒号）——说明本行行首的数字
+#      是该标签的**被引用编号**，不是节号；
+#   ② 本行数字后紧跟句点（`3.3.1.`）——那是引用句的句号。真节头 `C.S Title` 不带
+#      尾点；带点的书（do Carmo "1-2. Parametrized Curves"、Serre "5.1 The cyclic
+#      group C,"）此时①必不成立（上一行是散文句尾，不会停在 "Theorem" 一词上）。
+# 只加在 universal 通道（`_section_header_info`），SEC_GLOBAL / GLUE / PLAIN 等
+# 带 § 前缀或单分量的通道一律不触 → 其余书零回归。已知**漏报**（保守代价）：
+# ①成立而②不成立（印面引用号后无点，如 Bass 那类）仍由既有从句散文闸负责。
+#
+# 🔴 标签词表**刻意不含** Equation / Note / Proof（跨书标定 2026-10-17，58 书目录 /
+# 13 书有契约+页面，逐条人工看过每个命中）：`Equation` 会以普通名词收尾真句子
+# ——Evans《PDE》p71 印面小节头 «2.3.3. Properties of solutions.» 的上一行正是
+# 「…maximum principle for the heat equation」，收 Equation 即**误杀真节头**；
+# `note`（"we note"）、`proof`（"the proof"）同理是散文高频尾词。交叉引用停在
+# 这三个词的印面形态极罕见，宁可漏报。剔除后全书标定命中 13→12 处，逐条皆为
+# 「…in Theorem / …in Section / …of Example」换行 + 「编号. 散文句/习题句」，
+# 零真节头损失（Serre《Linear Representations》p144 那条是习题行 «17.1. Extend the
+# definitions of Res and Ind…»，其真节头 «17.1 Change of groups»@p143 编号后无句点，
+# 条件②不成立 → 照旧识别）。
+# 判据测试：tests/test_xref_wrap_phantom_section.py
+# ---------------------------------------------------------------------------
+_XREF_TAIL_RE = re.compile(
+    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
+    r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
+    r'Remark|Figure|Fig|Table|Section|Sect|§)\s*[,:;]?\s*$',
+    re.IGNORECASE)
+
+
+def _xref_wrap_phantom(prev_line, ln, m_end):
+    """True = 本行行首的点分编号是**上一行换行交叉引用**的编号，不是节号。"""
+    if not prev_line:
+        return False
+    if ln[m_end:m_end + 1] != '.':
+        return False
+    return _XREF_TAIL_RE.search(prev_line) is not None
+
 
 # 习题区闩锁内的「真节标题」判据（配合 scan() 的闩锁守卫使用）：
 # 真节标题短（Casella & Berger 全部节标题 ≤ 41 字符，闩锁后首节 Miscellanea
@@ -975,7 +1086,7 @@ def _expected_next_sec(last_num, ch):
 
 def _section_header_info(ln, ch=None, depths=None, max_depth=6,
                          allow_cjk_comma=False, successor_num=None,
-                         section_whitelist=None):
+                         section_whitelist=None, prev_line=None):
     """Return ``(num_str, depth, title)`` for a genuine section header, else
     None.
 
@@ -1014,6 +1125,11 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
             return None
         depth = len(comps)
         if depths is not None and depth not in depths:
+            return None
+        # 🔴 换行交叉引用否决（见 _XREF_TAIL_RE 注释，Lehmann ch3 §3.3.1 实测）：
+        # 上一行停在标签词上且本行编号后紧跟句点 ⇒ 该编号是被引用的条目号，撤销
+        # 节头候选（无条件，不吃序位/白名单豁免）。
+        if _xref_wrap_phantom(prev_line, ln, m_end):
             return None
         # 🔴 三级条/练习头否决（Rising Sea 实测 57 处）：印刷体例「编号紧跟
         # 题头」的书，`C.S.` 后若直接粘连大写字母（'10.1.E.EXERCISE …' /
@@ -1350,7 +1466,7 @@ def _merge_bare_num_head(ln, bi, blocks):
 def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=None,
          exercise_headings=None, plain_sec_heads=False, sections_global=None,
          local_num_sec=False, chapter_local_numbering=False, section_whitelist=None,
-         language='cn'):
+         language='cn', letter_sections=False):
     rows = []
     # 目录真值小节号（agent 依 TOC 写出的 `_section_whitelist.json` 本章清单，
     # 归一为 "N.M" 字符串集合）。仅用于「闩锁内真节头放行」判据（见下方
@@ -1434,6 +1550,10 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # record them here so the filter can exempt only the ones we intentionally
     # emitted (key-set membership, not a loose pattern → no FP leakage).
     local_sec_keys = set()
+    # 🔴 附录 `Section A.N.` 显式节头通道（见 SEC_APP_WORD 注释）：仅章键非数字
+    # 的附录/补篇章启用；`(字母, 号)` 单调递增 + 键首现是分组头/页眉复本的判据。
+    _app_ch = not str(ch)[:1].isdigit()
+    _app_sec_state = None
     # 🔴 Only enable the universal (depth-agnostic) detector when there is at
     # least one depth>=2 section to find.  A book whose sections are single
     # numbers (`## §N`, e.g. do Carmo) has `depths_set == set()` (empty) — the
@@ -1441,10 +1561,16 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
     # leaving it on would silently detect ZERO sections and force every item to
     # page-proximity.  `bool(depths_set)` falls back to the mode's SEC regex
     # (SEC_2 for two-level) which correctly catches single-number sections.
-    use_universal_sec = bool(depths_set)
+    # 🔴 LETTER-CODED SECTIONS (Axler 体例): 字母小节 `2A` 不是数字深度可检测的
+    # 标准小节, universal 检测器对它们完全失明; 且开启它会与下方 LETTER_SEC 通道
+    # 抢同一行。故 `letter_sections=True` 时强制关闭 universal 检测器, 仅走
+    # LETTER_SEC + 数字小节抑制路径。默认 False → 零回归。
+    use_universal_sec = bool(depths_set) and not letter_sections
     # 页眉带线 (页, y)：扫描时按 `is_running_head` 记录，供行后
     # `demote_head_band_rows` 把抢当窗口左界的页眉复本行降级。
     _head_band = set()
+    # 上一文本块的末行（跨块「上一行」，见 _prev_line 注释）。
+    _prev_blk_ln = None
     for p in range(start, end + 1):
         fp = os.path.join(extract_dir, 'page_%03d.json' % p)
         if not os.path.exists(fp):
@@ -1466,12 +1592,44 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             _run_head = is_running_head(ln_x, ln_y, _m_left, _m_span, _m_top)
             if _run_head:
                 _head_band.add((p, ln_y))       # 供 demote_head_band_rows 降级窗口左界
+            # 逐行归一后**仍只取末行**做检测（PaddleOCR 的文本块基本一行一块，
+            # 既有全书行为），但把「上一行」一并留住：`_prev_line` = 块内末行的
+            # 前一行，块只有一行时取**上一块**的末行 —— 供换行交叉引用否决使用
+            # （见 _XREF_TAIL_RE）。整块无文字时直接跳过，不再拿上一块的残值重跑
+            # 一遍检测（旧逻辑 `else: continue` 落到块外，会用陈旧 `ln` 二次发行）。
+            _lns = []
             for _raw in (it.get('text') or '').split('\n'):
-                ln = _raw.rstrip('$').strip()
-                if ln:
-                    ln = EXER_OCR_ONE.sub(r'\g<1>1\g<2>', ln)
-                else:
-                    continue
+                _r = _raw.rstrip('$').strip()
+                if _r:
+                    _lns.append(EXER_OCR_ONE.sub(r'\g<1>1\g<2>', _r))
+            if not _lns:
+                continue
+            ln = _lns[-1]
+            _prev_line = _lns[-2] if len(_lns) > 1 else _prev_blk_ln
+            _prev_blk_ln = ln
+            # --- appendix `Section A.N. Title` heads (see SEC_APP_WORD) -------
+            if _app_ch:
+                _ma = SEC_APP_WORD.match(ln)
+                if _ma:
+                    _L, _an = _ma.group(1).upper(), int(_ma.group(2))
+                    _atitle = _ma.group(3).strip()
+                    _akey = "%s.%d" % (_L, _an)
+                    # 尾标点否决用**本地判据**而非 `_sec_like_title`：后者是「闩锁
+                    # 内散文行」判据，含 `_EXER_SEC_TITLE_MAX` 长度闸（~40 字符），
+                    # 而附录真节题合法地长（Lehmann 实测 A.1/A.5/A.6 三条 43–46
+                    # 字符被它整条否决）。真节题永不成句收尾（跨行连字符要放过）。
+                    _at_tail = _atitle.rstrip('-–— ')
+                    if (_akey not in _sec_emitted and _local_num_title_ok(_atitle)
+                            and not (_at_tail and _at_tail[-1] in '.,;:!?，。；：！？')
+                            and not _SEC_SENT_BREAK_RE.search(_atitle)
+                            and (_app_sec_state is None
+                                 or (_L, _an) > _app_sec_state)):
+                        _app_sec_state = (_L, _an)
+                        _sec_emitted.add(_akey)
+                        last_sec_num = _akey
+                        rows.append((p, 'SEC', _akey, _atitle, ln_y))
+                        in_exercise = False
+                        continue
             # Exercise-region detection (case-insensitive, space-optional so it
             # survives OCR like `EXERCISESFORCHAPTER3`).  Once seen, the chapter
             # is in its exercise block through to the next genuine section
@@ -1507,7 +1665,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                 # 编号习题节标题（"2.6 Exercises"）同时是真实小节：在声明了
                 # section_types 的书里补发 SEC 行进骨架，避免该节从骨架中消失。
                 # （P 层对习题专属节本就豁免必写，但 D 层连续性/骨架仍需要它。）
-                if depths_set is not None:
+                if depths_set is not None and not letter_sections:
                     _secinfo = _section_header_info(ln, ch=ch, depths=depths_set)
                     if _secinfo is not None:
                         rows.append((p, 'SEC', _secinfo[0], _secinfo[2], ln_y))
@@ -1521,7 +1679,7 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # 🔴 STICKY 例外：声明了 exercise_region_headings 的书，章末习题块
             # 之后不再有正文——闩锁激活后跳过 universal 节检测（习题长句
             # "3.11 Two cards..." 会被 universal 检测误判为真节头并错误解除闩锁）。
-            if depths_set is not None and not (sticky_exer and in_exercise):
+            if depths_set is not None and not letter_sections and not (sticky_exer and in_exercise):
                 # chapter_local_numbering：两分量均章内（`4.2` 首分量≠章号），
                 # 关闭 `== ch` 守卫；并放行标题内全角逗号（见函数 docstring）。
                 # 🔴 该模式的「序位豁免」由**闩锁状态**给出（旧版直接设 None ⇒
@@ -1543,7 +1701,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                     depths=depths_set,
                     allow_cjk_comma=chapter_local_numbering,
                     successor_num=_succn,
-                    section_whitelist=_wl_nums)
+                    section_whitelist=_wl_nums,
+                    prev_line=_prev_line)
                 if sec is None:
                     # 数字/标题分块粘连回收（见 _merge_bare_num_head 注释）：
                     # 裸编号行 + 紧邻短标题块 → 合并串重新走全量校验。
@@ -1554,7 +1713,8 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                             depths=depths_set,
                             allow_cjk_comma=chapter_local_numbering,
                             successor_num=_succn,
-                            section_whitelist=_wl_nums)
+                            section_whitelist=_wl_nums,
+                    prev_line=_prev_line)
                 if sec is not None and chapter_local_numbering:
                     # 「A == 当前节 + B 单调」闩锁：杀章内交叉引用/公式行
                     # （"6.1所示" p216、"2.1的第4题可知" p346——彼时当前节是
@@ -1864,7 +2024,23 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                         cur_local_sub = None
                         continue
             if mode == 'two-level':
-                m = SEC_2.match(ln)
+                if letter_sections:
+                    # 🔴 LETTER-CODED SECTIONS (Axler《Measure, Integration &
+                    # Real Analysis》体例): 小节印 `2A Outer Measure on R` /
+                    # `2B Measurable Spaces and Functions`。识别为 SEC 行(键 = "2A")，
+                    # 并**跳过数字 N.M 小节检测**——本书结果(2.1/2.2…)是「章.号」
+                    # 连续编号、从不是小节, 必须留给条目抽取器, 否则会被 SEC_2 误吞
+                    # 成 §2 小节、把 2.1..2.N 全部漏抽。默认 letter_sections=False。
+                    m = LETTER_SEC.match(ln)
+                    if (not in_exercise and m and int(m.group(1)) == ch
+                            and _letter_sec_title_ok(m.group(3))
+                            and int(m.group(1)) <= SEC_MAX_NUMBER
+                            and not m.group(3).rstrip().endswith('.')):
+                        rows.append((p, 'SEC', '%s%s' % (m.group(1), m.group(2)),
+                                     m.group(3).strip(), ln_y))
+                        continue
+                else:
+                    m = SEC_2.match(ln)
                 # 🔴 chapter_first gate: for section-scoped books (do Carmo,
                 # chapter_first=False) section numbers restart per chapter and
                 # are INDEPENDENT of the chapter number, so the `== ch` guard
@@ -1937,10 +2113,22 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
                         rows.append((p, 'EXER', '%s.%s.%s' % m.group(1, 2, 3),
                                      ln[m.end():].strip()[:90]))
                         continue
-                m = SEC_3.match(ln)
-                if not use_universal_sec and m and int(m.group(1)) == ch and not m.group(3).endswith('.'):
-                    rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), m.group(3).strip(), ln_y))
-                    continue
+                if letter_sections:
+                    # 🔴 LETTER-CODED SECTIONS (Axler 体例, 三级书变体): 同 two-level
+                    # 分支, 字母小节 `2A` 识别为 SEC, 抑制数字 N.M 小节检测。
+                    m = LETTER_SEC.match(ln)
+                    if (m and int(m.group(1)) == ch
+                            and _letter_sec_title_ok(m.group(3))
+                            and int(m.group(1)) <= SEC_MAX_NUMBER
+                            and not m.group(3).rstrip().endswith('.')):
+                        rows.append((p, 'SEC', '%s%s' % (m.group(1), m.group(2)),
+                                     m.group(3).strip(), ln_y))
+                        continue
+                else:
+                    m = SEC_3.match(ln)
+                    if not use_universal_sec and m and int(m.group(1)) == ch and not m.group(3).endswith('.'):
+                        rows.append((p, 'SEC', '%s.%s' % m.group(1, 2), m.group(3).strip(), ln_y))
+                        continue
                 m = EXER_3.match(ln)
                 if m and int(m.group(1)) == ch:
                     htxt = (m.group(4) or '').strip()

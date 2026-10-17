@@ -2490,6 +2490,14 @@ def _merged_category_first_missing(ctx, all_keys, blocking):
     if ctx.config.primary_type != ORDINAL_THREE_LEVEL:
         return
     ch = ctx.ch
+    # 🔴 章末**集中习题节**（verify_config `exercise_region_headings`，判据单一真源
+    #   `lib/exercise_region`）整节按 V-I 省略，产出侧 `build_structure` 3a-2 也不把块头
+    #   之后的条目写进合同 → 本层不得按「该节书中含定理 N 条而总结无」索要（Lehmann
+    #   《Elements of Large-Sample Theory》ch1 §1.7 / ch6 §6.6 实测：习题区内印有一条
+    #   `Theorem 1.7-1`，报成 BLOCKING 就是闸逼写手写规定要省略的内容）。
+    #   未声明的书 `section_numbers` 返回空集 → 零回归。
+    from lib import exercise_region as _exreg
+    _ex_secs = _exreg.section_numbers(ctx.ext_dir, ch, ctx.start, ctx.end, ctx.config)
     book_cat = _scan_book_category_items(ch, ctx.start, ctx.end, ctx.ext_dir)
     if not book_cat:
         return
@@ -2502,6 +2510,8 @@ def _merged_category_first_missing(ctx, all_keys, blocking):
         if m and int(m.group(1)) == ch:
             md_by_sec[int(m.group(2))].add(int(m.group(3)))
     for (sec, cat), nums in book_cat.items():
+        if sec in _ex_secs:
+            continue
         bmin = nums[0]
         if bmin in md_by_sec.get(sec, set()):
             continue                        # 该编号在总结中已出现（任何类别）→ 非首项缺失

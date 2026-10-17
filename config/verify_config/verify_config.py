@@ -741,6 +741,24 @@ class BookConfig:
     #     the validated ncomp==1 Q-layer fix does not regress.
     # Default False — every other book is completely unaffected.
     numeric_local_sections: bool = False
+    # LETTER-CODED SECTIONS (Axler《Measure, Integration & Real Analysis》体例,
+    # config_setting 规则5 增量扩展): 小节印 `2A Outer Measure on R` / `2B …`
+    # （章号 + 单字母后缀、无分隔符），与条目的 `章.号`（`2.1`、`2.2`）体例
+    # 完全不同。标准 scan_skeleton 的 SEC 检测只认数字 `N.M` 小节，会**把
+    # `2.1` 结果误判成小节**、又**完全漏检 `2A` 字母小节**。置 True 时：
+    #   * scan_skeleton 新增 `N+A` 字母小节检测（`^(\d{1,2})([A-Z])\s+…`），
+    #     并把数字 `N.M` 小节抑制（结果 `2.1` 不再被当小节，留给条目抽取器）；
+    #   * `2A` 字母小节正常建节节点，`2.1`…`2.N` 结果归入其下。
+    # 默认 False —— 其余书零影响。
+    letter_sections: bool = False
+    # BARE-RESULT EXTRACTION (同上 Axler 体例): 结果以 `章.号` 连续编号
+    # （2.1、2.2、…、2.59），且**大多无标签词**（"2.17 nontrivial intervals
+    # are uncountable" / "2.18 nonadditivity of outer measure"），仅少量带
+    # Definition/Example 标签。标准 extract_items_en 只抽带标签词的结果，
+    # 会整段漏抽无标签结果。置 True 时 extract_items_en 额外抽取 `N.M Title`
+    # 裸号结果（无标签 → type `uncat`），并与带标签结果去重。
+    # 默认 False —— 其余书零影响。
+    bare_results: bool = False
     # END-OF-CHAPTER exercise-block headings (Ross《A First Course in
     # Probability》体例: "Problems" / "Theoretical Exercises" / "Self-Test
     # Problems and Exercises").  When declared (non-empty), scan_skeleton treats
@@ -1160,6 +1178,8 @@ class BookConfig:
             chapter_local_numbering=bool(data.get('chapter_local_numbering', False)),
             sections_global=bool(data.get('sections_global', False)),
             numeric_local_sections=bool(data.get('numeric_local_sections', False)),
+            letter_sections=bool(data.get('letter_sections', False)),
+            bare_results=bool(data.get('bare_results', False)),
             exercise_region_headings=[
                 str(h) for h in (data.get('exercise_region_headings') or [])
                 if str(h).strip()

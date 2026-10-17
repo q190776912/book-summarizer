@@ -229,6 +229,44 @@ def _load_chapter_item_num_tuples(ch, ext):
         return set()
 
 
+def _load_chapter_consolidated_sec_tuples(ch, ext):
+    """本章契约里 **consolidated 节**的全数字键元组集合（如 §2.9「Problems」-> ``(2, 9)``）。
+
+    整节都是集中习题的章末节（声明 `exercise_region_headings` 的书；印面形如
+    ``2.9 Problems``）按 writing-rules V-I「集中习题块一律省略；整节都是习题的节同理
+    省略」恒不写出——产出侧（`split_draft_units` / `unit_node_entries`）与 merge 证据
+    （`_missing_contract_names`）都跳过该子树。D 层的「源有节头 + 编号项」判据只看
+    原书印面，不知道这条规则，于是会对同一形态索要「MISSING TAIL SECTION」= **闸逼
+    写手写书里规定要省略的内容**（与产出侧互相矛盾）。故按契约标记剔除，与条目号剔除
+    同理属纠错而非掩盖。契约不可用时返回空集 = 行为不变。
+    """
+    try:
+        from data.book_structure.book_structure import BookStructure
+        from verify.script.check_structure_completeness import load_contract
+        bs = BookStructure.load(ext)
+        if bs is None:
+            return set()
+        node = bs.find_chapter(str(ch))
+        if node is None:
+            return set()
+        tree, _, _ = load_contract(node)
+        out = set()
+
+        def _walk(n):
+            for c in (n.get("sub_sec") or []):
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "section" and c.get("consolidated") and c.get("key"):
+                    ds = re.findall(r"\d+", str(c["key"]))
+                    if ds:
+                        out.add(tuple(int(x) for x in ds))
+                _walk(c)
+        _walk(tree if isinstance(tree, dict) else {})
+        return out
+    except Exception:
+        return set()
+
+
 def _filter_d_layer_by_contract(result, ch, ext):
     """Drop section entries whose (chapter, *nums) tuple is an item number in the
     contract (e.g. Theorem 2.25 -> (2, 25)). Mirrors the _contract_item_num_tuples
@@ -242,14 +280,19 @@ def _filter_d_layer_by_contract(result, ch, ext):
     can NOT be a real missing section — a real missing section would not also be
     a captured item. Filtering is correction, not concealment.
 
+    🔴 同闸再剔除契约标 `consolidated` 的节（整节集中习题恒按 V-I 省略，见
+    `_load_chapter_consolidated_sec_tuples`）。
+
     Returns the (possibly filtered) result unchanged when the contract is
     unavailable (empty item_num_tuples) — no behavioral regression.
     """
     if not result:
         return result
     item_num_tuples = _load_chapter_item_num_tuples(ch, ext)
-    if not item_num_tuples:
+    cons_sec_tuples = _load_chapter_consolidated_sec_tuples(ch, ext)
+    if not item_num_tuples and not cons_sec_tuples:
         return result
+    drop = set(item_num_tuples) | set(cons_sec_tuples)
 
     def _keep(rp):
         if not rp:
@@ -258,7 +301,7 @@ def _filter_d_layer_by_contract(result, ch, ext):
             t = (ch,) + tuple(int(x) for x in rp.split('.'))
         except ValueError:
             return True
-        return t not in item_num_tuples
+        return t not in drop
 
     levels = result.get('levels', {}) or {}
     new_levels = {}
@@ -708,6 +751,18 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
 
     raw_sec_header = {L: set() for L in range(1, max_level + 1)}
     raw_labeled_item = {L: set() for L in range(1, max_level + 1)}
+    # 🔴 声明了 `exercise_region_headings` 的书：印面「章末集中习题节」（`1.7 Problems`）
+    #   不是「须写出的节」——writing-rules V-I 规定集中习题块（含**整节都是习题**的节）一律
+    #   省略，产出侧（`build_structure` 4a-exer + STICKY 闩锁 + 3a-2 条目切断）据此不落该节，
+    #   D 层若仍把它当源真值节索要，就是**闸逼写手写书里规定要省略的内容**（Lehmann《Elements
+    #   of Large-Sample Theory》ch1 §1.7 实测：该节头连契约都没进，D 层照报 MISSING TAIL
+    #   SECTION，且节内 `Theorem 1.7-1` 还会投影出 (1,7) 的 labeled 证据）。
+    #   判据与产出侧同源，收在 `lib/exercise_region`（标题匹配器 = 同一个
+    #   `scan_skeleton._exercise_headings_re`，页眉带不算块头）；未声明的书返回空 → 零回归。
+    from lib import exercise_region as _exreg
+    _ex_head_rx = _exreg.headings_re(cfg)
+    ex_sec_nums = {(ch, s) for s in
+                   _exreg.section_numbers(ext, ch, start, end, cfg, page_dir=None)}
     _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
         fp = os.path.join(_pdir, f'page_{p:03d}.json')
@@ -719,6 +774,10 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
             txt = t.get('text', '').strip()
             if not txt:
                 continue
+            if _ex_head_rx is not None and any(
+                    _ex_head_rx.match(ln.strip().rstrip('$').strip())
+                    for ln in txt.split('\n')):
+                continue      # 该块是章末习题块节头：不贡献节头证据
             for rgx in (D_SEC_HEAD_A, D_SEC_HEAD_B):
                 m = rgx.match(txt)
                 if m:
@@ -757,6 +816,14 @@ def check_d_layer(ch, start, end, md_file, ext, cfg=None, ordinal=ORDINAL_THREE_
                     continue
                 if _d_is_labeled(txt, m):
                     _project(c, section_depths, raw_labeled_item)
+
+    # 章末集中习题节：该节号**及其后代**从两份源真值证据里一并摘除
+    # （等价于产出侧 3a-2「块头起至章末不抽条目」的切断）。
+    for _e in ex_sec_nums:
+        for L in range(1, max_level + 1):
+            for _dic in (raw_sec_header, raw_labeled_item):
+                _dic[L] = {t for t in _dic[L]
+                           if not (t[:len(_e)] == _e[:len(t)])}
 
     result = _partition_sections_by_level(md_sections, raw_sec_header, raw_labeled_item, max_level)
     # 🔒 纠错过滤（与 step2_sections 的 _contract_item_num_tuples 同构）：D 层把

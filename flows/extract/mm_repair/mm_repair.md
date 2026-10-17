@@ -68,7 +68,7 @@ python flows/extract/mm_repair/script/mm_repair_apply.py "<_extract_dir>"
     - text 方向：原 text 项被这些段整体替代 / 删除；formula 方向：原 formula 项被删除（纯文本）或保留（含公式段时更新 `latex`）。
   - 修正条目：`text`/`latex` 更新，原值存 `text_ocr`/`latex_ocr`，加 `mm_repaired: true`；
   - 确认 OK：加 `mm_reviewed: true`。
-  - **`unavailable`（不可恢复，跳过，不污染内容）**：条目经多轮视觉审读仍判为不可恢复（纯 OCR 噪声 / 严重乱码碎片）→ 设 per-entry `mm_unavailable: true` + 页级 `data["MM_UNAVAILABLE"] = true` + manifest 该条目 `resolved = true`（闸门放行，满足出口「每页至少一标记」）。下游 `dump_chapter_ocr.py` 导出 OCR 时跳过（`if fo.get("mm_unavailable"): continue` / `if t.get("mm_unavailable"): continue`），writer agent 不会看到垃圾条目，内容不被污染。🔴 不可恢复必须诚实标 `unavailable`，**绝不强行编造修正值**（会污染书内容）。
+  - **`unavailable`（不可恢复，跳过，不污染内容）**：条目经多轮视觉审读仍判为不可恢复（纯 OCR 噪声 / 严重乱码碎片）→ 设 per-entry `mm_unavailable: true` + 页级 `data["MM_UNAVAILABLE"] = true` + manifest 该条目 `resolved = true`（闸门放行，满足出口「每页至少一标记」）。下游 `dump_chapter_ocr.py` 导出 OCR 时跳过（`if fo.get("mm_unavailable"): continue` / `if t.get("mm_unavailable"): continue`），writer agent 不会看到垃圾条目，内容不被污染。🔴 **真正给契约喂内容的 `attach_content._collect_blocks` 同样必须兑现这条**（2026-10-15 Lehmann 实测：apply 只打标记、**不删条目**，而该函数原先不看 `mm_unavailable`，其内置的几何去重又只认「互相重合」的整块（`inter/max(ta,fa)>0.5`），于是「整条被高置信 display 公式框包住的薄文本带」（本书 659/2042 条）会以散文残渣混进单元、与同页 latex 重复）——现 text 侧开头即 `if b.get("mm_unavailable"): continue`；判据测试 `flows/write-source/structure/script/tests/test_mm_unavailable_text_skipped.py`（含「无标记不受影响」「标记为 False 不算跳过」两条负向）。🔴 不可恢复必须诚实标 `unavailable`，**绝不强行编造修正值**（会污染书内容）。
   - **幂等**：manifest 已 `resolved` 的条目（含 `mm_repaired` / `mm_reviewed` / `mm_unavailable`）一律跳过（apply 开头 `if e.get("resolved"): continue`），重复跑安全。
 - 回写后立即 `json.load` 复验（保持 schema 不变、UTF-8、JSON 合法）。
 

@@ -77,33 +77,58 @@ class TestDetectFigNumbering(unittest.TestCase):
             shutil.rmtree(ext, ignore_errors=True)
 
     def test_two_level_series(self):
-        d, labels = self._det(["Figure 1.1 The system", "Figure 1.2 Second caption"])
+        d, labels, sc = self._det(["Figure 1.1 The system", "Figure 1.2 Second caption"])
         self.assertEqual(d, 2)
         self.assertIn("Figure", labels)
+        self.assertEqual(sc, 2, "两段图号（章.图）的窗口就是章级")
 
     def test_global_integer_series(self):
-        d, labels = self._det(["Fig. 3 Some caption", "Fig. 4 Another caption"])
+        d, labels, sc = self._det(["Fig. 3 Some caption", "Fig. 4 Another caption"])
         self.assertEqual(d, 1)
         self.assertIn("Fig", labels)
+        self.assertEqual(sc, 1, "全局整数图号必须 book 级（旧写死 2 会打开跨章守卫）")
 
     def test_three_level_series(self):
-        d, _ = self._det(["Figure 1.2.3 cap", "Figure 1.2.4 cap"])
+        d, _lab = self._det(["Figure 1.2.3 cap", "Figure 1.2.4 cap"])[:2]
         self.assertEqual(d, 3)
 
+    def test_three_level_per_section_restart_gets_scope_3(self):
+        # Lehmann 印面实况：Figure 1.2.1…1.2.4 / 1.4.1…1.4.4 / 1.6.1…1.6.2，
+        # 末段**每节从 1 重启** → 计数器窗口是节级（scope 3）。旧实现写死
+        # `1 if depth==1 else 2`，三级图号书一律被赋 scope 2。
+        d, _l, sc = self._det([
+            "Figure 1.2.1 First caption", "Figure 1.2.2 Second caption",
+            "Figure 1.2.3 Third caption", "Figure 1.4.1 Another section",
+            "Figure 1.4.2 Keeps restarting", "Figure 1.6.1 Yet another",
+            "Figure 2.2.1 New chapter restarts too"])
+        self.assertEqual(d, 3)
+        self.assertEqual(sc, 3, "末段跨节重启必须判 scope 3：%r" % (sc,))
+
+    def test_three_level_continuous_inside_chapter_gets_scope_2(self):
+        # 章内跨节**连续**编号（1.2.1,2 后 1.4.3,4），换章才从 1 重启 → scope 2；
+        # 不得凭「跨节一跳」冒充 scope 3。
+        d, _l, sc = self._det([
+            "Figure 1.2.1 First", "Figure 1.2.2 Second",
+            "Figure 1.4.3 Third", "Figure 1.4.4 Fourth",
+            "Figure 2.1.1 New chapter restarts", "Figure 2.3.2 Continues"])
+        self.assertEqual(d, 3)
+        self.assertEqual(sc, 2, "章内连续、章末重启必须判 scope 2：%r" % (sc,))
+
     def test_cjk_series(self):
-        d, labels = self._det(["图 2.1 系统框图", "图 2.2 另一个图"])
+        d, labels, sc = self._det(["图 2.1 系统框图", "图 2.2 另一个图"])
         self.assertEqual(d, 2)
         self.assertEqual(labels, ["图"])
+        self.assertEqual(sc, 2)
 
     def test_cross_reference_only_is_not_a_series(self):
         # Single distinct number repeated in prose = cross-references, not
         # captions -> must NOT fake a numbering scheme.
-        d, _ = self._det(["see Figure 7 above", "as in Figure 7", "cf. Figure 7"])
+        d = self._det(["see Figure 7 above", "as in Figure 7", "cf. Figure 7"])[0]
         self.assertEqual(d, 0)
 
     def test_no_figures(self):
-        d, labels = self._det(["Theorem 1.1 Every ring has an identity.",
-                               "Proof. Consider the ideal."])
+        d, labels, sc = self._det(["Theorem 1.1 Every ring has an identity.",
+                                   "Proof. Consider the ideal."])
         self.assertEqual(d, 0)
         self.assertEqual(labels, [])
 

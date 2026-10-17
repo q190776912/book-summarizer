@@ -1,8 +1,27 @@
 #!/usr/bin/env python3
+"""写手逐单元自检入口：对单个单元跑**章门控的同一套装配**（步骤 5）。
+
+    python tools/_selfcheck_unit.py "<单元文件绝对路径>"
+
+🔴 本脚本只做一件事：把单元路径反解成 `(extract_dir, 章键, units_sub, 文件名)`，
+再调 `gate_units.gate_chapter(..., only_unit=<文件名>)`。判据本体在门控里，这里
+**不得**再自己组一次 `check_body` 调用。
+
+成因（Lehmann《Elements of Large-Sample Theory》ch1，2026-10-16）：本脚本原来是另起
+一次 `check_body(...)`，参数只给了 `expected_tags/expected_images/content_blocks`，
+少给 `ext_dir`/`ch` ⇒ 第 19 项「顶层散文照抄」整个缺席（该项按这两参数开关），
+`source_text`/`node_type`/`ord_keys`/#23 标签对账/真实 KaTeX 渲染同样不在场。写手据此
+打印 `RESULT OK` 翻 DONE，章门控再把**同一单元**打回（0013 / 0026 / 0035 三例），
+平白多一轮返工。「自检比门控松」是结构性假绿：入口必须由门控自己提供，
+让两者共用同一行调用点（判据测试
+`flows/write-source/script/tests/test_gate_unit_mode.py`）。
+
+输出契约（写手作业单按这些 token 判断，勿改）：`MARK <DRAFT|DONE>` / `PROB …` /
+`RESULT OK|FAIL`；退出码 0 = 该单元 DONE 且门控放行。
+"""
 import os
-import sys
-import json
 import re
+import sys
 from pathlib import Path
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
@@ -11,53 +30,66 @@ for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
         break
 else:
     _ROOT = str(Path(__file__).resolve().parents[2])
-for _p in (_ROOT, os.path.join(_ROOT, "lib"),
-           os.path.join(_ROOT, "flows", "write-source", "script")):
+for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
 
-"""单元质量自检：对单个单元文件跑 check_unit_quality.check_body 并打印问题。"""
-from check_unit_quality import check_body
+sys.stdout.reconfigure(encoding="utf-8")
+
+import gate_units
+from data.book_structure.book_structure import (  # noqa: E402
+    list_chapter_keys, prime_chapter_kinds, unit_dir_name)
+
+MARK_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit:")
+
+
+def _fail(msg):
+    print("PROB %s" % msg)
+    print("RESULT FAIL")
+    return 1
+
 
 def main():
-    unit_path = sys.argv[1]
-    with open(unit_path, encoding="utf-8") as f:
-        raw = f.read()
-    m = re.match(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->", raw)
-    if not m:
-        print("BAD first line")
-        return 1
-    body = raw[m.end():].lstrip("\r\n")
-    ch_dir = os.path.dirname(unit_path)
-    mpath = os.path.join(ch_dir, "manifest.json")
+    if len(sys.argv) != 2:
+        return _fail("用法：python tools/_selfcheck_unit.py <单元文件绝对路径>")
+    unit_path = os.path.abspath(sys.argv[1])
+    if not os.path.isfile(unit_path):
+        return _fail("单元文件不存在：%s" % unit_path)
+    d = os.path.dirname(unit_path)
     fname = os.path.basename(unit_path)
-    exp_tags = exp_imgs = content = None
-    name = m.group(5)
-    utype = m.group(3)
-    if os.path.exists(mpath):
-        man = json.load(open(mpath, encoding="utf-8"))
-        for u in man.get("units", []):
-            if u.get("file") == fname:
-                exp_tags = u.get("tags")
-                exp_imgs = u.get("images")
-                content = u.get("content")
-                name = u.get("name") or name
-                utype = u.get("type") or utype
-                break
-    ok, probs = check_body(
-        utype, name, body,
-        expected_tags=exp_tags if exp_tags is not None else None,
-        expected_images=exp_imgs if exp_imgs is not None else None,
-        content_blocks=content,
-    )
-    print("MARK", m.group(1))
-    for p in probs:
-        print("PROB", p)
-    good = ok and m.group(1) == "DONE"
-    print("RESULT", "OK" if good else "FAIL")
-    return 0 if good else 1
+    units_sub = os.path.basename(os.path.dirname(d))
+    ext = os.path.dirname(os.path.dirname(os.path.dirname(d)))
+    # 🔴 布局不符即拒绝，绝不退回「弱一点的自检」：静默降级就是下一个假绿。
+    if units_sub not in ("units", "units-translate"):
+        return _fail("路径形态不是 <extract>/book_structure/%s/<章目录>/<文件>：%s"
+                     % ("units|units-translate", unit_path))
+    if not os.path.isfile(os.path.join(d, "manifest.json")):
+        return _fail("该单元目录缺 manifest.json（登记处不在场，无法对账）：%s" % d)
+    with open(unit_path, encoding="utf-8") as f:
+        head = f.readline()
+    m = MARK_RE.match(head)
+    if not m:
+        return _fail("首行标记缺失/损坏（须含 `<!-- book-summarizer DRAFT|DONE unit: ...`）")
+    print("MARK %s" % m.group(1))
+    prime_chapter_kinds(ext)
+    unit_dir = os.path.basename(d)
+    ch_key = next((k for k in list_chapter_keys(ext)
+                   if unit_dir_name(k) == unit_dir), None)
+    if ch_key is None:
+        return _fail("目录 %s 对不上本章任何分章契约的单元目录名（章键无法归属，"
+                     "自检不可用）" % unit_dir)
+    ok, detail = gate_units.gate_chapter(ext, ch_key, units_sub=units_sub,
+                                        only_unit=fname)
+    lines = [ln.strip() for ln in (detail or "").splitlines() if ln.strip()]
+    if lines:
+        print(lines[0])
+    for line in lines[1:]:
+        print("PROB %s" % line)
+    print("RESULT %s" % ("OK" if ok else "FAIL"))
+    return 0 if ok else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

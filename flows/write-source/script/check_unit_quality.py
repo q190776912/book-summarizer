@@ -842,6 +842,111 @@ def math_glue_problems(body, limit=4):
         out.append("  …共 %d 处" % len(hits))
     return ["\n".join(out)]
 
+
+# 🔴 第 25 项「松散 OCR 数学形态」判据（Lehmann ch7_b03 2026-10-18 现场）：写手把
+#     OCR 的 `v ^ { \prime }`、`\delta _ { n }`、`\begin{array} { l l }`、`3 . 6 2 8 8`
+#     原样搬进正文，逐单元自检照样 RESULT OK —— writing-rules V-C「严禁照抄 OCR」是
+#     **硬要求**，但门控里此前**没有任何机械判据**，只有该书 `_extract/` 里一次性的
+#     探针脚本在数，于是「改好」只保证 KaTeX 能渲染，不保证不是照抄。
+#     判据只作用于**数学片段**（行内 `$...$` 之间的内容、`$$` 围栏内的整行，去掉
+#     `\tag{}`），因为紧凑 LaTeX 在这三处**从不**出现下列形态：
+#       · `x _ { n }` / `v ^ { \prime }`   上下标标记与花括号断开
+#       · `\frac { a } { b }`              命令与花括号断开（命令表见 _LOOSE_MATH_CMDS）
+#       · `3 . 1 . 1` / `1 0 ^ { 6 }`      数字被逐位摊开
+#     散文视图完全不看（表格数字列、年份串、`p. 12` 一类不受影响），
+#     `\begin{array}{ccc} 1 & 2 & 3` 这种合法矩阵行也不受影响（`&` 不是空白）。
+#     跨库校准（2026-10-18，51 库 units 扫描）：本书已封章 ch1 = 0 处；
+#     Katok / Vakil / Kreyszig / Evans 等**已交付**书各有残留（属真实 backlog，
+#     已在报告里列出，不在本轮回溯改动）。
+_LOOSE_MATH_CMDS = (
+    "d?t?frac|sqrt|binom|dbinom|sum|int|limits|substack|left|right|begin|end"
+    "|bigg?[lr]?|underbrace|overbrace"
+    "|bar|hat|tilde|dot|ddot|check|breve|vec|widehat|widetilde"
+    "|math(?:cal|bb|bf|rm|it|sf|tt|frak)|operatorname|text"
+)
+_LOOSE_MATH_SUB = re.compile(r"[_^]\s+\{")
+_LOOSE_MATH_CMD = re.compile(r"\\(?:%s)\s+\{" % _LOOSE_MATH_CMDS)
+# 定界/可选参数命令的松散形态：`\left (`、`\Bigl \{`、`\sqrt [ n ]`、`\sqrt [ n ] { x }`
+# 里命令与开界符之间断开（紧凑写法 `\left(`、`\sqrt[n]{x}` 从不留空格）。
+_LOOSE_MATH_DELIM = re.compile(
+    r"\\(?:left|right|big[glmr]?|Big[glmr]?|bigg[glmr]?|Bigg[glmr]?)\s+[\(\[\{|]"
+    r"|\\sqrt\s+\["
+    r"|\]\s+\{")
+_LOOSE_MATH_DIGIT = re.compile(r"\d\s+\.\s+\d|\d\s+\d\s+\d")
+_LOOSE_MATH_PATTERNS = (_LOOSE_MATH_SUB, _LOOSE_MATH_CMD,
+                        _LOOSE_MATH_DELIM, _LOOSE_MATH_DIGIT)
+_LOOSE_MATH_TAG = re.compile(r"\\tag\s*\{[^{}]*\}")
+
+
+def _math_fragments(line):
+    """一行里的**行内**数学片段（`$...$` 之间的内容）。
+
+    含 `$$` 的行、`<!--` 注释行、`$` 为奇数的行（由公式闭合判据负责）→ 返回空，
+    避免与既有检测重复报同一处。行间块内容由 `loose_math_problems` 的状态机处理。
+    """
+    s = line.lstrip()
+    while s.startswith(">"):
+        s = s[1:].lstrip()
+    if not s or s.startswith("<!--") or "$$" in s:
+        return []
+    if line.count("$") % 2 or "\\$" in line:
+        return []
+    parts = line.split("$")
+    return [parts[k] for k in range(1, len(parts) - 1, 2)]
+
+
+def _display_body(line):
+    """行首 `>` 标记剥离后的内容；本行若为 `$$` 围栏标记行则返回 None。"""
+    s = line.lstrip()
+    while s.startswith(">"):
+        s = s[1:].lstrip()
+    s = s.strip()
+    return None if s == "$$" else s
+
+
+def loose_math_problems(body, limit=5):
+    """第 25 项：照抄 OCR 留下的松散数学形态 → 问题列表（按行判，报行号）。
+
+    数学片段两类都看：① 行内 `$...$`；② `$$` 围栏**内**的整行（display 块中间的
+    行没有 `$`，只能靠状态机识别——这正是 OCR 松散形态最常堆积的地方）。
+    """
+    hits = []
+    in_display = False
+    for i, ln in enumerate(str(body or "").split("\n"), start=1):
+        if in_display:
+            s = _display_body(ln)
+            if s is None:                # `$$` → 退出围栏
+                in_display = False
+                continue
+            frags = [s]
+        else:
+            s = _display_body(ln)
+            if s is None:
+                in_display = True
+                continue
+            if s.startswith("$$") and s.endswith("$$") and len(s) > 4:
+                frags = [s[2:-2]]        # 单行 display（围栏判据另拦，此处仍查形态）
+            else:
+                frags = _math_fragments(ln)
+        for frag in frags:
+            frag = _LOOSE_MATH_TAG.sub("", frag)
+            for pat in _LOOSE_MATH_PATTERNS:
+                m = pat.search(frag)
+                if m:
+                    a = max(0, m.start() - 12)
+                    hits.append((i, frag[a:m.end() + 14].strip()))
+                    break
+    if not hits:
+        return []
+    out = ["照抄 OCR 的松散数学形态（V-C 硬要求：须读懂语义重写成紧凑 LaTeX，"
+           "如 `x _ { n }`→`x_{n}`、`\\frac { a } { b }`→`\\frac{a}{b}`、"
+           "`\\begin{array} { l l }`→`\\begin{array}{ll}`、`3 . 1 . 1`→`3.1.1`）"]
+    out += ["  L%-4d %s" % (no, frag) for no, frag in hits[:limit]]
+    if len(hits) > limit:
+        out.append("  …共 %d 处" % len(hits))
+    return ["\n".join(out)]
+
+
 def label_key_problems(body, ord_keys, ch_num):
     """第 23 项：单元行首**粗体条目/习题标签**里的三级序标必须是本章契约登记的编号。
 
@@ -1342,5 +1447,10 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     #     源侧零拦截 → 双语产物从源头失真。language=None / 中文 → 不跑。
     for p in source_language_problems(body_clean, source_language):
         all_problems.append(p)
+
+    # 25) 松散 OCR 数学形态闸（见 `_LOOSE_MATH_SUB` 上方注释）：V-C「严禁照抄 OCR」
+    #     此前无机械判据，写手原样搬 `v ^ { \prime }` / `\frac { a } { b }` /
+    #     `3 . 1 . 1` 也能 RESULT OK。只扫数学片段，散文不看。
+    all_problems.extend(loose_math_problems(body_clean))
 
     return (len(all_problems) == 0, all_problems)

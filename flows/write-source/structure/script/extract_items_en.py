@@ -529,6 +529,20 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                 # 幻影练习节点（16.12 / 22.24，与真 Problem 16-12 / 22-24 并存）。
                 if txt[_mend:_mend + 2] in (".]", ".)"):
                     continue
+                # 🔴 粘连更深数字段否决（Rice《Mathematical Statistics and Data
+                # Analysis》3e ch8 p301 实测 2026-10-17）：本书的例用**字母**序标
+                # （Example A / B / C / D，每章重起，与 letter-labeled 定理同构 →
+                # 散文继承），从不印「数字例号」。OCR 把句中回指 "…in Example A of
+                # Section 8.5.1…" 断粘成一行 "Example 8.5.1A.)"——两级抽取器 lab_re
+                # 只吃两级号 "8.5"，其后**无空格**紧粘「.1」= 第三段数字，即印刷号
+                # 比两级体例更深，这是对**小节 §8.5.1** 的交叉引用而非条头。真两级
+                # 条头号后至多跟「句号+空格+标题」或「( 标题)」，绝不无空格粘出更深
+                # 数字段；若出现「分隔符+数字」紧粘（.digit / -digit …）即判引用。
+                # 旧守卫只堵 ".)"/".]"（上一行），漏掉 ".digit" 这一形态。`single`
+                # （章级单段计数器）无二级组，不受本守卫影响，零回归。
+                if (not single and
+                        re.match(r'^[.\-–·/．－〜_~]\d', txt[_mend:_mend + 2])):
+                    continue
                 # 🔴 正文交叉引用守卫（Bass《Real Analysis》实测）：段落本身就是
                 # "Example 5.16 will illustrate why this is a less useful theorem
                 # than …" 这类**前瞻引用**——块首 + 标签 + 编号的形态与真条头完全
@@ -697,6 +711,16 @@ def extract_items_en(extract_dir, start, end, want_examples=True, section_scoped
                     continue                      # 真条头以块首起（与主干同判据）
                 label = _resolve_label(m.group(1), lab_labels)
                 if label is None or (label == "Example" and not want_examples):
+                    continue
+                # 🔴 纯字母序标守卫（与主干 lab_re 同判据，Shafarevich 先例）：
+                # 本兜底趟匹配「全大写标签 + 紧随 EN_OCR_NUM」，而 EN_OCR_NUM 含
+                # OCR 形近字母（B→8 / D / O→0 / I→1 / S→5 / Z→2），于是字母标号
+                # 条头 "PROPOSITION B" 被折成幻影数字键 `Proposition 8`（主干守卫
+                # 已拦纯字母形态，此趟旧漏拦——Rice《Mathematical Statistics and
+                # Data Analysis》全书字母条头实测 2026-10-17）。字母序标不占数字
+                # 计数器，照散文继承即可：捕获的数字串不含任何真实 ASCII 数字即
+                # 跳过；含数字的全大写条头（"THEOREM 8.4"）逐字不变、零回归。
+                if m.group(2) and not any(c.isdigit() for c in m.group(2)):
                     continue
                 _mend = m.end()
                 n1 = _ocr_int_glue(m.group(2), txt[_mend:_mend + 1])

@@ -1185,6 +1185,15 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
                 # section-dependency diagrams like "5-6.A") — real titles have words
         if not re.search(r'[A-Za-z一-鿿∈∗\*]', title):
             return None
+        # 🔴 单汉字标题否决（Rice《Mathematical Statistics and Data Analysis》
+        # ch2 p70 实测 2026-10-17）：图（Figure 2.11 gamma 密度）坐标轴刻度
+        # "2.5" 与相邻 OCR 碎粒被合粘成一行 "2.5上"——编号后的"标题"恰为**单个**
+        # 汉字。上方短标题守卫为保护「含 CJK 的 2-3 字真标题」（孙文祥"熵映射"）
+        # 而放行任何含汉字的短标题，导致这个单汉字碎片漏网 → §2.5 被锚到图示页
+        # p70（早于真节头 §2.4 p81）→ ANCHOR-SANITY「小节号晚而页码早」拒绝落盘。
+        # 真中文节标题恒 ≥2 字，单汉字必是图示刻度/散文物料，不是节头。
+        if re.fullmatch(r'[一-鿿]', _rest_stripped):
+            return None
         # 🔴 纯节号串否决（do Carmo ch5 实测 2026-09-26）：章首目录/图示依赖
         # 行把一串裸节号印成「标题」（"5-2 5-3 5-4 5-5 5-6,A5-6,B 5-7 …"），
         # OCR 合并成一行后命中检测 → §5-2 被锚到目录行、真条头被首现去重压掉。
@@ -1636,9 +1645,17 @@ def scan(extract_dir, ch, start, end, mode, section_depths=None, chapter_first=N
             # header (multi-section books like do Carmo run an EXERCISES block
             # at the END OF EVERY SECTION, so the latch must reset on SEC).
             if ex_head_re is not None and not in_exercise and ex_head_re.match(ln) \
+                    and not ln.strip().rstrip('. ．·').islower() \
                     and not _run_head:
                 # Ross 体例章末习题块头（"Problems" 等）：STICKY 闩锁激活，
                 # 其后直到章末不再有正文/节。
+                # 🔴 全小写散文碎屑不闩（Lehmann《Theory of Point Estimation》ch6
+                #   实测 2026-10-18：正文句尾 "…16 problems." 被 OCR 断成独立一行
+                #   "problems."，`_exercise_headings_re` 大小写无关 → 整行命中，误开
+                #   粘滞闩锁；其后每一页左侧页眉节号 "6.7]" / "6.8]" 被 STICKY_EXER_RE
+                #   收成幽灵习题、散归派生小节 → ANCHOR-SANITY 整章拒绝落盘）。真习题块
+                #   标题排版为 Title-Case 或全大写（Problems / NOTES / "9 Problems"），
+                #   全小写只可能是句尾散文词 → 与下方 EXER_HEADING 分支同源拒绝。
                 in_exercise = True
                 continue
             if (EXER_HEADING.match(ln) and not ln.strip().rstrip('. ．·').islower()

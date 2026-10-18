@@ -111,5 +111,31 @@ class TestDigitCarryingFormsUnaffected(unittest.TestCase):
         self.assertIn("proposition 3.1", got)
 
 
+class TestAllCapsGarblePassGuard(unittest.TestCase):
+    """🔴 全大写兜底趟（EN_LAB_RE_CAPS_GARBLE）曾漏拦字母序标：主干 lab_re 的
+    纯字母守卫已拦 "Proposition B"，但「全大写标签 + EN_OCR_NUM」兜底趟没带该
+    守卫，于是全大写条头 "PROPOSITION B" 被 B→8 折成幻影数字键 `Proposition 8`
+    （Rice《Mathematical Statistics and Data Analysis》ch1 p29 实测 2026-10-17）。
+    修复后兜底趟须同样丢弃无真实数字的字母序标，而含数字的全大写条头逐字保留。"""
+
+    def test_all_caps_letter_head_not_laundered(self):
+        got = _keys([[
+            _blk("PROPOSITION B"),
+            _blk("THEOREM D Let X be a topological space"),
+            _blk("COROLLARY O The result follows"),
+        ]])
+        self.assertNotIn("proposition 8", got)   # B→8
+        self.assertEqual(got, set())
+
+    def test_all_caps_digital_head_still_kept(self):
+        got = _keys([[
+            _blk("PROPOSITION B"),
+            _blk("THEOREM 8.4 Any algebraic group is a quasiprojective variety."),
+        ]])
+        self.assertNotIn("proposition 8", got)
+        self.assertTrue(any("theorem 8" in k for k in got),
+                        "digit-bearing all-caps head must survive: %r" % got)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

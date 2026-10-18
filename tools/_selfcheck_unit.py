@@ -18,6 +18,13 @@
 
 输出契约（写手作业单按这些 token 判断，勿改）：`MARK <DRAFT|DONE>` / `PROB …` /
 `RESULT OK|FAIL`；退出码 0 = 该单元 DONE 且门控放行。
+
+🔴 DRAFT 态另给一行 `BODY OK|FAIL`（正文预判，`tolerate_draft` 通道）：门控默认在
+「标记仍为 DRAFT」这条判据处就 `continue`，**正文质量判据根本不跑**，于是写手在改正文
+的阶段永远只能拿到 `RESULT FAIL`，与作业纪律「没拿到 OK 不许写 DONE」字面冲突
+（Lehmann 2026-10-17/18 三个批次独立上报，其中一个只能先翻 DONE 才暴露出真实内容缺陷
+= 先落账后验收）。正文判据看 `BODY`，标记状态看 `RESULT`：`BODY OK` → 翻 DONE →
+再跑一次须见 `RESULT OK`。
 """
 import os
 import re
@@ -88,6 +95,14 @@ def main():
     for line in lines[1:]:
         print("PROB %s" % line)
     print("RESULT %s" % ("OK" if ok else "FAIL"))
+    if m.group(1) == "DRAFT":
+        ok_b, det_b = gate_units.gate_chapter(ext, ch_key, units_sub=units_sub,
+                                             only_unit=fname, tolerate_draft=True)
+        for line in [ln.strip() for ln in (det_b or "").splitlines()
+                     if ln.strip()][1:]:
+            print("PROB-BODY %s" % line)
+        print("BODY %s（正文预判，标记仍是 DRAFT；见 BODY OK 才翻 DONE，"
+              "翻完须再见 RESULT OK）" % ("OK" if ok_b else "FAIL"))
     return 0 if ok else 1
 
 

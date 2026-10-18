@@ -192,5 +192,57 @@ class UnknownUnit(Base):
             sys.argv = old
 
 
+class DraftBodyPrecheck(Base):
+    """``tolerate_draft`` 正文预判通道：DRAFT 态也要能拿到**正文**结论。
+
+    默认路径在「标记仍为 DRAFT」处 `continue`，正文质量判据**根本不跑** ⇒ 写手在改
+    正文阶段只能见 `RESULT FAIL`，与作业纪律「没拿到 OK 不许写 DONE」字面冲突，
+    实际结果是先翻 DONE 再验（先落账后验收）。Lehmann 2026-10-17/18 三个批次独立上报。
+    """
+
+    def test_precheck_actually_runs_body_judgment(self):
+        """判据本体（负向）：DRAFT 单元正文照抄原书 → 预判必须照样报出，不是 blanket pass。"""
+        self._write("0002_desc_D2.md", _marker("DRAFT", "0002", "D2", "§1.1 D2"),
+                    SOURCE_PROSE)
+        ok, det = gate_units.gate_chapter(self.ext, "1", units_sub="units",
+                                         only_unit="0002_desc_D2.md",
+                                         tolerate_draft=True)
+        self.assertFalse(ok, det)
+        self.assertIn(FLAG, det, det)
+
+    def test_precheck_passes_clean_draft_body_without_marker_noise(self):
+        ok, det = gate_units.gate_chapter(self.ext, "1", units_sub="units",
+                                         only_unit="0002_desc_D2.md",
+                                         tolerate_draft=True)
+        self.assertTrue(ok, det)
+        self.assertNotIn("仍未处理", det, det)
+
+    def test_default_path_still_requires_done(self):
+        """放宽只给预判通道：不带 tolerate_draft 的默认门控口径一字不变。"""
+        ok, det = self.gate(only="0002_desc_D2.md")
+        self.assertFalse(ok, det)
+        self.assertIn("仍未处理", det, det)
+
+    def test_no_bookwide_backdoor(self):
+        """🔴 不给 only_unit 就放宽 = 整章静默放过 DRAFT，必须是报错而不是放行。"""
+        with self.assertRaises(ValueError):
+            gate_units.gate_chapter(self.ext, "1", units_sub="units",
+                                    tolerate_draft=True)
+
+    def test_selfcheck_entry_emits_body_token(self):
+        """`tools/_selfcheck_unit.py` 的输出契约：DRAFT 态给 MARK/RESULT/BODY 三行。"""
+        import subprocess
+        tool = os.path.join(_ROOT, "tools", "_selfcheck_unit.py")
+        env = dict(os.environ, PYTHONUTF8="1",
+                   PYTHONPATH=_ROOT + os.pathsep + os.pathsep.join(sys.path))
+        p = subprocess.run([sys.executable, tool,
+                            os.path.join(self.units_dir, "0002_desc_D2.md")],
+                           capture_output=True, text=True, encoding="utf-8", env=env)
+        self.assertIn("MARK DRAFT", p.stdout, p.stdout + p.stderr)
+        self.assertIn("RESULT FAIL", p.stdout, p.stdout + p.stderr)
+        self.assertIn("BODY OK", p.stdout, p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

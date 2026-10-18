@@ -1392,6 +1392,33 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                                 ".".join(str(x) for x in c)),
                 })
                 continue
+        # 🔴 粘连更深数字段交叉引用否决（Rice《Mathematical Statistics and Data
+        # Analysis》3e ch8 p301 实测 2026-10-17，与 extract_items_en 的 lab_re
+        # 「粘连更深数字段否决」守卫**同源同判据**）：本书的例用字母序标（Example
+        # A/B/C/D，散文继承），OCR 把句中回指 "…in Example A of Section 8.5.1…"
+        # 断粘成一行 "Example 8.5.1A.)"——两级抽取只吃到 "8.5"，其号后**无空格**紧粘
+        # 「.digit」= 比两级体例更深的号（§8.5.1 是真实小节）。抽取器据此丢弃，源侧
+        # 安全网须同样降级为交叉引用；否则抽取器漏抽 vs 安全网 readable 互搏、闸门
+        # 死锁，盲 --backfill 还会在契约里造出幽灵数字例条目。判据：带标签候选、
+        # canon 为多级（≥2 段）、其点分串在 snippet 首个出现处紧邻「分隔符+数字」。
+        # 记 section_ref：不回填、不拦闸、不喂 B 层。
+        if (it.get("has_label") and isinstance(c, tuple) and len(c) >= 2):
+            _num_str = ".".join(str(x) for x in c)
+            _gi = (it.get("snippet") or "").find(_num_str)
+            if _gi >= 0:
+                _gtail = it["snippet"][_gi + len(_num_str): _gi + len(_num_str) + 2]
+                if re.match(r'^[.\-–·/．－〜_~]\d', _gtail):
+                    _exempt_ck.add(ck)
+                    missing_items.append({
+                        "key": it["key"], "label": it["label"], "page": it["page"],
+                        "snippet": it["snippet"], "canon": list(c),
+                        "has_label": True,
+                        "status": "section_ref",
+                        "note": "printed number '%s' continues glued into a deeper "
+                                "segment — cross-reference to a sub-section, not an "
+                                "item head" % _num_str,
+                    })
+                    continue
         # 🔴 字母后缀序标 OCR 形近豁免（do Carmo ch5 实测 2026-09-26）：印刷
         # 「THEOREM 1a / 1b」的尾字母被抽取器按形近折成数字（b→8 → 伪候选
         # canon=(18,) 键「定理18」），而契约真身「定理1b」因尾字母无 int canon

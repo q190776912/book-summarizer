@@ -128,6 +128,17 @@ def _name_sig(it):
     return tail[:60]
 
 
+def _has_title(it):
+    """签名里是否含**真实标题文字**（≥3 连续字母/词字符）。
+
+    裸号 cross-reference 行（"Example 6.10."）的 `_name_sig` 只剩标点「.」，
+    旧「`not _name_sig(...)`」按空串判裸会把它当成带标题、于是真标题头（"Example
+    6.10 Sufficiency of order statistics"）在 unique_keys 去重里抢不过它（TPE
+    Lehmann-Casella 例6.10 实测：p62 裸引用吃掉 p63 真头 → 锚错页 + 内容错挂 →
+    B 层「顺序错乱」BLOCKING）。以「有无真标题」替代「签名是否为空」。"""
+    return bool(re.search(r'[A-Za-z]{3,}', _name_sig(it)))
+
+
 def dedup_items(raw_matches, unique_keys=False):
     """Collapse a single item's many mentions/references down to its definition
     entry, but KEEP two genuinely different items that share a (label, number).
@@ -172,7 +183,7 @@ def dedup_items(raw_matches, unique_keys=False):
                         break
                 else:
                     grp.append(it)
-            elif g and not _name_sig(genuines[0]) and _name_sig(it):
+            elif g and not _has_title(genuines[0]) and _has_title(it):
                 grp[grp.index(genuines[0])] = it   # 裸者让位给带标题者
             continue
         # Same-page collision: two occurrences of the same (label, number) on the

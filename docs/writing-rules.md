@@ -249,6 +249,18 @@ Common patterns (after correction):
 - **🔴 绝不照抄 OCR 公式**：OCR 出的 LaTeX 几乎总是错的。读懂其语义意图后，**凭学科知识重写正确 LaTeX**，严禁把 `formulas[].latex` 直接粘贴进 `.md`。（依据：`page_*.json` 的 `formulas[].latex` 是"原书公式内容真相"，但需重写而非照抄。）
   - ❌ 照抄：`\| x _ { \mathfrak { n } } - x _ { \mathfrak { m } } \| ^ { 2 } = \int _ { 0 } ^ { 1 } [ x _ { \mathfrak { n } } ( t ) - x _ { \mathfrak { m } } ( t ) ] ^ { 2 } d t`
   - ✅ 重写：`\|x_n - x_m\|^2 = \int_0^1 [x_n(t) - x_m(t)]^2 dt`
+  - 🔴 **本条已有机械判据（门控第 25 项，2026-10-18）**：数学片段（行内 `$...$` 之间、
+    `$$` 围栏内的整行）里出现「上下标标记与花括号断开」（`x _ { n }`、`v ^ { \prime }`）、
+    「命令与开界符断开」（`\frac { a } { b }`、`\bar { X }`、`\mathcal { O }`、
+    `\begin{array} { l l }`、`\left (`、`\sqrt [ n ]`）或「数字逐位摊开」（`3 . 1 . 1`、
+    `1 0 ^ { 6 }`）即判不通过并报行号。散文数字串（表格列、年份）与合法矩阵行
+    `1 & 2 & 3` 不判；紧凑化是**纯形态改写**，不得借机删项/改语义。
+    判据本体 = `flows/write-source/script/check_unit_quality.py::loose_math_problems`
+    （跨库校准：`python tools/scan_math_form.py <corpus_root>`；实测 55 库 / 5314 个单元
+    文件带残留 = 跨书 backlog，本书已封章 ch1 = 0 处）。
+    成因：该硬要求此前**只在文档里**，门控看不见 → 写手原样搬 OCR 也能 `RESULT OK`
+    （Lehmann ch7_b03 八份单元全绿却有数百行松散形态），且书外临时探针与门控两套口径
+    会让返工队列既不充分也不必要（已改为与门控同源）。
 - **语义保真（不得偷换）**：OCR 编码噪声（如 `\pmb{\mathscr{R}}` → `\mathcal{R}`）可修正，但**数学语义**（算符 / 运算元 / 关系 / 集合符号 / 常数）必须与原书一致。
   - ❌ 错（语义改变）：PDF 是 `= \emptyset`，总结写 `= 0`。
   - ✅ 对：PDF `= \emptyset` → 总结 `= \emptyset`；PDF `{\cal L}_{A_c}` → 总结 `L_{A^c}`（同义、记号归一允许）。

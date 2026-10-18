@@ -626,7 +626,8 @@ def _gate_cleanup_tmpdir():
 atexit.register(_gate_cleanup_tmpdir)
 
 
-def gate_chapter(ext, ch_key, units_sub="units", only_unit=None):
+def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
+                 tolerate_draft=False):
     """门控单章。返回 (ok, detail)。detail 为逐条问题或通过说明。
 
     ``units_sub``：单元子目录名——``units``（源语言单元，默认）或
@@ -645,7 +646,17 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None):
     源章门控**——源单元未全部修正完成（源门控未通过）即拒绝放行翻译门控。
     翻译必须等源单元全部改好才开始/放行，否则译文基于旧源必作废（init 硬闸
     只保证初始化那一刻源是好的；源后续再改，翻译门控必须重新把关）。
+
+    ``tolerate_draft``：**只允许与 ``only_unit`` 同时使用**（逐单元自检的「正文预判」
+    通道）。默认路径下 DRAFT 单元在标记判据处就 `continue` 了，正文质量判据**根本不跑**
+    ——于是写手在 DRAFT 态永远拿不到「正文是否已改对」的结论，只能先翻 DONE 再验，
+    等于「先落账后验收」（Lehmann 写手两例独立上报：ch4_b02 / appendix_b01，
+    与作业说明「没拿到 RESULT OK 不许写 DONE」字面冲突）。置 True 时跳过该单元
+    的 DRAFT 标记判据、其余判据一字不动地照跑。
+    🔴 无 ``only_unit`` 时置 True = 直接报错（防止它变成全书静默豁免 DRAFT 的后门）。
     """
+    if tolerate_draft and not only_unit:
+        raise ValueError("tolerate_draft 只能配合 only_unit 逐单元使用（章级门控必须认 DRAFT）")
     # 🔴 翻译前置硬闸：源单元全部修正完成（源门控通过）才允许翻译门控放行。
     # 内层调用 units_sub="units" 不会再触发本分支，无递归风险。
     if units_sub != "units":
@@ -720,7 +731,7 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None):
             observed_imgs.update(
                 _bn(m) for m in re.findall(r'<img[^>]+src="([^"]+)"', body))
             continue
-        if mark == "DRAFT":
+        if mark == "DRAFT" and not tolerate_draft:
             problems.append("单元 %s（%s %s）仍未处理（标记仍为 DRAFT）" % (
                 u["file"], u["type"], u["key"]))
             observed_imgs.update(

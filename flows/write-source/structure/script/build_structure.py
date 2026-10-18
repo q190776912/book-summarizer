@@ -521,6 +521,13 @@ def _item_pos(ext, it, page_dir=None):
     if not snip_body:
         snip_body = snip
     probe = re.sub(r"\s+", " ", snip_body[:48]).lower()
+    # 实质标题串（剥前导 CJK 标签词 + 最多两段编号 token），用于把「带题文的真条头行」
+    # 与「同前缀的裸号引用行」区分开（见下方 ys_head_confirm）。空串（标题即裸键的条目）
+    # 原样保留，由消费处「长度 < 4 即不信任」的守卫挡掉，故标题为空的书行为逐字不变。
+    _tw = re.sub(r'^[\u4e00-\u9fff]+', '', snip)
+    _tw = re.sub(r'^(?:\s*\d+(?:[.\-]\d+)*)+', '', _tw)
+    _tw = re.sub(r'\s+', ' ', _tw).strip().lower()
+    _tw_probe = _tw[:24] if len(_tw) >= 4 else ""
     key_variants = [key] if key else []
     _nf_specs = []   # 数字先行条头（number-first）变体，见下方注入点
     m_cn = re.match(r'^([\u4e00-\u9fff]+)', key)
@@ -571,7 +578,19 @@ def _item_pos(ext, it, page_dir=None):
                    _typ + ' ' + key):
             if _v not in key_variants:
                 key_variants.append(_v)
-    ys_head, ys_head_bare, ys_contain = [], [], []
+    # 🔴 英文标签词与序标粘连键的空格变体（TPE Lehmann-Casella Table6.1 / Figure 实测）：
+    #   Figure/Table 一类标签不在 CN 标签集里，抽取器把印刷 "Table 6.1" 直接拼成契约
+    #   key "Table6.1"（小写 "table6.1"），既无 CJK 前缀走不到上面的 EN 别名分支、又不满足
+    #   ^[\dA-Z] 的 _typ 头守卫 → 无带空格变体 → `_item_pos` 对印面 "Table 6.1. Values…"
+    #   （号前有空格）startswith 永不命中 → y=-1 → 锚点退化成 (page, 0.0) 抢走整页正文、
+    #   且其页码早于树序前驱 → ANCHOR-SANITY。拆「前导英文标签词 + 其后序标」补
+    #   "<词> <号>" 带空格变体；纯加性，CJK/纯数字/已含空格键行为逐字不变。
+    _mglue = re.match(r'^([a-z]{3,})[\s.\-]*(\d[\d.\-]*)$', key)
+    if _mglue:
+        _v = _mglue.group(1) + " " + _mglue.group(2)
+        if _v not in key_variants:
+            key_variants.append(_v)
+    ys_head, ys_head_bare, ys_head_confirm, ys_contain = [], [], [], []
     for b in d.get("text", []):
         if not isinstance(b, dict):
             continue
@@ -591,8 +610,16 @@ def _item_pos(ext, it, page_dir=None):
                     # 裸头判定：匹配号后仅剩标点/空白（印刷头独占一行）。
                     # 同页若有以此为前缀、后接散文的引用行（"(Theorem 5.3.8.)
                     # Similar..."），y 更小会被 min(y) 抢先——裸头必须优先。
-                    if not sl[len(k):].strip(" .:：．，,;；)）-–—*"):
+                    _rem = sl[len(k):].strip(" .:：．，,;；)）-–—*")
+                    if not _rem:
                         _hit_bare = True
+                    # 🔴 真标题行判定：号后带题文**且**题文里含本条实质标题
+                    # `_tw_probe` → 这是印刷条头本身，而非同前缀的裸号 cross-ref
+                    # 散文（TPE Lehmann-Casella 例3.4 实测：真头 "Example 3.4
+                    # Two sampling plans"@y991 被其后引用行 "Example 3.4."@y1555
+                    # 的裸头优先级抢先，锚点落到 Theorem 3.5 之后 → ANCHOR-SANITY）。
+                    elif _tw_probe and _tw_probe in _rem:
+                        ys_head_confirm.append(y)
                     break
         if _hit_bare:
             ys_head_bare.append(y)
@@ -607,6 +634,8 @@ def _item_pos(ext, it, page_dir=None):
             _probe_ns = probe.replace(" ", "")
             if len(_probe_ns) >= 8 and _probe_ns[:24] in sl.replace(" ", ""):
                 ys_contain.append(y)
+    if ys_head_confirm:
+        return (p, min(ys_head_confirm))
     if ys_head_bare:
         return (p, min(ys_head_bare))
     if ys_head:
@@ -2918,6 +2947,20 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
                            else None))
 
     _last_sec_page = max([int(v) for v in sec_pages.values()] or [0])
+    # 🔴 章末集中习题块的「最后一个真节」须排除 back-matter 节（声明了
+    #   `exercise_region_headings` 的书才生效，其余书零回归）。Lehmann《Theory of
+    #   Point Estimation》/《Elements of Large-Sample Theory》体例：章末先「Problems」
+    #   后「Notes」两块都带序标、都被扫成节，且题号沿用正文 `节.号` 计数器（习题
+    #   "6.35" ↔ 定理 6.35 同号）。「Problems」标题**晚于**最后真节、却**早于**
+    #   「Notes」节，于是 `_last_sec_page`=max(全部节)=Notes 页 → `_chapter_end_exercise_start`
+    #   在「≥最后节页」区间找不到块头 → `_tail_ex_start=None` → 章末习题既不挂章末也不
+    #   标 consolidated，按键散归各派生小节（页码 520+ 却塞进 §2/§3 之下）→ ANCHOR-SANITY
+    #   整章拒绝落盘。判据：把已标 `consolidated` 的 back-matter 节从「真节」集合剔除，
+    #   令 `_last_sec_page` = 最后一个**正文**节页，块头（Problems）即在其后被认领。
+    if _ex_headings:
+        _cm_keys = {k for k, nd in sec_nodes.items() if nd.get("consolidated")}
+        _real_pages = [int(v) for k, v in sec_pages.items() if k not in _cm_keys]
+        _last_sec_page = max(_real_pages or [0])
     _last_sec_pos = None
     if _last_sec_page:
         # 最后一个节头在自身页上的真实 y：取自 skeleton SEC 行（已排除偶/奇页眉

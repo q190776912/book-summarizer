@@ -508,5 +508,87 @@ class ContractUnitCoverageTest(unittest.TestCase):
         self.assertEqual(gu._check_contract_unit_coverage(None, [], "6"), [])
 
 
+class LooseMathFormTest(unittest.TestCase):
+    """第 25 项：照抄 OCR 的松散数学形态必须拦得住（Lehmann ch7_b03 现场）。
+
+    V-C「严禁照抄 OCR」是硬要求，但此前门控里**没有对应机械判据**：写手把
+    `\\delta _ { n }`、`\\frac { a } { b }`、`\\begin{array} { l l }`、`3 . 1 . 1`
+    原样搬进正文，KaTeX 照样渲染、自检照样 RESULT OK（实测 ch7_b03 八份单元全绿
+    却有数百行松散形态）。锁死两侧：
+      1. 松散形态（行内 + `$$` 围栏**内**无 `$` 的中间行）→ FAIL 并报行号；
+      2. 紧凑形态、散文里的数字串、矩阵行 `1 & 2 & 3`、`\\text{as }` → 不得误报。
+    """
+
+    TAGS = ["2.7.1"]
+
+    @staticmethod
+    def _body(math_lines):
+        return ("**Theorem 2.7.1** Suppose that\n"
+                ">\n"
+                "$$\n" + "\n".join(math_lines) + r" \tag{2.7.1}" + "\n"
+                "$$\n"
+                "as $ n \\to \\infty $ the risk tends to zero.\n")
+
+    def _probs(self, body):
+        return cq.check_body("item", "定理 2.7.1", body,
+                             expected_tags=self.TAGS)[1]
+
+    def _loose(self, probs):
+        return [p for p in probs if "松散数学形态" in p]
+
+    def test_loose_display_inside_fence_caught(self):
+        # 🔴 关键负向：围栏中间的行没有 `$`，只有状态机能看见
+        probs = self._probs(self._body(
+            [r"\delta _ { n } = \frac { 1 } { n } \sum X _ { i }"]))
+        self.assertTrue(self._loose(probs),
+                        "松散 display 内容未被拦下（判据退化成只看行内 $）")
+
+    def test_loose_inline_caught(self):
+        ok, probs = cq.check_body(
+            "item", "定理 2.7.1",
+            "**Theorem 2.7.1** Let $ v ^ { \\prime } ( \\theta ) $ be given "
+            "for $ n \\ge 1 $.\n")
+        self.assertFalse(ok)
+        self.assertTrue(self._loose(probs))
+
+    def test_loose_spaced_number_caught(self):
+        probs = self._probs(
+            "**Theorem 2.7.1** By ( $ 3 . 1 . 1 $ ) the bound holds "
+            "for all $n$.\n")
+        self.assertTrue(self._loose(probs))
+
+    def test_compact_form_not_flagged(self):
+        probs = self._probs(self._body(
+            [r"\delta_{n} = \frac{1}{n} \sum X_{i}",
+             r"\begin{array}{ll} a & b \\ c & d \end{array}"]))
+        self.assertFalse(self._loose(probs),
+                         "紧凑 LaTeX 被误报：%s" % probs[:1])
+
+    def test_prose_digits_and_matrix_rows_not_flagged(self):
+        probs = self._probs(self._body(
+            [r"\begin{pmatrix} 1 & 2 & 3 \\ 4 & 5 & 6 \end{pmatrix}"
+             r" \qquad \text{as } n \to \infty"]))
+        self.assertFalse(self._loose(probs),
+                         "矩阵行/`\text{as }` 被误报：%s" % probs[:1])
+        ok, probs2 = cq.check_body(
+            "item", "定理 2.7.1",
+            "**Theorem 2.7.1** Rows list counts for 1 2 3 and years "
+            "1946 1950 1955 with $ n \\to \\infty $.\n")
+        self.assertFalse(self._loose(probs2),
+                         "散文数字串被误报：%s" % probs2[:1])
+
+    def test_reports_line_number(self):
+        hits = self._loose(self._probs(self._body([r"\bar { X } _ { n }"])))
+        self.assertTrue(hits)
+        self.assertRegex(hits[0], r"L\d")      # 行号回给写手定位
+
+    def test_loose_math_cmd_variants(self):
+        for frag in (r"\sqrt [ n ] { x }", r"\mathcal { O } _ { X }",
+                     r"\int _ { 0 } ^ { z } f", r"\left ( \frac{a}{b} \right )"):
+            probs = self._probs(
+                "**Theorem 2.7.1** Take $ %s $ here.\n" % frag)
+            self.assertTrue(self._loose(probs), "未拦下：%s" % frag)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -224,7 +224,7 @@ def _label_typo_normalize(txt):
     return _label_typo_lib.label_typo_normalize(txt, EN_LABELS)
 
 
-def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None, groups=None):
+def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool = True, language=None, groups=None, two_level_items: bool = False):
     """标题锚定源侧扫描：返回书中真值条目候选列表（跨校验源集）。
     每项: {key, label, page, snippet, scheme, canon, has_label}
     key 与 build_structure 产出的分章契约格式一致
@@ -309,6 +309,51 @@ def scan_raw_items(ext, ch, start, end, primary_type=None, chapter_first: bool =
                 "page": it["page"],
                 "snippet": (it.get("text") or "")[:120].replace("\n", " "),
                 "scheme": "app", "canon": c, "has_label": True,
+            })
+        return out
+    if primary_type == ORDINAL_THREE_LEVEL and language == "en" and two_level_items:
+        # 🔴 HYBRID 体例（Modern Robotics）：primary_type==3（节头三段 ``C.S`` 检测正确）
+        # 但条目是**两级标签** ``Label C.N``（章内单一共享计数器，非 ``C.S.N``）。上面的
+        # THREE_LEVEL+en 分支只留 en3_lf/cn3_lf 三段方案 → 扫不到两级条目，源侧真值集空
+        # → 闸门对「条目全漏」失明。此处与 build_structure 的 hybrid 分支同源，改委托
+        # extract_items_en（标签前置两级）抽条目，保证源侧/契约侧两套真值一致、可被 B 层校验。
+        from extract_items_en import extract_items_en
+        from verify_config import _canon_label as _canon_lab
+        # 🔴 与 build_structure 的 _extract_items hybrid 分支同源：图形类标签
+        # （Figure/Fig/Fig./Table/图/表）由 figure_detection / E 层单独处理，*不是*
+        # 契约里的结构条目。若把 Figure 等塞进 extra_labels，extract_items_en 会
+        # 把习题正文里的行内图形引用（"Figure 2.7(b)"）误扫成结构条目，而契约侧
+        # 并无此项 → 被判别为缺项、闸门永 FAIL。故在此精确复刻 build_structure 的
+        # _non_text 过滤（Exercise 不在此列——它虽由 step3 下游按 _EXER_LABELS 过滤，
+        # 但 build_structure 的 extra 同样含 Exercise，保持一致即双侧同进同出）。
+        _non_text = {"uncat", "Figure", "Fig", "Fig.", "Table", "图", "表"}
+        _non_text_stripped = {t.rstrip(".") for t in _non_text}
+        extra = []
+        for _g in (groups or []):
+            for _nm in (getattr(_g, "name", None) or []):
+                if _nm and _nm not in extra and _nm.rstrip(".") not in _non_text_stripped:
+                    extra.append(_nm)
+        out = []
+        for it in extract_items_en(ext, start, end, want_examples=True,
+                                  section_scoped=False,
+                                  extra_labels=extra or None,
+                                  bare_results=False):
+            lab, _, num = it["key"].partition(" ")
+            parts = num.split(".")
+            if len(parts) < 2:
+                continue
+            if chapter_first and parts[0].isdigit() and int(parts[0]) != ch:
+                continue
+            try:
+                c = (int(parts[0]), int(parts[1]))
+            except ValueError:
+                continue
+            out.append({
+                "key": f"{_canon_lab(lab)}{num}",
+                "label": it.get("label") or "uncat",
+                "page": it["page"],
+                "snippet": (it.get("text") or "")[:120].replace("\n", " "),
+                "scheme": "en2_hybrid", "canon": c, "has_label": True,
             })
         return out
     patterns = _PATTERNS
@@ -492,7 +537,17 @@ def _canon_key(primary_type, key):
         # 513 键；跨 15 本 THREE_LEVEL 书普查：本改动 gained≥0 且 lost=0）。
         s = _LABEL_RE.sub('', key).strip()
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)[.\-·，．]+(\d+)$', s)
-        return tuple(int(x) for x in m.groups()) if m else None
+        if m:
+            return tuple(int(x) for x in m.groups())
+        # 🔴 HYBRID 体例（Modern Robotics）：primary_type==3 但条目是两级 ``C.N``
+        # （章内共享计数器），三段匹配失败 → 末段缺。若 _TWO_LEVEL_ITEMS 置位，
+        # 降级接受两段 ``C.N``（与 scan_raw_items 的 hybrid 分支同源）。其他书
+        # _TWO_LEVEL_ITEMS=False → 行为不变（仍返回 None）。
+        if _TWO_LEVEL_ITEMS:
+            m2 = re.match(r'^(\d+)[.\-·，．]+(\d+)$', s)
+            if m2:
+                return (int(m2.group(1)), int(m2.group(2)))
+        return None
     if primary_type in (ORDINAL_TWO_LEVEL,):
         s = _LABEL_RE.sub('', key).strip()
         m = re.match(r'^(\d+)[.\-·，．]+(\d+)$', s)
@@ -1265,7 +1320,8 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
         _foreign_secs = _foreign_sections(bs, ch)
 
     raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
-                                             groups=getattr(cfg, "ordinal", None))
+                                             groups=getattr(cfg, "ordinal", None),
+                                             two_level_items=getattr(cfg, "two_level_items", False))
                  if str(it["label"]).strip().lower() not in _EXER_LABELS_RAW_LC]
 
     # 0) agent 已核实「非条目」的键（ignore_ch{N}.json，须附理由）：从源侧缺失集
@@ -1918,11 +1974,18 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
 
 # === 主流程 ================================================================
 _PRIMARY = ORDINAL_THREE_LEVEL
+# 🔴 HYBRID 体例（Lynch & Park《Modern Robotics》）：primary_type==3 用于三类节头
+# 检测（节头印成 ``C.S`` + 尾点），但条目是**两级标签** ``Label C.N``（章内单一共享
+# 计数器，非 ``C.S.N`` 三段）。scan_raw_items / _canon_key 默认按 THREE_LEVEL 只认
+# 三段条目 → 源侧与契约侧双侧盲 → 完整性闸门对本书条目假 PASS。置此全局旗，让这两个
+# 函数在本类书识别两级条目。默认 False，对其他书零回归（其他书 primary_type 不走 hybrid）。
+_TWO_LEVEL_ITEMS = False
 
 
 def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
-    global _PRIMARY
+    global _PRIMARY, _TWO_LEVEL_ITEMS
     _PRIMARY = cfg.primary_type
+    _TWO_LEVEL_ITEMS = bool(getattr(cfg, "two_level_items", False))
     # 分章契约：经 BookStructure.load 聚合读取，定位指定章节点。
     bs = BookStructure.load(ext)
     if bs is None:
@@ -2119,7 +2182,8 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         "contract_items": len(contract_items),
         "contract_sections": sorted(contract_sections),
         "ignore_audit": run_audit(ext, ch),  # ignore 条目审核：SUSPECT 提示 agent 复核
-        "raw_items_scanned": _count_raw_items(ext, ch, start, end, cfg.chapter_first),
+        "raw_items_scanned": _count_raw_items(ext, ch, start, end, cfg.chapter_first,
+                                              getattr(cfg, "two_level_items", False)),
         "raw_sections_present": sorted(set(sec_detail.get("continuity", []) + sec_detail.get("tail", []))),
         "missing_sections": missing_sections,
         "missing_items": missing_items,
@@ -2161,9 +2225,10 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     return report
 
 
-def _count_raw_items(ext, ch, start, end, chapter_first: bool = True):
+def _count_raw_items(ext, ch, start, end, chapter_first: bool = True, two_level_items: bool = False):
     """轻量统计源侧（含练习过滤前）扫描到的原始条目数，仅用于报告，不影响回填。"""
-    return len(scan_raw_items(ext, ch, start, end, None, chapter_first))
+    return len(scan_raw_items(ext, ch, start, end, None, chapter_first,
+                              two_level_items=two_level_items))
 
 
 def main():

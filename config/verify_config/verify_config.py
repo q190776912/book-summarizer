@@ -658,6 +658,24 @@ class BookConfig:
     # ordering).  Default False — books whose item number's second component
     # IS the section number keep the number-derived placement.
     chapter_scoped_items: bool = False
+    # EXERCISE-ONLY chapter-scoped placement (Modern Robotics 体例): 条目仍按号
+    # 派生归节（chapter_scoped_items=False），但**习题是章级计数器**——Exercise
+    # 2.1–2.N 全属章末「N.M Exercises」编号小节，号首段是章号而非节号。置 True 时
+    # build_structure 仅对**习题**走「页码就近归节」（落到 Exercises 节），不污染
+    # 条目放置；与 chapter_scoped_items 取 OR（edited volumes 设了后者也自动覆盖
+    # 习题）。默认 False —— 其余书零影响。
+    exercise_chapter_scoped: bool = False
+    # HYBRID numbering (Lynch & Park《Modern Robotics》): THREE-LEVEL sections
+    # (section heads print as ``C.S`` e.g. "2.1"…"2.8", so primary_type must be 3
+    # so scan_skeleton uses SEC_3 to detect in-chapter sections) + TWO-LEVEL
+    # LABELED items (definitions/examples print as label-prefixed two-segment
+    # "Definition 2.1" / "Example 2.3", a single chapter-wide counter, NOT
+    # "C.S.N" three-segment). When True, despite primary_type==3 (section
+    # detection stays three-level), item extraction routes to extract_items_en
+    # (label-first two-segment) instead of extract_items_en3 (three-segment),
+    # otherwise en3 misses all two-segment labeled items (items=0). Default False
+    # —— every other book is completely unaffected.
+    two_level_items: bool = False
     # Gelfand-Manin《Methods of Homological Algebra》体例（config_setting 规则5
     # 增量扩展）：条目是「节内共享一条计数器的裸整数头、数字在前」——"3. Theorem"
     # / "5. Definition." / 描述子块 "1. Main Definitions" 同占一条 N.M 序列的槽位，
@@ -1172,6 +1190,8 @@ class BookConfig:
             chapter_first=bool(data.get('chapter_first', True)),
             section_scoped=bool(data.get('section_scoped', False)),
             chapter_scoped_items=bool(data.get('chapter_scoped_items', False)),
+            exercise_chapter_scoped=bool(data.get('exercise_chapter_scoped', False)),
+            two_level_items=bool(data.get('two_level_items', False)),
             gm_bare_numbered=bool(data.get('gm_bare_numbered', False)),
             exercise_shared_numbering=bool(data.get('exercise_shared_numbering', False)),
             chapter_local_sections=bool(data.get('chapter_local_sections', False)),

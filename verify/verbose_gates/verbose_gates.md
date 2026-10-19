@@ -17,6 +17,7 @@
   3. `p_bare_item`：number-first 体例下条目标题缺失（裸 `**N.M.K**` 无标题）。
   4. `p_missing_sec`：缺节（md `## §` 数 < 骨架 SEC 数，骨架见分章契约 `book_structure/ch{N}.json`（经 `BookStructure.load` 聚合），由 `build_structure` 生成，SSOT 见 `flows/write-source/structure/structure.md`）。
      - `section_types` 不含 `0`（标准书，原书小节带序标）：该层级 `## §N[.M...]` 的数字须**逐一对齐**契约 `sub_sec` 编号（`present` 集合包含契约每个非习题节号）。
+       - 🔴 **习题节名的「题号粘连」形态同归豁免**（2026-10-19 Lehmann 大样本理论实测）：OCR 会把节末**印刷页码**接在标题词后（契约 `4.5 Problems269` / `5.8 Problems349`），而 `'s'` 与数字同为 word char ⇒ `problems?\b` 失配，该节被当成必写节并要求补一个原书根本不打算收录的 `## §4.5` 标题——与「章末集中题集块一律省略」的习题收录规则正面冲突，属闸门 bug。`EXER_SEC_TITLE_RE` 因此新增「习题词 + 尾随数字直至词尾」一支（`exercises?[0-9]*\b` / `problems?[0-9]*\b`）。放宽面已跨书普查校准：**751 份分章契约里新增命中恰只有该书这两条**，其余书目逐字节不变；负向锁死见 `verify/tests/test_p_missing_sec_glued_exercise_title.py`（`4.5 Examples269` / `4.5 Further results` 缺节照报）。
      - `section_types` 含 `0`（无序号标书，如 Silverman，对应 `type 0` / `depth 0`）：md 该层级写 `## § <标题>`（数字留空），闸门**不依赖数字**，改为按「位置/数量」比对——只查契约要求的每一节是否都在 md 中（按 `## §` 出现顺序位置对齐），**不报 md 多出契约未记的小节**（原书 subsection 可能多于稀疏契约，且 md 忠实于原书，多出的 `## §` 是合理的、不阻断）。仅当 md 的 `## §` 数**少于**契约必写节数时才报「缺节」。（`section_types` 是逐层级列表、**章层级计入元素 0**：Silverman 为 `[0, 0]`——元素 0 的 `0` 即「章无 `## §` 序号标」（章是文件 `# 第N章`，序号来自文件名），元素 1 的 `0` 才是「`## §` 小节无序号标」。两个 `0` 分别对应章与小节两个层级，不可合并。）
   5. `p_extra_item`：编造条目（md 出现骨架 ITEM 清单没有的编号条目）。
      - **两种形态同判据**（2026-09-23 Katok 实测：只认裸编号时，同一缺陷中文版报出、

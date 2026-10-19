@@ -23,6 +23,10 @@ FIGURE_LABELS_DEFAULT = ["图", "Figure", "Fig"]
 # match stray `Figure`/`图` words in a label-less book).
 _NEVER_RE = re.compile(r"[^\s\S]")
 
+# `ordinal` Figure 组的 `type` 中，首分量为**字母章位**的两个码（附录 `Figure B.1`
+# = 14 两段 / `Figure C.2.3` = 13 三段）。见 lib.numbering.ORDINAL_DEPTH。
+LETTER_CH_FIG_TYPES = frozenset({13, 14})
+
 
 # A figure group's `type` encodes its numbering depth (= number of numeric
 # components = the former `figure.components`).  🔴 `components` IS `depth`.
@@ -39,7 +43,29 @@ from verify_config import ConfigError
 from lib.numbering import _FIG_LABEL_KW as _FIG_KW, is_fig_label_name as _is_fig_kw
 
 
-def _figure_group(data):
+def _segment_keys_for_ch(ch):
+    """Config-segment keys to try for chapter `ch`, most specific first.
+
+    A book may declare DIFFERENT figure families per segment: the body numbers
+    figures `Figure N.M` (two numeric components) while an appendix numbers them
+    `Figure B.1` (letter chapter slot).  Callers that know the chapter must ask
+    for THAT segment's figure group first — otherwise a letter-chapter appendix
+    is matched with the body's digit-only shape and every appendix figure stays
+    UNNAMED (Modern Robotics measured: appendixB 4/0 named, appendixC 5/0).
+
+    Returns ``()`` for ``ch is None`` so the historic global scan is used
+    verbatim (zero regression for every existing caller).
+    """
+    if ch is None:
+        return ()
+    s = str(ch)
+    if s.isdigit():
+        return ("ch",)
+    # 非数字章键 = 附录/补篇（与 ConfigLoader._resolve_kind 同判据）
+    return ("appendix", "supplement", "ch")
+
+
+def _figure_group(data, ch=None):
     """Return the `ordinal` group whose `name` contains a figure-label keyword,
     or None.  Figures are NO LONGER a separate `figure` config block — they live
     in `ordinal` like any other counter, and their `type` (-> ORDINAL_DEPTH)
@@ -50,7 +76,19 @@ def _figure_group(data):
       * current NESTED: ``{"ch": {"ordinal":[...]}, "appendix": {"ordinal":[...]},
         "supplement": {"ordinal":[...]}}`` — the figure group declared inside a
         chapter/appendix segment must still be found (otherwise the figure gate
-        aborts all verification with "缺少 figure 配置")."""
+        aborts all verification with "缺少 figure 配置").
+
+    🔴 按章路由（`ch`，2026-10-19）：`ch` 非 None 时**先**只看该章所属段
+    （`:func:_segment_keys_for_ch`），取不到才回退全局扫描。这样段间体例不同的书
+    各段各用自己的图号形态；`ch is None` 的调用方行为与改造前**逐字节等价**。
+    """
+    # 0) chapter-scoped lookup FIRST (per-segment figure families)
+    for seg_key in _segment_keys_for_ch(ch):
+        seg = data.get(seg_key)
+        if isinstance(seg, dict):
+            for g in seg.get("ordinal", []):
+                if any(_is_fig_kw(nm) for nm in g.get("name", [])):
+                    return g
     # 1) legacy flat shape: top-level `ordinal`
     for g in data.get("ordinal", []):
         if any(_is_fig_kw(nm) for nm in g.get("name", [])):
@@ -71,8 +109,11 @@ def _figure_group(data):
     return None
 
 
-def load_fig_labels(out_dir):
+def load_fig_labels(out_dir, ch=None):
     """Return the book's figure-label prefixes (list of keywords).
+
+    `ch` (optional) selects the config SEGMENT to read first — see
+    :func:`_segment_keys_for_ch`; omit it for the historic book-wide answer.
 
     🔴 Figure labels/depth now live in `ordinal`, NOT a separate `figure` block.
     Derivation order:
@@ -91,7 +132,7 @@ def load_fig_labels(out_dir):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                fg = _figure_group(data)
+                fg = _figure_group(data, ch)
                 if fg is not None:
                     fig_only = [str(nm) for nm in fg.get("name", []) if _is_fig_kw(nm)]
                     if fig_only:
@@ -128,9 +169,12 @@ def fig_label_alt(labels):
     return "|".join(alts)
 
 
-def load_fig_components(out_dir):
+def load_fig_components(out_dir, ch=None):
     """Return the figure-number COMPONENT COUNT (== ordinal `depth`) for this book,
     or raise `ConfigError` if figure numbering is not explicitly declared.
+
+    `ch` (optional) selects the config SEGMENT to read first — see
+    :func:`_segment_keys_for_ch`; omit it for the historic book-wide answer.
 
       1 = global integer sequence   (e.g. Kreyszig "Fig. 1", "Fig. 23", …)
       2 = chapter.figure            (e.g. "Fig. 3.1", "图 3.1")
@@ -151,7 +195,7 @@ def load_fig_components(out_dir):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                fg = _figure_group(data)
+                fg = _figure_group(data, ch)
                 if fg is not None:
                     t = fg.get("type")
                     if isinstance(t, int):
@@ -184,7 +228,7 @@ def load_fig_components(out_dir):
         "（现自动探测图题并显式补组）或按 verify_config.md 手工补声明。")
 
 
-def build_fig_label_re(labels, components=2):
+def build_fig_label_re(labels, components=2, letter_ch=False):
     r"""Compiled regex that finds a figure caption label (图 X.X / Figure X.X / …)
     in text and captures its sequential number. Driven by BOOK-SPECIFIC
     `labels` AND `components`, so each book's OWN figure numbering is honored.
@@ -201,6 +245,10 @@ def build_fig_label_re(labels, components=2):
       2 -> ``([0-9]+(?:\.|-)[0-9]+){1,2}``    (chapter.figure / chapter.section.figure)
       3 -> ``([0-9]+(?:\.|-)[0-9]+){2,3}``    (chapter.section.figure, stricter)
       None / 0 -> ``_NEVER_RE``               (无图编号：type:0 或显式 None，不匹配任何图题)
+
+    🔴 `letter_ch`（2026-10-19）：True 时**首分量是字母**（附录字母章位体例
+    `Figure B.1` / `Figure C.2.3`），数字核改为 ``[A-Za-z]`` 打头、后接
+    ``components-1`` 个数字段。默认 False ⇒ 与改造前逐字节等价。
     """
     if not labels:
         return _NEVER_RE
@@ -209,6 +257,11 @@ def build_fig_label_re(labels, components=2):
         # （与 `{"labels": []}` 的「无图标签」标记一致，返回 _NEVER_RE）。
         return _NEVER_RE
     components = max(1, min(3, int(components)))
+    if letter_ch and components >= 2:
+        # 字母章位：首分量单字母，其余 components-1 段为数字。
+        num = r"([A-Za-z](?:(?:\.|-)[0-9]+){%d,%d})" % (components - 1, components)
+        alt = fig_label_alt(labels)
+        return re.compile(rf"(?:{alt})\s*{num}|{num}\s*(?:{alt})", re.IGNORECASE)
     if components == 1:
         num = r"([0-9]+)"
     elif components == 2:
@@ -231,11 +284,44 @@ def fig_label_from_match(m):
     return m.group(2)
 
 
-def load_fig_label_re(out_dir):
+def load_fig_letter_ch(out_dir, ch=None):
+    """True iff this book's (`ch`'s) figure numbers use a LETTER chapter slot.
+
+    Derived from the `ordinal` Figure group's `type`: 13 (letter + 2 numeric)
+    / 14 (letter + 1 numeric) are the appendix letter-slot families, e.g.
+    ``Figure B.1``.  Every other family is digit-led and yields False — which
+    is also the answer for books with no figure group at all (their `type`
+    cannot be 13/14), so this never raises and needs no silent default.
+
+    `ch` (optional) selects the config SEGMENT to read first — see
+    :func:`_segment_keys_for_ch`.
+    """
+    candidates = [os.path.join(out_dir, "verify_config.json"),
+                  os.path.join(os.path.dirname(os.path.abspath(out_dir)),
+                               "verify_config.json")]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                fg = _figure_group(data, ch)
+                if fg is not None:
+                    return fg.get("type") in LETTER_CH_FIG_TYPES
+            except Exception:
+                pass
+    return False
+
+
+def load_fig_label_re(out_dir, ch=None):
     """One-call convenience: compiled figure-label regex honoring BOTH the book's
     `labels` and `components`. Prefer this over ``build_fig_label_re(load_fig_labels(...))``
-    so the component count is never forgotten at a call site."""
-    return build_fig_label_re(load_fig_labels(out_dir), load_fig_components(out_dir))
+    so the component count is never forgotten at a call site.
+
+    `ch` (optional) selects the config SEGMENT to read first — see
+    :func:`_segment_keys_for_ch`."""
+    return build_fig_label_re(load_fig_labels(out_dir, ch),
+                              load_fig_components(out_dir, ch),
+                              load_fig_letter_ch(out_dir, ch))
 
 
 def load_figure_index(path):

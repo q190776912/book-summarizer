@@ -1499,6 +1499,49 @@ def _extract_items(ext, ch, start, end, book, manual=None, page_dir=None, sec_ke
                                     known_sec_titles=sec_titles)
         return _nf_dedup_items(items)
 
+    if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en"
+            and getattr(book, "two_level_items", False)):
+        # HYBRID (Modern Robotics): three-level SECTIONS (C.S, so primary_type==3
+        # drives SEC_3 section detection) but two-level LABELED items
+        # ("Definition 2.1" / "Example 2.3", a single chapter-wide counter, NOT
+        # "C.S.N").  Divert item extraction to extract_items_en (label-first
+        # two-segment); extract_items_en3 (three-segment) would miss them all.
+        _non_text = {"uncat", "Figure", "Fig", "Fig.", "Table", "图", "表"}
+        _non_text_stripped = {t.rstrip(".") for t in _non_text}
+        extra = []
+        for _g in getattr(book, "ordinal", []) or []:
+            for _nm in getattr(_g, "name", []) or []:
+                if _nm and _nm not in extra and _nm.rstrip(".") not in _non_text_stripped:
+                    extra.append(_nm)
+        items = extract_items_en(_dir, start, end, want_examples=True,
+                                 section_scoped=book.section_scoped,
+                                 extra_labels=extra,
+                                 bare_results=getattr(book, 'bare_results', False))
+        kept = []
+        for it in items:
+            lab, _, num = it["key"].partition(" ")
+            parts = num.split(".")
+            if book.chapter_first and len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) != ch:
+                continue
+            it = dict(it)
+            it["key"] = f"{_canon_label(lab)}{num}"
+            kept.append(it)
+        if manual:
+            existing = {it["key"]: idx for idx, it in enumerate(kept)}
+            for mo in manual:
+                _mok = str(mo.get("key", ""))
+                k = (f"{_canon_label(mo.get('label', ''))}"
+                     f"{' ' if _mok[:1].isalpha() else ''}{_mok}")
+                item = {"key": k, "page": mo.get("page"),
+                        "label": mo.get("label", ""), "text": mo.get("text", ""),
+                        "agent_recovered": True}
+                if k in existing:
+                    kept[existing[k]] = item
+                else:
+                    kept.append(item)
+            kept.sort(key=lambda x: ((x.get("page") or 0), _nat_key(x["key"])))
+        return kept
+
     if (primary == ORDINAL_THREE_LEVEL and getattr(book, "language", None) == "en") \
             or primary in (ORDINAL_APP, ORDINAL_APP2):
         # EN three-level, label-first (e.g. Strogatz, Lasota & Mackey).  The
@@ -2999,7 +3042,8 @@ def build_chapter(ext, ch, start, end, book, cm, manual=None):
             continue
         sec_key = _section_of_exer(
             num, getattr(book, 'chapter_local_numbering', False),
-            chapter_scoped=getattr(book, 'chapter_scoped_items', False))
+            chapter_scoped=(getattr(book, 'exercise_chapter_scoped', False)
+                            or getattr(book, 'chapter_scoped_items', False)))
         _place(node, sec_key, p)
 
     # 6) 章节内子节点排序（2026-08-29 y 感知版 → 2026-09-26 Kreyszig 根治）：

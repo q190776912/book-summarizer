@@ -3360,6 +3360,18 @@ class QLayer(VerifyLayer):
                     fignore |= {str(k) for k in _pic_data.keys()}
             except Exception:
                 pass
+        # 🔴 ignore 键形状归一（2026-10-19 Lehmann 附录实测根治）：
+        # `manage_ignore.py` 按 B 层惯例把键写成连字符形（`A.2-16` / `6.4-67`），
+        # 而 Q 层比对的号是 `SourceFormulaIndex.norm` 规范化后的点形（`A.2.16`）。
+        # 分节路径先过 `_split_scoped_ignore` 折形（所以正文 `6.4-67` 生效），
+        # **纯章路径**（附录 md 的 `## §A.1` 不被 `_detect_summary_sections`
+        # 认成节 → 落到这里）却把原始键直接交给 `_compare`，于是登记了也清不掉
+        # MISSING —— 同一份 ignore 文件「正文过 / 附录不过」的口径分叉。
+        # 取 **原始 ∪ 规范化** 并集（只并入 bare 键，`sec#num` 作用域键仍交
+        # `_split_scoped_ignore` 分桶）：FABRICATED 与 MISSING 两侧都先查
+        # `n in ignore`，故本步只会少报、不可能多报，对既有书单调安全。
+        _fglob_norm, _ = _split_scoped_ignore(fignore)
+        fignore = fignore | _fglob_norm
         fkeep = formula.get('keep_cross_refs', True)
         # 🔧 known_book (2026-09-14): genuine book formula numbers the source
         # scan missed, registered as real (not hidden behind ignore).  Wired

@@ -57,7 +57,10 @@ _boot.setup()
 import figure_detect
 from figure_detect import FigureDetect
 from page_json import PageJson
-from lib.figure_io import load_fig_labels, load_fig_components, build_fig_label_re, FIGURE_LABELS_DEFAULT, fig_label_from_match, figure_dir
+from lib.figure_io import (load_fig_labels, load_fig_components,
+                          load_fig_letter_ch, build_fig_label_re,
+                          FIGURE_LABELS_DEFAULT, fig_label_from_match,
+                          figure_dir)
 
 
 import os, sys
@@ -224,7 +227,7 @@ def is_display_numeral_box(ocr_items, box, page_h):
 # honors the book's actual Figure / 图 / Fig. numbering, NOT a hardcoded list.
 
 
-def parse_fig_label(text, labels=None, components=2):
+def parse_fig_label(text, labels=None, components=2, letter_ch=False):
     """Extract the sequential number after a figure-label prefix in `text`.
 
     The prefix list is BOOK-SPECIFIC (the `ordinal` Figure group's `name`; derived
@@ -240,12 +243,14 @@ def parse_fig_label(text, labels=None, components=2):
     Books with a global-integer figure sequence (Kreyszig, components=1) DO accept
     a bare integer ("Fig. 23" -> "23") because the required "Fig." prefix already
     disambiguates it from "equation 3".
+
+    🔴 `letter_ch`（2026-10-19）：True 时首分量为字母（附录 `Figure B.1`）。
     """
     if not text:
         return None
     if labels is None:
         labels = FIGURE_LABELS_DEFAULT
-    m = build_fig_label_re(labels, components).search(text)
+    m = build_fig_label_re(labels, components, letter_ch).search(text)
     return fig_label_from_match(m)
 
 
@@ -349,8 +354,29 @@ def detect_on_page(model, arr, W, H, conf, imgsz, device, fig_id, cap_id):
     return figs, caps
 
 
+_FIG_CTX_CACHE = {}
+
+
+def _fig_ctx_for_ch(out_dir, ch):
+    """(labels, components, letter_ch) for chapter `ch`, memoized per (dir, ch).
+
+    🔴 附录/补篇可用**字母章位**图号（`Figure B.1`），与正文 `Figure 3.1` 形态不同；
+    不按章解析就会拿正文的数字核去套附录图题，一条也认不出 —— 连带后果是
+    「有标号才合并 caption」判据恒假，附录图注不会被裁进图里。
+    """
+    key = (out_dir, str(ch))
+    hit = _FIG_CTX_CACHE.get(key)
+    if hit is None:
+        hit = (load_fig_labels(out_dir, ch),
+               load_fig_components(out_dir, ch),
+               load_fig_letter_ch(out_dir, ch))
+        _FIG_CTX_CACHE[key] = hit
+    return hit
+
+
 def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
-                 fig_dir, conf, imgsz, device, fig_labels=None, fig_components=2):
+                 fig_dir, conf, imgsz, device, fig_labels=None, fig_components=2,
+                 out_dir=None, fig_letter=False):
     """Detect + crop figures on one page (DETECTION ONLY: positional names, no
     semantic label yet). Returns (entries, md_lines).
 
@@ -359,6 +385,9 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
     (label + following description text) as one image. A figure whose caption
     has no sequential label — or has no caption at all — is cropped alone.
     """
+    if out_dir is not None:
+        # 按本章所属配置段解析图号体例（正文 / 附录 / 补篇可各立一体例）
+        fig_labels, fig_components, fig_letter = _fig_ctx_for_ch(out_dir, ch)
     figs, caps = detect_on_page(model, arr, W, H, conf, imgsz, device, fig_id, cap_id)
     entries, md_lines = [], []
     fi = 0
@@ -387,7 +416,8 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
         # If yes, crop the figure + its caption (label + description) as ONE
         # image; otherwise crop the figure alone. This is the required
         # "include caption iff it has a label" logic.
-        has_label = bool(cap_txt) and parse_fig_label(cap_txt, fig_labels, fig_components) is not None
+        has_label = (bool(cap_txt) and parse_fig_label(
+            cap_txt, fig_labels, fig_components, fig_letter) is not None)
 
         # Crop region: figure box by default; extend to include the caption
         # (union of figure + caption boxes) only when a labeled caption exists.
@@ -501,7 +531,7 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
         ch = chapter_for_page(pno, chap_map)
         e, _ = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
                             ch, pno, fig_dir, conf, imgsz, device, fig_labels,
-                            fig_components)
+                            fig_components, out_dir=out_dir)
         new_entries += e
     doc.close()
 
@@ -559,7 +589,7 @@ def run_full_book(pdf_path, out_dir, weights=DEFAULT_WEIGHTS,
         ch = chapter_for_page(pno, chap_map)
         e, md = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
                              ch, pno, fig_dir, conf, imgsz, device, fig_labels,
-                             fig_components)
+                             fig_components, out_dir=out_dir)
         all_entries += e
         all_md += md
         if pno % 20 == 0 or pno == total:
@@ -606,7 +636,7 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
         ocr_items = load_ocr_text(json_path)
         e, m = process_page(model, arr, W, H, ocr_items, fig_id, cap_id,
                             ch, pno, fig_dir, conf, imgsz, device, fig_labels,
-                            fig_components)
+                            fig_components, out_dir=out_dir)
         entries += e
         md += m
     doc.close()

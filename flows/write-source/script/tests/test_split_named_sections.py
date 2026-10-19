@@ -21,10 +21,16 @@ from split_chapters import NAMED_SEC_RE, split_one_file
 def test_named_re_positive_negative():
     assert NAMED_SEC_RE.match("## § Smooth Structures").group(1) == "Smooth Structures"
     assert NAMED_SEC_RE.match("## § 拓扑流形 (Topological Manifolds)")
+    # 字母式节号（Axler `## §2A 名称`）：前缀消费、名称组取其后文本
+    m = NAMED_SEC_RE.match("## §2A Outer Measure on R")
+    assert m and m.group(1) == "Outer Measure on R"
+    m = NAMED_SEC_RE.match("## §11B 傅里叶级数与单位圆的 $L^p$ (Fourier Series and $L^p$ of Unit Circle)")
+    assert m and m.group(1).startswith("傅里叶级数与单位圆的")
     # 负向：H3 子节 / 无 § / 编号式 均不当具名节
     assert NAMED_SEC_RE.match("### § Coordinate Charts") is None
     assert NAMED_SEC_RE.match("## Smooth Structures") is None   # 缺 §
-    assert NAMED_SEC_RE.match("## §5 Numbered") is None          # 数字开头→编号式，非具名
+    assert NAMED_SEC_RE.match("## §5 Numbered") is None          # 数字+空白→编号式，非具名
+    assert NAMED_SEC_RE.match("## §2.1 Numbered") is None        # 点分编号→编号式
     assert NAMED_SEC_RE.match("# § Chapter Title") is None       # H1 不当节
 
 
@@ -93,3 +99,36 @@ def test_split_one_file_numbered_still_uses_split_re():
         written = split_one_file(src, 10 ** 9, 2, "en", dry_run=False, force=True)
         names = sorted(os.path.basename(p) for p in written)
         assert names == ["Chapter2_1_Maps.md", "Chapter2_2_Composition.md"], names
+
+
+def test_split_one_file_letter_sections_end_to_end():
+    # 字母式节号（Axler `## §2A 名称`）：按出现顺序赋 1..k 序数键，与
+    # 英文版手工拆分 ChapterN_1..k 键位对齐（规则3 配对闸要求节号集合一致）
+    text = "\n".join([
+        "# 第 2 章 测度",
+        "",
+        "章引言并入第 1 节",
+        "",
+        "## §2A 实数集上的外测度 (Outer Measure on R)",
+        "body A",
+        "",
+        "## §2B 可测空间与可测函数 (Measurable Spaces and Functions)",
+        "body B",
+        "",
+        "### §2B.1 子节留父节",
+        "sub body",
+        "",
+    ]) + "\n"
+    with tempfile.TemporaryDirectory() as d:
+        src = _write(d, "第2章_测度.md", text)
+        written = split_one_file(src, 10 ** 9, 2, "zh", dry_run=False, force=True)
+        names = sorted(os.path.basename(p) for p in written)
+        assert names == [
+            "第2章_1_实数集上的外测度(OuterMeasureonR).md",
+            "第2章_2_可测空间与可测函数(MeasurableSpacesandFunctions).md",
+        ], names
+        first = open(written[0], encoding="utf-8").read()
+        assert "章引言并入第 1 节" in first
+        assert first.startswith("# 第 2 章 测度")
+        second = open(written[1], encoding="utf-8").read()
+        assert "### §2B.1 子节留父节" in second

@@ -326,7 +326,14 @@ def check_bare_items(lines, ordinal):
 # （Bass 实测契约 `2.3 EXERCISES`），旧写法 `[Ee]xercises?` 无法匹配，
 # 于是「全大写习题节」既被 p_exer_block 禁写标题、又被本集合当成必写节，
 # 形成无解矛盾。统一 re.I 后：习题节一律可省略（不进 required）。
-EXER_SEC_TITLE_RE = re.compile(r'(?:练习|习题|习)\s*\d*\s*$|exercises?\b|problems?\b', re.I)
+# 🔴 `\b` 会被**印面题号粘连**打断（Lehmann《Elements of Large-Sample Theory》实测
+# 契约 `4.5 Problems269` / `5.8 Problems349`：OCR 把节末印刷页码接在标题词后，
+# 's' 与数字同为 word char → `problems?\b` 失配），于是「按习题收录规则应省略」的
+# 章末题集节反被 p_missing_sec 要求补 `## §4.5` 标题 = 逼写手无中生有。
+# 放行形态只增加「习题词 + 尾随数字直至词尾」一支；跨书目普查（751 份分章契约）
+# 该放宽的新增命中**恰好只有这两条**，即对既有全部书目零行为变化。
+EXER_SEC_TITLE_RE = re.compile(
+    r'(?:练习|习题|习)\s*\d*\s*$|exercises?[0-9]*\b|problems?[0-9]*\b', re.I)
 
 
 # 标题归一化（无序号标小节按标题匹配用）：去 LaTeX/标点/空白，保留字母数字与
@@ -450,9 +457,13 @@ def _norm_secnum(s):
 # md 侧 token（全局节号书 / 字母子节）：
 #   `## §12`      -> 数字节（首分量即节 id，全书全局编号）
 #   `## §A`       -> 字母节（附录章）
+#   `## §1A`      -> 裸字母后缀节（Axler MIRA 体例：'1A' 无分隔符，原正则只认
+#                    `1.A` / `1-A` → 字母节整批假阳缺节）
 #   `### §12.A`   -> 投影式字母子节（历史写法，显式父节优先）
 #   `### §A`      -> 纯字母子节（Karlin 体例，父节靠位置）
-_GLOBAL_SEC_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7\-]\d+)*(?:[.\u00b7\-][A-Z])?)')
+# 🔴 裸后缀支必须带 `(?![A-Za-z])`：否则 `## §1 Appendix…` 会被读成节 '1A'。
+_GLOBAL_SEC_TOKEN_RE = re.compile(
+    r'^#{2,6}\s*§\s*(\d+(?:[.\u00b7\-]\d+)*(?:[.\u00b7\-][A-Z]|[A-Z](?![A-Za-z]))?)')
 _LETTER_TOKEN_RE = re.compile(r'^#{2,6}\s*§\s*(?:(\d{1,2})[.\u00b7]\s*)?([A-Z])(?![A-Za-z])')
 
 
@@ -468,6 +479,39 @@ def _md_global_section_ids(md_lines):
         if m:
             ids.add(m.group(1))
     return ids
+
+
+def _norm_heading_title(s):
+    """标题归一化：弯引号折直、空白折叠、去尾部标点、小写。"""
+    s = (s.replace('\u2019', "'").replace('\u2018', "'")
+          .replace('\u201c', '"').replace('\u201d', '"'))
+    s = re.sub(r'\s+', ' ', s)
+    return s.strip(' \t.:：;；,，-–—').lower()
+
+
+def _md_section_titles(md_lines):
+    """md 的 `## §…` 纯标题集合（归一化），去掉紧随 `§` 的印刷/合成序标
+    （'1A' / '12.3' / 'U1'）。供**无印刷序标**的合成节键（`U1…`，如 Axler
+    ch12 小节印面只有标题）按标题兜底匹配；带数字的键仍只认序标。
+    译版标题（写作规则：CN 标题带 `(English)` 源书标题）的**尾部英文括号段**
+    一并入集——U 键兜底是集合精确匹配，只收译名会让中文侧对全部合成键
+    假阳缺节（Axler MIRA ch12 CN 6/6 节实测 2026-10-19）。"""
+    out = set()
+    for ln in md_lines:
+        s = ln.strip()
+        if not re.match(r'^#{2,6}\s*§', s):
+            continue
+        s = re.sub(r'^#{2,6}\s*§\s*', '', s)
+        s = re.sub(
+            r'^(?:\d+(?:[.\u00b7\-]\d+)*(?:[.\u00b7\-]?[A-Z](?![A-Za-z]))?|U\d+)'
+            r'(?=\s|[:：]|$)', '', s).strip()
+        t = _norm_heading_title(s)
+        if t:
+            out.add(t)
+            m = re.search(r'\(([^()]+)\)$', t)
+            if m:
+                out.add(m.group(1).strip())
+    return out
 
 
 def _md_letter_sub_pairs(md_lines):
@@ -524,9 +568,15 @@ def check_missing_sections(md_lines, ext_dir, ch, cfg=None):
                 # 与 contract-last 回退同一通道（2026-09-26 do Carmo 实测）。
                 present_first.add('A')
         present |= md_sec_ids
+        md_title_set = _md_section_titles(md_lines)
         for s, title in required:
             ns = _norm_secnum(s)
             ok = (ns in present) or (ns.split('.')[-1] in present_first)
+            # 合成键（`U1…`，原书小节无印刷序标，见 build_structure U{n}）：
+            # 印面标题即全部信息，按归一化标题兜底；带数字的键仍只认序标。
+            if not ok and not re.match(r'^\d', ns):
+                t = _norm_heading_title(title or '')
+                ok = bool(t) and t in md_title_set
             if not ok:
                 out.append(f"  x Ch{ch} §{s}: 结构契约要求此节，但 md 无对应 `## §{s}` 标题")
     elif required and unnumbered:

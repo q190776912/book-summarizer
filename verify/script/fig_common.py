@@ -23,16 +23,20 @@ from key_parse import sortkey
 from lib.figure_io import load_figure_index, load_fig_labels, load_fig_label_re, build_fig_label_re, FIGURE_LABELS_DEFAULT
 
 
-def fig_cap_re(out_dir=None):
+def fig_cap_re(out_dir=None, ch=None):
     """Compiled regex that finds figure caption labels (图 X.X / Figure X.X / …)
     in OCR text. The prefix list is BOOK-SPECIFIC (the `ordinal` Figure group's
     `name`); `out_dir=None` uses the default prefix set. This makes the E-layer
-    honor each book's OWN figure numbering instead of a hardcoded 图."""
+    honor each book's OWN figure numbering instead of a hardcoded 图.
+
+    🔴 `ch`（2026-10-19）：非 None 时按该章所属配置段（正文 / 附录 / 补篇）
+    取图号形态——段间体例不同的书（附录 `Figure B.1`）各段各判，见
+    `lib.figure_io._segment_keys_for_ch`。"""
     # Honor BOTH the book's Figure group `name` AND its `type` (-> depth =
     # component count: 1=global int, 2=chapter.figure, 3=chapter.section.figure).
     # out_dir=None -> default prefixes with the historical 2-component default.
     if out_dir:
-        return load_fig_label_re(out_dir)
+        return load_fig_label_re(out_dir, ch)
     labels = list(FIGURE_LABELS_DEFAULT)
     return build_fig_label_re(labels)
 

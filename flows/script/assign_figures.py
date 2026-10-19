@@ -71,7 +71,8 @@ from extract_figures import (  # noqa: E402
     load_ocr_text, center_of_poly, parse_fig_label,
     chapter_for_page, load_chapter_map, render_page,
 )
-from lib.figure_io import load_fig_labels, load_fig_components, load_fig_label_re, figure_dir  # noqa: E402
+from lib.figure_io import (load_fig_labels, load_fig_components,
+                          load_fig_label_re, load_fig_letter_ch, figure_dir)  # noqa: E402
 
 
 def load_figure_detect(out_dir):
@@ -98,7 +99,7 @@ from lib.figure_io import load_figure_index, fig_label_from_match
 from figure_index import merge_index  # figure_index.json instantiation lives with its model
 
 
-def gather_refs(out_dir, start, end):
+def gather_refs(out_dir, start, end, ch=None):
     """Collect every figure caption (图X.X / Figure X.X / …) in the chapter's
     OCR pages, with its (page, cy) position. Returns list of (label, page, cy).
 
@@ -112,7 +113,11 @@ def gather_refs(out_dir, start, end):
     the figure label on the joined string — this yields the full label
     (1/2/3 component per Figure group `type` -> depth) instead of a partial fragment,
     and we map the match back to its line's y."""
-    pat = load_fig_label_re(out_dir)
+    # 🔴 章号下发：`ch` 决定读 `verify_config.json` 的哪一段（正文 / 附录 /
+    # 补篇）。附录用字母章位图号（`Figure B.1`）的书，不按章路由就会拿正文
+    # 的 `N.M` 形态去匹配，该章的图注一条也认不出来（见 lib/figure_io
+    # `._segment_keys_for_ch`）。
+    pat = load_fig_label_re(out_dir, ch)
     refs = []
     for pno in range(start, end + 1):
         ocr = load_ocr_text(os.path.join(out_dir, f"page_{pno:03d}.json"))
@@ -310,13 +315,14 @@ def assign_chapter(det_all, ch, start, end, out_dir, pdf_path=None):
 
     _tag = _ch_tag(ch)
     os.makedirs(fig_dir, exist_ok=True)
-    labels = load_fig_labels(out_dir)
-    fig_components = load_fig_components(out_dir)
+    labels = load_fig_labels(out_dir, ch)
+    fig_components = load_fig_components(out_dir, ch)
+    fig_letter = load_fig_letter_ch(out_dir, ch)
 
     ch_dets = [e for e in det_all if e.get("chapter") == ch]
     ch_dets.sort(key=lambda e: (e["page"], e.get("fig_idx", 0)))
 
-    refs = gather_refs(out_dir, start, end)
+    refs = gather_refs(out_dir, start, end, ch)
     used_refs = set()  # indices into refs claimed by a figure
 
     # ---- cleanup: drop previous NON-manual chNN_* crops for this chapter ----
@@ -333,7 +339,9 @@ def assign_chapter(det_all, ch, start, end, out_dir, pdf_path=None):
 
     assigned, unnamed_k = [], 0
     for det in ch_dets:
-        label = parse_fig_label(det.get("cap_text"), labels, fig_components) if det.get("cap_text") else None
+        label = (parse_fig_label(det.get("cap_text"), labels, fig_components,
+                                fig_letter)
+                if det.get("cap_text") else None)
 
         if not label:
             # proximity fallback: same page, nearest unused 图X.X.X by vertical gap

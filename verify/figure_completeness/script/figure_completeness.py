@@ -255,8 +255,10 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
         if isinstance(e, dict) and e.get('label'):
             extracted_bookwide.add(normfig(e['label']))
     caption = set()
-    cap_re = fig_cap_re(ext)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
-    components = load_fig_components(ext)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
+    # 🔴 按章路由：附录等段可另立图号体例（`Figure B.1`），不传 ch 会拿正文
+    #   形态去套，该章图题一条也认不出来（见 lib.figure_io._segment_keys_for_ch）。
+    cap_re = fig_cap_re(ext, ch)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
+    components = load_fig_components(ext, ch)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
     _pdir = resolve_page_dir(ext, ch)
     for p in range(start, end + 1):
         fp = os.path.join(_pdir, f'page_{p:03d}.json')

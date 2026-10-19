@@ -38,7 +38,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from verify.script.base import VerifyLayer, LayerResult
-from key_parse import sortkey, _canon_label
+from key_parse import sortkey, _canon_label, COMBINED_LABEL_KINDS
 from lib.regexlib import SEP_TIGHT, SEP_SPLIT_RE
 from verify_config import (ORDINAL_THREE_LEVEL, ORDINAL_APP, ORDINAL_APP2,
                            _LABEL_CANON)
@@ -183,6 +183,37 @@ def _ex_canon_key(k):
     """
     s = re.sub(r'^\D+', '', str(k or '').strip())
     return s.replace('．', '.').replace('-', '.')
+
+
+# 🔴 uncat 两段键「数字同号」同实体判据（2026-10-19 Axler《Measure, Integration
+# & Real Analysis》ch2/ch4–ch12 实测：44 键 × 中英 89 行 EXTRA-ENTRY 全为该型
+# 假信号）。结构探测对「标签词被 OCR 粘连/缺失」的两段真实条目落
+# `key = 'uncat' + 号`（structure_io.read_structure_items 两段分支
+# `TYPE_TO_LABEL.get(n.type,'uncat') + _number`），而 md 条头照印面带标签
+# （CN `**例10.101（…）**`、EN `**5.11 Example …**` → `例5.11`、
+# `**2.39 condition …**` → `条件2.39`）。`_norm_path` 只折三段键 → 两侧归一后
+# 'uncat5.11' vs '例5.11' 永不相交，契约**已登记**的条目被逐条报成「契约漏登记
+# 印面条目」（2026-10-08 老修复只覆盖三段裸键，正是此因）。label='uncat' =
+# 类型未知，本就无类型可对账（P 层闸门⑩ 对 uncat 跳过），故两侧统一剥
+# `uncat`/条目标签后按**数字同号**判同一实体。suppress-only：只进 `_covered`
+# （EXTRA 抑制），绝不进 `extracted`（uncat 本就不在书真相集 → truly_missing /
+# 序标闸 / 编号单调零影响）；契约无同号 uncat 节点的真孤儿条头照旧上报
+# （守护测试 `test_b_layer_entry_domain_eqref_guard`：`定义4.2.9` 仍须报出）。
+_UNCAT_LABEL_ALT = '(?:uncat|%s)' % '|'.join(
+    dict.fromkeys(sorted((str(w) for w in COMBINED_LABEL_KINDS), key=len,
+                         reverse=True)))
+
+
+def _digit_entity(k):
+    """剥 `uncat`/条目标签后的点分数字同号实体（`uncat5.11`/`例5.11`/`5.11` → `5.11`）。
+
+    锚定全匹配：只有「可选标签词 + 点分纯数字」形态返回号串；三级键（
+    `_norm_path_labelfree` 已折 `1.1-1`）、字母章位（`A.2-1`）、习题短横
+    （`7-19`，走 `_ex_canon_key`）等一律返回 None，不进本判据，各归各的通道。
+    标签词表复用单一真源 `COMBINED_LABEL_KINDS`（含 EN 词，防未归一形态漏配）。
+    """
+    m = re.fullmatch(_UNCAT_LABEL_ALT + r'?(\d+(?:\.\d+)+)', str(k or '').strip())
+    return m.group(1) if m else None
 
 
 def _inline_only_entry_keys(md_lines, keys):
@@ -2609,6 +2640,10 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # 分隔符统一成 `.` 后两侧同折。suppress-only：只进覆盖集，绝不进 `extracted`。
         _ex_canon = {_ex_canon_key(k)
                      for k in _contract_exercise_keys(ctx.ext_dir, ctx.ch)}
+        # 🔴 uncat 两段键数字同号覆盖（判据与注释见 `_digit_entity`，2026-10-19
+        # Axler 44 键 89 行 EXTRA-ENTRY 根治）。suppress-only：并入 `_covered`
+        # 只压 EXTRA 桶，不碰 `extracted`/`truly_missing`/`mentioned_only`。
+        _uncat_nums = {n for n in (_digit_entity(k) for k in _uncat_keys) if n}
         _all_norm = {_norm_path_labelfree(k) for k in all_keys}
         truly_missing = sorted(k for k in extracted
                                if _norm_path_labelfree(k) not in _all_norm)
@@ -2617,7 +2652,8 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         # (merely a label-variant of a registered item); keep only genuine orphans.
         _covered = {k for k in all_keys
                     if _norm_path_labelfree(k) in _ext_norm
-                    or _ex_canon_key(k) in _ex_canon}
+                    or _ex_canon_key(k) in _ex_canon
+                    or _digit_entity(k) in _uncat_nums}
         all_keys_eff = set(all_keys) - _covered
         # 🔴 EXTRA 分桶（判据见 `_split_extra`）。混在一行时报告文案
         # "usually correctly-filtered cross-refs" 会把**契约漏登记的真条目**说成

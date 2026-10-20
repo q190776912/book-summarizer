@@ -156,7 +156,18 @@ def fig_label_alt(labels):
     'l' (e.g. "Fig." -> "Flg." in Kreyszig's scan), which would otherwise leave
     those captions unnamed. For any label containing 'i'/'I' we also emit the
     same prefix with 'i' -> '[il]', so "Flg." matches the "Fig" prefix. Scoped
-    to labels that actually contain 'i', so 图-only books are unaffected."""
+    to labels that actually contain 'i', so 图-only books are unaffected.
+
+    OCR robustness (2026-10-20 Rice MSA ch2/8/11/14): large-caps display
+    captions are often word-split mid-word by the text layer ("F I G U R E 2.6" /
+    "FIG U RE 11.5" / "FIGU RE 14.12" for the unsplit forms). For any
+    ASCII-letter label we also emit a word-split variant whose internal letter
+    boundaries may carry a single space (zero or more), so those real captions
+    still enter the caption set and are not misreported as FIGURE EXTRA /
+    re-paired into the wrong crop. Split requires at least two letter runs
+    (never matches a lone-letter Chinese/other label). The unsplit form is
+    already matched by the exact-prefix branch; zero regression for unsplit
+    captions and for books whose label list has no ASCII letters."""
     if not labels:
         return r"[^\s\S]"
     alts = []
@@ -166,6 +177,15 @@ def fig_label_alt(labels):
         if "i" in lbl.lower():               # tolerate Fig -> Flg (i read as l)
             conf = re.escape(lbl).replace("i", "[il]").replace("I", "[il]")
             alts.append(conf + r"\.?")
+        if any(ch.isalpha() and ch.isascii() for ch in lbl):
+            # OCR word-split: F I G U R E -> "FIG U RE" / "FIGU RE" / "F I G U R E"
+            # Optional single spaces at every internal letter boundary
+            # (zero-or-more so both "FIG U RE" and "F I G U R E" match;
+            # unsplit form is already matched by the exact-prefix branch).
+            letters = [c for c in lbl if c.isalpha() and c.isascii()]
+            if len(letters) >= 2:
+                pat = r"\s*".join(re.escape(c) for c in letters)
+                alts.append(pat + r"\.?")
     return "|".join(alts)
 
 

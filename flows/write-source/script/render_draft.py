@@ -30,7 +30,9 @@
   * 习题收录规则：章末集中习题块（``consolidated=true``）**省略**，穿插练习保留；
   * 带编号的行间公式：契约公式块的 ``tag`` 以 KaTeX ``\\tag{...}`` 独立一行写入
     ``$$`` 块内（书无号不编造；单元据此保留序标供调整与 Q 层对账）；
-  * 描述信息（description 节点）为无标题纯段落；图片块按原嵌图格式（flex div + ``<img>``）输出；
+  * 描述信息（description 节点）：无名 = 无标题纯段落；有名（印面**无序号节末标题**
+    被 `attach_content._lift_head_word` 登记进 ``name``）= 先出独立粗体标题行
+    ``**Summary**`` 再写小结正文，见 ``_emit_desc_node``；图片块按原嵌图格式（flex div + ``<img>``）输出；
   * 分段：``line_start`` + ``indent``（首行缩进带）另起一段。
 
 单元是 write-source 逐章「调整与校验」的**底稿**，不是成品，**不经 verify、不受任何校验层约束**（P 层冗长告警等在其上属预期——初版按设计保留完整信息，Tier 压缩发生在调整步骤）：
@@ -345,9 +347,28 @@ def _render_proof(pr, out, quote, lang):
         out.append(("> " + ln) if not quote else ln)
 
 
+def _emit_desc_node(el, out, quote=False, lang="cn"):
+    """description 节点 → 段落流。
+
+    无名（普通聚合散文）= 纯段落，无标题（原行为）；
+    🔴 有名 = 印面**无序号节末标题**（`Summary` / `Overview` …，`attach_content
+    ._lift_head_word` 把独占一行的标题词登记进 `name`）→ 先出独立粗体标题行，
+    其下才是小结正文。Lehmann 的节末是**编号要点列表**，故标题单独成行；
+    run-in 体例（`**Summary.** 正文同句`）不属本形态：标题词与正文同块，不会成为独立
+    标题，草稿照旧原样输出，粗体化归写源步骤管。
+    """
+    dname = (el.get("name") or "").strip()
+    if dname:
+        if out and str(out[-1]).strip():
+            _blank(out, quote)
+        out.append("**%s**" % dname)
+        _blank(out, quote)
+    _walk_mixed(el, out, quote, lang)
+
+
 def _walk_mixed(node, out, quote=False, lang="cn", top=False):
     """sub_sec 混合列表：内容块成段（连续块成组传入，供连续图片 run 合并 flex
-    div）；description 无标题纯段落；proof 证明思路块引用；章末集中习题块
+    div）；description 段落流（无名纯段落 / 有名先出节末标题行，见 `_emit_desc_node`）；proof 证明思路块引用；章末集中习题块
     （consolidated）按习题收录规则省略；其余结构节点递归。
 
     top=True（章 / 节的直接子层）时按 V-F 边界规则 emit 条目级 ``---``：
@@ -380,7 +401,7 @@ def _walk_mixed(node, out, quote=False, lang="cn", top=False):
                 out.append("---")
                 out.append("")
         if t == "description":
-            _walk_mixed(el, out, quote, lang)   # 无序标散文：纯段落，无标题
+            _emit_desc_node(el, out, quote, lang)   # 无名=纯段落；有名=节末无序号标题 + 段落
             if top:
                 _CTX["prev"] = "desc"
         elif t == "proof":

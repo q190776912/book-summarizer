@@ -30,7 +30,9 @@
                         //   axiom(Ross) | algorithm | property | table | figure |
                         //   description（描述信息）| proof（证明，条目子节点）| -1(书根)
   "name": "1.1-1 Definition (Metric space, metric).",  // 带序标的纯标题，不含正文
-                        //   description 恒为 ""（无序标）；proof 为证明标记原文
+                        //   description 通常 ""（无序标）；🔴 印面无序号节末标题
+                        //   （`Summary` / `Overview` …）独占一行时 = 该标题词；
+                        //   proof 为证明标记原文
   "page_start": 18,
   "page_end": 18,       // 叶子 == page_start；容器 / description / proof 取所辖块的页区间
   "consolidated": false, // 全节点均有（save 序列化必写）；true 仅「章末集中习题块」内的练习
@@ -116,7 +118,7 @@
 | `property` | 性质 | `"性质1"` | `"性质1"` → `性质1 傅里叶变换是线性变换…` |
 | `table` / `figure` | 表 / 图注条目（节内共享计数器书，Fraleigh 型） | `"Table1.20"` / `"Figure3.10"` | `"Table1.20"` → `Table1.20 1.20 Table` |
 | `uncat` | 无法归类标签的编号项（兜底） | `"3.21-3"` | `"3.21-3"` → `3.21-3 22` |
-| `description` | **描述信息**（大段无序标散文，与定理同级；仅分章契约） | 合成 `"D{n}"`（章内文档序）；name 恒空 | `"D2"`，`sub_sec` 承载散文内容块 |
+| `description` | **描述信息**（大段无序标散文，与定理同级；仅分章契约） | 合成 `"D{n}"`（章内文档序）；name 一般空，🔴 仅印面**无序号节末标题**独占一行时登记该标题词（见 §4） | `"D2"`，`sub_sec` 承载散文内容块 |
 | `proof` | **证明**（条目子节点；仅分章契约） | 合成 `"{条目key}-P{n}"`；name = 证明标记原文 | `"2.1-1-P1"` → `PROOF` |
 
 ### 2.3 特殊字段与遗留形态
@@ -147,11 +149,11 @@
 
 ## 4. description 节点（描述信息，与定理同级）
 
-- **语义**：书中大段**不属于任何定义/定理、没有序标**的描述性散文——章首序言、节导语、条目之间/证明之后的独立段落。
-- **产生规则**（`attach_content`）：① 章首序言块 → 章 `sub_sec` 最前的 description 节点；② 节首散文块 → 节 `sub_sec` 最前的 description 节点；③ 条目末个 `proof` 之后的尾随正文块 → 与该条目**同级**的 description 节点（插在该条目之后）。
-- **字段**：合成 `key="D{n}"`（章内按文档顺序递增）；`name=""`（无序标）；`page_start/page_end` = 所含块的页区间；`sub_sec` = 文字/公式内容块。
+- **语义**：书中大段**不属于任何定义/定理、没有序标**的描述性散文——章首序言、节导语、条目之间/证明之后的独立段落、节末/章末小结。
+- **产生规则**（`attach_content`）：① 章首序言块 → 章 `sub_sec` 最前的 description 节点；② 节首散文块 → 节 `sub_sec` 最前的 description 节点；③ 条目末个 `proof` 之后的尾随正文块 → 与该条目**同级**的 description 节点（插在该条目之后）；④ 🔴 块流里独占一行的**无序号节末标题**（`Summary` / `Overview` …）从它处切开，标题词登记为该段的 `name`（判据与切分见 `flows/write-source/structure/structure.md`「无序号节末标题」）。
+- **字段**：合成 `key="D{n}"`（章内按文档顺序递增）；`name` = `""`（普通聚合散文）或**一个标题词**（形态 ④，剥去尾随 `:` / `.`）；`page_start/page_end` = 所含块的页区间；`sub_sec` = 文字/公式内容块。
 - **verify 不消费**：description 仅存在于分章内容契约，结构基线不含，编号项基准 / B·D 层均不受影响（结构指纹亦排除）。
-- **渲染**：`split_draft_units` 输出为**无标题纯段落**（公式照常 `$`/`$$`）的独立 `desc` 单元，agent 调整时按 Tier 2 描述性内容规则压缩。
+- **渲染**：`split_draft_units` 输出为独立 `desc` 单元——无名 = **无标题纯段落**（公式照常 `$`/`$$`）；有名 = 先一行独立粗体标题 `**Summary**` 再写小结正文（`render_draft._emit_desc_node`），`name` 同时写入单元记录供写手/清单可见。agent 调整时按 Tier 2 描述性内容规则压缩。
 
 ## 5. proof 节点（证明，条目子节点）
 

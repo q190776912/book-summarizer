@@ -129,5 +129,27 @@ class TestColonInsideBoldProofTitle(unittest.TestCase):
                              "豁免行被 fix 改动了")
 
 
+class TestProofTitleWithInlineBody(unittest.TestCase):
+    r"""证明标题与其正文**同行**的形态（Lehmann–Casella《TPE》CN ch1 0065 实测 2026-10-20）。
+
+    印面 `Proof of Theorem 6.12. This corollary states…` 被忠实译成
+    「> **定理 6.12 的证明** 该推论指出：…」。旧豁免 `_proof_title_in_bq_re` 要求
+    「证明」后到行尾，遇到这种行内正文即漏豁免 → 把证明标题误判成「被吞进 `>` 的结构性
+    条目」，`--fix` 还会剥掉 `>` 把标题拆出证明块（与 gate_units「证明须在 `>` 内」打脸）。
+    根治判据：只看**第一个粗体标题段**本体是否含「证明/Proof」。含 = 证明标题 → 豁免；
+    真正的裸条目（标题段不含「证明」）即使正文同行也照报。
+    """
+
+    def test_proof_title_inline_body_is_exempt(self):
+        md = ("**推论 6.13** 陈述正文。\n\n"
+              "> **定理 6.12 的证明** 该推论指出：$U$ 是充分的当且仅当 $T$ 是 $U$ 的函数。\n")
+        self.assertFalse(_hit(md), "证明标题+行内正文必须豁免")
+
+    def test_bare_struct_entry_inline_body_still_flagged(self):
+        """反向：标题段不含「证明」的裸条目即使正文同行也照报。"""
+        md = "> **定义 13.1.1 转移函数。** 该函数满足 $p_{ij} \\ge 0$。\n>\n> 续。\n"
+        self.assertTrue(_hit(md), "「> **定义 …。** 正文」是被吞进引用的条目，必须 FAIL")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

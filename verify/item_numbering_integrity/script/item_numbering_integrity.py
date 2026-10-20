@@ -476,7 +476,7 @@ def _comps_of(numpath):
     return [int(p) for p in parts]
 
 
-def _is_header_boundary(tail):
+def _is_header_boundary(tail, lang=None):
     """After the numeric path, the bold span must terminate the *header*
     (colon / paren / period / end-of-span) — not run into prose such as
     '的证明' or ' and', which would indicate a *reference* rather than a
@@ -495,7 +495,22 @@ def _is_header_boundary(tail):
     if c in '-–—·/~〜' and s[1:2].isdigit():
         # 分隔符型 SEP_TIGHT 成员（dash 系）后接数字同理 = 截断残段
         return False
-    if c.isalpha():          # latin letter -> 'Theorem 4.1 and ...' prose
+    if c.isascii() and c.isalpha():  # latin letter -> 'Theorem 4.1 and ...' prose
+        # 🔴 必须限定 ASCII：汉字等 CJK 字符 `.isalpha()` 亦为真，旧版裸
+        # `if c.isalpha():` 会抢在下方 `if '一' <= c <= '鿿':` 汉字分支之前把
+        # 所有汉字续词判 False 丢弃 → CN 条头**编号后紧跟中文描述标题**（如
+        # `> **例 1.3 二项分布…。**`）永不被计数 → 假「缺号」BLOCKING。与本函数
+        # 的姊妹 `_is_reference_tail`（其拉丁分支即 `c.isascii() and c.isalpha()`）
+        # 对齐：拉丁分支只管 ASCII，汉字交给汉字分支。EN 侧无回归（内层本已要求
+        # `c.isascii()`）。
+        # EN 描述性命名的条目会把标题**直接续在编号后**（Lehmann & Casella：
+        # `**Example 1.3 Approximate variance of a binomial UMVU estimator.**`），
+        # 旧逻辑把任何拉丁续词一律判成散文而丢条目 → 制造假「缺号」BLOCKING。
+        # 与 `_is_reference_tail` 的 EN 放宽同源：EN 侧拉丁续词是**真条目标题**，
+        # 仅当它以显式交叉参照词（see/cf/viz/ibid）开头时才按引用排除。CN 侧
+        # 行为一字节不改（任何拉丁续词仍判 False——其描述性标题走汉字分支）。
+        if c.isascii() and lang == 'en' and not _is_citation_starter(s):
+            return True
         return False
     if '一' <= c <= '鿿':
         # A Han-char continuation after the number is normally a DESCRIPTIVE
@@ -505,7 +520,14 @@ def _is_header_boundary(tail):
         # rejected.  This mirrors the _is_reference_tail philosophy: a Han-start
         # descriptive title is a REAL entry, not a reference — rejecting it
         # silently drops legitimate entries and manufactures false 缺号 (BLOCKING).
-        if re.match(r'^(?:的|之)?(?:证明|应用|推论|推广|逆|特例|注|说明|扩展|上界|下界|估计|逼近|表示|等价|形式)', s):
+        # 🔴 的/之 必须**强制**（Lehmann–Casella《TPE》CN ch2 实测 2026-10-20）：
+        # 旧版把 `(?:的|之)?` 设为可选，于是以内容动词开头的**中文描述性标题**——如
+        # `> **例2.1 估计正态方差的多元式（Estimating …）**` 的 `估计…`——被误当成
+        # 「定理 4.1 的应用」这类所属格引用而丢弃 → 真实 Example 2.1 从节窗消失 →
+        # 假「缺号 1」BLOCKING，而 EN 孪生 `Example 2.1 Estimating…` 却正常计数。
+        # 所属格引用在中文里**必带 的/之**（`…的证明`、`…的应用`）；光杆内容词开头 =
+        # 条目标题 = 真实条目。故要求 的/之 在场才拒，与 EN 侧（拉丁续词按标题计数）对齐。
+        if re.match(r'^(?:的|之)(?:证明|应用|推论|推广|逆|特例|注|说明|扩展|上界|下界|估计|逼近|表示|等价|形式)', s):
             return False
         if s[:1] in _CN_CITATION_STARTERS or (len(s) >= 2 and s[:2] in _CN_CITATION_STARTERS):
             return False
@@ -700,9 +722,9 @@ def _parse_entry(inner, levels, lang=None):
         # 🔴 FIX ⑧b（Vakil 字母习题实测）：「练习 25.2.A」在 lv=2 回退轮被截成
         # [25,2] 灌进「章」级习题窗（节号冒充条目号，制造假「ex:25 缺号 1」）。
         # numpath 之后紧跟 SEP+字母 = 字母序标习题位，本层解析必须整体让位。
-        if re.match(r'[' + SEP_TIGHT[1:-1] + r']?[A-Za-z]', inner[m.end():].lstrip()):
+        if re.match(r'[' + SEP_TIGHT[1:-1] + r']?[A-Za-z]', inner[m.end():]):
             return None
-        if not _is_header_boundary(inner[m.end():]):
+        if not _is_header_boundary(inner[m.end():], lang):
             return None
         comps = _comps_of(numpath)
         if comps is None:
@@ -861,7 +883,7 @@ def _parse_entry(inner, levels, lang=None):
         if _depth > 0:
             return None
         numpath = m3.group(1)
-        if _is_header_boundary(inner[m3.end():]):
+        if _is_header_boundary(inner[m3.end():], lang):
             comps = _comps_of(numpath)
             if comps is None:
                 return None
@@ -2071,6 +2093,25 @@ def _key_label_body(key):
     return mm.group('label').strip(), mm.group('num')
 
 
+#: 条目词表（`_canon_label` 归一后）：用于识别「纯字母序标条头」。
+_ENTRY_LABEL_CANON = frozenset(_canon_label(x) for x in COMBINED_LABEL_KINDS)
+_LETTER_HEAD_KEY_RE = re.compile(r'^(.*?)\s*([A-Z])$')
+
+
+def _letter_head_label(key):
+    """纯字母序标条头（`定理 A` / `性质 D` / `Example B`）的规范标签；非此形 → None。
+
+    🔴 只认「条目词 + 空格 + **单个大写字母**」且无任何数字。数字号形
+    （`定理7.1` / `定义 A.1`）一律不在此列——它们能被计数器对账，不能借
+    「未宣告类型」豁免。`_canon_label` 把 EN/CN 标签统一到中文正名后再比对。
+    """
+    mm = _LETTER_HEAD_KEY_RE.match(str(key or '').strip())
+    if not mm:
+        return None
+    lab = _canon_label(mm.group(1).strip())
+    return lab if lab in _ENTRY_LABEL_CANON else None
+
+
 def _contract_type_vocab(config):
     """本书 config **宣告的条目计数器词表**（`_canon_label` 归一后的标签集）。
 
@@ -2784,6 +2825,32 @@ class ItemNumberingIntegrityLayer(VerifyLayer):
         if _led_labels:
             extra_entry = [k for k in extra_entry
                            if _led_label(k) not in _led_labels]
+
+        # 🔴 **纯字母条头 · 未宣告类型**（2026-10-20 Rice《Mathematical Statistics
+        # and Data Analysis》ch1–14 实测，每章成排 `定理 A` / `性质 D` / `例 I`）：
+        # 本书 config 的 `_provenance` 明载条目全为字母序标（THEOREM A / PROPERTY
+        # A–D，逐章重起），抽取器按体例**散文继承**（extract_items_en 注释：字母
+        # 条目不建序号计数器），契约因此不开槽；B 层的「契约漏登记 → register it」
+        # 救济在数据侧没有落点（登记反而触发闸⑩索要单元记录），与 `_untyped_single
+        # _mention` 同一哲学：**本书未宣告该条目类型**时，纯字母键无从对账，降级不判。
+        # 🔴 三道口径缺一不可：
+        #   * 只吃**纯字母**条头（`_letter_head_label` 要求无数字）：数字号形即使
+        #     类型未宣告也照报（那是真漏登记的形态，如 `例题7.2.5`）；
+        #   * 按**标签逐键**门控：config 宣告了 `定理` 计数器（Shafarevich 式
+        #     字母定理契约）时 `定理 A` 照常报出——字母体例书的真契约漏项不静音；
+        #   * `_contract_type_vocab` 返回 None（有 uncat 兜底 / 读不出组）→ 整支
+        #     关闭（fail-closed，宁可照报）。
+        # suppress-only：只出 extra_entry 桶，`extra` 并集不动。
+        _type_vocab = _contract_type_vocab(ctx.config)
+        if _type_vocab and extra_entry:
+            _prose_letter = set()
+            for _k in extra_entry:
+                _lab = _letter_head_label(_k)
+                if _lab and _lab not in _type_vocab:
+                    _prose_letter.add(_k)
+            if _prose_letter:
+                extra_entry = [k for k in extra_entry
+                               if k not in _prose_letter]
 
         # 🔴 **印面确证豁免**（2026-10-04 动力系统书架收尾：Koopman ch20 `引理 20.3`
         # 印面笔误、chaos ch5 `Definition 5.6.5` 原书误指、Arnold 附录M 英译者脚注里

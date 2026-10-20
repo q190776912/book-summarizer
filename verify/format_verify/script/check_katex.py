@@ -406,9 +406,16 @@ def process_file(path, fix):
     _struct_in_bq_re = re.compile(
         r'^>\s+\*\*(?:定义|定理|引理|推论|命题|断言|公理'
         r'|Definition|Theorem|Lemma|Corollary|Proposition|Axiom)\b')
-    _proof_title_in_bq_re = re.compile(
-        r'(?:的证明|之证明|证明)\s*(?:[（(][^）)]*[)）])?\s*[：:。.，,]?\s*\*\*\s*'
-        r'[：:。.，,]?\s*$')
+    # 🔴 证明标题的**判据落在标题本体**，不在行尾（Lehmann–Casella《TPE》CN ch1
+    # 0065 实测 2026-10-20）：印面「Proof of Theorem 6.12. This corollary states…」
+    # 被忠实译成「> **定理 6.12 的证明** 该推论指出：…」——证明标题与其**正文同行**，
+    # 旧豁免 `_proof_title_in_bq_re` 要求「证明」后必须到行尾，遇到这种行内正文就漏豁免，
+    # 把证明标题误判成「被吞进 `>` 的结构性条目」，`--fix` 还会剥掉 `>` 把标题拆出证明块。
+    # 新判据：只看**第一个粗体标题段**（`**…**`）本体是否含证明词；含 = 证明标题 → 豁免，
+    # 其后的正文不再参与判定。真正的裸条目（`> **定义 13.1.1 转移函数。**`）标题段不含
+    # 「证明」→ 仍照报，零回归。
+    _head_span_re = re.compile(r'\*\*([^*]*?)\*\*')
+    _proof_word_re = re.compile(r'的证明|之证明|证明|[Pp]roof')
     def _struct_in_bq_hit(line):
         """判据唯一入口：检测趟与修复趟**必须共用**本谓词。
 
@@ -416,8 +423,14 @@ def process_file(path, fix):
         检测已豁免的「> **定理 2.11 的证明**：」照旧剥掉 `>`——标题被拆出证明块，
         与 gate_units「证明正文须包在 `>` 内」互相打脸（书 md 被静默重排）。
         """
-        return bool(_struct_in_bq_re.match(line)
-                    and not _proof_title_in_bq_re.search(line))
+        if not _struct_in_bq_re.match(line):
+            return False
+        m = _head_span_re.search(line)
+        # 粗体标题段本体含「证明 / Proof」= 证明标题（无论正文是否同行、冒号在粗体内侧
+        # 还是外侧），一律豁免；标题段不含证明词的裸结构性条目仍按被吞引用上报。
+        if m and _proof_word_re.search(m.group(1)):
+            return False
+        return True
 
     for i, line in enumerate(lines):
         if _struct_in_bq_hit(line):

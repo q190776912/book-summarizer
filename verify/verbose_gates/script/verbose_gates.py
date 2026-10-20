@@ -203,9 +203,17 @@ _MD_SECTION_HEAD_FOR_EXER_RE = re.compile(
     r'^#{1,4}\s*§?\s*(\d+(?:\.\d+)*|[A-Za-z](?:\.\d+)+)')
 
 
-def check_exer_blocks(lines, ext_dir=None, ch=None):
-    """独立习题标题块。给出 ext_dir+ch 时按契约「印刷标题在账」豁免（见上）。"""
+def check_exer_blocks(lines, ext_dir=None, ch=None, cfg=None):
+    """独立习题标题块。给出 ext_dir+ch 时按契约「印刷标题在账」豁免（见上）。
+
+    🔴 另外按**本书声明的章末习题区标题**（`exercise_region_headings`，语言无关，见
+    `_is_exercise_region_head`）豁免：源书把章末习题区印成 `**Problems**`，其等价译题
+    `**习题**` 落在告警词表里（习题/exercises 命中、Problems 不命中），若不走同一豁免就会
+    「源过 / 译不过」（Lehmann–Casella《TPE》CN ch2 实测）。声明该标题 = 忠实渲染章末题集，
+    非无中生有的归拢块。未声明 heads 的书本分支恒不触发 → 零回归。
+    """
     exempt = contract_exer_heading_sections(ext_dir, ch) if ext_dir else set()
+    heads = _exercise_region_heads(cfg) if cfg is not None else []
     out = []
     cur_sec = ""
     for i, ln in enumerate(lines):
@@ -213,6 +221,8 @@ def check_exer_blocks(lines, ext_dir=None, ch=None):
         if hm:
             cur_sec = _norm_secnum(hm.group(1))
         if EXER_HEADING_RE.match(ln) or EXER_BOLD_RE.match(ln):
+            if heads and _is_exercise_region_head(ln, heads):
+                continue      # 本书声明的章末习题区标题（任语言）→ 忠实，非归拢块
             if exempt and cur_sec and (_section_ancestors(cur_sec) & exempt):
                 continue      # 原书该节自己印的习题集标题 → 忠实渲染，非归拢块
             out.append(f"  x L{i+1}: 练习归拢块（练习须原位内联为 "
@@ -296,7 +306,89 @@ def check_noise(lines):
     return out
 
 
-def check_bare_items(lines, ordinal):
+def _exercise_region_heads(cfg):
+    """本书声明的章末集中习题区标题词（verify_config `exercise_region_headings`）。
+
+    与 `lib/exercise_region` 同一 **opt-in** 语义：未声明 → ``[]``，于是
+    `check_bare_items` 永不进入习题区、对既有全部书目逐字节零回归。习题区的
+    题号（`**1.1** …`）是**习题编号**而非条目标题，不该套 number-first「标题须在
+    bold 内」的判据（Lehmann–Casella《Theory of Point Estimation》ch2 实测：章末
+    `**Problems**` 块 10 道习题 `**1.1**`–`**1.11**` 被 p_bare_item 误报为标题缺失）。
+    """
+    heads = getattr(cfg, "exercise_region_headings", None) or []
+    return [str(h).strip().lower() for h in heads if str(h).strip()]
+
+
+# 🔴 习题区标题词的**跨语言同族**（语言无关豁免，根治「源过 / 译不过」）：
+# `exercise_region_headings` 从**源语言**（本书 = 英文 "Problems"/"Notes"）声明，但
+# verify 会对**每个语言版**各跑一遍；译文把同一个章末习题区标题译成母语（`**习题**` /
+# `**注**`）后，旧的判据只按声明里的**英文词**整词匹配，于是英文侧 `**Problems**` 命中
+# → 区内裸题号 `**1.1**` 豁免通过，而中文侧 `**习题**` 不命中 → 同区 10 道习题裸号被
+# p_bare_item 全数误报、`**习题**` 又被 p_exer_block 判成「无中生有归拢块」——**纯翻译
+# 不对称**。本表把每个习题区标题归入其语义族，声明任一词即整族在任语言下均被认作习题区
+# 标题。与 `_CONTRACT_EXER_NAME_RE`（已含 problems/questions、语言无关）同一取向。
+# 仅**放宽豁免**（新增命中只会少报），且只在书显式 opt-in 声明 heads 时生效 → 零回归。
+_EXER_REGION_FAMILIES = (
+    ('exercise', (
+        'exercise', 'exercises', 'exercse', 'exercs',
+        'problem', 'problems', 'question', 'questions',
+        '练习', '习题', '问题', '思考题', '难题')),
+    ('notes', (
+        'note', 'notes', 'remark', 'remarks',
+        '注', '注记', '评注', '注解', '附注')),
+)
+
+
+def _exercise_region_family(word):
+    w = str(word).strip().lower()
+    for fam, members in _EXER_REGION_FAMILIES:
+        if w in members:
+            return fam
+    return None
+
+
+def _exercise_region_family_words(heads):
+    """声明标题词所属**同族**的全部等价词（跨语言），供整词前缀匹配。"""
+    fams = {_exercise_region_family(h) for h in heads}
+    fams.discard(None)
+    words = set()
+    for fam, members in _EXER_REGION_FAMILIES:
+        if fam in fams:
+            words |= set(members)
+    return words
+
+
+_EXER_HEAD_TRAILING_PAGE = re.compile(r'\s*\d+\s*$')
+
+
+def _exercise_region_head_core(ln):
+    """剥离 `#`、`**`/`*`、前导 `§`+节号、尾随页码并转小写，得习题区标题可比内核。"""
+    s = ln.strip()
+    s = re.sub(r'^#{1,6}\s*', '', s)
+    s = s.replace('**', '').replace('*', '')
+    s = re.sub(r'^§?\s*\d+(?:[.\-–·]\d+)*\s*', '', s)
+    s = _EXER_HEAD_TRAILING_PAGE.sub('', s)
+    return s.strip().lower()
+
+
+def _is_exercise_region_head(ln, heads):
+    """该行是否为**习题区标题**（`**Problems**` / `## §7 Problems` / `**Notes**` /
+    译文 `**习题**`/`**注**`，含 OCR 把页码粘连到词尾的 `problems269`）。
+
+    判据：行内核须**整词起始**于声明标题词所属**同族**的任一等价词（`\b`/CJK 边界），
+    避免误吞只是提到该词的散文（如「problem set」不匹配 `problems\b` 之后紧跟非边界的
+    情形，而 `Problems in …` 作为节标题则命中）。语言无关，见 `_EXER_REGION_FAMILIES`。
+    """
+    if not heads:
+        return False
+    s = _exercise_region_head_core(ln)
+    if not s:
+        return False
+    words = _exercise_region_family_words(heads)
+    return any(re.match(r'^' + re.escape(w) + r'(\b|$)', s) for w in words)
+
+
+def check_bare_items(lines, ordinal, cfg=None):
     out = []
     n = len(lines)
     # ordinal == 3 (three_level) uses the 3-component bare-item detector;
@@ -304,7 +396,17 @@ def check_bare_items(lines, ordinal):
     # the 2-component detector.
     bare = BARE_ITEM_3 if ordinal == 3 else BARE_ITEM_2
     detached = DETACHED_3 if ordinal == 3 else DETACHED_2
+    # 🔴 章末集中习题区（opt-in，`exercise_region_headings` 声明）里的 `**N.M** 正文`
+    # 是习题编号，非 number-first 条目标题——整区豁免，见 `_exercise_region_heads`。
+    heads = _exercise_region_heads(cfg)
+    in_exer = False
     for i, ln in enumerate(lines):
+        if heads and _is_exercise_region_head(ln, heads):
+            in_exer = True            # 进入习题区（`**Problems**` / `**Notes**`）
+        elif _MD_SECTION_HEAD_FOR_EXER_RE.match(ln):
+            in_exer = False           # 遇真正的编号节标题 → 离开习题区
+        if in_exer:
+            continue
         if bare.match(ln):
             # 标题可能在下一行（英文 "Categories." 之类）
             j = i + 1
@@ -975,9 +1077,9 @@ class PLayer(VerifyLayer):
                 'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [],
                 'p_extra_item': [], 'p_verbose': [], 'p_proof_verbose': [],
             })
-        exer = check_exer_blocks(lines, ctx.ext_dir, ctx.ch)
+        exer = check_exer_blocks(lines, ctx.ext_dir, ctx.ch, cfg=ctx.config)
         noise = check_noise(lines)
-        bare = check_bare_items(lines, ctx.config.primary_type)
+        bare = check_bare_items(lines, ctx.config.primary_type, cfg=ctx.config)
         missing = check_missing_sections(lines, ctx.ext_dir, ctx.ch,
                                          cfg=ctx.config)
         extra = check_extra_items(lines, ctx.ext_dir, ctx.ch)

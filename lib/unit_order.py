@@ -40,7 +40,11 @@
    axiom/property``）的 dash 键**不再豁免**；类型取不到、或属习题族 / ``uncat`` / ``item``
    的一律维持豁免原状（保守侧，不给类型奇怪的书新增误报）。判据只此一份：:func:`dash_exempt`。
 5. 解析不到页码的单元（契约无该键 / 幻影 / 老键形对不上）→ **跳过**（既不当问题也不
-   重置游标），避免因锚点缺失产生连锁误报。
+   重置游标），避免因锚点缺失产生连锁误报。契约节点自带 ``page_start <= 0`` 同属「无页码
+   证据」：写源后的降级手术会把节点页码清成 0（2026-10-20 跨库普查全书库仅 6 处，全在
+   Weibel《同调代数》：ch7/ch9 两个 ``chapter`` 节点 + ch9/10 三个
+   ``definition``「converted from miscast subsection」），故建锚点表时一并剔除，
+   契约前序自查（:func:`check_contract_anchors`）同源剔除。
 6. **续接单元（manifest 记录带 ``"continuation": true``）**复用「同键最近一次正常消费
    的锚点」，**不推进**该键锚点列表的游标（键也解析不到时退回正常消费）。
    为什么需要：一个契约节点的正文可以被**合法地**拆成多条单元——印刷字母小节
@@ -52,6 +56,23 @@
    的页码，于是从这一条起整章的锚点消费错位，一次性假报数十处跨页倒退
    （2026-09-29 阿诺尔德《经典力学的数学方法》ch3/4/5/7 实测）。续接标记由拆单元的一方
    写明，判据只在此模块认，别处不必再实现。
+7. **继承锚点的导语容器跳过**（:func:`inherited_desc_anchor_keys`，2026-10-20 Kreyszig
+   泛函分析 ch4 实测根治）：单元**消费的契约节点**是 ``description`` 且其 ``page_start``
+   与所在节起始页相同（= 从节继承来的容器页）时，跳过判定、不推进游标。为什么必须跳：
+   印面上节标题常排到页末、它的开场段落换到下一页首，「节头 → 导语」这一**正确**次序
+   在页码单调判据下必然「倒退」。实测 Kreyszig ch4 的 12 个 desc 单元逐个是下一节的开场白
+   （page_233.json：§4.3 标题 poly y=1286/1332，其开场白 y=1415 在标题**下方**），门控 ⑪
+   据此假报 11 处，并把一次返修引到与印面相反的方向（源清单被改成「导语 → 节头」，与中英
+   两版交付 md 分叉 ⇒ ``check_translate_parity`` 报「两侧顺序不同」）。
+   🔴 口径按**锚点节点类型**收窄（不是按单元 ``type``）：跨书普查 79 → 65 处，消失的 14 处
+   逐条核对均为「单元正文不属于其键所指节点」的继承锚点错挂；被豁免的只有「消费的锚点是
+   ``description`` **且**该容器页 == 所在节起始页」这一种，其余一处不动——实测两种仍受约束
+   的形态：① 遍历论_孙文祥 ch4 ``4.3-1`` / ch6 ``6.2-2`` 是 **item** 记录（ntype 属编号结果，
+   连 dash 豁免都不成立），锚点本就是条目节点；② 同书 ch8 ``D4`` 是 desc 记录，但其容器
+   页 216 ≠ 所在节起始页 214 = 容器自带页码证据，不属继承。判据测试
+   ``lib/tests/test_unit_order.py::test_inherited_desc_*`` +
+   ``::test_own_page_desc_unit_is_still_flagged`` + ``::test_desc_unit_consuming_item_anchor_stays_checked`` +
+   ``::test_dash_key_item_unit_is_never_desc_exempted``。
 
 调用方（gate_units 合并前 / verify 层合并后）负责取到 ``contract``（分章契约 dict）与
 **有序** ``units``（manifest 的 ``units`` 数组，或合并 md 反推出的单元序），两者共用本
@@ -146,8 +167,15 @@ def iter_unit_nodes(contract: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 except (TypeError, ValueError):
                     pass
                 else:
-                    out.append({"key": str(key), "nk": nk, "type": ntype,
-                                "name": str(node.get("name") or ""), "page": page})
+                    # ``page_start <= 0`` = **无页码证据**（不是「原书第 0 页」）：写源后
+                    # 的降级手术会把节点页码清成 0（Weibel 同伦代数 ch9/10 实测：3 个
+                    # ``definition``「converted from miscast subsection」+ ch7/ch9 两个
+                    # ``chapter`` 节点）。这类节点若进锚点表，任何单元吃到它都会被判成
+                    # 「早页内容排在晚页之后」——判据 5 对「解析不到页码」一律跳过，
+                    # 对「页码为 0」必须同样跳过，否则豁免只覆盖了一半的无证据形态。
+                    if page > 0:
+                        out.append({"key": str(key), "nk": nk, "type": ntype,
+                                    "name": str(node.get("name") or ""), "page": page})
         for sub in (node.get("sub_sec") or []):
             _walk(sub)
 
@@ -163,6 +191,52 @@ def _iter_anchor_entries(contract: Optional[Dict[str, Any]]):
     """
     for i, d in enumerate(iter_unit_nodes(contract)):
         yield d["nk"], d["type"], d["page"], i, d["key"]
+
+
+# 契约侧「导语容器」节点类型。
+_DESC_NODE_TYPE = "description"
+
+
+def inherited_desc_anchor_keys(contract: Optional[Dict[str, Any]]) -> set:
+    """契约里**锚点是继承来的** ``description`` 容器节点，其原始键集合。
+
+    ``build_structure`` 把一节的导语聚成一个无名 ``description`` 节点（``D1``/``D2``…），
+    而该节点的 ``page_start`` 写的就是**所在节**的起始页——容器自己没有独立页码证据。
+    于是「节点页码」只能回答「这一节从哪页开始」，**回答不了「这段散文印在哪一页」**：
+    印刷体里节标题常常落在页末、其导语段落排到下一页首（甚至紧跟着**下一节**的标题），
+    写作期把导语单元排在节标题之后或前一节末段之后都是同一页的合法形态。
+
+    实测（2026-10-20 Kreyszig 泛函分析 ch4）：12 个 ``desc`` 单元的正文逐个是**下一节**的
+    开场段落（``page_233.json``：§4.3 标题 poly y=1286/1332，而 §4.3 开场白
+    「The Hahn-Banach theorem 4.2-1 concerns real vector spaces…」y=1415 在其**下方**），
+    交付中英两版都按「节头 → 导语」排 = 与印面一致；门控 ⑪ 却拿容器继承页
+    （D2→p228 = §4.2 起始页）判它「排在 §4.3（p233）之后 = 倒退」，一次假报 11 处，
+    并把一次「按报错改清单」的返修引到了**与印面相反**的方向。
+    跨书普查（corpus 全部 ``units/*/manifest.json`` × 契约）：旧判据 79 处问题，
+    豁免「继承锚点的 desc 单元」后 65 处，消失的 14 处逐条核对**单元正文都不属于
+    其键指向的契约节点**（导语错挂 / 习题残留），即全部是同一形态；
+    倒退一处不动的两类实测：遍历论_孙文祥 ch4/ch6 的 ``4.3-1`` / ``6.2-2`` 是 **item**
+    记录（锚点为条目节点），同书 ch8 的 ``D4`` 虽是 desc 记录、容器却自带独立页码
+    （216 ≠ 所在节起始页 214）= 有证据，两者都不落在豁免口径里。
+    """
+    out: set = set()
+
+    def _walk(node: Any, sec_page: Any):
+        if not isinstance(node, dict):
+            return
+        ntype = node.get("type")
+        ps = node.get("page_start")
+        cur = sec_page
+        if ntype == "section":
+            cur = ps
+        if ntype == _DESC_NODE_TYPE and ps is not None and ps == cur:
+            out.add(str(node.get("key")).strip())
+        for sub in (node.get("sub_sec") or []):
+            _walk(sub, cur)
+
+    if isinstance(contract, dict):
+        _walk(contract, contract.get("page_start"))
+    return out
 
 
 def check_unit_order(
@@ -191,6 +265,7 @@ def check_unit_order(
     consumed: Dict[int, int] = {}
     follow: Dict[str, Tuple[int, int]] = {}
     problems: List[str] = []
+    inherited_desc = inherited_desc_anchor_keys(contract)
     max_page = -1
     max_order = -1
     max_ref: Tuple[str, int] = ("", -1)
@@ -211,10 +286,16 @@ def check_unit_order(
         if u.get("continuation") and nk in follow:
             anchor = follow[nk]             # 续接单元：复用父单元锚点，不消费列表
         else:
-            anchor = _unit_page(raw_key, u, tables, consumed)
+            anchor = _unit_anchor(raw_key, u, tables, consumed)
             if anchor is not None:
                 follow[nk] = anchor
         if anchor is None:                   # 锚点缺失：跳过，不重置游标
+            continue
+        if (anchor[3] == _DESC_NODE_TYPE
+                and str(anchor[4] or "").strip() in inherited_desc):
+            # 导语容器继承锚点：页码只说明「本节从哪页开始」，对这段散文的真实位置
+            # 无证据 → 既不算问题，也不推进/受限游标（判据 7，见
+            # :func:`inherited_desc_anchor_keys`）。
             continue
         page, order = anchor[0], anchor[1]
         label = u.get("type") or "单元"
@@ -258,9 +339,14 @@ def _iter_anchor_nodes(contract: Optional[Dict[str, Any]]):
         anchored = bool(nk) and ps is not None and ntype != "proof"
         if anchored:
             try:
-                yield node, nk, int(ps), parent_key
+                page = int(ps)
             except (TypeError, ValueError):
                 anchored = False
+            else:
+                if page > 0:                  # 同 :func:`iter_unit_nodes`：页码 0 = 无证据
+                    yield node, nk, page, parent_key
+                else:
+                    anchored = False
         for sub in (node.get("sub_sec") or []):
             for got in _walk(sub, str(key) if key is not None else parent_key):
                 yield got
@@ -379,7 +465,7 @@ def check_section_key_page_order(contract: Optional[Dict[str, Any]]) -> List[str
 
 # manifest 记录 type → 契约节点 type 的等价写法（记录没有 ntype 时退回用它）。
 # 'item' 故意不给别名：条目在契约里按体例分为 example/theorem/definition/…，
-# 让 _unit_page 走「不分类型」兜底表，行为与旧的单值首见锚点一致。
+# 让 _unit_anchor 走「不分类型」兜底表，行为与旧的单值首见锚点一致。
 _TYPE_ALIAS = {"desc": "description", "exercise": "exercise",
                "problem": "exercise", "section": "section", "chapter": "chapter"}
 
@@ -443,16 +529,10 @@ def _consume(entries, consumed):
     return entries[i] if i < len(entries) else entries[0]
 
 
-def _unit_page(raw_key, unit, tables, consumed):
-    """该单元的 ``(契约页, 契约前序号)``；查表次序见 :func:`_unit_anchor`。"""
-    a = _unit_anchor(raw_key, unit, tables, consumed)
-    return a[:2] if a else None
-
-
 def _unit_anchor(raw_key, unit, tables, consumed, nodes=None):
     """该单元消费的**锚点元组**（``(页, 前序号, 归一键, 节点type, 契约原始键)``）。
 
-    判据与 :func:`_unit_page` 同一份实现（页码单调闸与修复工具不可能各说各话）；
+    页码单调闸与修复工具共用这一份查表实现，两侧不可能各说各话。
     传 ``nodes``（:func:`iter_unit_nodes` 的列）时把命中的**契约节点本体**一并附上。
 
     查表次序 = 证据强度次序：``(节点类型, 键)`` 桶（最具体，能分开 ``10.2`` 的节节点与

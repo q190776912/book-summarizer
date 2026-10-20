@@ -29,9 +29,13 @@ Checks performed (all on chapter-filtered index entries):
   * embed coverage: figures detected in figure_index.json but never embedded
     as <img> -> `fig_unembedded` (WARN "PARTIAL COVERAGE"); zero labeled
     figures embedded -> `fig_zero_embed` (blocking).  `ignore_fig` ALSO
-    exempts the unembedded side when the figure's label or crop filename is
-    explicitly registered with a justification (典型：章末习题配图、章末习题
-    按 writing-rules 不收录) — see check_figure_coverage.
+    exempts BOTH sides when the figure's label or crop filename is explicitly
+    registered with a justification (典型：章末习题 / Notes 区配图，宿主条目按
+    writing-rules 不收录 → 无锚点) — see check_figure_coverage and ELayer.run.
+    Registered-exempt labeled crops drop from the should-embed set so a chapter
+    whose only labeled figure is such an orphan no longer hard-blocks, yet a
+    blanket "embed was never run" stays a FAIL because any UNREGISTERED labeled
+    figure keeps `fig_zero_embed` firing.
   * validity (was F): each cropped PNG decoded via cv2 (np.fromfile+imdecode to
     survive Unicode paths); missing/undecodable/too-small -> `fig_invalid`
     (blocking FAIL); near-blank low-variance crop -> `fig_invalid_warn` (WARN).
@@ -218,6 +222,38 @@ def _fig_ocr_tail_recovered(num, txt, end):
     return (num + ''.join(extra)) if extra else None
 
 
+def _chapter_section_numbers(ext, ch):
+    """Set of integer first-components of this chapter's TOP-LEVEL section keys,
+    read from the per-chapter contract (`type == 'section'` direct children of the
+    chapter root). e.g. sections keyed `'1'..'8'` -> ``{1,2,3,4,5,6,7,8}``; a
+    dashed key `'3-2'` contributes ``3``. Used to recognize SECTION-LOCAL figure
+    numbering (`Figure 2.1` = §2's first figure, as in Lehmann–Casella, where the
+    figure label's first component is the section index, not the chapter). Contract
+    missing / unreadable -> empty set (caller then keeps the chapter-equality guard
+    only, i.e. original behavior)."""
+    if not ext or ch is None:
+        return set()
+    try:
+        from data.book_structure.book_structure import (
+            norm_chapter_key, resolve_chapter_json_path)
+        fp = resolve_chapter_json_path(ext, norm_chapter_key(ch))
+        if not os.path.isfile(fp):
+            return set()
+        with open(fp, encoding='utf-8') as f:
+            root = json.load(f)
+        nums = set()
+        for node in (root.get('sub_sec') or []):
+            if not isinstance(node, dict) or node.get('type') != 'section':
+                continue
+            key = str(node.get('key') or '')
+            first = re.split(r'[.\-·．–—]', key.strip())[0]
+            if first.isdigit():
+                nums.add(int(first))
+        return nums
+    except Exception:
+        return set()
+
+
 def check_figure(ch, start, end, ext, ignore_fig=None):
     """Unified E+F figure layer.
 
@@ -260,6 +296,9 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
     cap_re = fig_cap_re(ext, ch)  # book-specific prefix + component set (ordinal Figure group name / type->depth)
     components = load_fig_components(ext, ch)  # 1=global int, 2=ch.fig (default), 3=ch.sec.fig
     _pdir = resolve_page_dir(ext, ch)
+    # 章内顶层小节号集（用于识别 section-local 图号，见 _chapter_section_numbers）：
+    # 只在多分量（components>=2）编号书上启用；components==1 全局整数书不需要。
+    _sec_nums = _chapter_section_numbers(ext, ch) if components >= 2 else set()
     for p in range(start, end + 1):
         fp = os.path.join(_pdir, f'page_{p:03d}.json')
         if not os.path.exists(fp):
@@ -297,8 +336,28 @@ def check_figure(ch, start, end, ext, ignore_fig=None):
                     # （do Carmo 五章 227 张 × 中英）。点式标签的切分结果不变，
                     # 零回归；`parts[0].isdigit()` 兜住分隔符混杂的 OCR 残渣。
                     parts = re.split(r'[.\-·．－–—]', num)
-                    if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) == ch:
-                        caption.add(normfig(num))
+                    if len(parts) >= 2 and parts[0].isdigit():
+                        _lead = int(parts[0])
+                        if _lead == ch:
+                            caption.add(normfig(num))
+                        elif (components == 2 and _lead in _sec_nums
+                              and normfig(num) in extracted):
+                            # SECTION-LOCAL figure numbering: `Figure 2.1` = the
+                            # first figure of §2 within chapter `ch` (the crop's
+                            # label first-component is the SECTION index, not the
+                            # chapter — Lehmann–Casella, 2026-10). CONFIRM-ONLY:
+                            # we accept such a number into `caption` only when a
+                            # crop already bearing that label exists, so the crop
+                            # is verified against its printed caption and the false
+                            # `FIGURE EXTRA` clears — WITHOUT inventing new blocking
+                            # `MISSING` from OCR-misread section-local numbers (the
+                            # ch5 stray `Figure 6.2` on p.390 is really a mis-scan of
+                            # Figure 5.2, discussed in that very sentence). The
+                            # `== ch` chapter.figure branch above is untouched, so
+                            # legitimate chapter-qualified MISSING still reports; and
+                            # genuine uncropped section-local figures stay exactly as
+                            # (in)visible as before this change — no MISSING regression.
+                            caption.add(normfig(num))
     _known = extracted | (extracted_bookwide if components == 1 else set())
     missing = sorted(caption - _known - ignore_fig, key=sortkey)
     # 🔴 豁免必须**双向**生效（2026-09-29 Apostol IANT 附录前置章 ch0 根治）。
@@ -357,8 +416,12 @@ def _unembedded_exempt(entry, ig_norm, ig_raw, ig_stems):
     """True when a figure entry is EXPLICITLY REGISTERED as intentionally
     unembedded (figure_completeness.md 完整性 · unembedded 豁免): either by its
     figure label (`normfig`-compared, same namespace as missing/extra) or by
-    its crop file basename / stem (unnamed detect-crops carry no label).
-    Registration lives in `ignore_fig_ch{N}.json` with a justification."""
+    its crop file basename / stem (unnamed detect-crops carry no label). The
+    figure's own stem is matched BOTH against `ig_stems` (the splitext-normalized
+    registration set) AND exactly against `ig_raw` — the latter rescues bare
+    DOTTED stems (e.g. `ch02_fig8.1`), which `os.path.splitext` would otherwise
+    mis-strip to `ch02_fig8` when building `ig_stems`. Registration lives in
+    `ignore_fig_ch{N}.json` with a justification."""
     lbl = entry.get('label')
     if lbl and normfig(lbl) in ig_norm:
         return True
@@ -368,7 +431,21 @@ def _unembedded_exempt(entry, ig_norm, ig_raw, ig_stems):
     if base in ig_raw:
         return True
     stem = os.path.splitext(base)[0]
-    return stem in ig_stems
+    return stem in ig_stems or stem in ig_raw
+
+
+def _normalize_fig_ignore(ignore):
+    """Normalize a chapter's merged `ignore_fig` namespace into the three forms
+    the exemption predicate matches against: `normfig`-compared labels, raw
+    crop basenames, and stem (extension-stripped) basenames. Single source so
+    the WARN (unembedded) side and the blocking (zero-embed) side cannot drift.
+    """
+    if not ignore:
+        return frozenset(), frozenset(), frozenset()
+    ig_norm = {normfig(k) for k in ignore}
+    ig_raw = {str(k).strip() for k in ignore}
+    ig_stems = {os.path.splitext(x)[0] for x in ig_raw}
+    return ig_norm, ig_raw, ig_stems
 
 
 def check_figure_coverage(md_file, ch_entries, ignore=None):
@@ -382,11 +459,16 @@ def check_figure_coverage(md_file, ch_entries, ignore=None):
 
     ``ignore`` (the chapter's merged `ignore_fig` namespace) ALSO exempts the
     unembedded side: a figure whose label or crop filename is explicitly
-    registered (with justification — 典型：章末习题配图、而章末习题按
+    registered (with justification — 典型：章末习题 / Notes 区配图、宿主条目按
     writing-rules 习题收录规则不收录，宿主条目不存在) is dropped from
-    ``unembedded``. Unregistered figures are still reported. The ``embedded``
-    set and the blocking `fig_zero_embed` gate are NOT affected — a blanket
-    "embed was never run" remains a hard FAIL even with registrations present.
+    ``unembedded``. Unregistered figures are still reported. This function
+    leaves the ``embedded`` set untouched (a caller cannot fake an embed by
+    blanket-registering). The blocking `fig_zero_embed` decision is derived in
+    ELayer.run, which applies the SAME registered-exemption to drop exempt
+    labeled crops from the should-embed set — so a chapter whose only labeled
+    figure is a registered orphan no longer hard-blocks — while any
+    UNREGISTERED labeled figure keeps a blanket "embed was never run" a hard
+    FAIL.
     """
     names = []
     for e in ch_entries:
@@ -398,11 +480,7 @@ def check_figure_coverage(md_file, ch_entries, ignore=None):
         with open(md_file, encoding='utf-8') as fh:
             for m in _IMG_EMBED_RE.finditer(fh.read()):
                 embedded.add(os.path.basename(m.group(1)))
-    ig_norm = ig_raw = ig_stems = frozenset()
-    if ignore:
-        ig_norm = {normfig(k) for k in ignore}
-        ig_raw = {str(k).strip() for k in ignore}
-        ig_stems = {os.path.splitext(x)[0] for x in ig_raw}
+    ig_norm, ig_raw, ig_stems = _normalize_fig_ignore(ignore)
     unembedded = [
         os.path.basename(e['file'])
         for e in ch_entries
@@ -411,6 +489,32 @@ def check_figure_coverage(md_file, ch_entries, ignore=None):
         and not _unembedded_exempt(e, ig_norm, ig_raw, ig_stems)
     ]
     return embedded, unembedded
+
+
+def compute_fig_zero_embed(embeddable, embedded, ignore=None):
+    """Blocking zero-embed decision for a chapter's figures.
+
+    `embeddable` = figure_index entries for the chapter that have a crop file;
+    `embedded` = crop basenames referenced by `<img>` in the md (from
+    check_figure_coverage); `ignore` = the chapter's merged `ignore_fig`
+    namespace.
+
+    Returns True only when a figure that SHOULD be embedded is entirely absent
+    from the md. The should-embed set is the *labeled* crops minus those
+    registered-exempt in `ignore_fig` (a labeled orphan whose host entry is
+    legitimately omitted per writing-rules — 典型：章末习题 / Notes 区配图 — has no
+    anchor and is dropped here, exactly as the `fig_unembedded` WARN side drops
+    it). Unnamed detect-crops are never in the should-embed set.
+
+    Safety net: any UNREGISTERED labeled crop keeps the gate firing, so a
+    blanket "embed_figures.py was never run" remains a hard FAIL.
+    """
+    ig_norm, ig_raw, ig_stems = _normalize_fig_ignore(ignore)
+    should = [e for e in embeddable
+              if e.get('label')
+              and not _unembedded_exempt(e, ig_norm, ig_raw, ig_stems)]
+    should_names = {os.path.basename(e['file']) for e in should}
+    return bool(should) and not (should_names & embedded)
 
 
 class ELayer(VerifyLayer):
@@ -436,13 +540,12 @@ class ELayer(VerifyLayer):
             ch_entries = _chapter_entries(idx, ctx.ch)
         embedded, unembedded = check_figure_coverage(ctx.md_file, ch_entries, ctx.ignore)
         embeddable = [e for e in ch_entries if e.get('file')]
-        # Blocking zero-embed only counts genuinely captioned figures: an
-        # unnamed detect-crop the note never cites is legitimately omitted
-        # (embed-when-referenced rule), so it must not hard-fail a chapter.
-        labeled = [e for e in embeddable if e.get('label')]
-        labeled_names = {os.path.basename(e['file']) for e in labeled}
-        labeled_embedded = labeled_names & embedded
-        fig_zero_embed = bool(labeled) and not labeled_embedded
+        # Blocking zero-embed only counts genuinely captioned figures that SHOULD
+        # be embedded — labeled crops that are NOT registered-exempt (see the
+        # docstring of compute_fig_zero_embed). Registered orphans (host entry
+        # omitted per writing-rules) drop out; any UNREGISTERED labeled crop
+        # keeps the blanket "embed was never run" a hard FAIL.
+        fig_zero_embed = compute_fig_zero_embed(embeddable, embedded, ctx.ignore)
         return LayerResult(code=self.code, legacy=res, metadata={
             'fig_missing': res['missing'],
             'fig_extra': res['extra'],

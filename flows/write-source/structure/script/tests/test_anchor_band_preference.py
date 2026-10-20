@@ -89,6 +89,49 @@ class TestBandSplitY(unittest.TestCase):
         self.assertEqual(_band_split_y([(700.0, 60.0), (100.0, 400.0)], blocks),
                          60.0)
 
+    # --- 判据 ②（页顶「全题复本」）：Lehmann p110 实测 2026-10-20 -----------------
+    def test_unshifted_header_copy_loses_to_body_head_by_prefix(self):
+        """②正例：页眉左缘只推到 322（<25% 阈值，①漏判），但它是本页最顶行、
+        非正文左缘，且同页下方那行真节头（折行只印前半）是它的**前缀** → 让位。
+
+        实测 `2.7` p110：页眉 y=85 x=322 全题，真节头 y=899 x=184 只印
+        '2.7 The CLT for independent non-identical'。
+        """
+        blocks = [_blk("2.7 The CLT for independent non-identical random variables   97",
+                       322, 85),
+                  _blk("random variables", 184, 940),
+                  _blk("2.7 The CLT for independent non-identical", 184, 899),
+                  _blk("The following proposition makes this precise.", 184, 1030)]
+        hits = [(322.0, 85.0, "2.7 The CLT for independent non-identical random variables   97"),
+                (184.0, 899.0, "2.7 The CLT for independent non-identical")]
+        self.assertEqual(_band_split_y(hits, blocks), 899.0)
+
+    def test_real_head_at_page_top_is_not_demoted(self):
+        """②负例①：真节头就印在**正文左缘**（本页最顶行）→ x 门槛挡住，不得降级。
+
+        节恰好从页顶开始时，同页下方常有该节的续行/回指命中；只看「页顶 + 前缀」
+        会把真节头判成页眉，把本节开头整段推给上一节。
+        """
+        blocks = [_blk("3.2 The big oh notation and asymptotic equality", 126, 119),
+                  _blk("3.2 The big oh notation", 126, 900)]
+        hits = [(126.0, 119.0, "3.2 The big oh notation and asymptotic equality"),
+                (126.0, 900.0, "3.2 The big oh notation")]
+        self.assertEqual(_band_split_y(hits, blocks), 119.0)
+
+    def test_short_band_text_has_no_prefix_evidence(self):
+        """②负例②：带内命中太短（归一后 <8 字）⇒ 无「全题复本」证据，照旧采纳。"""
+        blocks = [_blk("3.2 See", 322, 85),
+                  _blk("3.2 See also below", 126, 900)]
+        hits = [(322.0, 85.0, "3.2 See"), (126.0, 900.0, "3.2 See also below")]
+        self.assertEqual(_band_split_y(hits, blocks), 85.0)
+
+    def test_legacy_two_tuple_hits_keep_old_behaviour(self):
+        """老 2 元组调用方（无行文本）⇒ ②不启用，只有 ① 生效：逐字维持旧结果。"""
+        blocks = [_blk("2.7 The CLT for independent non-identical random variables   97",
+                       322, 85),
+                  _blk("2.7 The CLT for independent non-identical", 184, 899)]
+        self.assertEqual(_band_split_y([(322.0, 85.0), (184.0, 899.0)], blocks), 85.0)
+
 
 class TestNumberedHeadingY(unittest.TestCase):
     """带点序标的小节头 y（Koopman/Apostol 那一路）同样要避开页眉。"""
@@ -159,6 +202,17 @@ class TestFindTitlePos(unittest.TestCase):
                             _blk("3.2 The big oh notation", 126, 1103)]})
         self.assertEqual(_find_title_pos(d, "3.2 The big oh notation", 42, 42),
                          (42, 1103.0))
+
+    def test_pass1a_header_copy_not_right_shifted(self):
+        """Pass 1a 同一路也启用判据 ②：页眉未右移到 25% 阈值，但它是页顶全题、
+        下方真节头是它的前缀（Lehmann p110 形态）→ 锚点取正文那一行。
+        """
+        d = self._dir({110: [_blk("2.7 The CLT for independent non-identical random variables   97",
+                                  322, 85),
+                             _blk("non-identical random variables", 184, 1030),
+                             _blk("2.7 The CLT for independent non-identical", 184, 899)]})
+        self.assertEqual(_find_title_pos(d, "2.7 The CLT for independent non-identical",
+                                        110, 110), (110, 899.0))
 
     def test_earlier_page_still_wins(self):
         """带优先只在**同页**内比较：前一页的真命中仍先于后一页。"""

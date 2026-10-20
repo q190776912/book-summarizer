@@ -8,7 +8,11 @@
 
 检查项（任一为 FAIL 即 exit 1）
 ----------------------------
-1. **单元序列一致**：`id` / `type` / `key` / `name` / `file` 逐一对应（缺 / 多 / 错位）。
+1. **单元按 `file` 配对**：以 `file` 为键把源/译两侧的 manifest 记录配上（缺 / 多 = FAIL，
+   两侧同名重复 = FAIL），再比对每对的 `id` / `type` / `key` / `name`。🔴 **不按 manifest
+   下标 zip**：Kreyszig 泛函分析 ch4 实测两侧文件集合相同、仅 D-注与节标题先后差 26 位，
+   zip 会把 26 对无关单元配成「字段不一致」假阳并跳过真正该比的一对。两侧顺序不同本身
+   单列一条 FAIL（`merge_units` 按各自 manifest 顺序拼接 → 源/译阅读顺序分叉）。
 2. **公式序标一致**：`\\tag{...}` 编号集合逐单元相同（漏公式 / 擅自改号 → FAIL）。
 3. **图片一致**：`<img src="...">` 集合逐单元相同（漏图 → FAIL）。
 4. **节号一致**：`section` 单元的 `§N.M` 编号集合相同（D 层靠 `§` 认节，错位即 FAIL）。
@@ -58,6 +62,7 @@
 ----
     通过 exit 0；不通过 exit 1 并打印逐章问题清单。
 """
+import difflib
 import hashlib
 import json
 import os
@@ -120,6 +125,11 @@ _TEXT_RE = re.compile(
     r"\s*\{(?:[^{}]|\\[^{}])*\}")
 # 尾部标点：中文用 `。`、英文用 `.`，且 CN 版常在 `$$…$$` 内保留/删去句点 → 归一掉。
 _TAIL_PUNCT_RE = re.compile(r"[.,;:!?。，；：！？]+$")
+# 🔴 带编号的显示式尾部是 `\tag{9.1}`，块尾锚定的 `_TAIL_PUNCT_RE` **永远剥不到**式子
+# 自己的句末标点（`… = 0 . \tag{9.1}`），于是上面那条「句末标点习惯差异放行」的设计对
+# 编号式失效——随机过程 ch5/0031、ch6/0051、ch9 四处实测全是这一形（`.` vs `,`）。
+# 故同一豁免须显式覆盖「紧贴 `\tag{` 之前的标点」。
+_PUNCT_BEFORE_TAG_RE = re.compile(r"[.,;:!?。，；：！？]+(?=\\tag\{)")
 
 
 def _norm_inline_spans(body):
@@ -140,8 +150,33 @@ def _norm_display_blocks(body):
         lines = [re.sub(r"^\s*>?\s*", "", ln) for ln in blk.split("\n")]
         s = _TEXT_RE.sub("", re.sub(r"\s+", "", "".join(lines)))
         core = _TAIL_PUNCT_RE.sub("", s[:-2] if s.endswith("$$") else s)
+        core = _PUNCT_BEFORE_TAG_RE.sub("", core)
         out.append(core + "$$" if s.endswith("$$") else core)
     return out
+
+
+def _norm_display_pairs(body):
+    """与 `_norm_display_blocks` **同序同数**，但每条附带逐字原文块。
+
+    只给 FAIL 消息取证用：归一串把空白全删，`\\max_{1 \\le i \\le k_n}` 会被印成
+    `\\max_{1\\lei\\lek_n}`——看着像 OCR 粘连没修（随机过程 ch5/0031 实测：因此误判分诊
+    方向一轮）。消息必须给**磁盘上的真形**，否则闸门自己造假证据。
+    """
+    return list(zip(_norm_display_blocks(body),
+                    [m.group(0) for m in _DISPLAY_RE.finditer(body)]))
+
+
+def _lost_block_text(norm_blk, raw_src, tr_pairs):
+    """一条「译文中丢失/被改写」的显示式 → 消息文本：源侧逐字 + 译侧最接近的一条。"""
+    shown = " ".join(raw_src.split())[:90]
+    best, best_r = None, 0.0
+    for tnorm, traw in tr_pairs:
+        r = difflib.SequenceMatcher(None, norm_blk, tnorm).ratio()
+        if r > best_r:
+            best, best_r = traw, r
+    if best is not None and best_r >= 0.5:
+        shown += " ｜ 译侧最近块: " + " ".join(best.split())[:90]
+    return shown
 
 
 def _flatten_math(body):
@@ -175,16 +210,17 @@ def _math_content_problems(src_body, tr_body, fname):
     # 9) 显示式内容丢失 / 被改写。精确配对失败 → 查摊平子串（块↔行内搬迁豁免），
     #    两者都失败才算真丢失/被改写。
     pool = list(_norm_display_blocks(tr_body))
+    tr_pairs = _norm_display_pairs(tr_body)
     flat_tr = _flatten_math(tr_body)
     lost = []
-    for blk in _norm_display_blocks(src_body):
+    for blk, raw in _norm_display_pairs(src_body):
         if blk in pool:
             pool.remove(blk)
             continue
         core = blk[2:-2] if (blk.startswith("$$") and blk.endswith("$$")) else blk
         if core and core in flat_tr:
             continue
-        lost.append(blk[:60])
+        lost.append(_lost_block_text(blk, raw, tr_pairs))
     if lost:
         out.append("单元 %s 显示公式在译文里丢失/被改写（须逐字节照抄源）：%s"
                    % (fname, "；".join(lost)))
@@ -245,6 +281,73 @@ def _collect(body, rx):
     return sorted(set(rx.findall(body)))
 
 
+PAIR_FIELDS = ("id", "type", "key", "name")
+
+
+def pair_units(su, tu):
+    """把源/译两侧的 manifest 单元记录**按 `file` 配对**。返回 (problems, pairs)。
+
+    🔴 判据本体（第 1 项）不住在 `check_chapter_parity` 里而先拆成纯函数，是因为
+    「按下标 zip 配对」这个错法只有拿真实清单才能证伪——zip 版在 Kreyszig 泛函分析
+    ch4 报出 26 行「字段不一致」全是假阳（该章两侧字段本就全等），而它跳过的正是
+    该比的那一对。本函数还负责把三种真缺陷分开报清：**漏译**（源有译无）、**多余/改名**
+    （译有源无）、**顺序分叉**（集合相同而次序不同：`merge_units` 各按自己那侧的
+    `units` 次序拼接，源/译交付 md 的阅读顺序会不一样）。同名单元重复使配对失去唯一性，
+    单独报出且**不再按位置猜测**。
+    """
+    problems = []
+    if len(su) != len(tu):
+        problems.append("单元数不一致：源 %d / 译 %d（漏译或多余单元）" % (len(su), len(tu)))
+    su_files = [str(u.get("file") or "") for u in su]
+    tu_files = [str(u.get("file") or "") for u in tu]
+
+    def _by_file(units, side):
+        by_file, dups = {}, []
+        for u in units:
+            fname = str(u.get("file") or "")
+            if fname in by_file:
+                dups.append(fname)
+            else:
+                by_file[fname] = u
+        for fname in sorted(set(dups)):
+            problems.append("%s侧 manifest 单元文件名重复：%s（同名下无法按文件配对）"
+                            % (side, fname))
+        return by_file
+
+    src_by, tgt_by = _by_file(su, "源"), _by_file(tu, "译")
+    only_src = sorted(set(src_by) - set(tgt_by))
+    only_tgt = sorted(set(tgt_by) - set(src_by))
+    if only_src:
+        problems.append("源侧 %d 个单元无对应译文（漏译）：%s"
+                        % (len(only_src), ", ".join(only_src[:8])
+                           + (" …" if len(only_src) > 8 else "")))
+    if only_tgt:
+        problems.append("译侧 %d 个单元在源侧无据（多余 / 改名）：%s"
+                        % (len(only_tgt), ", ".join(only_tgt[:8])
+                           + (" …" if len(only_tgt) > 8 else "")))
+
+    pairs = []
+    for fname in su_files:                        # 按源侧登记顺序逐单元裁决
+        a, b = src_by.get(fname), tgt_by.get(fname)
+        if a is None or b is None:
+            continue                               # 缺对已由上面两条报出
+        for fld in PAIR_FIELDS:
+            if str(a.get(fld) or "") != str(b.get(fld) or ""):
+                problems.append("单元 %s %s 不一致：源 %r / 译 %r"
+                                % (fname, fld, a.get(fld), b.get(fld)))
+                break
+        pairs.append((a, b))
+    if not (only_src or only_tgt) \
+            and len(set(su_files)) == len(su_files) and len(set(tu_files)) == len(tu_files) \
+            and su_files != tu_files:
+        _nd = sum(1 for x, y in zip(su_files, tu_files) if x != y)
+        problems.append("两侧 manifest 的单元**顺序**不同（%d/%d 个位置的文件名不一致）——"
+                        "`merge_units` 各按自己那侧的顺序拼接，源/译交付 md 的阅读顺序会分叉；"
+                        "须把一侧的 `units` 数组次序改回另一侧（正文不动）"
+                        % (_nd, len(su_files)))
+    return problems, pairs
+
+
 def check_chapter_parity(ext, ch_key):
     """比对单章源单元与翻译单元。返回 (ok, problems)。"""
     prime_chapter_kinds(ext)  # 被当库调用时同样保证补篇/附录目录名正确
@@ -262,17 +365,11 @@ def check_chapter_parity(ext, ch_key):
         tgt_m = json.load(f)
     su, tu = src_m.get("units") or [], tgt_m.get("units") or []
 
-    # 1) 单元序列一致
-    if len(su) != len(tu):
-        problems.append("单元数不一致：源 %d / 译 %d（漏译或多余单元）" % (len(su), len(tu)))
-    for i, (a, b) in enumerate(zip(su, tu)):
-        for fld in ("id", "type", "key", "name", "file"):
-            if str(a.get(fld) or "") != str(b.get(fld) or ""):
-                problems.append("单元 #%d（%s）%s 不一致：源 %r / 译 %r"
-                                % (i + 1, a.get("file"), fld, a.get(fld), b.get(fld)))
-                break
+    # 1) 单元配对 + 字段一致（判据本体 = `pair_units`，负向测试见其文档）
+    _pair_problems, pairs = pair_units(su, tu)
+    problems.extend(_pair_problems)
 
-    for i, (a, b) in enumerate(zip(su, tu)):
+    for a, b in pairs:
         sp = os.path.join(src_dir, a["file"])
         tp = os.path.join(tgt_dir, b["file"])
         if not (os.path.exists(sp) and os.path.exists(tp)):

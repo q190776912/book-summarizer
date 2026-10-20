@@ -12,7 +12,8 @@
 
   * ``chapter`` 单元：``# 章标题``（章首序言是其后独立的 ``desc`` 单元）；
   * ``section`` 单元：``## §...`` 标题行（其下描述/编号项各为独立单元）；
-  * ``desc`` 单元：描述散文（章首序言 / 节导语 / 条目尾随段，无标题纯段落）；
+  * ``desc`` 单元：描述散文（章首序言 / 节导语 / 条目尾随段；无名 = 纯段落，
+    印面**无序号节末标题**被登记进节点 ``name`` 时 = 标题行 + 段落，见 ``_render_desc``）；
   * ``item`` 单元：单个编号项（定义/定理/例等，含其内部 proof 子节点）；
   * ``exercise`` 单元：练习与问题节点（problem 类型，Lee 2e 章末 Problems；
     单元层不分 exercise/problem——身份由节点 type 与印刷头承载）。
@@ -155,7 +156,7 @@ def _render_section(node, lang):
 
 def _render_desc(node, lang):
     out = []
-    _rd._walk_mixed(node, out, False, lang, top=False)
+    _rd._emit_desc_node(node, out, False, lang)
     return out
 
 
@@ -204,7 +205,11 @@ def _emit_units(node, lang):
                      _render_section(child, lang), child)
                 walk_container(child)
             elif t == "description":
-                emit("desc", str(child.get("key") or ""), "",
+                # name 非空 = 印面**无序号节末标题**（`Summary`…，attach 登记进节点
+                # name）；一并写进单元记录，写手/译者的清单里看得见「这是有名小结块」
+                # 而非一段无名散文。
+                emit("desc", str(child.get("key") or ""),
+                     str(child.get("name") or "").strip(),
                      _render_desc(child, lang), child)
             elif t == "proof":
                 continue            # proof 是 item 内部附属，由 item 单元渲染

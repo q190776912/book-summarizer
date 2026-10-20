@@ -118,6 +118,29 @@ class FigureComponentsTest(unittest.TestCase):
         """Empty labels marker -> never-matching regardless of components."""
         self.assertIs(build_fig_label_re([], 2), _NEVER_RE)
 
+    def test_ocr_word_split_caption_matches(self):
+        """Rice MSA ch2/8/11/14: OCR word-splits large-caps captions
+        ("F I G U R E 2.6" / "FIG U RE 11.5" / "FIGU RE 14.12") — must still
+        match the label. Fully letter-split forms must match too."""
+        reobj = build_fig_label_re(["Figure", "Fig", "图"], 2)
+        self.assertIsNotNone(reobj.search("FIG U RE 11.5Normal probability plots"))
+        self.assertIsNotNone(reobj.search("FIGU RE 14.12 A plot of residuals"))
+        self.assertIsNotNone(reobj.search("FIG U RE 14.6A plot of flow rate"))
+        self.assertIsNotNone(reobj.search("FIG U RE 14.11  Residuals from"))
+        self.assertIsNotNone(reobj.search("F I G U R E 2.6Poisson frequency functions"))
+        self.assertIsNotNone(reobj.search("F I G U R E 8.820 confidence intervals"))
+
+    def test_ocr_word_split_zero_regression(self):
+        """Unsplit captions and Fig->Flg misread still match (zero regression)."""
+        reobj = build_fig_label_re(["Figure", "Fig"], 2)
+        self.assertIsNotNone(reobj.search("Figure 3.1 caption"))
+        self.assertIsNotNone(reobj.search("FIGURE 11.4Boxplots"))
+        self.assertIsNotNone(reobj.search("Fig. 3.1.2"))
+        self.assertIsNotNone(reobj.search("Flg. 3.1"))
+        # CJK-only labels never gain a word-split variant
+        re_cn = build_fig_label_re(["图"], 2)
+        self.assertIsNotNone(re_cn.search("图 3.1"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

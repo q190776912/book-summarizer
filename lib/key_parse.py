@@ -83,6 +83,22 @@ ENTRY_RE_2 = re.compile(
 # Lasota & Mackey ch5 §5.10 实测），`(?!SEP\d)` 拦**跨段截断**（`2.1` ⊂ `2.1.1`）。
 # 与 ENTRY_RE_EN_SINGLE_C 的 `(\d+)(?!\d)(?!\s*SEP\s*\d)` 同一手法。
 _NOT_DEEPER = r'(?!\d)' + r'(?!' + SEP_TIGHT + r'\s*\d)'
+# 🔴 **节限定字母条目的引用**（2026-10-20 Rice《Mathematical Statistics and Data
+# Analysis》ch8 实测）：印面引用写 `例 8.4A` / `例 8.5A`，意思是「§8.4 / §8.5 的
+# Example A」——本书条目是字母序标（Example A/B/C），`8.4` 是**节号**不是条目号。
+# 二级 prose 正则把号截到 `8.4` 后照收，于是 all_keys 里凭空出现 `例8.4`/`例8.5`：
+# ① B 层每章刷 EXTRA-MENTION 幻影（错误键形，无从处置）；
+# ② 更糟：若契约真登记了编号例 8.4（别章/别书形态），这个幻影提及会让
+#    `truly_missing` 误判「已提及」——静默掩盖真缺项。
+# 守卫 = 号后紧跟**单个大写字母**（前后都不是字母/数字）即整条让位：该实体是节内
+# 字母条目，键空间里没有节号+字母的条目形，不参与提及对账。Ross 式 `Example 2a`
+# （单号+字母）由 ROSS 分支负责，不走本支，零影响。
+_LETTER_SLOT_TAIL_RE = re.compile(r'[A-Z](?![A-Za-z0-9])')
+
+
+def _is_letter_slot_tail(line, end):
+    """prose 匹配尾巴是「单个大写字母」→ 节限定字母条目引用（`例 8.4A`）。"""
+    return bool(_LETTER_SLOT_TAIL_RE.match(line, end))
 
 # 🔴 **裸三段号扫描**（`keys_in_md` 三级分支的 `KEY_RE`）同一族缺陷的**区间形态**
 # （2026-10-04 动力系统书架根治）：`KEY_RE` 两端无守卫，而 `finditer` 只产出**不重叠**
@@ -415,8 +431,11 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_2.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                    if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        continue
+                    if _is_letter_slot_tail(line, m.end()):
+                        continue
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
                 # EN 两级（原 ORDINAL_EN=4，已并入 type 2）：标签在前 / 数字在前 /
                 # 章内单数字三种形态，键同 type 2 规范键，保证 4→2 重映射书 md 解析一致。
                 for m in ENTRY_RE_EN_C.finditer(line):
@@ -439,8 +458,11 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     key = f"{_canon_label(m.group(1))} {m.group(2).upper()}"
                     entries.add(key); allk.add(key)
                 for m in PROSE_RE_EN_C.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                    if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        continue
+                    if _is_letter_slot_tail(line, m.end()):
+                        continue
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             elif t == ORDINAL_SINGLE:
                 # Single-level EN book (e.g. Silverman "A Friendly Introduction to
                 # Number Theory" 4th ed — ordinal type 1): items carry ONE
@@ -474,8 +496,11 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(_ross_canon(m.group(1), m.group(2), m.group(3).lower()))
                 for m in PROSE_RE_EN_C.finditer(line):
-                    if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
-                        allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
+                    if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
+                        continue
+                    if _is_letter_slot_tail(line, m.end()):
+                        continue
+                    allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
                 for m in PROSE_RE_ROSS_SINGLE.finditer(line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(_ross_canon(m.group(1), m.group(2)))

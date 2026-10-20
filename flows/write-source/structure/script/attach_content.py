@@ -91,6 +91,7 @@ from data.book_structure.book_structure import (chapter_json_path,
                                                 prime_chapter_kinds,
                                                 _DERIVED_TYPES)
 import build_structure as _bs
+import scan_skeleton as _sk
 from lib.numbering import (ordinal_depth,
                            resolve_formula_type, FORMULA_LEAD_DIGIT,
                            formula_paren_tag_re, page_number_furniture,
@@ -794,6 +795,23 @@ def _filter_noise(blocks, page_height, n_pages, ncomp=None, letter=False):
         if _edge(b):
             edge_pages.setdefault(n, set()).add(b["page"])
 
+    # 🔴 页眉带判据**共用 `scan_skeleton.is_running_head`**（不留第二套页眉规则）：
+    # 带下界取「本页最顶印刷行 + 容差」与绝对 100 的较大者，所以「页顶下一行的居中
+    # 标题」不算页眉，而「就是本页最顶行的词」算。
+    by_page = {}
+    for b in blocks:
+        if b["kind"] == "text":
+            by_page.setdefault(b["page"], []).append(b)
+
+    def _in_head_band(b):
+        col = by_page.get(b["page"]) or []
+        if not col:
+            return True                 # 无同页几何 ⇒ 按家具处理（保持原行为）
+        left = min(c["x"] for c in col)
+        span = max(c["x1"] for c in col) - left
+        top = min(c["y"] for c in col)
+        return _sk.is_running_head(b["x"], b["y"], left, span, top)
+
     # 🔴 页码跟踪律（与 check_content_completeness._source_formula_tags 共用
     # lib.numbering.page_number_furniture）：旧判据只看 0.06/0.94 极端带，页码印在
     # **页眉稍下**（Strogatz 3e 奇数页 y≈页高 6.3%）时整批漏网，于是页码被 splice
@@ -808,6 +826,18 @@ def _filter_noise(blocks, page_height, n_pages, ncomp=None, letter=False):
         if b["kind"] == "text":
             n = _norm(b["text"])
             if not n:
+                continue
+            # 🔴 **无序号节末标题不是家具**（Lehmann 实测 2026-10-20）：每节末尾复现的
+            # `Summary` 归一后是同一个词，只要其中 ≥2 处落进 0.12/0.90 边缘带（一节正好
+            # 结束在页顶/页底），上面那条「跨页边缘复现」就把**整章每一处**都删了——
+            # ch1 6/6、ch7 8/8 全灭，只有 ch5（7 处都在正文带）幸存。幸存的那 7 处才
+            # 登记出 6 个有名节点，其余 36 处连「本节有一份小结」的痕迹都不留在契约里。
+            # 放行判据只用页眉带（同 `is_running_head`，跨库普查据此把 Strogatz 的
+            # 偶数页页眉 `Overview`×5 继续当家具删掉：那一行**就是**本页最顶印刷行）。
+            # ⚠️ 这里**故意比登记判据宽**（不卡「大写起首 + 无句号」的词形）：宽出来的
+            # 块只是「留下来当正文」，不会登记 name ⇒ 既不可能丢内容，也不会假登记。
+            if _TAIL_HEADING_EN.match((b.get("text") or "").strip()) and not _in_head_band(b):
+                kept.append(b)
                 continue
             if len(n) >= 4 and len(edge_pages.get(n, ())) >= 2:
                 continue          # 页眉/页脚/版权行：跨页边缘重复
@@ -1076,6 +1106,55 @@ _TAIL_HEADING = re.compile(
     r'^\s*(?:思考与练习|思考题|习题|练习|内容提要|本章小结|小结|重\s*要\s*提示|'
     r'评注|注\s*记|提\s*要)')
 
+# 🔴 **无序号节末标题（整块只有该词）**——Lehmann《Elements of Large-Sample Theory》
+# 实测 2026-10-20：每节末尾印一个**独占一行、居中**的 `Summary`（文字层 43 页各 1 块），
+# 其下是该节的编号要点列表。该词不带序标 ⇒ 结构检测器不产生锚点，于是
+# ① 列表散文并进上一条定理/例题的正文，② 契约里没有任何节点承载「本节有一份小结」，
+# 草稿渲染成一句光秃秃的 `Summary` 段落开头，标题语义在写源阶段只能靠 agent 手工重建。
+# 跨库只读普查（57 书 / 该书 `_extract/_errata/census_summary_heads_corpus.py`）：符合
+# 「整块=词 + 落在该章正文页窗 + 明显偏离正文左缘 + 其下有长正文」的候选全库 47 处
+# （Lehmann 43、Strogatz《Nonlinear Dynamics and Chaos》4），**登记数 0** ⇒ 这个形态在
+# 库里是漏识，不是「别的书没有」。
+# 词表只收「节末/章末概述」词族，🔴 不收 `Remark`/`Note`/`Comment`：它们是**定理环境名**
+# （`Remark 2.1` 同样居中独占一行），收进来等于把条目当节标题（普查里 Vakil/黎曼几何/
+# Leinster 的 `type=remark` 节点正是这一族，形态与节末标题完全不同）。
+# 🔴 **最终判据比那份严格普查宽**（不要求偏离左缘，只要求不在页眉带），所以另跑了一轮
+# **词形分档普查 + 逐页确证**（`_extract/_errata/probe_tail_head_form_breakdown.py`，
+# 57 书候选 63 处）：`大写起首 + 结尾无句号` 59 处（Lehmann 43 / Ross《A First Course in
+# Probability》10 / Strogatz 6，Ross 的 `Summary` 是章末要点回顾的真标题，印在正文带）；
+# `小写起首 + 句号收尾` 4 处（Apostol p141 / Rosen p176 ×2 / Humphreys p43），逐页看上下文
+# 全部是**段落折行的最后一行**恰好只剩该词（`…some of the` / `discussion.`、`…in light` /
+# `summary.`、`…the desired` / `conclusion.`）。⇒ 判据收到「大写起首 + 无句号」这一档：
+# 真形态 59 处**全部仍然命中**（Strogatz 的 6 处随后由 `_filter_noise` 的页眉带分支单独
+# 当家具删除 ⇒ 实际登记 53 = Lehmann 43 + Ross 10），已知假阳 4 处全灭；全库
+# `Summary.`（大写带句号）与 `summary`（小写无句号）**零出现**，放宽须再普查。
+_TAIL_HEADING_EN = re.compile(
+    r'^\s*((?:Summing\s+[-\s]?Up|Summary|Overview|Review|Recapitulation'
+    r'|Conclusions?|Discussion|Perspectives)\s*[:.]?)\s*$', re.IGNORECASE)
+
+
+def _standalone_tail_head(b):
+    """块是否「整块就是一个无序号节末标题」。返回标题词（去掉尾随冒号/句点），否则 ''。
+
+    三条缺一不可：text 块、`line_start`（独立成行，非行内碎片）、整块匹配词表
+    （🔴 全匹配而非前缀：正文里 `Discussion of the proof follows.` 这类整句必须以
+    「整块=单个标题词」排除；run-in 体例（`Summary. Let T…`）与本判据天然无涉，
+    它根本不会成为独立块）。
+    第四条 = **词形档**（见 `_TAIL_HEADING_EN` 注释）：首字符不得是小写字母、整块不得以
+    句号收尾。库里唯一的假阳形态是段落折行尾行恰好只剩该词（小写 + 句号）；全大写
+    （`SUMMARY`，扫描页常见）与小写起首之间用 `islower()` 划界，一律放过非小写起首。
+    """
+    if b.get("kind") != "text" or not b.get("line_start"):
+        return ""
+    raw = str(b.get("text") or "").strip()
+    m = _TAIL_HEADING_EN.match(raw)
+    if not m:
+        return ""
+    word = m.group(1).strip(" :.．。")
+    if word[:1].islower() or raw.endswith("."):
+        return ""
+    return word
+
 
 def _proof_name(marker):
     """证明节点 name = 标记原文（去收尾标点，如 'PROOF.' → 'PROOF'、'证明：' → '证明'）。"""
@@ -1115,13 +1194,18 @@ def _qed_cut(b):
 
 
 def _is_tail_heading(b):
-    """块是否「章尾标题」（习题/思考题/内容提要/评注/小结/注记…）。
+    """块是否「章尾标题」（习题/思考题/内容提要/评注/小结/注记…，或英文节末
+    `Summary`/`Overview` 这类**整块只有标题词**的独占行）。
 
     判定收紧以免误切正文：须为 text 块、以标题词起头，且**独立成行**
     （line_start）或为**短标题行**（≤12 字，如 '习题3'/'注记127'）。
+    英文侧另走全匹配（`_standalone_tail_head`）：`Discussion of the proof…` 这类
+    以标题词开头的整句必须以「整块=单个标题词」排除。
     """
     if b.get("kind") != "text":
         return False
+    if _standalone_tail_head(b):
+        return True
     t = (b.get("text") or "").strip()
     if not t or not _TAIL_HEADING.match(t):
         return False
@@ -1189,11 +1273,45 @@ def _to_content(b):
     return out
 
 
-def _make_description(key, blocks):
-    """聚合散文块 → description 节点（与定理同级；无序标 → 合成 key、name 为空）。"""
+def _lift_head_word(blocks):
+    """桶首是无序号节末标题 → ``(标题词, 去掉该块的剩余块流)``；否则 ``('', blocks)``。"""
+    if blocks:
+        w = _standalone_tail_head(blocks[0])
+        if w:
+            return w, blocks[1:]
+    return "", blocks
+
+
+def _cut_at_tail_head(blocks):
+    """桶内在**非桶首**处出现无序号节末标题 → ``(前段, 后段)``；否则 ``(blocks, None)``。
+
+    立项缺陷（Lehmann 43 处里剩下的 4 处，2026-10-20 实测）：上一条目/上一节的尾料与
+    `Summary` 同桶（锚点分派无上界，标题落在桶中间），`_lift_head_word` 只看桶首 ⇒
+    小结列表照旧并进前一条目，标题词混在散文中间。切开后「后段」的桶首就是标题词，
+    交回 `_lift_head_word` 登记 `name`；章/节 own 桶的切段插在本节点子层**末尾**
+    （`own_tail_map`），条目/习题桶沿用既有 `trailing_map` 通道（插在該条目之后）。
+    与 exercise 分支早已存在的「首个章尾标题处截断」同源，只是谓词收严到
+    `_standalone_tail_head`（整块=词 + 独立成行），跨库普查只有 Lehmann 命中。
+    """
+    for i, b in enumerate(blocks):
+        if i and _standalone_tail_head(b):
+            return blocks[:i], blocks[i:]
+    return blocks, None
+
+
+def _make_description(key, blocks, name=""):
+    """聚合散文块 → description 节点（与定理同级；无序标 → 合成 key）。
+
+    🔴 **首个内容块若是无序号节末标题（`Summary` / `Overview` …，见
+    `_TAIL_HEADING_EN`）→ 该词登记成节点 `name` 并从内容流移除**（题面由 `name`
+    承载，与 `_strip_header` 对编号节头做的事同源；正文块守恒闸 2c 的
+    「块是契约节点 name 子串」豁免正好覆盖它）。这样节末小结列表落到一个**有名**
+    节点上，草稿与单元都渲染出标题行，而不是把光秃秃一个词留在散文首句里。
+    """
     pages = [b["page"] for b in blocks]
-    return {"type": "description", "key": key, "name": "",
-            "page_start": min(pages), "page_end": max(pages),
+    return {"type": "description", "key": key, "name": name,
+            "page_start": min(pages) if pages else None,
+            "page_end": max(pages) if pages else None,
             "sub_sec": [_to_content(b) for b in blocks]}
 
 
@@ -1429,13 +1547,19 @@ def build_chapter_contract(ext, node, page_dir=None):
 
     # ── pass 1：剥离印刷标题 + 条目内证明拆分（proof 子节点）──
     own_blocks = {}      # id(容器节点) -> 章首/节首描述散文块
+    own_tail_map = {}    # id(章/节节点) -> 节首散文里切出的「节末小结」块流
     trailing_map = {}    # id(条目节点) -> 末个 proof 之后的尾随正文块
     for e in events:
         tgt = e[2]
         blk = _strip_header(buckets.get(id(tgt)) or [], tgt.get("name") or "")
+        # 🔴 无序号节末标题印在桶中间（上一条目/前文尾料与它同桶）→ 从它切开，
+        # 后段交回 `_lift_head_word` 登记 name（见 `_cut_at_tail_head`）。
+        blk, tail_head = _cut_at_tail_head(blk)
         if tgt.get("type") in ("chapter", "section"):
             own_blocks[id(tgt)] = _drop_heading_residue(
                 blk, buckets.get(id(tgt)) or [], tgt.get("name") or "")
+            if tail_head:
+                own_tail_map[id(tgt)] = tail_head
         elif tgt.get("type") in ("exercise", "problem"):
             # 练习/问题的「证明：…」是题干任务而非证明过程 → 题面即正文，不拆 proof
             # 但锚点分派对末锚点之后无上界：章尾标题「习题答案与提示」及其后全部
@@ -1460,6 +1584,8 @@ def build_chapter_contract(ext, node, page_dir=None):
             tgt["sub_sec"] = elements
             if trailing:
                 trailing_map[id(tgt)] = trailing
+        if tail_head and tgt.get("type") not in ("chapter", "section"):
+            trailing_map[id(tgt)] = (trailing_map.get(id(tgt)) or []) + tail_head
 
     # ── pass 2：描述散文聚合为 description 节点（与条目同级；key 按文档序分配）──
     dcounter = [0]
@@ -1471,15 +1597,28 @@ def build_chapter_contract(ext, node, page_dir=None):
     def fill(n, own):
         # 自身描述散文 → description 节点置于最前；条目尾随散文 → 插条目之后；
         # 递归子容器，保证 key 严格按文档顺序递增。
-        head = [_make_description(next_dkey(), own)] if own else []
+        # 桶首是无序号节末标题（`Summary`…）→ 词作节点 name，节点只在剥掉标题后
+        # **仍有正文**时才建（只剩一个光标题词 = 印面没有小结内容，不建幻影节点）。
+        def _emit(bucket, sink):
+            """块桶 → 若干个 description：词在桶首登记 name；词在桶中间切开再起一段。"""
+            while bucket:
+                pre, post = _cut_at_tail_head(bucket)
+                w, rest = _lift_head_word(pre)
+                if rest:
+                    sink.append(_make_description(next_dkey(), rest, w))
+                bucket = post
+
+        head = []
+        _emit(own or [], head)
         new_kids = []
         for child in list(n.get("sub_sec") or []):
             if not _is_block(child) and child.get("type") in ("chapter", "section"):
                 fill(child, own_blocks.get(id(child)))
             new_kids.append(child)
-            tr = trailing_map.get(id(child))
-            if tr:
-                new_kids.append(_make_description(next_dkey(), tr))
+            _emit(trailing_map.get(id(child)) or [], new_kids)
+        # 本章节首散文里切出的「节末小结」→ 挂在**本章子层末尾**（印面就在本节最后），
+        # key 在递归完子节点之后才分配，文档序单调性不破。
+        _emit(own_tail_map.get(id(n)) or [], new_kids)
         n["sub_sec"] = head + new_kids
 
     fill(node, _strip_header(preamble, node.get("name") or "") if preamble else None)

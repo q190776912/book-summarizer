@@ -300,23 +300,66 @@ def _cln_dedup_name(it):
 _NUM_KEY_RE = re.compile(r'^[\dA-Z]+(?:\.[\dA-Z]+)+$')
 
 
-def _band_split_y(hits, blocks):
-    """同页命中 (x, y) 列表 → 优先「正文带」的最小 y，无正文命中时回落页眉带。
+def _norm_head(s):
+    """页眉/标题比对用的归一文本：只留字母数字与中日韩字，转小写。"""
+    return re.sub(r"[^0-9A-Za-z一-鿿]", "", str(s or "")).lower()
 
-    `hits` 为空返回 None。判据 `scan_skeleton.is_running_head` 与习题区闩锁、
-    `demote_head_band_rows`、`_numbered_heading_y` 同源一份（Arnold《经典力学的
-    数学方法》实测 2026-09-28：印刷把本节标题重印在本页页首右侧作页眉，页眉的
-    y 恒小于真节头 → 任何「取最小 y / 取首个命中」的锚点都会提到页顶，把上一节
-    尾料灌进本节、并让上一节末条目的尾随散文无上界吃到章末）。
+
+_HEAD_TRAIL_NUM = re.compile(r"\s*\d{1,4}\s*$")   # 页眉行尾的**印刷页码**
+
+
+def _band_split_y(hits, blocks):
+    """同页命中 → 优先「正文带」的最小 y，无正文命中时回落页眉带。
+
+    `hits` 为空返回 None。元素 = `(x, y)` 或 `(x, y, 行文本)`（带文本才启用
+    判据 ②，老调用方/老测试逐字不变）。
+
+    两条互相独立的页眉识别判据（任一命中即让位给带下命中）：
+      ① `scan_skeleton.is_running_head`：带内 **且明显右移**（>25% 页宽）。
+      ② **前缀重复**（Lehmann《Elements of Large-Sample Theory》p110/p510 实测
+         2026-10-20）：长节标题的页眉是「`2.7 The CLT … random variables 97`」，
+         左缘只推到 322/391（<25% 阈值）⇒ ① 漏判，锚点提到页顶把**上一节的节尾
+         散文**（含印面节末 `Summary` 列表）整段灌进本节。② 用页眉自己的排式事实：
+         它在**本页最顶行**、**不在正文左缘**（>5% 页宽），且**同页更下方还有一行
+         同号命中，其文本正是它（去掉行尾印刷页码）的前缀**——真节头折行时首行短、
+         页眉单行印全题，于是「短的是真、长的是复本」。
     """
     if not hits:
         return None
+    parsed = [(h[0], h[1], h[2] if len(h) > 2 else "") for h in hits]
     left, span = scan_skeleton.page_x_extent(blocks)
     top = scan_skeleton.page_top_y(blocks)
+
+    def _head_band_copy(x, y, txt):
+        """该带内命中是否同时满足「页顶行 + 非正文左缘 + 是更下方某命中的全题复本」。"""
+        if x is None or y is None or left is None or not span:
+            return False
+        if top is None or float(y) > float(top) + scan_skeleton._HEAD_TOP_TOL:
+            return False                                  # 不是本页最顶行 = 可能是真节头
+        if float(x) <= left + 0.05 * span:
+            return False                                  # 正文左缘起头 = 真节头
+        n = _norm_head(_HEAD_TRAIL_NUM.sub("", txt))
+        if len(n) < 8:
+            return False                                  # 无文本可比（老 2 元组调用方）
+        for x2, y2, t2 in parsed:
+            if y2 is None or float(y2) <= float(y):
+                continue
+            m = _norm_head(t2)
+            if len(m) >= 8 and n.startswith(m):
+                return True
+        return False
+
     body, band = [], []
-    for x, y in hits:
-        (band if scan_skeleton.is_running_head(x, y, left, span, top)
-         else body).append(y if y is not None else 0)
+    band_top = (scan_skeleton._HEAD_BAND_Y if top is None
+                else max(scan_skeleton._HEAD_BAND_Y,
+                         top + scan_skeleton._HEAD_TOP_TOL))
+    for x, y, txt in parsed:
+        if (scan_skeleton.is_running_head(x, y, left, span, top)
+                or (x is not None and y is not None and y < band_top
+                    and _head_band_copy(x, y, txt))):
+            band.append(y if y is not None else 0)
+        else:
+            body.append(y if y is not None else 0)
     ys = body or band
     return min(ys) if ys else None
 
@@ -355,7 +398,8 @@ def _numbered_heading_y(ext, key, page, page_dir=None):
         for ln in s.split("\n"):
             if pat.match(ln.strip()):
                 # 🔴 页眉带复本让位给正文命中（判据见 `_band_split_y`）。
-                hits.append(scan_skeleton.block_xy(b.get("poly") or []))
+                xy = scan_skeleton.block_xy(b.get("poly") or [])
+                hits.append((xy[0], xy[1], ln.strip()))
                 break
     return _band_split_y(hits, _blks)
 
@@ -406,7 +450,8 @@ def _find_title_pos(ext, title, start, end, page_dir=None):
                 continue
             s = blk_text(b).strip()
             if s and anchor_re.match(s):
-                hits.append(scan_skeleton.block_xy(b.get("poly") or []))
+                xy = scan_skeleton.block_xy(b.get("poly") or [])
+                hits.append((xy[0], xy[1], s))
         y = _band_split_y(hits, _blks)   # 页眉带复本让位（见 _band_split_y）
         if y is not None:
             return (p, y)

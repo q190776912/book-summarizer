@@ -35,7 +35,8 @@ import lib.boot as b
 b.setup()
 
 from lib.unit_order import (check_contract_anchors, check_section_key_page_order,
-                            check_unit_order, dash_exempt, is_dash_problem,
+                            check_unit_order, dash_exempt, inherited_desc_anchor_keys,
+                            is_dash_problem,
                             iter_unit_nodes, resolve_unit_anchors, _anchor_tables)
 
 
@@ -573,3 +574,189 @@ def test_dash_exempt_helper():
     assert dash_exempt("4.2-2", "Theorem") is False   # 大小写无关
     assert dash_exempt("4.2.2", "example") is False   # 非 dash 键本来就不豁免
 
+
+
+# ---------------------------------- 判据 7：继承锚点的导语容器（2026-10-20 Kreyszig ch4 实测）
+def _desc_chapter(desc_pages, own_pages=False):
+    """三节各带一个 ``description`` 导语节点的章契约。
+
+    ``own_pages=False`` = 真实形态：容器 ``page_start`` 从所在**节**继承（与节起始页相同），
+    它对「这段散文印在哪一页」没有证据。``own_pages=True`` = 反事实兜底：容器自己有独立
+    页码（≠ 节起始页），此时页码单调判定必须照常生效。
+    """
+    secs = []
+    for i, (sec_key, sec_page, dkey, dpage) in enumerate(desc_pages):
+        kids = [_node("description", dkey, dpage if own_pages else sec_page),
+                _node("item", sec_key + "-1", sec_page + 1),
+                _node("item", sec_key + "-2", sec_page + 2)]
+        # own_pages 形态下把容器页写成该节**末后**一页，制造可判定的锚点
+        if own_pages:
+            kids[0]["page_start"] = kids[0]["page_end"] = dpage
+        secs.append(_node("section", sec_key, sec_page, kids))
+    return {"key": "4", "type": "chapter", "name": "Ch", "page_start": 225,
+            "page_end": 320, "sub_sec": secs}
+
+
+_DESC3 = [("4.1", 225, "D1", 225), ("4.2", 228, "D2", 240), ("4.3", 233, "D3", 250)]
+
+
+def _units_after_desc(key_pos):
+    """按 ``(type, key)`` 列表造单元序。"""
+    return [{"type": t, "ntype": {"desc": "description", "item": "item",
+                                  "section": "section"}[t], "key": k}
+            for (t, k) in key_pos]
+
+
+def test_inherited_desc_anchor_helper():
+    c = _desc_chapter(_DESC3)
+    got = inherited_desc_anchor_keys(c)
+    assert got == {"D1", "D2", "D3"}, got          # 三容器页 == 各自节起始页 = 继承
+    own = _desc_chapter(_DESC3, own_pages=True)
+    # D1 的容器页仍 == 节页（225），D2/D3 的容器页被写成独立页 → 只有 D1 算继承
+    assert inherited_desc_anchor_keys(own) == {"D1"}, inherited_desc_anchor_keys(own)
+
+
+def test_inherited_desc_unit_out_of_page_order_is_not_flagged():
+    # 交付/印面次序：节头 → 该节条目 → **下一节**的导语（Kreyszig ch4 全部 12 个 desc
+    # 单元都是这个形态：容器继承页比它自己的散文早若干页）。旧判据一次假报 11 处。
+    c = _desc_chapter(_DESC3)
+    units = _units_after_desc([
+        ("section", "4.1"), ("desc", "D1"), ("item", "4.1-1"), ("item", "4.1-2"),
+        ("section", "4.2"), ("item", "4.2-1"), ("item", "4.2-2"),
+        ("desc", "D2"), ("section", "4.3"), ("item", "4.3-1"), ("item", "4.3-2"),
+        ("desc", "D3")])
+    assert check_unit_order(c, units) == []
+
+
+def test_inherited_desc_skip_does_not_blind_later_real_regression():
+    # 负向兜底：跳过的导语不得「顺手」把游标放宽——其后一条真实跨页倒退（§4.3 的条目
+    # 排到 §4.2 之前）仍须点名，且参照页码不受 desc 豁免影响。
+    c = _desc_chapter(_DESC3)
+    units = _units_after_desc([
+        ("section", "4.1"), ("desc", "D1"), ("item", "4.1-1"),
+        ("section", "4.3"), ("item", "4.3-1"),          # 晚节先出现 = 真倒退
+        ("section", "4.2"), ("item", "4.2-1")])
+    probs = check_unit_order(c, units)
+    assert len(probs) == 1, probs
+    assert "4.2" in probs[0] and "p228" in probs[0]
+
+
+def test_own_page_desc_unit_is_still_flagged():
+    # 反事实：容器有**独立**页码证据（≠ 节起始页）时判据 7 不适用，倒退照常报。
+    c = _desc_chapter(_DESC3, own_pages=True)
+    units = _units_after_desc([
+        ("section", "4.1"), ("desc", "D1"), ("item", "4.1-1"), ("item", "4.1-2"),
+        ("section", "4.2"), ("item", "4.2-1"), ("item", "4.2-2"),
+        ("section", "4.3"), ("item", "4.3-1"), ("item", "4.3-2"),
+        ("desc", "D3")])                                # D3 独立页 250 > 其后无内容，OK
+    assert check_unit_order(c, units) == []
+    late_first = _units_after_desc([
+        ("section", "4.1"), ("item", "4.1-1"),
+        ("section", "4.2"), ("item", "4.2-1"),
+        ("section", "4.3"), ("item", "4.3-1"),
+        ("desc", "D2")])                                # D2 独立页 240，排在 p234 之后
+    probs = check_unit_order(c, late_first)
+    assert any("D2" in p for p in probs), probs
+
+
+def test_desc_unit_consuming_item_anchor_stays_checked():
+    # 豁免口径按**锚点节点类型**收窄，不按单元 ``type``：一条 ``desc`` 记录若把键解析到
+    # **条目**节点（该键在契约里没有 description 节点），继承页判据不适用，真倒退
+    # 仍要点名。键形取**点分**而非 dash——dash 键先被判据 4 的 ``dash_exempt`` 处理，
+    # 到不了这里（实测 遍历论_孙文祥 ch4 ``4.3-1`` / ch6 ``6.2-2`` 就是 dash 键的
+    # **item** 记录，ntype 属编号结果 ⇒ 不豁免、照常判定，形态与判据 7 无关）。
+    c = {"key": "6", "type": "chapter", "name": "Ch", "page_start": 100, "page_end": 160,
+         "sub_sec": [_node("section", "6.1", 100, [_node("item", "6.1.1", 101),
+                                                   _node("item", "6.1.2", 102)]),
+                     _node("section", "6.2", 110, [_node("item", "6.2.1", 111),
+                                                   _node("item", "6.2.2", 112)])]}
+    units = _units_after_desc([
+        ("section", "6.1"), ("item", "6.1.1"), ("item", "6.1.2"),
+        ("section", "6.2"), ("item", "6.2.1"),
+        ("desc", "6.2.2")])                             # desc 记录吃了 p112 的条目锚点
+    assert check_unit_order(c, units) == []
+    back = _units_after_desc([
+        ("section", "6.1"), ("item", "6.1.1"),
+        ("section", "6.2"), ("item", "6.2.1"), ("item", "6.2.2"),
+        ("desc", "6.1.2")])                             # 但排在 p112 之后 → 真倒退
+    probs = check_unit_order(c, back)
+    assert any("6.1.2" in p for p in probs), probs
+
+
+def test_dash_key_item_unit_is_never_desc_exempted():
+    # 负向兜底（遍历论_孙文祥 ch4/ch6 实测形态）：dash 键 + **编号结果** ntype 的条目
+    # 单元不参与任何 desc 豁免；同键的 desc 容器豁免不得顺手把这类记录一起放过。
+    c = _desc_chapter([("6.1", 100, "D1", 100), ("6.2", 110, "D2", 110)])
+    units = [{"type": "section", "ntype": "section", "key": "6.1"},
+             {"type": "item", "ntype": "theorem", "key": "6.1-1"},
+             {"type": "desc", "ntype": "description", "key": "D1"},
+             {"type": "section", "ntype": "section", "key": "6.2"},
+             {"type": "desc", "ntype": "description", "key": "D2"},
+             {"type": "item", "ntype": "theorem", "key": "6.2-1"},
+             {"type": "item", "ntype": "theorem", "key": "6.1-2"}]
+    probs = check_unit_order(c, units)
+    assert len(probs) == 1, probs
+    assert "6.1-2" in probs[0], probs
+
+
+# ---------------------------------------------------------------------------
+# 判据 5 延伸：契约节点 page_start <= 0 = 无页码证据（Weibel 同调代数实测）
+# ---------------------------------------------------------------------------
+def _zero_page_chapter():
+    """ch9 形态：降级手术把条目页码清成 0（``converted from miscast subsection``）。
+
+    条目节点用 ``theorem``（+ 编号结果类型不享 dash 豁免），否则记录先被判据 4 豁免，
+    根本走不到锚点解析，本测试就变成空转。
+    """
+    return {"key": "9", "type": "chapter", "name": "Ch", "page_start": 330,
+            "page_end": 400, "sub_sec": [
+                _node("section", "9.5", 338,
+                      [_node("theorem", "9.5-5", 339),
+                       _node("definition", "9.5-6", 0),
+                       _node("theorem", "9.5-7", 340)]),
+                _node("section", "9.6", 350, [_node("theorem", "9.6-1", 351)])]}
+
+
+def test_zero_page_node_is_not_an_anchor():
+    c = _zero_page_chapter()
+    got = [(n["key"], n["page"]) for n in iter_unit_nodes(c)]
+    assert ("9.5-6", 0) not in got, got
+    assert sum(1 for k, _ in got if k == "9.5-6") == 0, got
+
+
+def _zero_units(*pairs):
+    """显式记录序（``ntype`` 用契约写法）——Weibel 的 0 页节点是 ``definition``，
+    dash 键 + 编号结果类型**不享** dash 豁免，必须让它走到锚点解析才有意义。"""
+    return [{"type": t, "ntype": nt, "key": k} for (t, nt, k) in pairs]
+
+
+def test_zero_page_unit_record_is_skipped_not_flagged():
+    c = _zero_page_chapter()
+    units = _zero_units(("section", "section", "9.5"), ("item", "theorem", "9.5-5"),
+                        ("item", "definition", "9.5-6"), ("item", "theorem", "9.5-7"),
+                        ("section", "section", "9.6"), ("item", "theorem", "9.6-1"))
+    assert check_unit_order(c, units) == []
+
+
+def test_zero_page_skip_does_not_reset_cursor():
+    # 负向兜底：页码 0 的单元被跳过，但它前面的游标（p340）仍须管住后面的真倒退
+    c = _zero_page_chapter()
+    units = _zero_units(("section", "section", "9.5"), ("item", "theorem", "9.5-5"),
+                        ("item", "theorem", "9.5-7"), ("item", "definition", "9.5-6"),
+                        ("item", "theorem", "9.5-5"),                  # p339 再现 = 倒退
+                        ("section", "section", "9.6"), ("item", "theorem", "9.6-1"))
+    probs = check_unit_order(c, units)
+    assert len(probs) == 1, probs
+    assert "9.5-5" in probs[0] and "p339" in probs[0], probs
+
+
+def test_zero_page_node_cleared_from_contract_self_check():
+    # 契约前序自查同源剔除：0 页节点排在高页码内容之后不该算「锚点与树序矛盾」
+    c = {"key": "9", "type": "chapter", "name": "Ch", "page_start": 330,
+         "page_end": 400, "sub_sec": [
+             _node("section", "9.5", 338,
+                   [_node("theorem", "9.5-5", 339), _node("definition", "9.5-6", 0)]),
+             _node("section", "9.6", 350, [_node("theorem", "9.6-1", 351)])]}
+    assert check_contract_anchors(c) == []
+    c["sub_sec"][0]["sub_sec"][1]["page_start"] = 337        # 真实倒退（早于其前序 339）
+    assert any("9.5-6" in p or "9.5.6" in p for p in check_contract_anchors(c))

@@ -61,6 +61,24 @@ class TestEnDescriptiveHeader(unittest.TestCase):
         # 专名在类型词之前（「黎斯引理」）仍按类型词入账 —— 旧行为不得回退。
         self.assertEqual(_parse_entry("2.5-4 4. 黎斯引理", 3, "cn"), ([2, 5, 4], "引理"))
 
+    def test_verb_led_cjk_descriptive_title_is_entry_not_reference(self):
+        # Lehmann–Casella《TPE》CN ch2 实测：label-first 条头的描述性标题以内容
+        # 动词开头（估计/表示/应用 …），对应印面 `Example 2.1 Estimating polynomials …`。
+        # 旧版 `_is_header_boundary` 的所属格拒绝对 `(?:的|之)?` 取了**可选**，于是
+        # 「估计正态方差的多元式」被误判成「定理 4.1 的应用」式引用丢弃 → 假「缺号 1」
+        # BLOCKING（EN 孪生因拉丁续词按标题计数而侥幸通过）。根治 = 的/之 必须强制在场。
+        self.assertEqual(
+            _parse_entry("例 2.1 估计正态方差的多元式（Estimating polynomials of a normal variance）",
+                         2, "cn"),
+            ([2, 1], "例"))
+        self.assertEqual(
+            _parse_entry("例 2.2 估计概率或临界值", 2, "cn"), ([2, 2], "例"))
+        self.assertEqual(
+            _parse_entry("定义 3.1 表示测度的收敛性", 2, "cn"), ([3, 1], "定义"))
+        # 负向不变：所属格引用（带 的）仍不是条目。
+        self.assertIsNone(_parse_entry("定理 4.1 的应用", 2, "cn"),
+                          "「…的应用」所属格引用必须仍被拒")
+
     def test_han_type_word_stem_inside_a_compound_is_uncat_not_dropped(self):
         # Gelfand-Manin ch1 §1.4 CN: '系' is 系/Porism, but 系数系统 / 带系数系统 uses
         # it as a word stem; '注记与例子' runs straight on.  None of them may vanish

@@ -1,6 +1,6 @@
 """test_sync_translate_markers.py — 首行复位工具的机械判据（CRLF 判定 + 契约裁决 + 状态词保全）。
 
-三条都是实测踩过的坑：
+四条都是实测踩过的坑：
 1. 🔴 **CRLF**：`raw.split(b"\\n",1)[0]` 已经把换行符当分隔吃掉，段内**永远**不含 CRLF，
    用 `in` 判行尾会恒定得出 LF，于是首行留着一个 CR 参与比较——dry-run 时把整本书
    （real-analysis 1560 文件里 757 个、Robinson 全部 1644 个）误报成「脱账」。
@@ -186,3 +186,59 @@ def test_unknown_contract_key_skips_conservatively(tmp_path):
                       "w", encoding="utf-8"), ensure_ascii=False)
     c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
     assert (c, m) == (1, 0) and "两侧均不在契约账上" in diffs[0], diffs
+
+
+# ── 4) key 裁定（随机过程 ch4/6/7 合成续接键形）─────────────────────────────
+
+
+def _book_key(tmp_path, manifest_key, marker_key, extra_contract_keys=()):
+    """契约节点键 = `1.1`（+ 可选别的键）；manifest 与首行各给一个键，`name` 留空。"""
+    ext = tmp_path / "ex"
+    d = ext / "book_structure" / "units" / "ch1"
+    d.mkdir(parents=True)
+    kids = [{"key": "1.1", "name": "", "type": "theorem", "items": []}]
+    for k in extra_contract_keys:
+        kids.append({"key": k, "name": "", "type": "theorem", "items": []})
+    json.dump({"chapters": [{"key": "1", "name": "Chapter 1", "children": kids}]},
+              io.open(str(ext / "book_structure" / "ch1.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    json.dump({"units": [dict(REC, name="", type="item", key=manifest_key,
+                              continuation=True)]},
+              io.open(str(d / "manifest.json"), "w", encoding="utf-8"),
+              ensure_ascii=False)
+    line = ("<!-- book-summarizer DONE unit: id=0001 type=item key=%s name= -->"
+            % marker_key)
+    _mk(str(d / REC["file"]), line, eol="\r\n")
+    return str(ext)
+
+
+def test_synthetic_continuation_key_in_manifest_is_never_written(tmp_path):
+    """🔴 manifest 键是父键 + `_cont<NN>` 的合成键（契约无此节点）、首行才是父键：
+    错的一侧是 manifest，复位会把错键写进文件，还会让 `lib/unit_order` 判据 6
+    「续接单元复用父锚点」失效（`norm_secnum` 不归一 `_cont`）。"""
+    ext = _book_key(tmp_path, manifest_key="1.1_cont5", marker_key="1.1")
+    p = os.path.join(ext, "book_structure/units/ch1", REC["file"])
+    good = "<!-- book-summarizer DONE unit: id=0001 type=item key=1.1 name= -->"
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 0), diffs
+    assert len(diffs) == 1 and "key 脱账" in diffs[0] and "首行的键才是契约那一侧" in diffs[0], diffs
+    assert io.open(p, encoding="utf-8").readline().rstrip("\r\n") == good, "把合成键写进了文件"
+
+
+def test_marker_key_off_contract_is_repaired_to_manifest_key(tmp_path):
+    """反向：首行键契约查不到、manifest 键在账 → manifest 那一侧才是真值，复位首行。"""
+    ext = _book_key(tmp_path, manifest_key="1.1", marker_key="1.1Z")
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 1), diffs
+    p = os.path.join(ext, "book_structure/units/ch1", REC["file"])
+    assert io.open(p, encoding="utf-8").readline().rstrip("\r\n") == (
+        "<!-- book-summarizer DONE unit: id=0001 type=item key=1.1 name= -->")
+
+
+def test_both_keys_on_contract_skips_conservatively(tmp_path):
+    """两个键都在契约账上（同书不同节点）→ 无法裁定归属，跳过不误写。"""
+    ext = _book_key(tmp_path, manifest_key="1.2", marker_key="1.1",
+                    extra_contract_keys=("1.2",))
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 0) and "两侧都合契约" in diffs[0], diffs
+

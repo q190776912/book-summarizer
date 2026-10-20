@@ -187,3 +187,38 @@ def test_relocation_fallback_does_not_mask_truncation():
     assert any("显示公式在译文里丢失" in p for p in probs), probs
 
 
+# ── 根治轮（2026-10-20 随机过程 ch5/0031 等 6 处实测）：`\tag` 前的句末标点 ──────
+
+def test_trailing_punct_before_tag_exempt():
+    r"""**编号显示式**的句末标点坐在 `\tag{}` **之前**，块尾锚定的 `_TAIL_PUNCT_RE` 剥不到
+    → 上面那条「句末标点习惯差异放行」的设计对全部编号式失效。本书实测 6 处（`.` vs `,`
+    四处、丢标点两处）全这一形，被当成「译文改写公式」报 FAIL。"""
+    src = "$$\n\\lim_{n\\to\\infty}\\max_{1 \\le i \\le k_n} F_{ni}(t) = 0 .\n\\tag{9.1}\n$$\n"
+    for tail in (" ,", ""):                      # 逗号形 与 丢标点形
+        tr = ("$$\n\\lim_{n\\to\\infty}\\max_{1 \\le i \\le k_n} F_{ni}(t) = 0%s\n"
+              "\\tag{9.1}\n$$\n" % tail)
+        assert _hits(src, tr) == [], tail
+
+
+def test_tag_punct_exempt_does_not_mask_content_change():
+    """豁免只认标点：`\tag` 式里改一个下标仍须被抓。"""
+    src = "$$\nR(v) = E[X_n X_{n+v}].\n\\tag{5.7}\n$$\n"
+    tr = "$$\nR(v) = E[X_n X_{n+v+1}],\n\\tag{5.7}\n$$\n"
+    probs = _hits(src, tr)
+    assert any("显示公式在译文里丢失" in p for p in probs), probs
+
+
+def test_fail_message_shows_verbatim_source_spacing():
+    r"""FAIL 消息必须给**磁盘真形**：归一串删掉所有空白，`1 \le i \le k_n` 会被印成
+    `1\lei\lek_n`——看着像 OCR 粘连没修，实际单元里早已是修好的形态（本轮据此误判分诊
+    方向一轮）。闸门的消息不能自己造假证据。"""
+    src = "$$\n\\lim_{n\\to\\infty}\\max_{1 \\le i \\le k_n} F_{ni}(t) = 0 .\n\\tag{9.1}\n$$\n"
+    tr = "$$\n\\lim_{n\\to\\infty}\\max_{1 \\le j \\le k_n} F_{ni}(t) = 0 .\n\\tag{9.1}\n$$\n"
+    probs = _hits(src, tr)
+    msg = "；".join(probs)
+    assert probs, probs
+    assert "1 \\le i \\le k_n" in msg, msg
+    assert "\\lei\\lek_n" not in msg, msg
+    assert "译侧最近块" in msg, msg
+
+

@@ -29,7 +29,7 @@ from data.book_structure.book_structure import (  # noqa: E402
 
 MARK_RE = re.compile(
     r"^<!--\s*book-summarizer\s+(DONE|DRAFT)\s+unit:\s*"
-    r"id=(\S*)\s+type=(?P<type>\S*)\s+key=(.*?)\s+name=(.*?)\s*-->$")
+    r"id=(\S*)\s+type=(?P<type>\S*)\s+key=(?P<key>.*?)\s+name=(.*?)\s*-->$")
 TPL = "<!-- book-summarizer %s unit: id=%s type=%s key=%s name=%s -->"
 
 
@@ -68,6 +68,27 @@ def manifest_matches_contract(name, key, names):
     if not name:
         return True
     return any(name == n or name == "%s %s" % (key, n) for n in names)
+
+
+def contract_node_keys(ext, ch):
+    """该章契约里所有节点的 `key` 集合（`key` 脱账时的审计面真值）。"""
+    p = resolve_chapter_json_path(ext, ch)
+    out = set()
+    if not os.path.exists(p):
+        return out
+
+    def walk(n):
+        if isinstance(n, dict):
+            v = str(n.get("key") or "").strip()
+            if v:
+                out.add(v)
+            for x in n.values():
+                walk(x)
+        elif isinstance(n, list):
+            for x in n:
+                walk(x)
+    walk(json.load(open(p, encoding="utf-8")))
+    return out
 
 
 # 契约节点 type → 单元/manifest 侧的单元 type（与 split_draft_units.emit 的取值一致：
@@ -119,6 +140,28 @@ def type_side_that_matches_contract(unit_type, manifest_type, key, types_by_key)
     return ("both" if (u_ok and m_ok) else "neither"), allowed
 
 
+def key_side_that_matches_contract(unit_key, manifest_key, keys):
+    """`key` 脱账时裁定哪一侧在契约账上 → ("manifest"|"unit"|"both"|"neither")。
+
+    用法与 `type` 裁定同构，但成因不同：合成键。实测随机过程《概率论基础教程》
+    ch4/ch6/ch7 有 7 条**源侧续接单元**的 manifest 键被手工写成 `D5_cont14` 这类
+    父键 + `_cont<NN>` 的合成键，而契约里只有父键 `D5`，单元首行也印着父键——
+    错的一侧是 **manifest**（`_split_letters.py` 这条正规拆分通道从来只沿用父键，
+    合成键在全树仅存在于这三个 manifest，无任何脚本/报告产生它）。按 manifest 复位
+    会把审计面的错键写进文件，还会让 `lib/unit_order` 判据 6「续接单元复用父锚点」
+    彻底失效（`norm_secnum("D5_cont14") != "D5"` ⇒ `follow` 永不命中），
+    以及 `lib/problem_coverage.coverage_problems` 按「单元 key ∈ 该节契约子树键集」
+    取正文时把这半段内容看成不存在。
+    """
+    u_ok = str(unit_key or "").strip() in keys
+    m_ok = str(manifest_key or "").strip() in keys
+    if m_ok and not u_ok:
+        return "manifest"
+    if u_ok and not m_ok:
+        return "unit"
+    return "both" if (u_ok and m_ok) else "neither"
+
+
 def _diff(path, rec):
     """→ (raw, nl, 现首行, 应有首行)；已一致时返回 None。
 
@@ -162,6 +205,7 @@ def sync_side(ext, sub, ch, apply_changes=False):
         return 0, 0, []
     names = contract_names(ext, ch)
     types_by_key = contract_unit_types(ext, ch)
+    keys_of_ch = contract_node_keys(ext, ch)
     units = json.load(open(mp, encoding="utf-8")).get("units") or []
     checked = changed = skipped = 0
     diffs = []
@@ -200,6 +244,22 @@ def sync_side(ext, sub, ch, apply_changes=False):
                              "      首行 type=%s / manifest type=%s / 契约该键允许=%s"
                              % (unit_dir_name(ch), u.get("file"), who, unit_type, mtype,
                                 sorted(allowed) or "?"))
+                continue
+        # 🔴 key 单独裁定：manifest 里被手工造出的合成键（父键 + `_cont<NN>`）不在契约账上，
+        # 首行才是契约那一侧；按 manifest 复位等于把错键写进文件（判据理由见
+        # :func:`key_side_that_matches_contract`）。
+        kfile = lm.group("key") if lm else ""
+        kman = str(u.get("key") or "")
+        if kfile != kman:
+            kwinner = key_side_that_matches_contract(kfile, kman, keys_of_ch)
+            if kwinner != "manifest":
+                skipped += 1
+                kwho = ("首行的键才是契约那一侧" if kwinner == "unit"
+                        else "两侧都合契约（无法裁定）" if kwinner == "both"
+                        else "两侧均不在契约账上")
+                diffs.append("%s/%s\n    跳过（key 脱账，%s，须先修 manifest）：\n"
+                             "      首行 key=%s / manifest key=%s"
+                             % (unit_dir_name(ch), u.get("file"), kwho, kfile, kman))
                 continue
         changed += 1
         diffs.append("%s/%s\n    现首行: %s\n    manifest: %s"

@@ -74,6 +74,20 @@
         步骤 6 译文层）——本库原先只有反方向的 `english_residues`，源侧零拦截，
         Shafarevich《Basic AG 1》I 实测 119 个源单元被并行写手写成中文。
         （#23 = `label_key_problems`，由 gate_units 侧调用，故本模块条目跳号对齐全局编号）
+    25. 松散 OCR 数学形态闸（`loose_math_problems`）：V-C「严禁照抄 OCR」此前无机械
+        判据——`v ^ { \prime }` / `\frac { a } { b }` / `3 . 1 . 1` 原样搬进单元也能
+        RESULT OK。只扫数学片段（行内 `$...$` + `$$` 围栏内的整行），散文不看。
+    26. 占位符残留闸（`placeholder_problems`）：`@@ARRAY@@` 一类 `@@NAME@@` 标记出现在
+        正文即不通过。Rosen 8e ch9/0157 译文把整块 array 换成 `@@ARRAY@@` 交回并进了
+        交付 md；parity 判据 9 今天已能抓「显示式被换掉」，但它**只比 `$$` 块**（拿占位
+        符换掉表格 / 散文时整条失明），且要等章级重跑才生效——本闸不看语义、只认形态，
+        在单元交回当刻即拦。全库 80990 个 md 标定仅 2 文件命中（该单元 + 其交付 md）
+        = 0 假阳。
+    27. 空展示块闸（`empty_display_problems`）：`$$` 成对而块内无内容 → 不通过（公式
+        被整体删空）。`$$` 闭合判据只查成对、tag 对账只管契约要求编号的块，两者都看不见
+        无编号空块。🔴 按奇偶顺序 walk 围栏，不用成对正则（成对正则把相邻两块配成空块，
+        全库假阳 1701 文件；顺序扫描只剩 Shafarevich ch4 两个修前备份）。
+        #26/#27 对**全部**单元类型生效（含 section / chapter 标头单元）。
   🔴 本模块只做静态/启发式检测；**真实 KaTeX 渲染**（`katex_render.run_render_check`，
     katex_validate.js 按章批量跑、错误映射回单元）由 `gate_units.gate_chapter` 承担。
   🔴 调用方（gate_units / flow_runner 证据复核）必须 **fail-closed**：本函数抛异常时
@@ -877,6 +891,9 @@ _LOOSE_MATH_PATTERNS = (_LOOSE_MATH_SUB, _LOOSE_MATH_CMD,
                         _LOOSE_MATH_DELIM, _LOOSE_MATH_DIGIT)
 _LOOSE_MATH_TAG = re.compile(r"\\tag\s*\{[^{}]*\}")
 
+# 第 26 项：`@@NAME@@` 占位符（`@@ARRAY@@` / `@@IMAGE@@` / `@@TABLE@@` 等）。
+_PLACEHOLDER_RE = re.compile(r"@@[A-Za-z_][A-Za-z0-9_]*@@")
+
 
 def _math_fragments(line):
     """一行里的**行内**数学片段（`$...$` 之间的内容）。
@@ -942,6 +959,73 @@ def loose_math_problems(body, limit=5):
            "如 `x _ { n }`→`x_{n}`、`\\frac { a } { b }`→`\\frac{a}{b}`、"
            "`\\begin{array} { l l }`→`\\begin{array}{ll}`、`3 . 1 . 1`→`3.1.1`）"]
     out += ["  L%-4d %s" % (no, frag) for no, frag in hits[:limit]]
+    if len(hits) > limit:
+        out.append("  …共 %d 处" % len(hits))
+    return ["\n".join(out)]
+
+
+def placeholder_problems(body, limit=3):
+    """第 26 项：`@@NAME@@` 形式的**占位符**残留在正文里 → 问题列表。
+
+    现场（Rosen《Discrete Mathematics》8e 步骤6，2026-10-20 全库普查）：译者把整块
+    `\\begin{array}` 展示式换成 `@@ARRAY@@` 交回，两侧 tag/图/条目号集合对账全等、
+    哈希不同 → parity 第 7/9 项双盲，占位符一路进了交付 md（`第9章_9.5_等价关系.md`）。
+    本判据不看语义、只认形态：`@@` + 标识符 + `@@` 在数学/散文里都不可能是合法内容。
+    全库标定（80990 个 md）：仅 2 文件命中（同一单元 + 它的交付 md），**0 假阳**。
+    """
+    hits = []
+    for i, ln in enumerate(str(body or "").split("\n"), start=1):
+        toks = sorted(set(_PLACEHOLDER_RE.findall(ln)))
+        if toks:
+            hits.append((i, ", ".join(toks), ln.strip()[:60]))
+    if not hits:
+        return []
+    out = ["正文残留占位符（内容未写）：形如 `@@ARRAY@@` 的占位标记必须换成真实内容"
+           "（照源单元把公式/表格/图写出来），不得留标记交回"]
+    out += ["  L%-4d %s  ← %s" % (no, toks, snippet) for no, toks, snippet in hits[:limit]]
+    if len(hits) > limit:
+        out.append("  …共 %d 行" % len(hits))
+    return ["\n".join(out)]
+
+
+def empty_display_problems(body, limit=3):
+    """第 27 项：空的 `$$…$$` 展示块（围栏成对而块内无内容）→ 问题列表。
+
+    现场（Shafarevich《Basic AG 1》ch4 修前备份实测 152 处）：改写公式时把内容整行
+    删掉只留下围栏，渲染成一个空块——`$$` 闭合判据只查 EOF（成对即绿），tag 对账
+    只在契约要求编号时才查（无编号的 display 块漏网）。
+
+    🔴 必须**按奇偶顺序 walk 围栏**，不能用 `\\$\\$\\n(.*?)\\n\\$\\$` 成对正则：
+    相邻两个真块之间的「闭栏 + 开栏」会被配成一对，`$$ / 空行 / $$` 假报成空块
+    （全库实测该写法 1701 文件假阳，顺序扫描只剩 2 个备份文件，0 假阳）。
+    """
+    hits = []
+    in_display = False
+    start = 0
+    has_content = False
+    for i, ln in enumerate(str(body or "").split("\n"), start=1):
+        s = _display_body(ln)
+        if s is None:                       # 独占一行的 `$$`：开栏/闭栏
+            if in_display:
+                if not has_content:
+                    hits.append((start, i))
+                in_display = False
+                has_content = False
+            else:
+                in_display = True
+                start = i
+            continue
+        if in_display:
+            if s.strip():
+                has_content = True
+        elif s.startswith("$$") and s.endswith("$$") and len(s) >= 4 \
+                and not s[2:-2].strip():   # 同行空块 `$$  $$`
+            hits.append((i, i))
+    if not hits:
+        return []
+    out = ["空的 `$$…$$` 展示块（围栏成对而块内无内容）：公式内容被整体删空，"
+           "须回源页按印面补写或删掉多余围栏"]
+    out += ["  L%d–%d" % (a, b) for a, b in hits[:limit]]
     if len(hits) > limit:
         out.append("  …共 %d 处" % len(hits))
     return ["\n".join(out)]
@@ -1107,12 +1191,16 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     跳过 P1 证明分条闸（译本逐行镜像已过该闸的源单元，拆条＝结构性分叉），
     与 ``ext_dir=None`` 关掉照抄闸同一取向。
     """
-    if utype not in ("item", "desc", "exercise"):
-        return True, []
-    lines = body.splitlines(keepends=True)
+    lines = str(body or "").splitlines(keepends=True)
     while lines and lines[0].startswith("<!--"):
         lines.pop(0)
     body_clean = "".join(lines)
+
+    if utype not in ("item", "desc", "exercise"):
+        # 标头类单元（section / chapter）正文本就极少，但两条**纯形态**签名对它同样
+        # 成立（占位符、空展示块都可能出现在节末散文里），故照常扫；其余判据不跑。
+        _p = placeholder_problems(body_clean) + empty_display_problems(body_clean)
+        return (len(_p) == 0, _p)
 
     all_problems = []
     line_list = body_clean.splitlines()
@@ -1452,5 +1540,14 @@ def check_body(utype, name, body, expected_tags=None, allow_extra=None,
     #     此前无机械判据，写手原样搬 `v ^ { \prime }` / `\frac { a } { b }` /
     #     `3 . 1 . 1` 也能 RESULT OK。只扫数学片段，散文不看。
     all_problems.extend(loose_math_problems(body_clean))
+
+    # 26) 占位符残留闸（`placeholder_problems`）：`@@ARRAY@@` 之类标记冒充内容。
+    #     Rosen 8e ch9/0157 译文实测把整块 array 换成 `@@ARRAY@@` 交回并进了交付 md，
+    #     parity 的集合对账（tag/图/条目号）与哈希判据对它双盲——只有形态判据能拦。
+    all_problems.extend(placeholder_problems(body_clean))
+
+    # 27) 空展示块闸（`empty_display_problems`）：`$$` 成对而块内空。
+    #     Shafarevich ch4 修前备份实测 152 处；`$$` 闭合只查成对、tag 对账只管有编号的块。
+    all_problems.extend(empty_display_problems(body_clean))
 
     return (len(all_problems) == 0, all_problems)

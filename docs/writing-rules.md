@@ -261,6 +261,19 @@ Common patterns (after correction):
     成因：该硬要求此前**只在文档里**，门控看不见 → 写手原样搬 OCR 也能 `RESULT OK`
     （Lehmann ch7_b03 八份单元全绿却有数百行松散形态），且书外临时探针与门控两套口径
     会让返工队列既不充分也不必要（已改为与门控同源）。
+- **🔴 内容不得以占位符或空块交回（门控第 26、27 项，2026-10-20）**：正文里出现
+  `@@NAME@@`（`@@ARRAY@@` / `@@TABLE@@` / `@@IMAGE@@`）或成对而**块内无内容**的
+  `$$\n\n$$`，一律判不通过——两者的功能都是「用标记/空壳顶替本该写出的内容」，
+  与「不得省略编号项」同罪。实测成因：① Rosen 8e 步骤6 译单元 `ch9/0157` 把整块
+  `\begin{array}` 换成 `@@ARRAY@@` 交回，一路进交付 md `第9章_9.5_等价关系.md`
+  （parity 判据 9 只比显示式块且要到章级才生效，换掉表格/散文时整条失明）；② Shafarevich
+  BAG1 ch4 两份修前备份实测 152 处空 `$$…$$`（公式漏在闭栏**之后**）。
+  判据本体 = `check_unit_quality.py::placeholder_problems` / `empty_display_problems`
+  （两条对 `section` / `chapter` 标头单元**也跑**）；跨库标定：全库 80990 个 md，
+  `@@NAME@@` 仅 2 文件命中（即上述真缺陷）、空块仅 2 个修前备份，**交付形态 0 假阳**。
+  🔴 空块判据须按奇偶顺序 walk 围栏——成对正则 `\$\$\n(.*?)\n\$\$` 会把相邻两个真块
+  的「闭栏+开栏」配成一对，全库假阳 1701 个文件。
+  判据测试 `flows/write-source/script/tests/test_placeholder_and_empty_display_gates.py`。
 - **语义保真（不得偷换）**：OCR 编码噪声（如 `\pmb{\mathscr{R}}` → `\mathcal{R}`）可修正，但**数学语义**（算符 / 运算元 / 关系 / 集合符号 / 常数）必须与原书一致。
   - ❌ 错（语义改变）：PDF 是 `= \emptyset`，总结写 `= 0`。
   - ✅ 对：PDF `= \emptyset` → 总结 `= \emptyset`；PDF `{\cal L}_{A_c}` → 总结 `L_{A^c}`（同义、记号归一允许）。

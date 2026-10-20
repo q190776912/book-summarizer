@@ -161,7 +161,12 @@ def center_of_poly(poly):
 
 def caption_text_for_bbox(ocr_items, bbox):
     """Reconstruct the caption string for a caption bbox from OCR text items
-    whose center falls inside the bbox (coordinate spaces must match)."""
+    whose center falls inside the bbox (coordinate spaces must match).
+
+    🔴 y-only band: “FIGURE 10.17” and “Occupancy measurements …” share y but
+    have disjoint x — a strict bbox would drop the description half. Union of
+    label-line x0..x1 is too wide (swallows body text on other columns), so
+    use the band’s y-range plus the caption label’s own x as a center."""
     if not bbox:
         return None
     x0, y0, x1, y1 = bbox
@@ -171,10 +176,83 @@ def caption_text_for_bbox(ocr_items, bbox):
         if not poly:
             continue
         cx, cy = center_of_poly(poly)
-        if x0 <= cx <= x1 and y0 <= cy <= y1:
-            parts.append((cy, it.get("text", "")))
-    parts.sort(key=lambda t: t[0])
-    return "".join(t for _, t in parts)
+        if y0 <= cy <= y1:
+            parts.append((cx, cy, it.get("text", "")))
+    if not parts:
+        return None
+    # keep only items near the label’s x (or the whole band if no x center)
+    xs = [p[0] for p in parts]
+    mid = (x0 + x1) / 2.0 if x1 > x0 else (min(xs) + max(xs)) / 2.0
+    span = max(x1 - x0, max(xs) - min(xs), 1.0)
+    keep = [p for p in parts if abs(p[0] - mid) <= max(span, 200.0)]
+    if not keep:
+        keep = parts
+    keep.sort(key=lambda t: t[1])
+    return "".join(t for _, _, t in keep)
+
+
+def _ocr_row_boxes(ocr_items, fig_labels, fig_components, fig_letter):
+    """Join OCR items into reading-order lines; return label-bearing line bboxes.
+
+    YOLO figure_caption class misses some display captions (large-caps
+    “FIGURE 9.1” tables, letter-spaced “F I G U R E 10.17” below a multi-panel
+    figure). Fall back to OCR lines that parse_fig_label recognizes so those
+    real captions still pair with the crop above/below them."""
+    items = []
+    for it in ocr_items or []:
+        poly = it.get("poly")
+        t = it.get("text") or ""
+        if not poly or not t.strip():
+            continue
+        xs, ys = poly[0::2], poly[1::2]
+        items.append({
+            "text": t,
+            "x0": min(xs), "x1": max(xs),
+            "y0": min(ys), "y1": max(ys),
+            "cy": sum(ys) / len(ys),
+        })
+    if not items:
+        return []
+    items.sort(key=lambda r: (round(r["cy"], 1), r["x0"]))
+    lines, cur = [], None
+    for r in items:
+        if cur is not None and abs(r["cy"] - cur["cy"]) <= 6:
+            cur["x0"] = min(cur["x0"], r["x0"])
+            cur["x1"] = max(cur["x1"], r["x1"])
+            cur["y0"] = min(cur["y0"], r["y0"])
+            cur["y1"] = max(cur["y1"], r["y1"])
+            cur["cy"] = (cur["y0"] + cur["y1"]) / 2.0
+            cur["text"] = (cur["text"] or "") + r["text"]
+        else:
+            if cur is not None:
+                lines.append(cur)
+            cur = dict(r)
+    if cur is not None:
+        lines.append(cur)
+    boxes = []
+    # Caption lines are short display strings, not body prose. Body lines like
+    # “Let X denote the number of heads. Figure 9.1 gives …” also parse_fig_label
+    # and must NOT be OCR-fallback candidates (they would steal the pair from
+    # the real “FIGURE 9.1” line below the table). Reject: long lines, or any
+    # line where the label match is NOT preceded only by the label word itself
+    # (display captions start with FIGURE / 图 / …, body refs sit mid-sentence).
+    for ln in lines:
+        txt = ln["text"] or ""
+        if len(txt.strip()) > 90:
+            continue
+        m = (build_fig_label_re(fig_labels, fig_components, fig_letter)
+             .search(txt) if txt else None)
+        if m is None:
+            continue
+        prefix = txt[:m.start()].strip()
+        # allow OCR junk like “9.2 do(The numbers …” only if it is the caption
+        # itself (short, starts with the label word); reject sentence prefixes.
+        if prefix and not re.fullmatch(r"[A-Za-z图\s\.\-—–]*", prefix):
+            continue
+        if len(prefix) > 24:          # body prose before the label
+            continue
+        boxes.append([int(ln["x0"]), int(ln["y0"]), int(ln["x1"]), int(ln["y1"])])
+    return boxes
 
 
 # 章开页的**大号独占一行章号**（GTM/Springer 体例，如 Apostol p169 的 "8"、
@@ -410,7 +488,30 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
             d = abs(ccy - cy) + 0.5 * abs(ccx - cx)
             if d < best_d:
                 best_d, best = d, c
+        # YOLO caption class sometimes misses display captions (FIGURE 9.1
+        # tables / F I G U R E 10.17 under a multi-panel figure). Pair those
+        # from OCR label-bearing lines; existing YOLO pairs are left alone.
+        if best is None:
+            for c in _ocr_row_boxes(ocr_items, fig_labels, fig_components,
+                                    fig_letter):
+                ccx = (c[0] + c[2]) / 2
+                ccy = (c[1] + c[3]) / 2
+                d = abs(ccy - cy) + 0.5 * abs(ccx - cx)
+                if d < best_d:
+                    best_d, best = d, c
         cap_txt = caption_text_for_bbox(ocr_items, best[:4]) if best else None
+
+        # YOLO caption class sometimes splits “FIGURE 10.17” from its description
+        # line (adjacent but disjoint x). Rebuild “FIGURE …description…” from
+        # the same y-band so assign_figures sees a full caption.
+        if cap_txt and parse_fig_label(cap_txt, fig_labels, fig_components,
+                                       fig_letter) is None and best is not None:
+            band = caption_text_for_bbox(
+                ocr_items,
+                [best[0] - 200, best[1] - 2, best[2] + 400, best[3] + 2])
+            if band and parse_fig_label(band, fig_labels, fig_components,
+                                        fig_letter) is not None:
+                cap_txt = band
 
         # Does the paired caption carry a sequential label (图 X.X / Fig X.X)?
         # If yes, crop the figure + its caption (label + description) as ONE
@@ -421,10 +522,21 @@ def process_page(model, arr, W, H, ocr_items, fig_id, cap_id, ch, pno,
 
         # Crop region: figure box by default; extend to include the caption
         # (union of figure + caption boxes) only when a labeled caption exists.
+        # 🔴 Only a *nearby* labeled caption belongs in the union: a multi-panel
+        # figure box may already include a mid-page caption, and a later
+        # figure’s caption sits inside that box’s y-span — without this guard
+        # crop10.17 swallowed “Occupancy measurements …” and lost Figure 10.17.
         cx0, cy0, cx1, cy1 = x0, y0, x1, y1
         if best is not None and has_label:
-            cx0 = min(x0, best[0]); cy0 = min(y0, best[1])
-            cx1 = max(x1, best[2]); cy1 = max(y1, best[3])
+            bccy = (best[1] + best[3]) / 2.0
+            bccx = (best[0] + best[2]) / 2.0
+            near = (bccy >= y0 - 80 and bccy <= y1 + 120
+                    and bccx >= x0 - 40 and bccx <= x1 + 40)
+            if near:
+                cx0 = min(x0, best[0]); cy0 = min(y0, best[1])
+                cx1 = max(x1, best[2]); cy1 = max(y1, best[3])
+        # OCR-line fallback boxes are int(); YOLO boxes are int already.
+        cx0, cy0, cx1, cy1 = (int(round(v)) for v in (cx0, cy0, cx1, cy1))
 
         crop = arr[cy0:cy1, cx0:cx1]
         if crop.size == 0:

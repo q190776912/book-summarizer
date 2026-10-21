@@ -23,7 +23,9 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 from problem_coverage import (_is_tail_ref_name, consolidated_cut,
                               coverage_problems, longest_run_from_one,
                               page_floor_problems, page_problem_floors,
-                              tail_reference_cut, unit_run_length)
+                              tail_reference_cut, unit_run_length,
+                              vi_omitted_problem_blocks,
+                              _chapter_takes_exercises, _skip_consolidated)
 
 
 def txt(t, line_start=True):
@@ -286,6 +288,203 @@ class TestPageFloors(unittest.TestCase):
         blocks = ["Problems", "1. a", "2. b", "1906 was the year", "3. c"]
         self.assertEqual(page_problem_floors(root, lambda pg: blocks, (50, 60)),
                          {"4.2": 3})
+
+
+def sec_page(ntype, key, blocks, children=(), ps=50, pe=50):
+    n = node(ntype, key, blocks, list(children))
+    n["page_start"], n["page_end"] = ps, pe
+    return n
+
+
+PAGES = {50: ["Problems", "1. a", "2. b", "3. c", "4. d", "5. e", "6. f"],
+         52: ["Problems", "1. a", "2. b", "3. c"]}
+LOAD = lambda pg: PAGES.get(pg)          # noqa: E731  节 4.2 下限 6、节 4.3 下限 3
+
+
+class TestPageFloorViExemption(unittest.TestCase):
+    """闸 ⑬ 与写作规则 V-I 的边界（2026-10-21 Isaacson & Marder 实测 8 章假阳）。
+
+    本闸触发条件＝该节页窗印着 ``Problems`` / ``Problem Set N.M`` 标题，而 V-I 对这种
+    **有专门小标题的集中习题块**的规定是「一律省略」；同时 V-I 要求「若选择写入则须逐题
+    写全」。故判据只能管**收了没收全**，不能管**收没收**。正/负两侧都必须锁死：
+    负向＝整章零收题体例时空节不报（旧判据在此逼写手违反 V-I）；
+    正向＝契约登记习题 / 有 exercise 单元 / 同章别的节抄过题集 / 本节部分抄写，四种
+    欠账形态一条都不能漏（Kreyszig ch9 的节末题集写在 item 单元编号散文里、契约
+    exercise 节点为 0，正是靠「同章别的节抄到 10–15 题」暴露的）。
+    """
+
+    def _root(self, *sections):
+        return chapter(*sections)
+
+    def test_vi_omission_of_dedicated_block_not_demanded(self):
+        a = sec_page("section", "4.2", [txt("no numbered content")], (), 50, 51)
+        probs = page_floor_problems(self._root(a), [unit("4.2", "")],
+                                   _read({"4.2": "**Theorem 4.2**: prose only."}),
+                                   LOAD, (50, 60))
+        self.assertEqual(probs, [])
+
+    def test_partial_copy_still_fires_regardless_of_convention(self):
+        # 收了 1..3、印面有 6 题 = V-I「须逐题写全」的欠账
+        a = sec_page("section", "4.2", [txt("no numbered content")], (), 50, 51)
+        probs = page_floor_problems(
+            self._root(a), [unit("4.2", "")],
+            _read({"4.2": "**Problem Set 4.2**\n\n1. a\n2. b\n3. c"}), LOAD, (50, 60))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("只写到 3", probs[0])
+
+    def test_sibling_section_that_copied_arms_the_chapter(self):
+        # Kreyszig 形态：4.2 一题不写、4.3 抄全 → 4.2 必须报（体例是「收题」）
+        a = sec_page("section", "4.2", [txt("no numbered content")], (), 50, 51)
+        b = sec_page("section", "4.3", [txt("no numbered content")], (), 52, 55)
+        bodies = {"4.2": "**Theorem 4.2**: prose only.",
+                  "4.3": "**Problem Set 4.3**\n\n1. a\n2. b\n3. c"}
+        probs = page_floor_problems(self._root(a, b),
+                                    [unit("4.2", ""), unit("4.3", "")],
+                                    _read(bodies), LOAD, (50, 60))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("节 4.2", probs[0])
+
+    def test_contract_registered_exercise_arms_the_chapter(self):
+        # 契约登记了未标 consolidated 的习题节点 = 流水线判定要写 → 空节必须报
+        a = sec_page("section", "4.2", [txt("no numbered content")],
+                     [node("exercise", "4.2-1", [txt("1. a")])], 50, 51)
+        probs = page_floor_problems(self._root(a), [unit("4.2", "")],
+                                   _read({"4.2": "prose only"}), LOAD, (50, 60))
+        self.assertEqual(len(probs), 1)
+
+    def test_exercise_unit_in_manifest_arms_the_chapter(self):
+        a = sec_page("section", "4.2", [txt("no numbered content")], (), 50, 51)
+        u = unit("4.2", "")
+        u["type"] = "exercise"
+        probs = page_floor_problems(self._root(a), [u],
+                                   _read({"4.2": "prose only"}), LOAD, (50, 60))
+        self.assertEqual(len(probs), 1)
+        self.assertTrue(_chapter_takes_exercises(self._root(a), [u]))
+
+    def test_consolidated_section_skipped_like_gate_twelve(self):
+        # 契约明示省略（consolidated）→ 与 ⑫ 同步跳过，不看体例信号
+        ex = node("exercise", "4.2-1", [txt("1. a")])
+        ex["consolidated"] = True
+        a = sec_page("section", "4.2", [txt("no numbered content")], [ex], 50, 51)
+        self.assertTrue(_skip_consolidated(a))
+        b = sec_page("section", "4.3", [txt("no numbered content")], (), 52, 55)
+        bodies = {"4.2": "prose only", "4.3": "**Problem Set 4.3**\n\n1. a\n2. b\n3. c"}
+        probs = page_floor_problems(self._root(a, b),
+                                    [unit("4.2", ""), unit("4.3", "")],
+                                    _read(bodies), LOAD, (50, 60))
+        self.assertEqual([p for p in probs if p.startswith("节 4.2")], [])
+
+    def test_continuation_units_same_key_not_dropped(self):
+        """负向：同键续接单元（父 + 续写）的正文必须**全部**计入号流。
+
+        按键建「一个键一份正文」的字典会把续接正文丢掉 → 6 题只数到 3 = 假阳。
+        """
+        a = sec_page("section", "4.2", [txt("no numbered content")], (), 50, 51)
+        units = [unit("4.2", ""), unit("4.2", "")]
+
+        def read(u):
+            return "**Problem Set 4.2**\n\n1. a\n2. b\n3. c" if u is units[0] \
+                else "4. d\n5. e\n6. f"
+        probs = page_floor_problems(self._root(a), units, read, LOAD, (50, 60))
+        self.assertEqual(probs, [])
+
+
+CON6 = [txt("%d. problem statement number %d" % (i, i)) for i in range(1, 7)]
+
+
+class TestCoverageViExemption(unittest.TestCase):
+    """闸 ⑫（契约侧覆盖对账）与 V-I 的边界——与 ⑬ **共用同一份裁决**。
+
+    ⑫ 拿契约当真值，而 Isaacson & Marder 的节末题集在抽取期**整块灌进本节 description
+    文本流**（没有 exercise 节点，因而没有可标 ``consolidated`` 的地方）：契约侧数到
+    ``1..6``、单元侧一个没写，旧判据报「缺 6 项，须逐项分行补全」= 逼写手违反 V-I
+    「有专门小标题的集中习题块一律省略」。故两道闸必须吃同一份
+    ``vi_omitted_problem_blocks``，且**只放「没收」的、绝不放「收了没收全」的**。
+    """
+
+    def _gates(self, root, units, bodies, pages=LOAD, span=(50, 60)):
+        """按 gate_units 的接线跑一遍：豁免只算一次，同时喂给 ⑫ 与 ⑬。"""
+        read = _read(bodies)
+        om = vi_omitted_problem_blocks(root, units, read, pages, span)
+        return (om, coverage_problems(root, units, read, vi_omitted=om),
+                page_floor_problems(root, units, read, pages, span, vi_omitted=om))
+
+    def test_omitted_block_silent_on_both_gates(self):
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        om, cov, floor = self._gates(chapter(a), [unit("4.2", "")],
+                                     {"4.2": "**Theorem 4.2**: prose only."})
+        self.assertEqual(om, {"4.2"})
+        self.assertEqual((cov, floor), ([], []))
+
+    def test_default_argument_keeps_old_verdict(self):
+        # 负向：不传 vi_omitted 时判据与旧版逐字相同（豁免必须由调用方显式接线，
+        # 独立调用 coverage_problems 的书/工具不会因为本改动而失明）
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        probs = coverage_problems(chapter(a), [unit("4.2", "")],
+                                  _read({"4.2": "prose only"}))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("缺 6 项", probs[0])
+
+    def test_partial_copy_still_fires(self):
+        # V-I：若选择写入则须逐题写全 → 收了 1..3、契约有 6 题 = 欠账，豁免不生效
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        om, cov, floor = self._gates(
+            chapter(a), [unit("4.2", "")],
+            {"4.2": "**Problem Set 4.2**\n\n1. a\n2. b\n3. c"})
+        self.assertEqual(om, set())
+        self.assertEqual(len(cov), 1)
+        self.assertIn("缺 3 项", cov[0])
+
+    def test_sibling_that_copied_arms_the_chapter(self):
+        # Kreyszig 形态：4.2 一题不写、同章 4.3 抄了题集 → 体例是「收题」，4.2 必报
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        b = sec_page("section", "4.3", CON6, (), 52, 55)
+        om, cov, _ = self._gates(
+            chapter(a, b), [unit("4.2", ""), unit("4.3", "")],
+            {"4.2": "prose only",
+             "4.3": "**Problem Set 4.3**\n\n1. a\n2. b\n3. c"})
+        self.assertEqual(om, set())
+        self.assertTrue(any(p.startswith("节 4.2") for p in cov), cov)
+
+    def test_contract_registered_exercise_arms_the_chapter(self):
+        # 契约登记了未标 consolidated 的习题节点 = 流水线判定这批题要写
+        a = sec_page("section", "4.2", CON6, [node("exercise", "4.2-1", [txt("1. q")])],
+                     50, 51)
+        om, cov, _ = self._gates(chapter(a), [unit("4.2", "")], {"4.2": "prose only"})
+        self.assertEqual(om, set())
+        self.assertEqual(len(cov), 1)
+
+    def test_exercise_unit_in_manifest_arms_the_chapter(self):
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        u = unit("4.2", "")
+        u["type"] = "exercise"
+        om, cov, _ = self._gates(chapter(a), [u], {"4.2": "prose only"})
+        self.assertEqual(om, set())
+        self.assertEqual(len(cov), 1)
+
+    def test_no_printed_head_is_not_exempt(self):
+        # fail-closed：页窗里看不见习题小标题 → 没有 V-I 触发证据 → 一律照报
+        #（复变函数论 / 数学分析 / 黎曼几何 的 10 条即此形态，不得被本豁免吞掉）
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        om, cov, floor = self._gates(chapter(a), [unit("4.2", "")],
+                                     {"4.2": "prose only"}, pages=lambda pg: None)
+        self.assertEqual(om, set())
+        self.assertEqual(len(cov), 1)
+        self.assertEqual(floor, [])
+
+    def test_continuation_units_same_key_not_dropped(self):
+        """负向：同键续接单元（父 + 续写）的正文必须**全部**计入单元侧号流。
+
+        按键建字典只留一份正文 → 契约 6 / 单元数到 3 = 报「缺 3 项」的假阳。
+        """
+        a = sec_page("section", "4.2", CON6, (), 50, 51)
+        units = [unit("4.2", ""), unit("4.2", "")]
+
+        def read(u):
+            return "1. a\n2. b\n3. c" if u is units[0] else "4. d\n5. e\n6. f"
+        root = chapter(a)
+        om = vi_omitted_problem_blocks(root, units, read, LOAD, (50, 60))
+        self.assertEqual(coverage_problems(root, units, read, vi_omitted=om), [])
 
 
 class TestConsolidatedCut(unittest.TestCase):

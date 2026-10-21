@@ -31,7 +31,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib"),
 import lib.boot as _boot
 _boot.setup()
 
-from check_translate_parity import _math_content_problems, _norm_display_blocks
+from check_translate_parity import (
+    _math_content_problems, _norm_display_blocks, _strip_text_bodies)
 
 SRC_0014 = (
     "**Definition 1.8**: A homomorphism of algebras $f : A \\to B$ is a linear map "
@@ -220,5 +221,75 @@ def test_fail_message_shows_verbatim_source_spacing():
     assert "1 \\le i \\le k_n" in msg, msg
     assert "\\lei\\lek_n" not in msg, msg
     assert "译侧最近块" in msg, msg
+
+
+# ── 根治轮 #26（2026-10-21 全库普查 594 章目录 / 32292 对配对单元）────────────
+# 普查把判据 9/10 的剩余红收窄到 3 对，逐对分诊后落三处改版：① 归一化删间距命令
+# （译文为中文句读多加的 `\quad` 属散文胶合）；② `\text{}` 参数体改**按花括号配平**
+# 摘取（旧正则遇 `\text{… \pmod{4} …}` 从第一个 `}` 截断，把残留当数学比）；③ 判据 10
+# 的单运算符指代豁免认印面 **Unicode 字形**（OCR 文字层常把 `\cdot` 打成裸 `·`）。
+# 改版前后各跑一遍普查：**新增红 0**（两条归一化对两侧同删，构造上单调安全）。
+
+def test_spacing_commands_added_by_translator_exempt():
+    r"""译文为中文句读补的 `\quad` / `\qquad` / `~` 是**散文胶合**，不是公式内容。"""
+    src = "$$\nx + yi \\text{ is normalized if } x > 0.\n$$\n"
+    tr = "$$\nx + yi \\text{是规范化的}\\quad\\text{若}\\quad x>0。\n$$\n"
+    assert _hits(src, tr) == []
+
+
+def test_spacing_exempt_does_not_mask_content_change():
+    """间距豁免只吞间距：同式里换一个操作数仍须被抓。"""
+    src = "$$\nx + yi \\text{ is normalized if } x > 0.\n$$\n"
+    tr = "$$\nx + yi \\text{是规范化的}\\quad\\text{若}\\quad y>0。\n$$\n"
+    probs = _hits(src, tr)
+    assert any("显示公式在译文里丢失" in p for p in probs), probs
+
+
+def test_text_body_stripped_by_brace_balance():
+    r"""`\\text{}` 体里有嵌套花括号（`\\pmod{4}`）时，旧正则从**第一个** `}` 截断，
+    残留 `4} …` 被当数学内容比 → 假阳。配平摘取须把整段（含嵌套）一次删净。"""
+    assert _strip_text_bodies(r"\text{a \pmod{4} b} x") == " x"
+    assert _strip_text_bodies(r"\text{未闭合 } y") == " y"
+    assert _strip_text_bodies(r"\text{ escapes: \| \{ \} ok}z") == "z"
+    assert _strip_text_bodies(r"x \mathrm{Hom}_A y") == r"x \mathrm{Hom}_A y"
+
+
+def test_permuted_math_token_order_still_flagged():
+    r"""**没有**把判据 9 放宽成「顺序不敏感」：把中文关系从句前置使数学 token 次序
+    改变（`d\ N\ d\equiv1` → `d\equiv1\ N`），实测样本（数论 ch34/0013 定理 5 的
+    `$D_1$/$D_3$`）只能改中文的 `\text{}` 分段来对次序，不能改判据——顺序不敏感会
+    一并放过 `$0<a<b$` ↔ `$a<0<b$` 这类真重排。"""
+    src = ("$$\nD_1 = (\\text{the number of positive integers } d \\text{ dividing } N "
+           "\\text{ that satisfy } d \\equiv 1 \\pmod{4}),\n$$\n")
+    bad = ("$$\nD_1 = (\\text{满足 } d \\equiv 1 \\pmod{4} \\text{ 的整除 } N "
+           "\\text{ 的正整数的个数}),\n$$\n")
+    assert any("显示公式在译文里丢失" in p for p in _hits(src, bad)), _hits(src, bad)
+    good = ("$$\nD_1 = (\\text{正整数 } d \\text{ 整除 } N \\text{ 且满足 } "
+            "d \\equiv 1 \\pmod{4} \\text{ 的个数}),\n$$\n")
+    assert _hits(src, good) == []
+
+
+def test_operator_named_by_printed_unicode_glyph_exempt():
+    r"""只含一个运算符的行内式 = 拿符号当名词指代。源文侧该符号可能**只以印面字形**出现
+    （OCR 文字层把 `\cdot` 打成裸 `·`，全文无 `\cdot`）→ 豁免须认字形。
+    实测：abstract-algebra ch1/0007（印面「Our usual multiplication · is a different
+    operation」）。"""
+    src = "Our usual multiplication \u00b7 is a different operation on $\\mathbb{R}$.\n"
+    tr = "通常的乘法 $\\cdot$ 则是 $\\mathbb{R}$ 上的另一个运算。\n"
+    assert _hits(src, tr) == []
+    # 命令名在账同样豁免（`\times` 形）
+    assert _hits("we write $\\times$ for it\n", "记作 $\\times$。\n") == []
+
+
+def test_glyph_attestation_does_not_invent_a_symbol():
+    """豁免只在「源文里这个符号（命令或字形）真的在账」时生效：
+    ① 源文两种写法都没有 → 仍报（abstract-algebra ch1/0015 实测：OCR 整丢印面的 `·`，
+       属**源单元内容丢失**，正解是把 `$\\cdot$` 补回源单元，不是把判据关掉）；
+    ② 运算符后面还挂着操作数（`$a \\cdot$`）不是「指代符号」，照旧按截断处理。"""
+    src = "Determine whether $H$ is closed under (a) addition and (b) multiplication.\n"
+    tr = "判断 $H$ 是否在加法、乘法下封闭，其中乘法写作 $\\cdot$。\n"
+    assert any("行内公式被截断" in p for p in _hits(src, tr)), _hits(src, tr)
+    tr2 = "于是 $a \\cdot$ 成立。\n"
+    assert any("行内公式被截断" in p for p in _hits(src, tr2)), _hits(src, tr2)
 
 

@@ -26,6 +26,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
 import lib.boot as _boot
 _boot.setup()
 
+from lib.unit_markers import is_unit_marker_line
+
 import os, re, sys
 
 # --- arrow map ---
@@ -144,6 +146,10 @@ def process(path):
     with open(path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
     masks = compute_protected(lines)
+    # 🔴 首行若是单元标记 `<!-- book-summarizer DONE unit: … name=… -->`，整行加入保护集：
+    #    标记是本侧 manifest 的逐字抄本（判据 12），格式重写扫到它 = 全章集体脱账。
+    if lines and is_unit_marker_line(lines[0]):
+        masks[0] = set(range(len(lines[0])))
     changed = 0
     new_lines = []
     for line, prot in zip(lines, masks):

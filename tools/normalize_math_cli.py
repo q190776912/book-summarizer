@@ -24,6 +24,7 @@ if SKILL_ROOT not in sys.path:
     sys.path.insert(0, SKILL_ROOT)
 
 from lib.normalize_math import normalize, stats
+from lib.unit_markers import outside_marker
 
 
 def main():
@@ -34,7 +35,8 @@ def main():
     for f in files:
         t = open(f, encoding='utf-8').read()
         sb, bb, ch = stats(t)
-        t2 = normalize(t)
+        # 🔴 首行单元标记（登记处抄本）不参与重写，否则判据 12 集体脱账
+        t2 = outside_marker(t, normalize)
         sb2, bb2, ch2 = stats(t2)
         if t2 != t:
             bak = f + '.bak_mathfix'

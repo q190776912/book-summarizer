@@ -299,6 +299,7 @@ Common patterns (after correction):
   - **无标题、穿插出现的习题**（散落正文条目间，或节末无标题归拢）→ **保留**，原位写出题目（OCR 噪声须重写正确 LaTeX），可附提示。
   - **问题（Problem）与练习同通道**：`problem` 类型节点（如 Lee 2e 章末 Problems，独立编号计数器、独立 `Problem` 组）与穿插练习同一收录机制与写作规则；是否省略**只由契约节点的 `consolidated` 标记承载**（未标 `consolidated` 的问题节点逐条原位写出），写手不自行按书中小标题判断省略。
   - ⚠️ 校验口径：集中习题块节点标 `consolidated:true` 并在 verify 真相集排除（既不写也不校验）；被保留的穿插练习与问题节点**既写也纳入编号项校验**（真实条目，漏写/跳号应被发现）。
+  - ⚠️ **抽取期整块不进契约**的集中习题块没有节点可标 `consolidated`，故 `gate_units` 章级闸 ⑫/⑬ 另按体例信号机械裁决（`lib/problem_coverage.vi_omitted_problem_blocks`：印面确有习题小标题 **且** 本节一个编号项没写 **且** 本章无任何收题体例信号 → 按本条省略放行）；「收了没收全」、契约登记了习题、manifest 有 exercise 单元、同章别的节抄过题集四种形态**照常报**（Isaacson & Marder 与 Kreyszig 两种实测形态的分界，判据测试 `lib/tests/test_problem_coverage.py`）。
 
 ### V-S 结构完整性（D / B / O 层）
 

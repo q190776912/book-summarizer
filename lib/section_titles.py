@@ -118,6 +118,10 @@ _SYMBOL_TEX = {
     "cup": "\u222a", "cap": "\u2229", "emptyset": "\u2205", "varnothing": "\u2205",
     "forall": "\u2200", "exists": "\u2203", "nexists": "\u2204",
     "to": "\u2192", "rightarrow": "\u2192", "longrightarrow": "\u2192",
+    # \infty / \partial 在分析/测度论书节题高频出现（"The dual of $L^\infty$, $p<\infty$"、
+    # "$\partial$-..."）；缺映射时 `\infty` 退化成裸词 `infty`，永不能与印面 ∞ 同形，
+    # 逼写手把正确的 KaTeX 节题降级——与 to/rightarrow 同类，必须收录。
+    "infty": "\u221e", "partial": "\u2202",
     "leftarrow": "\u2190", "leftrightarrow": "\u2194", "mapsto": "\u21a6",
     "implies": "\u21d2", "impliedby": "\u21d0", "iff": "\u21d4",
 }

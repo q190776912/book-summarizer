@@ -24,6 +24,10 @@
 4. ``n_contract < min_run``（默认 3）跳过——个别 ``1. 2.`` 是正文里的普通列举，
    不足以断定漏了东西；
 5. 契约里被标 ``consolidated=true`` 的章末成堆习题是流水线**认可的省略**，跳过。
+6. 🔴 写作规则 **V-I** 说「有专门小标题的集中习题块一律省略」，而这种块在抽取期常
+   **整块不进契约**（没有节点可标 ``consolidated``）→ 由 ``vi_omitted_problem_blocks``
+   按「印面确有习题小标题 + 本节一个没写 + 本章无任何收题体例信号」裁决豁免；
+   两道闸（⑫/⑬）共用那一份判据，只放**没收**的，绝不放**收了没收全**的。
 
 两侧用**同一**判据，故「正文里本就有的 1./2./3. 列举」不会造成假阳（单元里同样数得到）；
 契约侧 OCR 断号只会让 ``n_contract`` 偏小 = 偏保守（宁可漏报不误报）。
@@ -35,11 +39,11 @@
 即误报——按本书体例（题面一律列表项）不存在此形态；如遇到，改的是单元的排版，不是本闸。
 """
 import re
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 __all__ = ["contract_run_lengths", "unit_run_length", "coverage_problems",
            "consolidated_cut", "is_consolidated_head", "tail_reference_cut",
-           "page_problem_floors", "page_floor_problems",
+           "page_problem_floors", "page_floor_problems", "vi_omitted_problem_blocks",
            "exercise_item_numbers", "exercise_runs", "exercise_run_gaps",
            "chapter_exercise_problems", "exercise_statements",
            "duplicate_exercise_statement_problems",
@@ -420,13 +424,18 @@ def unit_run_length(texts: Iterable[str]) -> int:
 
 
 def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]],
-                      read_body, min_run: int = 3) -> List[str]:
+                      read_body, min_run: int = 3,
+                      vi_omitted: Optional[Iterable[str]] = None) -> List[str]:
     """节级编号内容覆盖对账 → 问题列表（空 = 通过）。
 
     ``read_body(unit)`` 返回该单元的正文（去掉首行 DONE 注释后的 md）。
+    ``vi_omitted``：由 ``vi_omitted_problem_blocks`` 给出的「V-I 授权整块省略」节键集
+    （印面确有专门习题小标题、且本章一套题集都没收）。给则跳过这些节，不给（默认）
+    = 判据与旧版逐字相同。
     """
     if not root:
         return []
+    skip = set(vi_omitted or ())
     problems = []
     for sec_key, n_contract, keys in contract_run_lengths(root):
         if n_contract < min_run:
@@ -435,6 +444,8 @@ def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]
         bodies = [read_body(u) for u in units if str(u.get("key")) in keyset]
         n_unit = unit_run_length(b for b in bodies if b)
         if n_unit < n_contract:
+            if sec_key in skip and n_unit == 0:
+                continue
             problems.append(
                 "节 %s 的编号内容有缺失：契约里编号 %s 连成一条（题面/条目通常整块被"
                 "抽进本章节点子树），单元里只写到 %s——缺 %s 项，须按契约把剩余各项补全"
@@ -460,6 +471,8 @@ def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]
 #   * 一遇到下一条节标题（``9.9 Section Title``）立即停止，避免把下一节的正文列举算进来；
 #   * 上限 30 挡掉 OCR 噪声式的大数；不足 ``min_floor`` 的忽略。
 # 因此它**永远不会高于**印刷实际题数（题号在页面上就是 1..N），只会因 OCR 丢块偏低。
+# 🔴 与写作规则 V-I 的分工见 ``page_floor_problems`` 文档串：本闸只管「收了没收全」，
+#   「有专门小标题的集中习题块收不收」由 V-I/consolidated 决定，不由下限决定。
 
 
 def _section_windows(root: Dict[str, Any],
@@ -538,33 +551,130 @@ def page_problem_floors(root: Optional[Dict[str, Any]], page_loader,
     return floors
 
 
+def _chapter_takes_exercises(root: Dict[str, Any], units: List[Dict[str, Any]]) -> bool:
+    """本章笔记是否**收了习题**（体例信号之一；「别的节抄了题集」另由 floors 侧核）。
+
+    两条任一即算：① 契约登记了**未标 consolidated** 的 exercise/problem 节点（= 流水线
+    判定这批题要写）；② manifest 里有 ``type == exercise`` 的单元。
+    🔴 契约侧只看**本章有无**，不看该节自己有无：把「该节无节点」当豁免等于让
+    「题面挂在别的节点子树里」这种整块漏写重新隐身（Kreyszig 实测形态）。
+    """
+    for c in _all_nodes(root):
+        if c.get("type") in ("exercise", "problem") and not c.get("consolidated"):
+            return True
+    return any(str(u.get("type")) == "exercise" for u in units)
+
+
+def _all_nodes(root: Dict[str, Any]):
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        for c in cur.get("sub_sec") or []:
+            if isinstance(c, dict) and "type" in c:
+                yield c
+                stack.append(c)
+
+
+def _unit_bodies(section: Dict[str, Any], units: List[Dict[str, Any]], read_body) -> List[str]:
+    """该节子树键对应的单元正文。
+
+    🔴 按 **manifest 顺序**取**全部**同键单元：续接单元与父单元同键，按键建字典会把
+    续接正文丢掉 → 号流偏低 = 假阳。
+    """
+    keys = set(_descendant_keys(section))
+    return [(read_body(u) or "") for u in units if str(u.get("key")) in keys]
+
+
+def vi_omitted_problem_blocks(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]],
+                              read_body, page_loader, chapter_span: Tuple[int, int],
+                              min_floor: int = 3) -> Set[str]:
+    """→ 本章按写作规则 **V-I 整块省略**的习题节键（闸 ⑫ / ⑬ 共用同一份裁决）。
+
+    V-I（docs/writing-rules.md「习题（练习）收录规则」）的两条：
+      * 「**有专门小标题的集中习题块**（``### 练习`` / ``Exercises`` / ``Problems`` /
+        章末体例词）→ **一律省略**，直接跳过、不写注记」；
+      * 「若判断其内容有提纲价值而**选择写入**，则须逐题照原书题面写全」。
+    所以闸 ⑫/⑬ 只能管**收了没收全**，不能管**收没收**；「收没收」原本由契约
+    ``consolidated`` 承载（闸 ⑫ 的 ``_skip_consolidated`` 早已如此）。🔴 2026-10-21
+    Isaacson & Marder 实测的缺口：抽取期**整块被丢 / 被灌进 description 节点**的节末
+    题集**根本不进契约**（该书 9 章 0 个 exercise 节点、0 个 exercise 单元、18 份交付
+    md 里「Problem Set」出现 0 次），没有节点就没有可标 ``consolidated`` 的地方 →
+    两道闸同时变成「逼写手违反 V-I」（⑫ 报 5 条、⑬ 报 8 条）。本函数给出机械可判的
+    替代证据，**三条同时成立**才豁免：
+      1. 该节页窗里**确实印着**习题小标题（``page_problem_floors`` 只在看得到
+         ``Problems`` / ``Problem Set N.M`` 标题时才出下限 = V-I 触发条件的直接证据；
+         无页 JSON / 无标题 → 不豁免 = fail-closed）；
+      2. 本节单元侧**一个编号项都没写**（写了哪怕一题 = 「选择写入须写全」→ 照常报）；
+      3. **本章没有任何收题体例信号**：契约无未标 consolidated 的习题节点、manifest
+         无 exercise 单元、且**别的带小标题的节也没抄**——Kreyszig 的节末 Problem Set
+         写在 item/desc 单元的编号散文里（ch9 契约习题节点 = 0），当年「约 51 节 /
+         500+ 题整块没进笔记」正是靠「同章别的节抄到 10–15 题、这节一个没有」暴露的，
+         这条把那种整块漏写继续判成欠账。
+    全库 56 书 / 744 章只读普查标定：闸 ⑬ floors 命中 23 章 / 86 条，报问题的 8 条
+    全在本形态（豁免后 8 → 0，其余书一条不受影响）；闸 ⑫ 全书 15 条里本形态 5 条
+    （全在这本书），另 10 条（复变函数论 / 数学分析 / 黎曼几何）页窗**无**习题小标题
+    → 不豁免，逐字照报。正/负两侧判据测试见
+    ``lib/tests/test_problem_coverage.py``（TestPageFloorViExemption / TestCoverageViExemption）。
+    """
+    if not root:
+        return set()
+    floors = page_problem_floors(root, page_loader, chapter_span, min_floor)
+    if not floors:
+        return set()
+    sec_nodes: Dict[str, Any] = {}
+    for s in _section_nodes(root):
+        sec_nodes.setdefault(str(s.get("key") or ""), s)
+    runs: Dict[str, int] = {}
+    for sec_key in floors:
+        node = sec_nodes.get(sec_key)
+        if node is None or not _descendant_keys(node):
+            continue
+        runs[sec_key] = unit_run_length([b for b in _unit_bodies(node, units, read_body) if b])
+    if _chapter_takes_exercises(root, units) or any(r > 0 for r in runs.values()):
+        return set()
+    return {k for k, r in runs.items()
+            if r == 0 and not _skip_consolidated(sec_nodes[k])}
+
+
 def page_floor_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]],
                         read_body, page_loader, chapter_span: Tuple[int, int],
-                        min_floor: int = 3) -> List[str]:
-    """页侧下限对账 → 问题列表（空 = 通过）。判据与 ``coverage_problems`` 同侧（单元）。"""
+                        min_floor: int = 3,
+                        vi_omitted: Optional[Iterable[str]] = None) -> List[str]:
+    """页侧下限对账 → 问题列表（空 = 通过）。判据与 ``coverage_problems`` 同侧（单元）。
+
+    ``vi_omitted`` = V-I 授权整块省略的节键（见 ``vi_omitted_problem_blocks`` 的判据与
+    普查标定；不传则本函数自算一次，独立调用亦可用）。
+    """
     if not root:
         return []
     floors = page_problem_floors(root, page_loader, chapter_span, min_floor)
     if not floors:
         return []
+    skip = set(vi_omitted) if vi_omitted is not None \
+        else vi_omitted_problem_blocks(root, units, read_body, page_loader,
+                                       chapter_span, min_floor)
+    sec_nodes: Dict[str, Any] = {}
+    for s in _section_nodes(root):
+        sec_nodes.setdefault(str(s.get("key") or ""), s)
     problems = []
     for sec_key, n_floor in sorted(floors.items()):
-        keys = set()
-        for s in _section_nodes(root):
-            if str(s.get("key") or "") == sec_key:
-                keys = set(_descendant_keys(s))
-        if not keys:
+        node = sec_nodes.get(sec_key)
+        if node is None or not _descendant_keys(node):
             continue
-        n_unit = unit_run_length(
-            [b for b in (read_body(u) for u in units if str(u.get("key")) in keys) if b])
-        if n_unit < n_floor:
-            problems.append(
-                "节 %s 的习题比**原书页面**少：该节页窗里「Problems」之后出现过题号 %d"
-                "（页侧下限，契约可能根本没抽到这批题块），单元里只写到 %s——请把该节页窗"
-                "内印刷的 Problem Set %s 逐题抄全（``**Problem Set %s**`` + 顶格 ``1. 2. …`` "
-                "列表项），不得只按契约抄、也不得以「见原书」搪塞"
-                % (sec_key, n_floor, "%d" % n_unit if n_unit else "没有任何编号项",
-                   sec_key, sec_key))
+        n_unit = unit_run_length([b for b in _unit_bodies(node, units, read_body) if b])
+        if n_unit >= n_floor:
+            continue
+        if _skip_consolidated(node):        # 契约明示省略 → 与 ⑫ 同步跳过
+            continue
+        if n_unit == 0 and sec_key in skip:  # V-I 授权整块省略（判据见上）
+            continue
+        problems.append(
+            "节 %s 的习题比**原书页面**少：该节页窗里「Problems」之后出现过题号 %d"
+            "（页侧下限，契约可能根本没抽到这批题块），单元里只写到 %s——请把该节页窗"
+            "内印刷的 Problem Set %s 逐题抄全（``**Problem Set %s**`` + 顶格 ``1. 2. …`` "
+            "列表项），不得只按契约抄、也不得以「见原书」搪塞"
+            % (sec_key, n_floor, "%d" % n_unit if n_unit else "没有任何编号项",
+               sec_key, sec_key))
     return problems
 
 

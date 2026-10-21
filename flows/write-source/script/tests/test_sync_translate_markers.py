@@ -242,3 +242,65 @@ def test_both_keys_on_contract_skips_conservatively(tmp_path):
     c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
     assert (c, m) == (1, 0) and "两侧都合契约" in diffs[0], diffs
 
+
+# ── 5) name 双侧裁定（首行才是契约那一侧：manifest 被截短 / 清空的形）───────────
+
+
+def _book_name(tmp_path, manifest_name, marker_name, contract_name="1.1 Definition"):
+    """契约节点名 = `contract_name`；manifest 与首行各给一个 `name`（type/key 两侧一致）。"""
+    ext = tmp_path / "ex"
+    d = ext / "book_structure" / "units" / "ch1"
+    d.mkdir(parents=True)
+    json.dump({"chapters": [{"key": "1", "name": "Chapter 1", "children": [
+        {"key": "1.1", "name": contract_name, "type": "theorem", "items": []}]}]},
+        io.open(str(ext / "book_structure" / "ch1.json"), "w", encoding="utf-8"),
+        ensure_ascii=False)
+    json.dump({"units": [dict(REC, name=manifest_name)]},
+              io.open(str(d / "manifest.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    _mk(str(d / REC["file"]),
+        "<!-- book-summarizer DONE unit: id=0001 type=item key=1.1 name=%s -->" % marker_name,
+        eol="\r\n")
+    return str(ext)
+
+
+def _unit_path(ext):
+    return os.path.join(ext, "book_structure/units/ch1", REC["file"])
+
+
+def test_marker_name_on_contract_while_manifest_blank_is_never_written(tmp_path):
+    """🔴 随机过程形：完整题只活在首行，而 manifest 的 `name` 是空的/截短的。
+    `manifest_matches_contract` 对空串放行，缺本关就会把唯一在账的完整题复位抹掉。"""
+    ext = _book_name(tmp_path, "", "1.1 Definition")
+    p = _unit_path(ext)
+    good = "<!-- book-summarizer DONE unit: id=0001 type=item key=1.1 name=1.1 Definition -->"
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 0), diffs
+    assert len(diffs) == 1 and "name 脱账" in diffs[0] and "首行才是契约那一侧" in diffs[0], diffs
+    assert io.open(p, encoding="utf-8").readline().rstrip("\r\n") == good, "抹掉了在账的完整题"
+
+
+def test_marker_name_prefix_form_of_contract_name_also_protected(tmp_path):
+    """契约名不带键前缀（`Definition`）、首行按拆分时的 `key + 空格 + 名` 形登记 → 同样算在账。"""
+    ext = _book_name(tmp_path, "", "1.1 Definition", contract_name="Definition")
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 0) and "name 脱账" in diffs[0], diffs
+
+
+def test_marker_name_off_contract_is_repaired_to_manifest_name(tmp_path):
+    """反向（本关不得退化成一律拒写）：首行多写了自撰尾巴、manifest 才在契约账上 → 复位首行。"""
+    ext = _book_name(tmp_path, "1.1 Definition", "1.1 Definition --- agent invented tail")
+    c, m, diffs = stm.sync_side(ext, "units", "1", apply_changes=True)
+    assert (c, m) == (1, 1), diffs
+    assert io.open(_unit_path(ext), encoding="utf-8").readline().rstrip("\r\n") == LINE
+
+
+def test_name_side_arbitration_four_cells():
+    names = {"Definition"}
+    assert stm.name_side_that_matches_contract("1.1 Definition", "", "1.1", names) == "unit"
+    assert stm.name_side_that_matches_contract(
+        "1.1 Defini", "1.1 Definition", "1.1", names) == "manifest"
+    assert stm.name_side_that_matches_contract(
+        "1.1 Definition", "Definition", "1.1", names) == "both"
+    assert stm.name_side_that_matches_contract(
+        "1.1 Nope", "1.1 Nope", "1.1", names) == "neither"
+

@@ -29,7 +29,7 @@ from data.book_structure.book_structure import (  # noqa: E402
 
 MARK_RE = re.compile(
     r"^<!--\s*book-summarizer\s+(DONE|DRAFT)\s+unit:\s*"
-    r"id=(\S*)\s+type=(?P<type>\S*)\s+key=(?P<key>.*?)\s+name=(.*?)\s*-->$")
+    r"id=(\S*)\s+type=(?P<type>\S*)\s+key=(?P<key>.*?)\s+name=(?P<name>.*?)\s*-->$")
 TPL = "<!-- book-summarizer %s unit: id=%s type=%s key=%s name=%s -->"
 
 
@@ -68,6 +68,35 @@ def manifest_matches_contract(name, key, names):
     if not name:
         return True
     return any(name == n or name == "%s %s" % (key, n) for n in names)
+
+
+def strict_contract_name(name, key, names):
+    """`name` 非空且**逐字**在契约账上（原样 / `key + 空格 + 名` 两种成形方式）。
+
+    与 `manifest_matches_contract` 的差别只在空串：那里空串放行（登记处本就可无名），
+    这里空串算「不合账」——空串无法证明任何一方是完整的。
+    """
+    if not name:
+        return False
+    return any(name == n or name == "%s %s" % (key, n) for n in names)
+
+
+def name_side_that_matches_contract(unit_name, manifest_name, key, names):
+    """`name` 脱账时裁定哪一侧在契约账上 → ("manifest"|"unit"|"both"|"neither")。
+
+    🔴 这一关是「**marker 比 manifest 多字**」的止血阀（`lib/unit_markers` 复位首行会把
+    marker 抹成 manifest）：实测随机过程《概率论基础教程》10-20 轮有 7 处 manifest/契约登记的是
+    **被截断的半截题**、完整印刷题只活在单元首行里，按 manifest 复位等于把唯一在账的完整题删掉，
+    正解是修 manifest。判据 = 首行逐字在契约账上、而 manifest 不在（含 manifest 名为空而首行非空）。
+    裁定为 "unit" 时本工具**不动盘**，只报告「须先修 manifest」。
+    """
+    u_ok = strict_contract_name(unit_name, key, names)
+    m_ok = strict_contract_name(manifest_name, key, names)
+    if m_ok and not u_ok:
+        return "manifest"
+    if u_ok and not m_ok:
+        return "unit"
+    return "both" if (u_ok and m_ok) else "neither"
 
 
 def contract_node_keys(ext, ch):
@@ -218,8 +247,10 @@ def sync_side(ext, sub, ch, apply_changes=False):
         if not r:
             continue
         raw, nl, line, want = r
+        lm = MARK_RE.match(line)
         mname = str(u.get("name") or "")
-        if not manifest_matches_contract(mname, str(u.get("key") or ""), names):
+        kman = str(u.get("key") or "")
+        if not manifest_matches_contract(mname, kman, names):
             skipped += 1
             diffs.append("%s/%s\n    跳过（manifest 与契约脱账，须先修 manifest）：\n"
                          "      manifest name=%s\n      契约 name 候选=%s"
@@ -227,9 +258,18 @@ def sync_side(ext, sub, ch, apply_changes=False):
                             " / ".join(sorted(n for n in names
                                               if n[:20] == mname[:20])[:3])[:160] or "?"))
             continue
+        # 🔴 name 双侧裁定：首行逐字在契约账上而 manifest 不在（含 manifest 名为空的截短形）
+        #    → manifest 才是残缺方，复位首行会把唯一在账的完整题抹掉，一律跳过并提示修 manifest。
+        uname = lm.group("name") if lm else ""
+        if (lm and uname != mname
+                and name_side_that_matches_contract(uname, mname, kman, names) == "unit"):
+            skipped += 1
+            diffs.append("%s/%s\n    跳过（name 脱账，首行才是契约那一侧，须先修 manifest）：\n"
+                         "      首行 name=%s\n      manifest name=%s"
+                         % (unit_dir_name(ch), u.get("file"), uname[:120], mname[:120] or "(空)"))
+            continue
         # 🔴 type 单独裁定：契约把 description 归一成 desc、条目归一成 item。
         # 若 manifest 的 type 不合契约而首行的 type 合契约，则错的一侧是 manifest，不能改首行。
-        lm = MARK_RE.match(line)
         unit_type = lm.group("type") if lm else ""
         mtype = str(u.get("type") or "")
         if unit_type != mtype:

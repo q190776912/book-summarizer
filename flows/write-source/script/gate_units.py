@@ -147,7 +147,8 @@ import split_draft_units as _split
 import check_unit_quality as _quality
 from lib.unit_order import check_unit_order
 from lib.problem_coverage import coverage_problems, page_floor_problems, \
-    chapter_exercise_problems, duplicate_exercise_statement_problems
+    chapter_exercise_problems, duplicate_exercise_statement_problems, \
+    vi_omitted_problem_blocks
 from lib.tag_attestation import (tag_attestation_problems,
                                  unharvested_anchor_problems,
                                  attested_numbers)
@@ -916,16 +917,37 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     # 里「从 1 起连续」的最长编号链 vs 本章单元按 manifest 序拼接后的最长链），短了即
     # 整块漏写；契约侧 OCR 断号只会让真值偏小 = 保守；契约标 consolidated 的成堆习题
     # 是流水线认可的省略，跳过。实现与负向测试见 lib/problem_coverage.py。
-    problems.extend(coverage_problems(contract, units, _unit_body_reader(out_dir)))
+    # 🔴 与 ⑬ **共用** V-I 豁免裁决（``vi_omitted_problem_blocks``）：抽取期整块不进
+    # 契约的节末习题块没有节点可标 consolidated，若不给豁免，本闸就变成「逼写手违反
+    # V-I（有专门小标题的集中习题块一律省略）」——Isaacson & Marder 实测 5 条。豁免只在
+    # 「印面确有习题小标题 + 本节一个没写 + 本章无任何收题体例信号」时生效；收了没收全
+    # （n_unit>0）与 Kreyszig 型「同章别的节抄了题集」两条照常报。
+    _span = ((int(contract.get("page_start") or 0), int(contract.get("page_end") or 0))
+             if contract is not None else (0, 0))
+    _page_loader = _page_block_loader(ext)
+    _vi_omitted = vi_omitted_problem_blocks(contract, units, _unit_body_reader(out_dir),
+                                            _page_loader, _span)
+    problems.extend(coverage_problems(contract, units, _unit_body_reader(out_dir),
+                                      vi_omitted=_vi_omitted))
     # 🔴 章级闸 ⑬：习题数的**页侧**下限对账（``_extract/page_NNN.json``）。⑫ 拿契约当
     # 真值，可契约自己会瞎：有的节末整页习题在抽取期根本没进契约（跨页题块被丢、或被
     # 灌进**另一节**的子树），于是「印刷 10 题 / 契约 4 题 / 单元写了 5 题」在 ⑫ 里是
     # 绿灯。本闸直接从该节页窗里「Problems」标题之后出现过的最大题号取下限（只作下限、
     # 遇下一条节标题即停、>30 视为噪声 = 永不低于印刷真值之上），单元侧短了就报。
     # 没有页 JSON 的书（纯知识库输入）自然取不到下限 = 不报，不影响其它项目。
-    problems.extend(page_floor_problems(
-        contract, units, _unit_body_reader(out_dir), _page_block_loader(ext),
-        (int(contract.get("page_start") or 0), int(contract.get("page_end") or 0))))
+    # 🔴 但**不得逼写手恢复 V-I 认可的省略**（2026-10-21 Isaacson & Marder 实测 8 章
+    # 假阳）：本闸的触发条件本身就是「该节页窗印着 Problems / Problem Set N.M 标题」，
+    # 而写作规则 V-I 对**有专门小标题的集中习题块**规定「一律省略」；契约里也**没有**
+    # 可标 consolidated 的节点（这批题块在抽取期就被丢了，正是本闸存在的前提）。
+    # 故判据只管「收了没收全」（V-I：若选择写入则须逐题写全），不管「收没收」：
+    # 空节须本章有收题体例（契约有非 consolidated 习题节点 / 有 exercise 单元 /
+    # 同章别的节抄过题集）才报——Kreyszig ch9 的题集写在 item 单元编号散文里、契约
+    # exercise 节点为 0，仍由「别的节抄到 10–15 题」这一条判住。四种欠账形态与豁免
+    # 侧各有负向测试（`lib/tests/test_problem_coverage.py`：TestPageFloorViExemption /
+    # TestCoverageViExemption —— 两道闸同一份裁决，两侧各测一遍防「只改一边」漂移）。
+    # 裁决只算一次，与 ⑫ 同一份 `_vi_omitted`（两道闸对同一节的省略口径必须一致）。
+    problems.extend(page_floor_problems(contract, units, _unit_body_reader(out_dir),
+                                       _page_loader, _span, vi_omitted=_vi_omitted))
     # 🔴 章级闸 ⑭：契约 tag 的**印刷锚点**对账。tag 是本门控「契约 ↔ 单元」的真值来源，
     # 契约里多一个原书没印过的编号，写手就被逼凭空 `\tag{}`（多出=编造），删了又报漏写，
     # 两头堵、且到步骤 8 Q 层才暴露。Kreyszig 实测 5 个毒 tag：`22`（display 里 ε/2 的

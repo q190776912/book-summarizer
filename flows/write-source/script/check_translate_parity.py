@@ -120,11 +120,59 @@ _DANGLING_RE = re.compile(
 # 中文是**正确**做法，不是内容差异 → 显示式对账时整段删掉（跨书实测：删体前 real-analysis
 # 假报 19 单元，删体后 0）。`\\mathrm` / `\\operatorname` **不**删——它们是算子名，
 # 被改动就是被改动。
-_TEXT_RE = re.compile(
-    r"\\(?:text|textrm|textit|textbf|textsf|texttt|mbox)"
-    r"\s*\{(?:[^{}]|\\[^{}])*\}")
+# 🔴 必须**按花括号配平**取参数体：早先用一条正则 `\{(?:[^{}]|\\[^{}])*\}` 无法穿透嵌套，
+# 遇 `\text{… \pmod{4} …}` 会从**第一个** `}` 截断，把残留的 `…}` 当成数学内容比 → 假阳。
+# 全库普查（594 个 units-translate 章目录 / 32292 对配对单元，2026-10-21）今天 0 处踩中，
+# 属**前瞻加固**（配平版与旧版实测**零差分**：转绿 0 / 新增 0）。
+_TEXT_CMD_RE = re.compile(
+    r"\\(?:text|textrm|textit|textbf|textsf|texttt|mbox)\s*\{")
+
+
+def _text_group_end(s, start):
+    """从 `\\text{` 左括号**之后**走到配平的右括号之后；不配平返回 None。"""
+    depth, j = 1, start
+    while j < len(s):
+        c = s[j]
+        if c == "\\" and j + 1 < len(s):
+            j += 2                      # 跳过 \| \{ \} 等转义
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def _strip_text_bodies(s):
+    """删掉全部 `\\text{}` 散文体（含内层花括号）；参数不配平则原样保留。"""
+    out, i = [], 0
+    while True:
+        m = _TEXT_CMD_RE.search(s, i)
+        if m is None:
+            out.append(s[i:])
+            break
+        out.append(s[i:m.start()])
+        end = _text_group_end(s, m.end())
+        if end is None:
+            out.append(s[m.start():m.end()])
+            i = m.end()
+        else:
+            i = end
+    return "".join(out)
+
+
 # 尾部标点：中文用 `。`、英文用 `.`，且 CN 版常在 `$$…$$` 内保留/删去句点 → 归一掉。
 _TAIL_PUNCT_RE = re.compile(r"[.,;:!?。，；：！？]+$")
+# 间距命令：`\quad` / `\qquad` / `\,` / `\;` / `\:` / `\\ ` / `~` **不携带数学内容**，
+# 译文在 `\text{}` 散文两侧多打一个 `\quad` 当分隔（数论 ch34/0003 实测：源
+# `x + yi \text{ is normalized if } x > 0`、译 `x + yi \text{是规范化的}\quad\text{若}\quad x>0`
+# ——删散文后差的只是两个 `\quad`）→ 归一掉。此删除**单调安全**：两侧同删，原先相等的
+# 不会变不等，只会让红转绿，不会凭空造红。
+_SPACING_RE = re.compile(r"\\(?:q?quad|,|;|:>|!| )|~(?![a-zA-Z])")
+
 # 🔴 带编号的显示式尾部是 `\tag{9.1}`，块尾锚定的 `_TAIL_PUNCT_RE` **永远剥不到**式子
 # 自己的句末标点（`… = 0 . \tag{9.1}`），于是上面那条「句末标点习惯差异放行」的设计对
 # 编号式失效——随机过程 ch5/0031、ch6/0051、ch9 四处实测全是这一形（`.` vs `,`）。
@@ -139,16 +187,19 @@ def _norm_inline_spans(body):
 
 
 def _norm_display_blocks(body):
-    """显示式清单，逐条归一：剥行首 `>` 包裹与全部空白 + 删 `\\text{}` 体 + 剥尾部标点。
+    """显示式清单，逐条归一：剥行首 `>` 包裹与全部空白 + 删 `\\text{}` 体 + 删间距命令
+    + 剥尾部标点。
 
-    中英两版的 `$$` 块允许三类**排版/表述**差异（必包 `>` 的标签表是双语对称的，CN
+    中英两版的 `$$` 块允许四类**排版/表述**差异（必包 `>` 的标签表是双语对称的，CN
     版可能比 EN 多一层 `>`；换行位置同理）：块内措辞的版式差异、`\\text{}` 里的散文被
-    正确译成中文、句末标点习惯差异。除此之外剩下的 token 差异一律视为丢失/改写。
+    正确译成中文、句末标点习惯差异、散文两侧的间距命令多寡。除此之外剩下的 token 差异
+    一律视为丢失/改写。
     """
     out = []
     for blk in _DISPLAY_RE.findall(body):
         lines = [re.sub(r"^\s*>?\s*", "", ln) for ln in blk.split("\n")]
-        s = _TEXT_RE.sub("", re.sub(r"\s+", "", "".join(lines)))
+        s = _SPACING_RE.sub("", _strip_text_bodies(
+            re.sub(r"\s+", "", "".join(lines))))
         core = _TAIL_PUNCT_RE.sub("", s[:-2] if s.endswith("$$") else s)
         core = _PUNCT_BEFORE_TAG_RE.sub("", core)
         out.append(core + "$$" if s.endswith("$$") else core)
@@ -186,8 +237,56 @@ def _flatten_math(body):
     要求源式**完整**内核作为子串出现。
     """
     s = "\n".join(re.sub(r"^\s*>?\s*", "", ln) for ln in body.split("\n"))
-    s = _TEXT_RE.sub("", s)
+    s = _SPACING_RE.sub("", _strip_text_bodies(s))
     return re.sub(r"\$+", "", re.sub(r"\s+", "", s))
+
+
+# 只有一个控制词的行内式（`$\circ$` / `$\times$` / `$\otimes$`）= 把**符号本身当名词**指代，
+# 不是被砍半截的表达式：真截断必然连着剩下的操作数（`$f(xy) = $`、`$a \in$`）。
+_OP_ONLY_RE = re.compile(r"^\$\\([A-Za-z]+)\$$")
+
+# 运算符的**印面字形**：OCR 文字层常把 `\cdot` 打成裸 `·`、`\times` 打成 `×`，
+# 「源侧数学里有 `\cdot`」这条豁免随之失效（abstract-algebra ch1/0007 实测：印面
+# 「Our usual multiplication · is a different operation」进文字层是 U+00B7，全文
+# 从未出现 `\cdot`）。故同一运算符还要认它的 Unicode 写法。
+# 🔴 只在「整条行内式就一个运算符」时启用，且字形必须在源文里真实出现；凭空造一个
+# 源文里连字形都没有的符号仍会被报。字形只列单码位字符，不做多字符拼接比较。
+_OP_GLYPHS = {
+    "cdot": "·⋅∙", "cdotp": "·", "bullet": "•",
+    "times": "×", "rtimes": "⋉", "lefttimes": "⋊",
+    "div": "÷", "ast": "∗", "star": "⋆", "circ": "∘",
+    "oplus": "⊕", "ominus": "⊖", "oslash": "⊘", "otimes": "⊗",
+    "pm": "±", "mp": "∓",
+    "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥",
+    "ne": "≠", "neq": "≠", "equiv": "≡", "cong": "≅",
+    "sim": "∼~", "simeq": "≃", "approx": "≈", "asymp": "≍",
+    "propto": "∝", "ll": "≪", "gg": "≫",
+    "in": "∈", "notin": "∉", "ni": "∋", "mid": "∣|", "nmid": "∤",
+    "subset": "⊂", "subseteq": "⊆", "supset": "⊃", "supseteq": "⊇",
+    "sqsubset": "⊏", "sqsubseteq": "⊑",
+    "to": "→", "rightarrow": "→", "leftarrow": "←", "leftrightarrow": "↔",
+    "mapsto": "↦", "implies": "⇒", "iff": "⇔",
+    "perp": "⊥", "parallel": "∥", "smile": "⌣", "frown": "⌢",
+    "cup": "∪", "cap": "∩", "setminus": "∖",
+    "wedge": "∧", "vee": "∨", "land": "∧", "lor": "∨",
+}
+
+
+def _op_named_in_source(span, flat_src):
+    r"""「只有一个运算符」的行内式且该运算符在源文里在账 → 视为指代符号，不报。
+
+    实测（abstract-algebra ch1/0017_desc_D8）：源书把复合运算印在散文列举里
+    「$+,-,\cdot,$ and ∘」，OCR 文字层把它打坏成 `$^ \circ$` / `$^{\circ}$` → 判据 10 的
+    「源文逐字有此式」豁免失效，而译文规范写的 `$\circ$` 被当成半截式（两处）。
+    豁免收窄到「符号在源侧数学里在账（命令名或印面字形任一）」，故凭空造一个源文
+    既无命令又无字形的符号仍会被报。
+    """
+    m = _OP_ONLY_RE.match(span)
+    if not m:
+        return False
+    name = m.group(1)
+    return ("\\" + name) in flat_src or any(
+        g in flat_src for g in _OP_GLYPHS.get(name, ""))
 
 
 def _math_content_problems(src_body, tr_body, fname):
@@ -229,8 +328,10 @@ def _math_content_problems(src_body, tr_body, fname):
     # 「张量函子」、`$\subseteq$` 指「包含关系」，本书实测两处）属印面照抄，不报；
     # 真正被砍半截的 `$f(xy) = $` 在源的行内式集合里无配对 → 报。
     attested = set(_norm_inline_spans(src_body))
+    flat_src = _flatten_math(src_body)
     dang = [s[:40] for s in _norm_inline_spans(tr_body)
-            if _DANGLING_RE.search(s[1:-1]) and s not in attested]
+            if _DANGLING_RE.search(s[1:-1]) and s not in attested
+            and not _op_named_in_source(s, flat_src)]
     if dang:
         out.append("单元 %s 行内公式被截断（以悬空运算符收尾且源文无此式）：%s"
                    % (fname, "；".join(dang[:4])))

@@ -890,26 +890,230 @@ _LOOSE_MATH_DIGIT = re.compile(r"\d\s+\.\s+\d|\d\s+\d\s+\d")
 _LOOSE_MATH_PATTERNS = (_LOOSE_MATH_SUB, _LOOSE_MATH_CMD,
                         _LOOSE_MATH_DELIM, _LOOSE_MATH_DIGIT)
 _LOOSE_MATH_TAG = re.compile(r"\\tag\s*\{[^{}]*\}")
+# 修法器（`tools/tighten_loose_math.py`）与判据共用这两组分档：**机械可逆**的形态
+# （只是「命令/标记与花括号之间多了空白」，删空白即还原，语义零风险）vs **需读懂**的形态
+# （数字被逐位摊开 `1 0 6` / `3 . 1 . 1`——可能是 OCR 摊开，也可能真是漏了小数点或
+# 少了一位数，删空白会把错数值焊死成另一个错数值），后者一律留给人工重写。
+LOOSE_MATH_MECHANICAL = (_LOOSE_MATH_SUB, _LOOSE_MATH_CMD, _LOOSE_MATH_DELIM)
+LOOSE_MATH_SEMANTIC = (_LOOSE_MATH_DIGIT,)
+# 反转面 = 上面三档各自的匹配**再向左吃掉一段空白**（`X _ { t }` 的正字是 `X_{t}`，
+# 只删判据匹配到的 `_ {` 之间那段会留下 `X _{t}`，仍不是紧凑形）。只多删空白、不多删
+# 字符，故反转面是判据面的超集：判据改到的地方一定被改，改过的地方判据必然不再报。
+_LOOSE_MATH_INV = (
+    # 上下标：空白在 `_`/`^` **任一侧**都删（OCR 常写成 `X _ { t }`，也有 `X _{ t }`、
+    # `X _{t}` 半修形——只按判据那一侧修会留下 `X _{t}`，仍不是紧凑形）。
+    re.compile(r"\s+[_^]\s*\{|\s*[_^]\s+\{"),
+    re.compile(r"\\(?:%s)\s+\{" % _LOOSE_MATH_CMDS),
+    re.compile(r"\\(?:left|right|big[glmr]?|Big[glmr]?|bigg[glmr]?|Bigg[glmr]?)"
+               r"\s+[\(\[\{|]|\\sqrt\s+\[|\]\s+\{"),
+)
+# 修法器第二档：括号**内侧**空白（`{ x }`→`{x}`、`[ n ]`→`[n]`、`} {`→`}{`）。
+# 数学模式里这类空白不产生任何排版效果（与 `_LOOSE_MATH_INV` 同一性质），但判据第 25 项
+# **不看**它（紧凑写法里 `x_{n}` 与 `x_{ n }` 都渲染成下标 n，摊开面没有「必须报」的形态），
+# 所以它只进修法器、不进判据——判据面若一起放宽，51 库要重跑一遍（须另拍板）。
+# 🔴 例外：text 模式参数（`\text{…}` / `\mbox{…}` / `\operatorname{…}` / `\intertext{…}`）
+# 里的空格是**内容**（`\text{ a s }` 印面就是「a s」），故当前作用域里只要有任一花括号组
+# 属于 text 模式，该组内的空白一概不删。
+_LOOSE_MATH_TEXT_ARG = re.compile(
+    r"\\(?:text(?:rm|bf|it|sf|tt|md|sc|normal)?|mbox|hbox|operatorname|intertext"
+    r"|parbox|textnormal)\s*$", re.I)
+
+
+def _tighten_edges(frag):
+    r"""删括号内侧与 `} {` 接缝的空白 → `(new, n)`；text 模式组内保守不动。
+
+    只做三种删除：开括号（`{` `[` `(`）之后、闭括号（`}` `]` `)`）之前、`} {` 接缝。
+    🔴 被删的空白**至少一侧紧邻括号**，所以不会把两个记号焊成一个新记号：
+    `\in T`→`\inT`（改解析）与 `1 0 6`→`106`（语义档，数字摊开须人工读印面）两事故故
+    都要求删「字母/数字之间」的空白，本函数不看。控制字**前**的空格同样不删——
+    `x \right)`、`\sum_{i} \,` 是正常写法，不是 OCR 摊开。
+    片段首尾（紧贴 `$` / `$$` 围栏的空白）也不删，免得碰围栏外观。
+    🔴 **反斜杠之后的空白更不删**：数学模式里孤立的 `\ ` 是「可打印空格」命令，
+    它是**内容**而非摊开——`{ \ }`（array 的空行）删成 `{\}` 就变成 `\}` 字面闭括号，
+    花括号照样配平、KaTeX 却在 `\end{array}` 处炸（随机过程 ch7 0024b 实测）。
+    """
+    out, n, stack = [], 0, []
+    i, ln = 0, len(frag)
+    while i < ln:
+        c = frag[i]
+        if c == "{":
+            stack.append(bool(_LOOSE_MATH_TEXT_ARG.search(frag, 0, i)))
+            out.append(c)
+            i += 1
+            continue
+        if c == "}":
+            if stack:
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        if c.isspace():
+            j = i
+            while j < ln and frag[j].isspace():
+                j += 1
+            prev = out[-1] if out else ""
+            nxt = frag[j] if j < ln else ""
+            hit = (prev in ("{", "[", "(") or (prev == "}" and nxt == "{")
+                   or nxt in ("}", "]", ")"))
+            if hit and prev != "\\" and not any(stack):
+                n += 1
+            else:
+                out.append(frag[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), n
+
+
+
+def _lead_strip(line):
+    """→ (pos, content)：剥去前导空白与 `>` 序列（反复）后的**原行偏移**与剩余内容。
+
+    口径 = `s = line.lstrip(); while s.startswith(">"): s = s[1:].lstrip()`（判据原先
+    就是这么写的）——留偏移是为了让修法器能把改动写回**原行**而不碰散文。
+    """
+    pos = 0
+    while pos < len(line):
+        n = pos
+        while pos < len(line) and line[pos].isspace():
+            pos += 1
+        while pos < len(line) and line[pos] == ">":
+            pos += 1
+        if pos == n:
+            break
+    return pos, line[pos:]
+
+
+def line_math_spans(line, in_display):
+    r"""一行里的数学片段**偏移** → `(spans, next_in_display)`，spans = [(start, end), ...]。
+
+    🔴 判据（`loose_math_problems`）与修法器（`tools/tighten_loose_math.py`）**共用这一份
+    遍历**：口径若有两侧，改到的地方和查的地方就会错开（漏改还在账上、或把判据没看的
+    散文当公式改了）。三类覆盖与围栏状态机 = ① `$$` 围栏内的整行（不含围栏标记行本身）
+    ② 单行 display `$$…$$` 的内部 ③ 行内 `$…$` 之间的内容。返回空 spans = 本行无数学
+    可查（含 `<!--` 首行、奇数 `$`、`\$`、围栏标记行）。
+    """
+    pos, s = _lead_strip(line)
+    if in_display:
+        body = s.strip()
+        if body == "$$":
+            return [], False
+        if not body:
+            return [], True
+        st = pos + len(s) - len(s.lstrip())
+        return [(st, st + len(body))], True
+    if s.strip() == "$$":
+        return [], True
+    body = s.strip()
+    if body.startswith("$$") and body.endswith("$$") and len(body) > 4:
+        st = pos + len(s) - len(s.lstrip())
+        return [(st + 2, st + len(body) - 2)], False
+    if not body or body.startswith("<!--") or "$$" in body:
+        return [], False
+    if line.count("$") % 2 or "\\$" in line:
+        return [], False
+    spans, at, parts = [], pos, s.split("$")
+    for k, seg in enumerate(parts):
+        if k and k % 2 and k < len(parts) - 1:
+            spans.append((at, at + len(seg)))
+        at += len(seg) + 1
+    return spans, False
+
+
+def math_frag_iter(body):
+    """正文 → 逐行产出 `(行号, 片段文本, 原行)`；判据与修法器共用的消费面。"""
+    in_display = False
+    for i, ln in enumerate(str(body or "").split("\n"), start=1):
+        spans, in_display = line_math_spans(ln, in_display)
+        for a, b in spans:
+            yield i, ln[a:b], ln
+
+
+def loose_math_frag_spans(text):
+    """→ `[(行下标, start, end, 片段)]`（行下标 0-based）：与 `math_frag_iter` 同一趟，
+    但给**原行内偏移**，供修法器就地替换（`tools/tighten_loose_math.py`）。"""
+    out = []
+    in_display = False
+    for k, ln in enumerate(str(text or "").split("\n")):
+        spans, in_display = line_math_spans(ln, in_display)
+        for a, b in spans:
+            out.append((k, a, b, ln[a:b]))
+    return out
+
+
+def _tighten_bare(frag):
+    out, n = frag, 0
+    for pat in _LOOSE_MATH_INV:
+        out, k = pat.subn(lambda m: re.sub(r"\s+", "", m.group(0)), out)
+        n += k
+    out, k = _tighten_edges(out)
+    return out, n + k
+
+
+def tighten_frag(frag):
+    r"""机械档反转：把 OCR 摊开的数学**空白**还原成紧凑写法（只删空白，不删字符）。
+
+    两档（都渲染中性）：①「上下标标记 / 命令 / 定界符」与其开括号之间
+    （`x _ { n }`→`x_{ n }`、`\left (`→`\left(`、`\sqrt [ n ]`→`\sqrt [n]`）；
+    ②括号内侧与 `} {` 接缝（`x_{ n }`→`x_{n}`、`\frac{ a }{ b }`→`\frac{a}{b}`、
+    `\sqrt [n]`→`\sqrt[n]`）。合成 `x _ { n }`→`x_{n}`、`\frac { a } { b }`→`\frac{a}{b}`。
+    🔴 三件事**不做**：text 模式参数（`\text{ a s }` 一类，组内空格是内容）、
+    字母/控制字与后续字母之间的空格（`\in T` 焊成 `\inT` 会改解析）、
+    数字摊开档（`3 . 1 . 1` / `1 0 6` 属**语义档**——遇到「真漏了小数点/少一位」的
+    误读，删空白就是把错值钉死，须写手读印面重写）。
+    `\tag{…}` 内部按段跳过（与判据摘 tag 的口径一致；跨 tag 缝的松散形不在此列，
+    出现即由调用方的「机械档残留」报出来交人工，不静默放过）。
+    → `(new_frag, n_changed)`
+    """
+    tags = list(_LOOSE_MATH_TAG.finditer(frag))
+    if not tags:
+        return _tighten_bare(frag)
+    parts, pos, n = [], 0, 0
+    for m in tags:
+        seg, k = _tighten_bare(frag[pos:m.start()])
+        parts.append(seg)
+        parts.append(m.group(0))
+        n += k
+        pos = m.end()
+    seg, k = _tighten_bare(frag[pos:])
+    parts.append(seg)
+    return "".join(parts), n + k
+
+
+def tighten_math_text(text):
+    """整篇正文的机械档反转 → `(new_text, n_changed, 机械档残留, 语义档残留)`。
+
+    只改数学片段内的空白，且**同行替换**（行结构、围栏、`>` 前缀、缩进一概不动）；
+    行首单元 marker 与围栏标记行不在遍历面内，天然零风险。残留两档由调用方决定是否
+    落盘：机械档残留 = 本函数有 bug；语义档残留 = 该处须人工重写。
+    """
+    lines = str(text or "").split("\n")
+    spans = loose_math_frag_spans("\n".join(lines))
+    mech_left = sem_left = changed = 0
+    edit_by_line = {}
+    for k, a, b, frag in spans:
+        new, n = tighten_frag(frag)
+        if n:
+            edit_by_line.setdefault(k, []).append((a, b, new))
+    for k, edits in edit_by_line.items():
+        ln = lines[k]
+        for a, b, new in sorted(edits, reverse=True):
+            ln = ln[:a] + new + ln[b:]
+        lines[k] = ln
+        changed += len(edits)
+    out = "\n".join(lines)
+    for _i, frag, _ln in math_frag_iter(out):
+        f = _LOOSE_MATH_TAG.sub("", frag)
+        if any(p.search(f) for p in LOOSE_MATH_MECHANICAL):
+            mech_left += 1
+        if any(p.search(f) for p in LOOSE_MATH_SEMANTIC):
+            sem_left += 1
+    return out, changed, mech_left, sem_left
+
 
 # 第 26 项：`@@NAME@@` 占位符（`@@ARRAY@@` / `@@IMAGE@@` / `@@TABLE@@` 等）。
 _PLACEHOLDER_RE = re.compile(r"@@[A-Za-z_][A-Za-z0-9_]*@@")
-
-
-def _math_fragments(line):
-    """一行里的**行内**数学片段（`$...$` 之间的内容）。
-
-    含 `$$` 的行、`<!--` 注释行、`$` 为奇数的行（由公式闭合判据负责）→ 返回空，
-    避免与既有检测重复报同一处。行间块内容由 `loose_math_problems` 的状态机处理。
-    """
-    s = line.lstrip()
-    while s.startswith(">"):
-        s = s[1:].lstrip()
-    if not s or s.startswith("<!--") or "$$" in s:
-        return []
-    if line.count("$") % 2 or "\\$" in line:
-        return []
-    parts = line.split("$")
-    return [parts[k] for k in range(1, len(parts) - 1, 2)]
 
 
 def _display_body(line):
@@ -926,33 +1130,18 @@ def loose_math_problems(body, limit=5):
 
     数学片段两类都看：① 行内 `$...$`；② `$$` 围栏**内**的整行（display 块中间的
     行没有 `$`，只能靠状态机识别——这正是 OCR 松散形态最常堆积的地方）。
+    遍历面 = `math_frag_iter`（与 `tools/tighten_loose_math.py` 共用同一份，判据看哪儿
+    修法器就改哪儿；`_LOOSE_MATH_TAG` 摘除口径也在这里，两侧一致）。
     """
     hits = []
-    in_display = False
-    for i, ln in enumerate(str(body or "").split("\n"), start=1):
-        if in_display:
-            s = _display_body(ln)
-            if s is None:                # `$$` → 退出围栏
-                in_display = False
-                continue
-            frags = [s]
-        else:
-            s = _display_body(ln)
-            if s is None:
-                in_display = True
-                continue
-            if s.startswith("$$") and s.endswith("$$") and len(s) > 4:
-                frags = [s[2:-2]]        # 单行 display（围栏判据另拦，此处仍查形态）
-            else:
-                frags = _math_fragments(ln)
-        for frag in frags:
-            frag = _LOOSE_MATH_TAG.sub("", frag)
-            for pat in _LOOSE_MATH_PATTERNS:
-                m = pat.search(frag)
-                if m:
-                    a = max(0, m.start() - 12)
-                    hits.append((i, frag[a:m.end() + 14].strip()))
-                    break
+    for i, frag, _ln in math_frag_iter(body):
+        frag = _LOOSE_MATH_TAG.sub("", frag)
+        for pat in _LOOSE_MATH_PATTERNS:
+            m = pat.search(frag)
+            if m:
+                a = max(0, m.start() - 12)
+                hits.append((i, frag[a:m.end() + 14].strip()))
+                break
     if not hits:
         return []
     out = ["照抄 OCR 的松散数学形态（V-C 硬要求：须读懂语义重写成紧凑 LaTeX，"

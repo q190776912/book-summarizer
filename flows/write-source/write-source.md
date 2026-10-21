@@ -327,17 +327,38 @@
      `tests/test_translate_parity_marker_manifest.py`（含截断形态）；复位工具 `tools/sync_translate_markers.py`
      （按契约裁决后只重写首行，首行不进终稿 md，故复位不需重 merge/verify）。
      🔴 **复位前逐字段裁定「哪一侧站在契约上」**（manifest 只是登记处，登记处本身也会被改错）：
-     `name` 比契约节点名集合、`type` 比契约节点类型（`description`→`desc`、条目→`item` 的归一形）、
-     `key` 比契约键集——任一字段裁定为「manifest 才是错的一侧」即整条跳过并提示先修 manifest，
-     绝不把错值写进文件。实测三类：Robinson 动力学 `ch3/0051` manifest `name` 多一个 `2`；
-     real-analysis `ch22/0014` manifest 漏做 `description`→`desc` 归一；随机过程 ch4/6/7 有 7 条
-     **续接单元**的 manifest 键被手工写成 `D5_cont14` 这类「父键 + `_cont<NN>`」合成键（契约里只有
-     父键 `D5`，全库普查 59 书仅此 7 条，无脚本产生）——正解是把 manifest 键回落成父键（保留
-     `continuation: true`），因为 `lib/unit_order` 判据 6 的「续接单元复用父锚点」按 `norm_secnum`
-     相等匹配，合成键让 `follow` 永不命中，而 `lib/problem_coverage.coverage_problems` 按
-     「单元 key ∈ 该节契约子树键集」取正文，会把那半段内容看成不存在。判据测试
-     `tests/test_sync_translate_markers.py`（`key` 裁定三向：合成键不写盘 / 首行错键按 manifest 复位 /
-     两键都合契约则保守跳过）。
+     `name`/`type`/`key` 三字段各自独立裁定，任一裁定为「manifest 才是错的一侧」即整条跳过并提示先修 manifest，
+     绝不把错值写进文件：
+     * `name` = **双侧**对契约节点名集合（`strict_contract_name`：原样 或 `key + 空格 + 契约名` 两种形都算在账）。
+       此前只判「manifest 名是否合契约」，于是 **manifest 名为空而首行题名在账** 这一格会被漏判——复位等于拿空串
+       抹掉正确题名。实测形态（Fraleigh / Rosen 两书）：改单元时把 OCR 脏题名（`0.1 Subsets`、
+       `例11 11 Sudoku`）自撰成干净题名，于是两侧都不再是契约登记的那一形——契约登记的就是 OCR 形，故须按
+       manifest 复位；
+       反之若首行恰好等于契约名而 manifest 漏登（空/截短），错的一侧是 manifest。实测反例：Robinson 动力学
+       `ch3/0051` manifest `name` 是 `3.6 Substitutions2`（多一个 `2`）而契约与首行都是正确的
+       `3.6 Substitutions`——无脑按登记处复位会把对的一侧改成错的。判据测试
+       `tests/test_sync_translate_markers.py` §5（空 manifest 名不写盘 / 前缀形也算在账 / 自撰尾巴仍复位 / 四象限）。
+     * `type` 比契约节点类型（`description`→`desc`、条目→`item` 的归一形）。实测：real-analysis `ch22/0014`
+       manifest 漏做 `description`→`desc` 归一，按 manifest 复位会把对的改成错的。
+     * `key` 比契约键集。实测：随机过程 ch4/6/7 有 7 条
+       **续接单元**的 manifest 键被手工写成 `D5_cont14` 这类「父键 + `_cont<NN>`」合成键（契约里只有
+       父键 `D5`，全库普查 59 书仅此 7 条，无脚本产生）——正解是把 manifest 键回落成父键（保留
+       `continuation: true`），因为 `lib/unit_order` 判据 6 的「续接单元复用父锚点」按 `norm_secnum`
+       相等匹配，合成键让 `follow` 永不命中，而 `lib/problem_coverage.coverage_problems` 按
+       「单元 key ∈ 该节契约子树键集」取正文，会把那半段内容看成不存在。判据测试
+       `tests/test_sync_translate_markers.py`（`key` 裁定三向：合成键不写盘 / 首行错键按 manifest 复位 /
+       两键都合契约则保守跳过）。
+     🔴 **整文件格式重写工具必须跳过首行标记**（脱账的机械成因之一就在这里）：`tools/_wrap_raw_math.py`
+     （裸 Unicode → `$\in$`）与 `tools/normalize_math_cli.py`（反引号 → 数学定界符）都是**整文件重写**，
+     一旦作用到单元首行就把 `name=设 a ∈ R` 变成 `name=设 a $\in$ R`，从此与 manifest 逐字脱账。现二者经
+     `lib.unit_markers.outside_marker`（识别 `is_unit_marker_line` 后只处理其余文本、首行原样接回）保护，
+     判据测试 `tools/tests/test_marker_line_format_guard.py`（含无守卫时的对照实验：不加守卫，首行必被包）。
+     🔴 **收口数据**（闸门上线前的历史债普查）：全库 `gate_units` dry-run 扫描 1129 处 / 4 书
+     （`基础\a-first-course-in-abstract-algebra` 550、`基础\数学分析` 323、`基础\discrete-mathematics-8th` 244、
+     `微分几何\黎曼几何` 12），其余书为 0；
+     分档后逐条按契约双侧裁定，全部落在「manifest 站契约那侧」= 复位是唯一正解，仅 `基础\数学分析` 2 条
+     manifest `type` outlier（`description` 未按书内约定归一成 `desc`）需先修登记处。复位后全库 dry-run 归零、305 个终稿 md 逐字节不变
+     （首行不进终稿，故**复位不需要重 merge / 重 verify**）、三书 `check_translate_parity` 全 PASS。
 8. **合并翻译语言总结 + 全量校验（源 + 译两版；流程末步；中文书只拼源版、全量校验即源版）**
    - 🔴 本步**只是机械拼接 + 校验**：源版在步骤 5、翻译版在步骤 7 已逐个改好并门控通过，
      本步仅运行拼接脚本与校验，**不需要也不允许 agent 再做任何写作调整**。
@@ -354,6 +375,10 @@
      PREFLIGHT；B/O 缺号经 `backfill_ordinals.py` 写回归属单元；至多 2 次仍不过则继续修，
      **严禁停下来问用户**）。校验层语义 / `--fix`（含默认禁用与强制开关）范围 / 字节契约键
      见 [`verify/verify.md`](../../verify/verify.md) 与各 `verify/<snake>/<snake>.md`（每层 SSOT）。
+   - 收官后可跑 `python tools/census_unit_delivery_coverage.py "<book_dir>"`（🔴 只读报告，
+     不是闸门、exit 恒 0）自查**「步骤 8 的印面手修有没有顺手删掉一条显示式」**——这个方向
+     verify 看不见（它只比交付与契约/配置，不比「单元内容是否都进了交付」）；命中的候选须逐条
+     回印面裁决，不得机械照单元改交付（单元侧也可能比交付陈旧，实测见该工具文档条）。
 
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动本流程前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
@@ -409,9 +434,32 @@
       所有空白，`1 \le i \le k_n` 会被印成 `1\lei\lek_n`，看着像「OCR 粘连没修」，实际单元早已修好
       ——本轮据此把分诊方向带偏一轮。闸门的消息通道自己不能造假证据（`_norm_display_pairs` /
       `_lost_block_text`；测试 `::test_fail_message_shows_verbatim_source_spacing`）。
-  - ⚠️ **已知残留假阳（未修，跨书 backlog）**：`_TEXT_RE` 不认嵌套花括号，`\text{… \pmod{4} …}`
-    会在第一个 `}` 处截断，残留 `dNd\equiv1\pmod` 之类碎片 → 判据 9 误报。实测在
-    数论/a-friendly-introduction-to-number-theory-4th ch34（2 单元 3 块）。
+  - 🔴 **判据 9/10 的第三轮修订（2026-10-21，先普查后放宽）**：把全库 594 个 `units-translate`
+    章目录 / 32292 对配对单元只读跑一遍 `_math_content_problems`，判据 9/10 合计**只剩 3 对红**；
+    逐对回印面与磁盘核真值后落三处改版 + 两处数据修，改后再跑同一普查 = **0 红 / 新增红 0**。
+    ① **间距命令归一掉**（`_SPACING_RE`，同时接进 `_norm_display_blocks` 与 `_flatten_math`）：
+      译文为中文句读补的 `\quad` / `\qquad` / `,`/`;`/`:>`/`~` 是散文胶合，不是公式内容
+      （实测 `x + yi \text{ is normalized if } x > 0` ↔ `\text{是规范化的}\quad\text{若}\quad x>0`）。
+      两条归一化**对两侧同删 = 构造上单调安全**（原先相等的不会变不等），实测新增红 0。
+    ② **`\text{}` 参数体改按花括号配平摘取**（`_strip_text_bodies` + `_text_group_end`，`_TEXT_RE` 已删）：
+      ⚠️ 早先记在账上的「`_TEXT_RE` 不认嵌套 `}` → 数论 ch34 假阳 2 单元 3 块」经复测**是误诊**——
+      那 3 块 `nested=False`，配平版与旧正则版在全库 32292 对上**零差分**（转绿 0 / 新增 0），属
+      **前瞻加固**而非本案正解。数论 ch34/0013（定理 5 的 `D_1`/`D_3`）真因是**中文关系从句前置把
+      数学 token 次序改了**（`d\ N\ d\equiv1` → `d\equiv1\ N`）→ 取**数据修**：把 `\text{}` 分段挪回
+      英文次序（`(\text{正整数 } d \text{ 整除 } N \text{ 且满足 } d \equiv 1 \pmod{4} \text{ 的个数})`），
+      **不得**把判据放宽成「顺序不敏感」（那会一并放过 `0<a<b` ↔ `a<0<b` 这类真重排）。
+    ③ **判据 10 单运算符指代豁免认印面 Unicode 字形**（`_OP_GLYPHS`）：只含一个运算符的行内式
+      （`$\cdot$` / `$\circ$`）是拿符号当名词，源侧该符号可能**只以裸字形**在账——OCR 文字层把印面的
+      `·` 收成 U+00B7、全文无 `\cdot`（abstract-algebra ch1/0007，印面 p29「Our usual multiplication ·
+      is a different operation」确证）→ 旧豁免（比对命令名）失效。收窄条件不变：**源文里命令名或字形
+      至少有一处在账**，否则照报。ch1/0015 即此负例：印面 p30 确有 `·`（fitz 取证件）而**源单元整丢该
+      符号** = 源侧内容丢失，正解是把 `Let $+$ and $\cdot$ be the usual operations …` 补回**源单元**
+      并镜像到已交付的 `Chapter1_*.md`（该行与单元正文逐字节同形，机械替换即可，**不重 merge**），
+      改后用 parity 自身的 `_read_body`/`_hash_text` 重算该条 `src_hash`/`hash`（`init_translate_units`
+      会先重跑源章门控，而本章在收官后新增了「节标题须为契约 name 全题」等判据，历史章重跑必红，
+      故该工具对此书不可用——重算用的是工具自己的哈希函数，不新增、不伪造）。
+    判据测试 `tests/test_translate_parity_math_content.py`（本轮 +6 条：间距豁免 / 间距不吞内容差 /
+    配平摘取四例 / 次序重排仍须抓 / 字形豁免 / 字形不吞凭空造符号）。
 - `flows/write-source/structure/script/scan_skeleton`：结构骨架（章节标题扫描，仅被 `build_structure` 调用）。
 - `flows/write-source/structure/script/extract_items` + 变体（`_en` / `_gm` / `_vakil` / `_hom` / `_kt`）：编号项抽取，按 `ordinal` 被 `build_structure` 调用。
 - `config/verify_config/make_config.py`：步骤 1 书级配置生成（`verify_config.json`）。
@@ -420,6 +468,11 @@
 - `../../verify/script/audit_counts.py`：逐节条数核对（OCR 侧启发式工具）。**契约条目在位核对**以结构契约为真值（优于 OCR 启发式），由规则8 的落账证据在 mark 前强制拦截漏项；本脚本保留为 OCR 侧独立交叉核对，供疑议时人工复核。
 - `flows/write-source/script/check_exercise_coverage.py`：**印面练习覆盖独立审计**（建议性，默认 exit 0，`--strict` 时 MISSING exit 1）。扫描书的练习是小字标题 `EXERCISE n.`，不被结构阶段识别为节点 → 契约里练习数为 0 → 没有练习单元，而 B 层只在偶然引用缺号时暴露一部分，**整章练习丢失**永远看不见。以 `page_*.json` 印面标题为真值对上单元行首练习，双向报 MISSING / PHANTOM / OCR-EMPTY；页归属按印面页眉判定（GAP 页与章末溢出页不算跨章）。🔴 **PHANTOM 必须先分诊**：① 标题行在 OCR 里但词形被读歪（`ExFRCISE 4.`）= **判据漏**，改 `printed_label`（旧字符类 ∪ 编辑距离 ≤1 且数字后紧跟终止符；放宽口径已跨 51 本书普查：1954 条旧命中之外只多 1 条，即该处真标题，正文互引 `Exercise 6 shows…` 与书眉 `EXERCISES 113` 全被终止符那道挡掉）；② 标题**整行连展示式一起漏扫**（机器无从复算）= 只能人看渲染页，用 `--attest CH:EX --page N --evidence …` 登记进 `verify_config.json → exercise_printed_attested` 并入印面真值。登记方三拒：页不在本章区间 / 号已能机械扫到（登记多余）/ 号在单元里不存在（会把真 MISSING 永久掩盖）；OCR 改版后能扫到时审计报 `redundant`，须人工重核后删账。
 - `flows/write-source/script/check_section_coverage.py`：**印面目录节覆盖独立审计**（同建议性口径）。结构阶段的节节点靠正文页 OCR 粗体标题识别，扫描书里该块常被整块漏掉（实测 Iwaniec–Kowalski GTM207 §4.3 印面 p.69 明晃晃印着，契约里根本没有该节 → 没有节单元 → 合并 md 缺节标题，而 D 层按同一份契约对账看不见）。真值取书首目录页（`§N.M 标题 页码` 同块，OCR 命中率高），报 MISSING / EXTRA；命中 MISSING 的处置是**补契约节节点 + `split_draft_units --force --keep-done` 重建**（正文源未变的 DONE 单元原样保留），不是把标题塞进条目单元（`gate_units` 反自造层级会拒）。
+- `tools/census_unit_delivery_coverage.py`：**单元 → 交付 单向覆盖独立审计**（🔴 只读报告、exit 恒 0，不做闸门）。补的盲区：单元进交付只有 `merge_units`（按 manifest 机械拼接）+ verify B/P/Q 三段保证，而**拼接之后**步骤 8 的印面修订轮是手工同行替换，没有任何判据回头检查「手工替换有没有顺手删掉一条式子」。判据 = 逐单元取 `$$…$$` 块，在该书**全部**交付 md 的归一文本里找内核，找不到才进候选；`--side src|tr`、`--book 子串`、`--verbose` 出 MID 档。
+  - 🔴 **为何不做等式闸（「merge 预览 == 交付」）**：已收官书的交付在 merge 之后按印面手修是**正确**结果，等式/存在性硬闸会把正确交付判成违规，并逼代理回头照抄单元里残留的 OCR 粘连形（= 闸门 bug，见 memory「闸逼代理自撰」）。所以只判**一个方向**（单元有而交付完全没有），交人工裁决。
+  - 三处**已证假阳机制**（各配负向测试 `tools/tests/test_unit_delivery_coverage_census.py`）：① `merge: false` 的单元（V-I：有专门小标题的集中习题块一律省略）本就不进交付；② 排版脚手架 `\begin{env}{cols}` / `\end{env}` / `&` / `\\` / `\left` 不携带数学内容（Fraleigh ch29/0034 印面 Example 30.1：单元 array 对齐式 vs 交付行内散文式，内容一字未丢）；③ 块体剥 `\tag{}` 后能对上 = `TAG_FORM`（记法差异不是丢失；methods-of-homological-algebra 单元 `\tag{1.2}` vs 交付 `\tag{I.2}`，印面是罗马章号 → 交付为真）。
+  - ⚠️ **踩过的坑**：交付侧**不得按文件名 ASCII/非 ASCII 分中英两侧**建 haystack。Evans-SDE 的 EN 交付名里带弯引号（`Chapter3_Brownian_Motion_and_“White_Noise”.md`），分侧后它被划成中文版 → 「源单元 → EN 交付」在全书法报 216+21 条。两版交付数学内容由 parity 1:1 锁定，合一个 haystack 不丢判别力。
+  - 全库首跑标定（2026-10-21，51 书）：v1 未归一 = **971** 候选 → 补三处机制后 = **63** 需人读 + 120 TAG_FORM（降幅 93%）。逐簇开验后**未见一例交付内容丢失**，剩下两形：单元侧陈旧记法（数值分析 ch2/0057 单元留 OCR 欧式逗号 `f(27,7)=4,1` 而交付已按印面写 `27.7=4.1`；Elliptic ch3/0023 定界符尺寸与 `\|f\|` 写法分叉），与 `TAG_FORM`。逐条印面裁决另立 backlog（不在本判据范围内）。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 8 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 

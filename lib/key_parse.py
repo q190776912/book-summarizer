@@ -559,6 +559,21 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             else:
+                # 🔴 Figure-only 组（type 0 及任何非条目类型）在此 catch-all 分支无
+                # 专用分支可落，会误跑通用「三级条目」正则（ENTRY_RE / _KEY_DEEP_RE /
+                # ENTRY_RE_EN3_C / ENTRY_RE_EN3_APP_C / _SEC_SINGLE_EX_RE）。这些正则
+                # 只认条目标签（Theorem/Definition…），与本组 name=['Figure'] 无关，
+                # 于是与真条目组并排的 figure 组会把每个条目头**重复**抠一遍；更糟的是
+                # 对字母序标附录头 `**Theorem A.1**`，ENTRY_RE_EN3_APP_C 还额外拆出
+                # 兄弟伪键 `定理 A.1`（带空格）与 `定理1`（纯数字残迹）——契约规范键是
+                # `定理A.1`（type14 分支产出，无空格），两侧永不对齐 → 假 EXTRA-ENTRY
+                # （Teschl《Topics…》附录 A 实测 2 键）。figure 组本就只该产图号（而图号
+                # 依 V 规则不作条目登记，见 193–194 注释），在通用分支里没有任何合法产出，
+                # 故整支跳过：真条目键由其所属的条目类型分支照常抠出，绝不丢失。
+                # 单调安全：只删 md 侧幻影 EXTRA 候选，不触碰任何契约对账键，
+                # truly_missing / 阻断判据逐字节不变。
+                if _fig_only:
+                    continue
                 for m in ENTRY_RE.finditer(line):
                     entries.add(normkey(m.group(1)))
                 # 🔴 带深度守卫的三段号扫描（判据见 `_KEY_DEEP_RE` 上方注释）：

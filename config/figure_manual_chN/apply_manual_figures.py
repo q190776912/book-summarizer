@@ -61,7 +61,7 @@ import shutil
 import tempfile
 
 import numpy as np
-import fitz
+import pymupdf as fitz
 import cv2
 
 

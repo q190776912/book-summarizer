@@ -339,9 +339,20 @@ def _math_content_problems(src_body, tr_body, fname):
 
 
 def _labels(body):
-    """粗体标签内部的条目编号集合（只认标签内，不认正文里的数字编号）。"""
+    """粗体标签内部的条目编号集合（只认标签内，不认正文里的数字编号）。
+
+    🔴 先掩掉全部数学再取粗体段（2026-10-22 real-analysis ch4/0031、ch8/0005 实测）：
+    泛函分析里 `$X^{**}$` / `j_{**}` 双对偶记号自带字面 `**`，`_BOLD_RE` 会把它们
+    当粗体定界符，两段杂散 `**` 跨数学配对后，会把夹在中间的交叉引用编号（如
+    "4.10"）提成伪条目号——且只随源/译**语序不同**而分叉（EN "by Corollary 4.10"
+    在句末、CN "由推论 4.10" 在 `j_{**}` 之前 → 译文多抓一个 4.10），造成假 FAIL。
+    真正的粗体标签（`**定理 4.15**`）从不落在 `$…$`/`$$…$$` 内部，故掩码数学
+    **只消除假阳、不可能藏真缺陷**。掩码口径与 `_has_prose` 逐字一致。
+    """
+    s = re.sub(r"\$\$[\s\S]*?\$\$", " ", body)
+    s = re.sub(r"\$[^$\n]*\$", " ", s)
     out = set()
-    for m in _BOLD_RE.finditer(body):
+    for m in _BOLD_RE.finditer(s):
         n = _NUM_IN_LABEL_RE.search(m.group(1))
         if n:
             out.add(n.group(1))

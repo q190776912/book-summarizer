@@ -20,6 +20,12 @@
   3) 源内容：在章页面区间内是否存在「带标签但无干净编号」的条头（OCR 丢号迹象）？
      → SUSPECT：可恢复的 OCR 丢号，建议 manual_overrides 恢复而非 ignore 隐藏。
   4) 否则（契约无邻居、源侧无对应内容）→ SAFE：疑似真·OCR 噪点 / 稀疏编号（agent 复核举证）。
+  5) 组索引伪组豁免键 `{gi}:{prefix}:{num}`（B 层 emit token，豁免的是某个编号组里的一个
+     号，契约无对应 canon，上面 1–4 判不了）：解析出组标签（verify_config.ordinal[gi]）后
+     只看举证——理由含 VERIFIED-SPARSE / 已核实跳号 等证据标记 → ACCEPTED；无标记 →
+     NEEDS-EVIDENCE（点名要求补印面证据，**不阻断**：晚生判据不得把已收官书刷红）。
+     旧实现对此类键一律 SKIP，于是带证据的豁免与裸静音在机器侧不可区分、全书
+     ACCEPTED 恒为 0（微分遍历论 7 条伪组键实测，2026-10-22）。
 
 用法
 ----
@@ -29,6 +35,7 @@
 import os
 import re
 import sys
+import io
 import json
 import glob
 from collections import defaultdict
@@ -111,7 +118,7 @@ def _chapter_range(ext, ch):
     if not os.path.exists(cm_path):
         return None
     try:
-        cm = json.load(open(cm_path, encoding="utf-8"))
+        cm = json.load(io.open(cm_path, encoding="utf-8-sig"))
     except Exception:
         return None
     rng = {}
@@ -149,7 +156,7 @@ def _scan_ocr_noise(ext, start, end, ch=None):
         if not os.path.exists(fp):
             continue
         try:
-            d = json.load(open(fp, encoding="utf-8"))
+            d = json.load(io.open(fp, encoding="utf-8-sig"))
         except Exception:
             continue
         for b in d.get("text", []):
@@ -174,7 +181,7 @@ def _collect_ignore(ext):
     cfg_path = os.path.join(ext, "verify_config.json")
     if os.path.exists(cfg_path):
         try:
-            book_cfg = json.load(open(cfg_path, encoding="utf-8"))
+            book_cfg = json.load(io.open(cfg_path, encoding="utf-8-sig"))
         except Exception:
             book_cfg = {}
         # 编号 ignore 的统一键（与 B 层 ctx.ignore 消费集合一致）
@@ -188,7 +195,7 @@ def _collect_ignore(ext):
     for fp in sorted(glob.glob(os.path.join(ext, "ignore_ch*.json"))
                              + glob.glob(os.path.join(ext, "ignore_appendix*.json"))):
         try:
-            data = json.load(open(fp, encoding="utf-8"))
+            data = json.load(io.open(fp, encoding="utf-8-sig"))
         except Exception:
             continue
         src = os.path.basename(fp)
@@ -202,6 +209,49 @@ def _collect_ignore(ext):
 
 
 _EVIDENCE_TOKENS = ("VERIFIED-SPARSE", "已核实跳号", "源书真实跳号", "sparse numbering")
+
+# 🔴 B 层组索引 emit token（伪组豁免键）形如 `{gi}:{prefix}:{num}`：`gi` 是
+# verify_config.ordinal 的组下标，`prefix` 是该组的编号前缀（章号或节号，附录书可为
+# 字母），`num` 是被豁免的序号。来源见 item_numbering_integrity.emit() 的候选串
+# `f"{gk}:{n}"`——「0:5:2」读作「第 0 组（本书为图组）中 5 章的 2 号」。
+# 本函数把它解析出来交给审核，使这类键与两级/三级键一样进入判定分支，而不是
+# 一律 SKIP。
+_GROUP_TOKEN = re.compile(r'^(\d+):([^:]*):(\d+)$')
+_SRC_CH = re.compile(r'^ignore_(?:ch|appendix)([0-9A-Za-z]+)\.json$')
+
+
+def _group_token_of(key):
+    if not isinstance(key, str):
+        key = str(key)
+    m = _GROUP_TOKEN.match(key.strip())
+    if not m:
+        return None
+    return int(m.group(1)), m.group(2).strip(), int(m.group(3))
+
+
+def _ordinal_group_names(ext):
+    """verify_config.json 的 ordinal 组名册（下标 → 标签词列表）；缺失返回 []。"""
+    cfg_path = os.path.join(ext, "verify_config.json")
+    if not os.path.exists(cfg_path):
+        return []
+    try:
+        with io.open(cfg_path, encoding="utf-8-sig") as f:
+            cfg = json.load(f)
+    except Exception:
+        return []
+    out = []
+    for g in cfg.get("ordinal", []) or []:
+        names = g.get("name") if isinstance(g, dict) else None
+        out.append([str(x) for x in names] if names else [])
+    return out
+
+
+def _chapter_of_source(src):
+    m = _SRC_CH.match(os.path.basename(str(src or "")))
+    if not m:
+        return None
+    s = m.group(1)
+    return int(s) if s.isdigit() else s
 
 
 def _is_evidenced_sparse(reason):
@@ -218,9 +268,41 @@ def _is_evidenced_sparse(reason):
 def run_audit(ext, chapter=None):
     """审计全书（或指定章）ignore 条目。返回结构化结果 dict。"""
     entries = _collect_ignore(ext)
+    group_names = _ordinal_group_names(ext)
     by_ch = defaultdict(list)
     unparsed = []
+    # 🔴 组索引伪组键（`gi:prefix:num`）单独走「举证」判定：这类键豁免的是**某个编号
+    # 组里的一个号**（多数是被 uncat 裸键/交叉引用误收进图组造出的伪洞），契约里没有
+    # 对应 canon，通用分支（契约存在性/序列洞）判不了它。旧行为是整体 SKIP——于是
+    # 「已核对印面并写好 VERIFIED-SPARSE 证据」的豁免也拿不到 ACCEPTED，全书审核报告
+    # 永远是 ACCEPTED=0，取证与裸静音在机器侧不可区分。现按证据标记分 ACCEPTED /
+    # NEEDS-EVIDENCE（后者**不阻断**，只点名要求补举证，避免晚生判据把已收官书刷红）。
+    group_rows = []
     for key, reason, src in entries:
+        gt = _group_token_of(key)
+        if gt is not None:
+            gi, prefix, num = gt
+            names = group_names[gi] if gi < len(group_names) else []
+            label = names[0] if names else "(ordinal[%d] 未宣告)" % gi
+            ch = _chapter_of_source(src)
+            if ch is None and str(prefix).isdigit():
+                ch = int(prefix)
+            if ch is None:
+                ch = str(prefix)
+            token = "%s %s.%s" % (label, prefix, num) if prefix else "%s %s" % (label, num)
+            rec = {"key": key, "chapter": ch, "source": src, "reason": reason,
+                   "group": {"index": gi, "label": label, "prefix": prefix, "num": num}}
+            if _is_evidenced_sparse(reason):
+                rec.update(verdict="ACCEPTED",
+                           why="伪组豁免键（组 %d=%s，号 %s）理由携带 VERIFIED-SPARSE / 已核实跳号 等证据标记 → "
+                               "agent 已核对印面确认 %s 非真实缺项，审计通过(非阻断)" % (gi, label, num, token))
+            else:
+                rec.update(verdict="NEEDS-EVIDENCE",
+                           why="伪组豁免键（组 %d=%s，号 %s）理由**无**证据标记 → 请核对印面后把证据写入登记原因"
+                               "（加 %s 之一）；当前不阻断，但裸豁免不可长期留存"
+                               % (gi, label, num, " / ".join(_EVIDENCE_TOKENS[:2])))
+            group_rows.append(rec)
+            continue
         p = _canon_key_of(key)
         if p is None:
             unparsed.append({"key": key, "reason": reason, "source": src,
@@ -232,17 +314,20 @@ def run_audit(ext, chapter=None):
     # 单章审计只汇总本章结果：unparsed 是【全书】无法解析出编号键的条目，
     # 无法归属到具体章——只混入单章报告会让 total>0 而逐章循环零命中，
     # 调用方（verify_chapter 单章 verify）据此误判「已审」。故仅全书审计呈现。
+    # 组索引伪组键能归属本章（来源文件名/前缀），两种模式都呈现。
     if chapter is not None:
         try:
             chapter = int(chapter)
         except (TypeError, ValueError):
             chapter = str(chapter).strip()  # 字母章号（附录 A/B…）
-        results = []
+        results = [r for r in group_rows
+                   if str(r["chapter"]) == str(chapter) or r["chapter"] == chapter]
     else:
-        results = list(unparsed)
+        results = list(group_rows) + list(unparsed)
     suspect = len([u for u in results if u["verdict"] == "SUSPECT"])
+    accepted = len([u for u in results if u["verdict"] == "ACCEPTED"])
+    needs_evidence = len([u for u in results if u["verdict"] == "NEEDS-EVIDENCE"])
     safe = 0
-    accepted = 0
     for ch in chapters:
         ch_entries = by_ch.get(ch, [])
         if not ch_entries:
@@ -295,18 +380,19 @@ def run_audit(ext, chapter=None):
             results.append(rec)
 
     return {"entries": results, "suspect_count": suspect, "safe_count": safe,
-            "accepted_count": accepted, "total": len(results)}
+            "accepted_count": accepted, "needs_evidence_count": needs_evidence,
+            "total": len(results)}
 
 
 def _print_report(rep):
     print("=" * 72)
-    print("ignore 条目审核报告  (SUSPECT=%d  ACCEPTED=%d  SAFE=%d  TOTAL=%d)"
+    print("ignore 条目审核报告  (SUSPECT=%d  ACCEPTED=%d  SAFE=%d  待举证=%d  TOTAL=%d)"
           % (rep["suspect_count"], rep.get("accepted_count", 0),
-             rep["safe_count"], rep["total"]))
+             rep["safe_count"], rep.get("needs_evidence_count", 0), rep["total"]))
     print("=" * 72)
     for r in rep["entries"]:
         tag = {"SUSPECT": "⚠ 可疑", "SAFE": "✓ 安全", "ACCEPTED": "✓ 已核实",
-               "SKIP": "· 跳过"}.get(r["verdict"], r["verdict"])
+               "NEEDS-EVIDENCE": "! 待举证", "SKIP": "· 跳过"}.get(r["verdict"], r["verdict"])
         print("\n[%s] %s   (来源: %s)" % (tag, r.get("key", "?"), r.get("source", "?")))
         if r.get("reason"):
             print("   登记原因: %s" % r["reason"])
@@ -316,6 +402,9 @@ def _print_report(rep):
         print("结论：存在 %d 条 SUSPECT，建议 agent 复核——优先用 manual_overrides 补回真实缺项，"
               "确认确为稀疏编号 / 真噪声才保留 ignore 并补举证（理由须含 VERIFIED-SPARSE 证据）。"
               % rep["suspect_count"])
+    elif rep.get("needs_evidence_count", 0):
+        print("结论：无 SUSPECT；%d 条伪组豁免键尚未举证（不阻断，但请把印面核对结果写进登记原因，"
+              "带证据者才会计入 ACCEPTED）。" % rep["needs_evidence_count"])
     elif rep.get("accepted_count", 0):
         print("结论：无 SUSPECT；%d 条为已核实的源书稀疏跳号（带证据），非隐藏缺项，审计通过(非阻断)。"
               % rep["accepted_count"])

@@ -60,7 +60,7 @@ PAGE_PT = (400, 500)                # synthetic page size (pt)
 
 def _mk_pdf(path):
     """One page with two solid black rectangles, side by side (a two-panel plot)."""
-    import fitz
+    import pymupdf as fitz
     doc = fitz.open()
     pg = doc.new_page(width=PAGE_PT[0], height=PAGE_PT[1])
     for (x0, y0, x1, y1) in (_px2pt(60, 200, 160, 320), _px2pt(240, 200, 340, 320)):

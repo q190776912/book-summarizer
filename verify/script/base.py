@@ -215,7 +215,12 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [], 'p_extra_item': [],
     'p_verbose': [], 'p_proof_verbose': [],
     # U-LAYER: unit structural reading-order (page monotonicity vs contract).
+    # 'unit_order_problems' 的被测顺序 = 源 manifest 的 units 数组（合并前自证）；
+    # 'md_order_problems' 的被测顺序 = **交付 md 文本自身**（合并之后交付侧被改过也照样复检，
+    # 2026-10-23 缺陷① 根治）；'md_order_stats' 带定位覆盖率——
+    # 🔴 定位不到的单元一律跳过，所以 coverage=0 不等于通过，报告须把两者一起呈现。
     'unit_order_problems': [],
+    'md_order_problems': [], 'md_order_stats': {},
     # Q-LAYER: formula sequence-label audit (opt-in via `formula` map; see q_layer.py).
     'q_checked': False,
     'q_fabricated': [], 'q_inconsistent': [], 'q_missing': [],

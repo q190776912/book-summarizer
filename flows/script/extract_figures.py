@@ -79,7 +79,7 @@ import json
 import argparse
 
 import numpy as np
-import fitz
+import pymupdf as fitz
 from PIL import Image
 import cv2
 import torch

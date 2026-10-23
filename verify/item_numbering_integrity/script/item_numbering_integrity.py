@@ -495,23 +495,27 @@ def _is_header_boundary(tail, lang=None):
     if c in '-–—·/~〜' and s[1:2].isdigit():
         # 分隔符型 SEP_TIGHT 成员（dash 系）后接数字同理 = 截断残段
         return False
-    if c.isascii() and c.isalpha():  # latin letter -> 'Theorem 4.1 and ...' prose
+    if c.isascii() and c.isalpha():  # latin letter -> descriptive title or prose
         # 🔴 必须限定 ASCII：汉字等 CJK 字符 `.isalpha()` 亦为真，旧版裸
         # `if c.isalpha():` 会抢在下方 `if '一' <= c <= '鿿':` 汉字分支之前把
         # 所有汉字续词判 False 丢弃 → CN 条头**编号后紧跟中文描述标题**（如
         # `> **例 1.3 二项分布…。**`）永不被计数 → 假「缺号」BLOCKING。与本函数
         # 的姊妹 `_is_reference_tail`（其拉丁分支即 `c.isascii() and c.isalpha()`）
-        # 对齐：拉丁分支只管 ASCII，汉字交给汉字分支。EN 侧无回归（内层本已要求
-        # `c.isascii()`）。
-        # EN 描述性命名的条目会把标题**直接续在编号后**（Lehmann & Casella：
-        # `**Example 1.3 Approximate variance of a binomial UMVU estimator.**`），
-        # 旧逻辑把任何拉丁续词一律判成散文而丢条目 → 制造假「缺号」BLOCKING。
-        # 与 `_is_reference_tail` 的 EN 放宽同源：EN 侧拉丁续词是**真条目标题**，
-        # 仅当它以显式交叉参照词（see/cf/viz/ibid）开头时才按引用排除。CN 侧
-        # 行为一字节不改（任何拉丁续词仍判 False——其描述性标题走汉字分支）。
-        if c.isascii() and lang == 'en' and not _is_citation_starter(s):
-            return True
-        return False
+        # 对齐：拉丁分支只管 ASCII，汉字交给汉字分支。
+        # 描述性命名的条目会把标题**直接续在编号后**，且**标题首字母可以是拉丁字母**
+        # ——EN（Lehmann & Casella：`**Example 1.3 Approximate variance of a binomial
+        # UMVU estimator.**`）与 CN（点集拓扑讲义《第五版》ch2 实测 2026-10-23：
+        # `> **例2.1.2 n 维欧氏空间**：…`、`> **例2.1.3 Hilbert 空间 H**：…`、
+        # `> **例2.4.4 Cantor 集…**：…`）都常见。中文教材的**例题描述标题常以拉丁
+        # 字母开头**（n 维、Hilbert、Cantor、Banach、$l^p$ 空间…），旧版把 CN 侧任何
+        # 拉丁续词一律判成散文而丢条目 → 制造假「缺号」BLOCKING 与假 TAIL 缺尾号。
+        # 🔴 放宽与 EN 同源、**不再局限于 lang=='en'**：能走到这里的拉丁首字母，其与
+        # 编号之间的紧贴字母序标形态（如「25.2.A」字母习题位、字母后缀）已在上游
+        # line 725 的 `re.match(r'[SEP]?[A-Za-z]', inner[m.end():])` 整体让位排除；
+        # 此处只剩「编号 + 空格 + 拉丁词」= **真条目标题**，仅当它以显式交叉参照词
+        # （see/cf/viz/ibid）开头时才按引用排除。CN 侧所属格引用（`…的证明`）以汉字
+        # 开头、走下方汉字分支，不受本放宽影响。
+        return not _is_citation_starter(s)
     if '一' <= c <= '鿿':
         # A Han-char continuation after the number is normally a DESCRIPTIVE
         # TITLE of the entry (e.g. '定理1 设 λ 为…', '例8 求 √115：'), which IS a

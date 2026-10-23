@@ -161,7 +161,7 @@ def render_page(doc, pno, dpi, mode="auto",
     text/formula pipeline and the figure detector so all boxes share one
     coordinate space.
     """
-    import fitz
+    import pymupdf as fitz
     page = doc[pno]
     pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0))
     arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(

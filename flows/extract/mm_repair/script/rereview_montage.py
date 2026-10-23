@@ -25,7 +25,7 @@ from page_json import PageJson
 
 import sys, os, json, glob, re, argparse
 sys.stdout.reconfigure(encoding="utf-8")
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 
 def load_font(size=18):

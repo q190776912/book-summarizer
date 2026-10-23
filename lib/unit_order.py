@@ -239,37 +239,95 @@ def inherited_desc_anchor_keys(contract: Optional[Dict[str, Any]]) -> set:
     return out
 
 
-def check_unit_order(
-    contract: Optional[Dict[str, Any]],
-    units: List[Dict[str, Any]],
+def _monotonic_problems(
+    seq: List[Tuple[str, Any, int, int]],
+    *,
+    where_page: str = "合并 md 阅读顺序倒退",
+    where_order: str = "合并 md 阅读顺序倒退，须同步清单次序",
+    by_preorder: bool = True,
 ) -> List[str]:
-    """检查 ``units``（**合并/manifest 顺序**）是否与原书页码、契约登记前序同时单调。
+    """对 ``(label, key, page, order)`` 的**阅读顺序**序列跑「页码 + 契约前序」双调判定。
 
-    返回问题字符串列表（空 = 通过）。契约缺失（``None``）→ 直接返回 ``[]``（无从判
-    真值，不误报，与其它门控的「契约缺失即跳过」一致）。
+    判据 1–3（页码严格小于迄今最大 = 跨节/跨页错位；页码相等允许；页码没倒退但契约登记
+    序倒退 = 单元跨过了它在契约里的位置）。抽成一份实现，是为了让「清单顺序」
+    （:func:`check_unit_order`）与「交付 md 实际读到的顺序」（:func:`check_delivered_order`）
+    两侧不可能各说各话；两个 ``where_*`` 只改报告括注里的**被测对象**，不改判据。
 
-    每条问题含：出问题的单元（type / key / 页码）+ 被其「插队」的参照单元（key / 页码），
-    便于定位「谁不该出现在这里」。
+    ``by_preorder=False`` 关掉第二条支（契约前序 tie-break），只留页码单调 ——
+    交付侧口径必须这么收窄，理由不是设计偏好而是实测：
+    **同一页之内**的先后，契约的 ``sub_sec`` 列表序**没有印面证据**（页码相等 = 判据 3
+    允许，前序只是「拆分当时的登记」）。2026-10-23 茆诗松《概率论与数理统计教程》全书
+    实测 6 处「前序倒退」，逐条解剖：4 处是 ``check_contract_anchors`` 文档里那条已知形态
+    ——节习题块登记成父节**第一个**子节点（``习题6.1`` 前序 15、``例6.1.6`` 前序 16，
+    而印面在 §6.1 末），交付侧才是对的；2 处是同页 subsection 与它的两条定义谁先谁后
+    （p324 三个条目 + 一个节头同页，页码给不出答案）。拿它当阻断判据 = 逼着修书方按
+    一个没有证据的次序去搬已经正确的交付块。
     """
-    if not isinstance(contract, dict) or not units:
-        return []
-    tables = _anchor_tables(contract)
-    if not tables[0]:
-        return []
-    # 单元记录没带 ``ntype`` 时（老清单 / 合并 md 反推），退回契约**原始键全等**查节点类型。
-    # 只在唯一类型时采信，混用同键多类型（条目 + 同号习题）宁可维持旧豁免 = 不误报。
-    _key_types: Dict[str, set] = {}
-    for _d in iter_unit_nodes(contract):
-        _key_types.setdefault(str(_d["key"]).strip(), set()).add(str(_d.get("type") or ""))
-
-    consumed: Dict[int, int] = {}
-    follow: Dict[str, Tuple[int, int]] = {}
     problems: List[str] = []
-    inherited_desc = inherited_desc_anchor_keys(contract)
     max_page = -1
     max_order = -1
     max_ref: Tuple[str, int] = ("", -1)
-    for u in units:
+    for label, key, page, order in seq:
+        if page < max_page:
+            problems.append(
+                "%s「%s」（原书 p%d）排在「%s」（原书 p%d）之后——早页内容出现在晚页"
+                "内容之后，单元跨节/跨页错位（%s）" % (
+                    label, key, page, max_ref[0], max_page, where_page))
+        elif by_preorder and order < max_order:
+            # 页码没倒退但契约登记序倒退：单元**跨过了它在契约里的位置**（改约未改清单，
+            # 或拆分后契约被重排）。同页互换不触发此支（序号仍须按前序）。
+            problems.append(
+                "%s「%s」（原书 p%d）在契约里登记在第 %d 位，却排在第 %d 位内容之后——"
+                "单元次序与契约前序不一致（%s）" % (
+                    label, key, page, order, max_order, where_order))
+        else:
+            max_page = max(max_page, page)
+            max_order = max(max_order, order)
+            max_ref = (str(key), page)
+    return problems
+
+
+def iter_judged_units(
+    contract: Optional[Dict[str, Any]],
+    units: List[Dict[str, Any]],
+):
+    """按**清单顺序**产出「参与页码单调判定」的单元 → ``(index, label, key, page, order)``。
+
+    这是两条被测顺序（清单序 = :func:`check_unit_order`、交付文本序 =
+    :func:`check_delivered_order`）**唯一一份**身份解析 + 豁免 + 锚点消费口径。
+    抽成生成器不是美化：2026-10-23 跨语料普查里，交付侧口径原先拿「解析到的**节点**
+    类型」判 ``dash_exempt``（节点类型必然具体），而清单口径拿「记录自带 ``ntype``，
+    缺失时回退**同键类型集**、混用即保守豁免」（判据 4 的旧行为）。同一本书、同一条
+    记录，两侧结论相反——Weibel《An Introduction to Homological Algebra》ch5/ch10
+    实测 8 条「交付顺序倒退」全是这一分叉造出来的假阳（``5.4-4`` 同键挂着
+    ``definition`` + ``exercise`` 两个节点 → 清单侧豁免、游标停在 p143；交付侧不豁免
+    → 游标推到 p144，紧接的 ``5.4-5``（契约误登记 p143）就被判成倒退）。
+    分叉的根源是「豁免写了两遍」，所以合写成一遍。
+
+    跳过者一律**不消费锚点**（保持 ``check_unit_order`` 旧行为逐字不变）：
+      * ``type`` ∈ :data:`_SKIP_TYPES`（章头）
+      * dash 键且 :func:`dash_exempt`（章末习题；同键多类型 = 混用 → 保守豁免）
+      * 锚点缺失（判据 5）
+      * 继承锚点的 ``description`` 容器（判据 7）
+
+    ``continuation`` 记录复用父单元锚点，不消费列表（判据 6）。
+    """
+    if not isinstance(contract, dict) or not units:
+        return
+    tables = _anchor_tables(contract)
+    if not tables[0]:
+        return
+    # 单元记录没带 ``ntype`` 时（老清单 / 合并 md 反推），先看记录**自带的 `type`**
+    # （结构族经 ``_TYPE_ALIAS`` 映射），再退回契约**原始键全等**查节点类型。
+    # 只在唯一类型时采信，混用同键多类型（条目 + 同号习题）宁可维持旧豁免 = 不误报。
+    key_types: Dict[str, set] = {}
+    for d in iter_unit_nodes(contract):
+        key_types.setdefault(str(d["key"]).strip(), set()).add(str(d.get("type") or ""))
+
+    consumed: Dict[int, int] = {}
+    follow: Dict[str, Tuple[int, int]] = {}
+    inherited_desc = inherited_desc_anchor_keys(contract)
+    for i, u in enumerate(units):
         if not isinstance(u, dict):
             continue
         if u.get("type") in _SKIP_TYPES:
@@ -278,7 +336,22 @@ def check_unit_order(
         if is_dash_problem(raw_key):
             nt = u.get("ntype")
             if not nt:
-                ts = _key_types.get(str(raw_key).strip())
+                # 🔴 清单记录**自带的 `type`** 是拆分当时的身份登记，对「这一条到底
+                # 是不是章末习题」比「同键在契约里挂着哪些节点类型」更可信。先吃它，
+                # 再落回同键类型集。Weibel《同调代数》ch5/ch10 实测假阳的第二半正是漏了
+                # 这一步：习题记录（``type=exercise`` / ``problem``）的**契约习题节点缺位**
+                # （同号的 ``Proposition 10.4.1`` 在、``Exercise 10.4.1`` 没登记），旧路径
+                # 只查 ``key_types['10.4-1']`` → 拿到唯一的那条**条目**类型（proposition）
+                # → 判「编号结果条目、不豁免」→ 习题单元被解析到条目的早页（p397），
+                # 紧跟晚页条目（Example 10.4.9, p401）之后就假报「阅读顺序倒退」。
+                # 而记录本身早已写明 ``type=exercise`` —— 习题族本就在章末豁免之列
+                # （见 :func:`dash_exempt` 对「习题族」维持旧豁免），该用记录自带类型。
+                # ``_TYPE_ALIAS`` 只把**结构族**（desc/exercise/problem/section/chapter）
+                # 映射成节点类型；编号条目记录 ``type=item`` 不在表内 → 落回 key_types，
+                # 逐字节维持旧行为（同号 ``{definition, exercise}`` 混用仍保守豁免）。
+                nt = _TYPE_ALIAS.get(str(u.get("type") or "").strip().lower())
+            if not nt:
+                ts = key_types.get(str(raw_key).strip())
                 nt = next(iter(ts)) if ts and len(ts) == 1 else None
             if dash_exempt(raw_key, nt):     # 章末习题：豁免，不推进游标
                 continue
@@ -297,25 +370,27 @@ def check_unit_order(
             # 无证据 → 既不算问题，也不推进/受限游标（判据 7，见
             # :func:`inherited_desc_anchor_keys`）。
             continue
-        page, order = anchor[0], anchor[1]
-        label = u.get("type") or "单元"
-        if page < max_page:
-            problems.append(
-                "%s「%s」（原书 p%d）排在「%s」（原书 p%d）之后——早页内容出现在晚页"
-                "内容之后，单元跨节/跨页错位（合并 md 阅读顺序倒退）" % (
-                    label, raw_key, page, max_ref[0], max_page))
-        elif order < max_order:
-            # 页码没倒退但契约登记序倒退：单元**跨过了它在契约里的位置**（改约未改清单，
-            # 或拆分后契约被重排）。同页互换不触发此支（序号仍须按前序）。
-            problems.append(
-                "%s「%s」（原书 p%d）在契约里登记在第 %d 位，却排在第 %d 位内容之后——"
-                "单元次序与契约前序不一致（合并 md 阅读顺序倒退，须同步清单次序）" % (
-                    label, raw_key, page, order, max_order))
-        else:
-            max_page = max(max_page, page)
-            max_order = max(max_order, order)
-            max_ref = (str(raw_key), page)
-    return problems
+        yield (i, u.get("type") or "单元", raw_key, anchor[0], anchor[1])
+
+
+def check_unit_order(
+    contract: Optional[Dict[str, Any]],
+    units: List[Dict[str, Any]],
+) -> List[str]:
+    """检查 ``units``（**合并/manifest 顺序**）是否与原书页码、契约登记前序同时单调。
+
+    返回问题字符串列表（空 = 通过）。契约缺失（``None``）→ 直接返回 ``[]``（无从判
+    真值，不误报，与其它门控的「契约缺失即跳过」一致）。
+
+    被测序列 = :func:`iter_judged_units`（身份/豁免/消费的唯一定义处）按**清单顺序**
+    直接喂给 :func:`_monotonic_problems`。
+
+    每条问题含：出问题的单元（type / key / 页码）+ 被其「插队」的参照单元（key / 页码），
+    便于定位「谁不该出现在这里」。
+    """
+    return _monotonic_problems(
+        [(label, key, page, order)
+         for _i, label, key, page, order in iter_judged_units(contract, units)])
 
 
 # 契约自身锚点自查（build_structure 落盘前的结构闸，判据 2c）
@@ -619,4 +694,148 @@ def resolve_unit_anchors(
             rec["page"] = anchor[0]
         out.append(rec)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 交付 md 自身阅读顺序（缺陷① 根治：清单转绿 ≠ 交付读对）
+# ---------------------------------------------------------------------------
+#: 唯一化锚点的最小字符数（归一化 = 去全部空白之后）。短于此值的前缀在正文里
+#: 极易重复（`**注**`、`---`、图嵌入 `<div …>`），据此决定是否再吃下一行。
+_MD_MIN_ANCHOR_CHARS = 12
+#: 一个单元最多吃掉多少行来凑唯一；仍不唯一 = 定位失败（跳过，不猜）。
+_MD_MAX_ANCHOR_LINES = 14
+
+
+def norm_text(text: Any) -> str:
+    """去掉**全部**空白（含全角空格 / NBSP）——交付文本与单元正文的公共比较空间。
+
+    比较必须在归一化空间里做：交付侧做过 `V-A` 空行整理、`---` 分隔线补齐、
+    ``_tidy_separators`` 与 ``clean_cjk``，行切分与单元原文件早已不一致；只剩
+    「字符序列」这一层两侧共同可信。单调性只需要相对先后，故偏移取归一化串里的
+    下标即可，无需还原成行号。
+
+    ``\\s``（unicode 模式）已含 U+00A0 NBSP 与 U+3000 全角空格，无需再列码位。
+    """
+    return re.sub(r"\s+", "", str(text or ""))
+
+
+def _md_line_anchor(lines: List[str], md: str) -> Optional[int]:
+    """逐行累加正文前缀，直到该前缀在归一化交付文本里**唯一**出现 → 返回偏移。
+
+    单行锚点会撞车（多个图嵌入单元共用同一行 ``<div style=...>``、多个习题共用
+    同一裸 ``> **解**``），取首见位置会把页码很晚的单元排到章首，制造假倒退——
+    所以必须唯一化后才可信；吃了 ``_MD_MAX_ANCHOR_LINES`` 行仍不唯一 → ``None``。
+    """
+    acc = ""
+    for ln in lines[:_MD_MAX_ANCHOR_LINES]:
+        acc += ln
+        if len(acc) < _MD_MIN_ANCHOR_CHARS:
+            continue
+        if md.count(acc) == 1:
+            return md.find(acc)
+    return None
+
+
+def _md_label_anchor(lines: List[str], md: str) -> Optional[int]:
+    """兜底定位：交付做过**内容级**修订（同行机械替换、块内加注）的单元，整行前缀
+    可能对不上，改用首行的**条头**（``**…**`` 粗体头或 ``#``/``>`` 标题残段）定位。
+
+    只有该条头在交付文本里唯一出现才可用；否则 ``None``（宁可不测，不猜位置）。
+    """
+    if not lines:
+        return None
+    first = lines[0]
+    m = re.search(r"\*\*[^*]{2,26}\*\*", first)
+    cand = m.group(0) if m else (re.sub(r"^>+|^#+", "", first)[:26] or None)
+    if not cand or len(cand) < 6 or md.count(cand) != 1:
+        return None
+    return md.find(cand)
+
+
+def md_unit_positions(
+    bodies: List[List[str]],
+    md_text: str,
+) -> List[Optional[int]]:
+    """每条单元正文在**归一化交付文本**里的偏移（定位不到 = ``None``）。
+
+    ``bodies``：与单元等长的「非空归一化正文行」列表（首行标记注释须已剥掉），
+    由调用方读取单元文件给出——本函数只做纯文本定位，不碰磁盘。
+    """
+    md = norm_text(md_text)
+    out: List[Optional[int]] = []
+    for lines in bodies:
+        if not lines or not md:
+            out.append(None)
+            continue
+        pos = _md_line_anchor(lines, md)
+        if pos is None:
+            # 🔴 必须是 `is None`，不能写 `or`：章首单元的合法偏移就是 0，
+            # 用真值判断会把「定位在文本最开头」当成定位失败丢掉，而章首那块往往
+            # 正是唯一能证明倒退的参照 → 整章零问题假绿（两条负向测试互为变异对照）。
+            pos = _md_label_anchor(lines, md)
+        out.append(pos)
+    return out
+
+
+def check_delivered_order(
+    contract: Optional[Dict[str, Any]],
+    units: List[Dict[str, Any]],
+    positions: List[Optional[int]],
+) -> List[str]:
+    """断言**交付 md 文本里实际读到的**单元次序与原书**页码**单调不减。
+
+    与 :func:`check_unit_order` 的分工，就是缺陷①的本体：那边的被测顺序是**源
+    manifest 的 ``units`` 数组**，隐含「``merge_units`` 之后交付 md 不再被改」这一假设；
+    而收官书的交付侧普遍做过内容级修订（整块搬移 / 单元换文件 / 按节拆文件后按节号
+    重排），该假设有实证反例（2026-10-23 茆诗松《概率论与数理统计教程》：门控 ⑪ 与 U 层
+    全绿的同一章，交付侧顺序是靠**镜像交付 md** 修好的，两道闸对交付文本的实际次序
+    完全不可见）。本函数把被测顺序换成**交付 md 自身**：每条单元的身份（契约节点、
+    页码、前序）仍按 manifest 顺序解析（``continuation`` / 出现序消费语义不变），
+    只有**先后**改成「该单元正文在交付文本里的偏移」。
+
+    ``positions``：:func:`md_unit_positions` 的产出（与 ``units`` 等长，``None`` =
+    定位不到 → 跳过，与判据 5/6 同口径 = 宁可不测不误报）。
+
+    🔴 **口径只到页码，不到契约前序**（``by_preorder=False``，理由与实测数字见
+    :func:`_monotonic_problems`）：同页之内的先后，印面证据只剩「同一页」这一条，
+    而契约 ``sub_sec`` 的列表序在交付侧不是可信真值（实测 6 处「前序倒退」里 4 处是
+    节习题块登记成父节第一个子节点的已知契约缺陷，交付侧才对）。所以本判据只报
+    **跨页**错位 = 有印面页码证据的那种；同页顺序差异要修的是**契约登记**，
+    归 ``check_contract_anchors`` 与各节内序标闸（B 层）管。
+
+    🔴 **``[]`` 不是「通过」的同义词**：定位不到就跳过，所以整章零覆盖也会返回空列表。
+    调用方必须把「已定位 / 应定位」覆盖率与问题一起呈现（见 U 层 ``md_order_stats``），
+    否则这道闸的绿是假的。
+
+    身份 / 豁免 / 锚点消费与清单侧**同一段代码**（:func:`iter_judged_units`）：章头跳过、
+    章末 dash 习题按 ``ntype``→同键类型集 的旧豁免、锚点缺失跳过、继承导语容器跳过
+    （判据 7）。交付侧只把「先后」换成正文在交付文本里的偏移，别的什么都不改——
+    普查里那 8 条假阳（:func:`iter_judged_units` 文档记了 anatomy）正是「豁免重写第二遍」
+    的代价。
+
+    🔴 一条命中 = **「交付文本次序」与「契约页码次序」矛盾**，不等于「交付错了」。
+    2026-10-23 全语料普查（58 本 / 892 个 (章,语种) 组 / 49075 条应定位单元，定位率
+    99.04%）在豁免口径合流后剩 12 条，逐条印面裁决，两类都是**账错、交付对**：
+      * Weibel《An Introduction to Homological Algebra》ch10（6 条，cn+en 各 3）：印面
+        p397 那行是 ``Proposition 10.4.1``，与同号 ``Exercise 10.4.1`` **撞键**；节末习题
+        块在交付里正确地排在 Example 10.4.9（p401）之后（它的内容引用引理 10.4.6），
+        而 manifest 仍把习题记录留在条目中间 = 清单陈旧。
+      * Underactuated Robotics 附录 C（6 条）：印面 ``C.1 OPTIMIZATION SOFTWARE`` 在
+        **p323**、``C.2 GENERAL CONCEPTS`` 在 p324；交付（C.1 先）对，契约页码
+        （C.1=p325 / C.2=p324）与 manifest 次序（C.2 先）都错。
+    两类都不该动交付，要动的是账（契约页码 / 清单次序）。所以本判据先以**非阻断
+    WARN** 出厂，且每条自带「先按印面定序」的出口指令；升阻断的前提是这两本书的账
+    回写完毕（见 ``verify/unit_order/unit_order.md`` 的出口条件）。
+    """
+    rows = []
+    for i, label, key, page, order in iter_judged_units(contract, units):
+        if i >= len(positions) or positions[i] is None:
+            continue
+        rows.append((positions[i], label, key, page, order))
+    rows.sort(key=lambda t: t[0])       # 稳定排序：偏移相同者保持 manifest 先后
+    return _monotonic_problems(
+        [(label, key, page, order) for _pos, label, key, page, order in rows],
+        where_page="交付 md 阅读顺序倒退——交付文本与契约页码必有一处不合印面，"
+                   "先按印面定序，再决定搬交付块还是回写契约/清单",
+        by_preorder=False)
 

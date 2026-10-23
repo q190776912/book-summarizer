@@ -5,6 +5,8 @@
 
 ```contract-keys
 unit_order_problems
+md_order_problems
+md_order_stats
 ```
 
 ## 目的
@@ -38,6 +40,64 @@ U 层（与 gate_units 章级闸 ⑪）用**源书页码**这个共同真值把�
 6. **锚点缺失跳过**：契约无该键 / 幻影 / 老键形对不上 → 跳过（既不当问题也不重置游标），
    避免锚点缺失产生连锁误报。
 
+## 第二条被测顺序：交付 md 自身（`md_order_problems`，缺陷① 根治，2026-10-23）
+
+上面 1–6 条的被测顺序是**源 manifest**，隐含假设「`merge_units` 之后交付 md 不再被改」。
+收官书的交付侧普遍在合并之后还做过内容级修订（整块搬移 / 单元换文件 / 按节拆文件后按节号
+重排），该假设有实证反例：茆诗松《概率论与数理统计教程》本轮的门控 ⑪ 与 U 层全绿，而交付侧
+次序是靠**镜像交付 md** 修好的——两道闸对交付文本的实际次序完全不可见。
+
+- **被测序列**：每条单元正文在**归一化交付文本**（去全部空白，含 `　`/NBSP）里的唯一偏移
+  （`lib/unit_order.md_unit_positions`：逐行累加到 ≥12 字符且全篇唯一；仍不唯一则退回首行
+  粗体条头/标题；都失败 = 定位不到）。按节拆分的章，文本取 verify 已在用的那份合并视图
+  （`_merge_section_files` 的节号序 = 读者实际读到的序）。
+- **单元身份**：仍按该语种 manifest 顺序解析，且与清单侧**共用同一段代码**
+  `lib/unit_order.iter_judged_units`（出现序消费、`continuation` 复用父锚点、章末 dash 按
+  `dash_exempt` 豁免、继承锚点的 `description` 容器跳过），**只有先后**换成文本偏移。
+  🔴 豁免口径曾经写了两遍而分叉：交付侧拿「解析到的**节点**类型」判 `dash_exempt`（节点
+  类型必然具体），清单侧拿「记录 `ntype`，缺失时回退**同键类型集**、混用即保守豁免」。
+  Weibel ch5 实测 8 条假阳全部出在这条分叉上（`5.4-4` 同键挂 `definition`+`exercise`
+  两个节点 → 清单侧豁免、游标停在 p143；交付侧不豁免 → 游标推到 p144，紧随的 `5.4-5`
+  被契约误登记 p143 就判成倒退）。合写成一遍后 `lib/tests/test_unit_order.py::
+  test_mixed_key_type_exemption_is_shared_by_both_calibers` 锁住两侧一致。
+  🔴 语种必须配对：拿英文单元正文在中文交付 md 里找 = 整章定位失败 = 假绿，故按
+  manifest 的 `language` 选 `units` / `units-translate`（译版单元顺序可以与源版不同，
+  Kreyszig ch4 实测两侧先后差 26 位，中文交付 md 的真实拼接序是译版 manifest 顺序）。
+  🔴 **语种要从文件名字读回来，而合并视图的名字不是交付名**：verify 交给各层的是
+  `_merged_temp_path` 写出的 `._verify_merged_<章>_<lang>.md`，而 `_group_lang` 原本只认
+  「第N章/附录/补篇」与「Chapter/Appendix/Supplement」两类真实交付前缀 → 视图名以 `.`
+  起头返回 None → 配对回退源侧 `units`。Weibel ch10 中文视图实测 **1/152 定位（0.7%）、
+  0 条问题**，而同一章英文视图 149/152、3 条问题——中文侧整章失明，却照样打印覆盖率行
+  像个结论。修法 = `_group_lang` 认视图名末尾的语种（`_MERGED_VIEW_LANG`；老命名
+  `._verify_merged_ch10.md` 仍返回 None，不猜），并配 `verify/tests/
+  test_delivered_order_lang_pairing.py`：视图名 round-trip + 中/英视图各自定位到
+  `units-translate`/`units` 并各报 1 条倒退（变异检验：摘掉语种分支 → 中文侧
+  `located=0`、3 条点名测试转红）。修复后 Weibel 中文视图 148/152 + 3 条，与本层普查
+  口径（普查驱动直接取组内真实首文件名，本来就是配对好的）一致。
+- **口径只到页码**（`by_preorder=False`）：同页之内的先后，契约 `sub_sec` 列表序在交付侧
+  **没有印面证据**。实测本书全书 6 处「前序倒退」，逐条解剖后 4 处是 `check_contract_anchors`
+  文档里的已知契约缺陷（节习题块登记成父节第一个子节点：`习题6.1` 前序 15、`例6.1.6` 前序 16，
+  印面在 §6.1 末 = 交付侧才对），2 处是同页三个条目加一个节头谁先谁后。拿它当阻断判据 =
+  逼修书方按无证据的次序搬走已经正确的交付块。同页顺序要修的是**契约登记**，归
+  `check_contract_anchors` / B 层节内序标管。
+- **覆盖率与问题同屏**（`md_order_stats`：`located/expected/coverage/units_dir/unlocated`）：
+  定位不到 = 跳过 = 不测，所以 `coverage` 低时「没有问题」不能作为证据；`merge:false`
+  单元（V-I 章末集中习题省略）不进分母。`unlocated` 全量落 `verify_detail` 旁路（缺陷③ 出口）。
+- **非阻断 WARN + 全语料普查（2026-10-23 出厂依据）**：晚生判据不得把已收官书永久刷红
+  （`flow_runner audit` 口径），故先以 WARN 呈现、明细进旁路。普查 = 58 本 / 892 个
+  (章,语种) 组 / 49075 条应定位单元，**定位率 99.04%**（未定位 472 条：desc 238 +
+  section 205 + chapter 18 + item 7 + exercise 4——即「纯标题/导语容器单元」，正文太短或
+  与交付条头不同形，宁可不测）；豁免口径合流后**问题 12 条，只落 2 本书**，逐条印面裁决
+  后**全部是「账错、交付对」**，没有一条该动交付：
+  - Weibel ch10（6 条）：印面 p397 是 `Proposition 10.4.1`，与同号 `Exercise 10.4.1` **撞键**；
+    节末习题块在交付里正确地排在 Example 10.4.9（p401）之后（其内容引用引理 10.4.6），
+    manifest 却把习题记录留在条目中间 = 清单陈旧。
+  - Underactuated Robotics 附录 C（6 条）：印面 `C.1 OPTIMIZATION SOFTWARE` 在 **p323**、
+    `C.2 GENERAL CONCEPTS` 在 p324；交付（C.1 先）对，契约页码（C.1=p325 / C.2=p324）与
+    manifest 次序（C.2 先）都错。
+  所以报告括注自带出口指令「先按印面定序，再决定搬交付块还是回写契约/清单」，防止把
+  正确的交付块按错账搬走。**升阻断的前提**：这两本书的账回写完毕 + 普查复跑归零。
+
 ## 本阶段规则（阻断性 / 可修复）
 - `unit_order_problems` 非空 → 阻断 FAIL（`problems += 1`）。
 - **不可 `--fix`**：顺序错乱的修复 = 重排单元（manifest 记录顺序），风险高，须人工/脚本按报告
@@ -46,6 +106,8 @@ U 层（与 gate_units 章级闸 ⑪）用**源书页码**这个共同真值把�
 ## 出口条件
 `unit_order_problems == []`。契约或源 manifest 任一缺失（旧书未产契约 / 非 write-source 产物）
 → 静默返回 `[]`（无从判真值不误报），不阻断。
+`md_order_problems == []` 属**非阻断**出口，且必须连同 `md_order_stats.coverage` 一起看
+（低覆盖 = 没测，不等于测过且通过）。
 
 ## 相关代码
 - 核心实现（门控与 verify 共用，杜绝逻辑漂移）：[`../../lib/unit_order.py`](../../lib/unit_order.py)

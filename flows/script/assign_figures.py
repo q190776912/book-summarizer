@@ -238,7 +238,7 @@ def _union_recrop(pdf_path, page, boxes, dst, dpi=_DETECT_DPI):
     if not pdf_path or not os.path.exists(pdf_path):
         return False
     try:
-        import fitz
+        import pymupdf as fitz
         import numpy as _np
         from PIL import Image as _PILImage
         doc = fitz.open(pdf_path)

@@ -24,6 +24,8 @@ _boot.setup()
 
 import os, sys
 
+from lib import verify_detail as _vd
+
 
 # P 层聚合阈值（与 verify/verbose_gates/script/verbose_gates.py 中的 VERBOSE_PARA_GATE / VERBOSE_PROOF_GATE 一致）
 from verbose_gates import VERBOSE_PARA_GATE, VERBOSE_PROOF_GATE
@@ -43,6 +45,11 @@ def print_result(r):
 
     problems = 0
     ch = r['ch']; md = r['md']
+    # 非阻断明细的机器可读旁路（判据见 lib/verify_detail.py）：先落盘，
+    # 于是下面任何「从略」都能点名到全量清单，日志短而审计不缺。
+    _det = _vd.dump(r)
+    _det_abs = (os.path.normpath(os.path.join(r.get('extract_dir', ''), _det))
+                if _det else None)
 
     # D-LAYER FIRST: section continuity + tail-section-missing (independent of extract_items)
     d = r['d_layer']
@@ -155,7 +162,11 @@ def print_result(r):
             for k in _emd[:40]:
                 print(f"  · {k}")
             if len(_emd) > 40:
-                print(f"  · …（其余 {len(_emd) - 40} 个从略）")
+                # 🔴 日志截断只许截**呈现**，不许截**账**：全量清单必须在盘上有
+                # 一份机器可读副本，否则「非阻断」等于「不可复核」。
+                _tail = (f"全量清单见 {_det_abs} 的 \"extra_mention_domain\" 桶"
+                         if _det_abs else "全量清单未落盘（本结果无 extract_dir，写不了旁路）")
+                print(f"  · …（其余 {len(_emd) - 40} 个从略；{_tail}）")
         _att = r.get('extra_attested')
         if _att:
             _ars = r.get('extra_attested_reasons') or {}
@@ -618,6 +629,32 @@ def print_result(r):
         for g in u_order:
             print(f"  ! {g}")
 
+    # ---- 交付 md 自身阅读顺序（缺陷①，WARN 非阻断）----
+    # 上面那条 U 层测的是**源 manifest** 顺序（隐含「merge 之后交付 md 不再被改」）；
+    # 本条把被测顺序换成**交付 md 文本自身**：单元身份仍按 manifest 解析，先后取自
+    # 「该单元正文在交付文本里的唯一偏移」（lib/unit_order.md_unit_positions）。
+    # 判据与阻断侧同源（_monotonic_problems），差别只在被测序列。
+    md_order = r.get('md_order_problems', []) or []
+    md_st = r.get('md_order_stats', {}) or {}
+    if md_order:
+        print(f"\nU-LAYER DELIVERED ORDER ({len(md_order)}) [WARN, non-blocking]: "
+              f"**交付 md 文本里读到的**单元次序与原书页码矛盾（跨页/跨节错位）——manifest 全绿"
+              f"只证明「拼接时次序对」，证明不了「交付 md 现在次序对」（合并后交付侧做过"
+              f"整块搬移 / 换文件 / 节序重排）。修法 = 按印面把交付 md 里的单元块整块搬回"
+              f"正确页序（🔴 交付侧只许整块搬移，绝不重 merge），并同步该章 manifest 与契约；"
+              f"同页之内的先后本判据**不作断言**（契约列表序在交付侧无印面证据，见 "
+              f"lib/unit_order._monotonic_problems），要修的是契约登记不是交付块：")
+        for g in md_order:
+            print(f"  ~ {g}")
+    if md_st:
+        # 覆盖率是这道闸的**可信度**，必须与问题同屏：定位不到 = 跳过 = 不测，
+        # 所以 coverage 低时「没有问题」根本不能作为证据。
+        _un = md_st.get('unlocated') or []
+        print(f"\nU-LAYER DELIVERED ORDER COVERAGE: 已定位 {md_st.get('located')}/"
+              f"{md_st.get('expected')}（{md_st.get('coverage')}%，单元侧 = "
+              f"{md_st.get('units_dir')}）" + ("" if not _un else
+              f"；未定位 {len(_un)} 条（前 {min(len(_un), 12)} 条：{', '.join(_un[:12])}"
+              + ("，全量见 verify_detail 旁路" if len(_un) > 12 else "") + "）"))
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。

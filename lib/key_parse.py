@@ -397,6 +397,89 @@ def _is_foreign_chapter_ref(line, start, end, chapter):
     return False
 
 
+# --- 复合词尾巴守卫（单字标签 `注` 的散文幻影键）------------------------------
+# 缺陷形态（2026-10-23 茆诗松《概率论与数理统计教程》ch2 实测）：正文
+# 「甲、乙两赌徒赌技不相上下，各出赌注 50 法郎」里的 `注` 被
+# `PROSE_RE_ROSS_SINGLE` 当成分节标签，配上后面的数量 `50` → 幻影键 `评注50`
+# （`注` 经 `_canon_label` 正名为 评注）。它一边给 B 层 EXTRA-MENTION 刷出
+# 需要人判的噪声，一边**能掩盖真实缺写**：若某书契约确有 `评注50` 而 md 漏写
+# 条头，这条散文幻影会让缺写蒙混过关。
+# 为什么不能靠「前字是中文」收窄：既有左守卫 `(?<![A-Za-z0-9])` 只管拉丁侧
+# （`reTheorem`），CJK 前字必须放行——`由定理5.2`、`的例 2`、`回顾注 4.5.5`
+# 全是真引用。58 本书 / 1933 个交付 md 的普查：单号散文正则的 CJK 紧邻前字命中
+# 2817 处（粗体内 545 / 粗体外 2272），逐条读上下文后确认其中绝大多数由限定词或
+# 动词带出（`由例 1`、`在例 2 中`、`仍以例 2`、`第 3 章例 3.2`…）。只有**前字与
+# `注` 本身构成一个词**时，`注` 才不是标签。
+# 表内每个词都是普查中**实际出现**过的形态，非推测：
+#   赌注（数量短语，纯幻影）· 脚注 / 附注 / 旁注 / 备注（指向笔记的引用或笔记条
+#   本身；契约从不按 `评注N` 登记，落在 EXTRA-MENTION 侧 = 噪声）
+# 刻意**不收**（普查确证其后的 `注` 就是标签，前字属动词/名词的另一成分）：
+#   回顾注 4.5.5 · 笑话题注 1.3.11 · 蕴含注 23.1.1 · 考虑例… · 见注 / 由注 /
+#   的注 / 下注 / 按注 / 如注 / 及注 / 和注 / 使注 / 节注 / 章注（均为真引用）
+# 🔴 两道豁免缺一不可（两侧都有实测样本）：
+#   * **粗体条头内不豁免即断链**：Leinster《BCT》中文侧把 Remark 印作「备注」，
+#     `**备注2.1.2**` 的键**只能**由散文正则产出——条头正则要求标签紧跟 `**`，
+#     而该行 `**` 之后第一个字符是 `备`。一律拦下 = 该书 remark 全族假 truly missing。
+#   * **行首条头位不豁免即误伤**：笔记条本身可以**不带粗体**直接起行——
+#     Weibel《An Introduction to Homological Algebra》ch5 的 `附注 1　$H_0(B)=…`、
+#     `脚注 7：回忆 spectral sequence…`，以及 数学物理方程《…》ch2 §2.3 的
+#     `附注 1　本教材…` / `评注 2　本教材…`（2026-10-20 该书的修法是把这两个键
+#     **登记进契约**，md 侧一直是裸行首形态）。此处「行首」按**复合词整体**判定
+#     （前字之前的文本只剩引用块 / 标题 / 空白等修饰符）：若按「标签之前」判定，
+#     `附注 1` 的前字 `附` 会让它显得在句中，收官书立刻新增假 truly missing。
+_NOTE_WORD_TAILS = frozenset({'赌注', '备注', '脚注', '附注', '旁注'})
+_NOTE_LABEL = '注'
+_CJK_CHAR_RE = re.compile('[一-鿿]')
+# 匹配点之前只剩引用块 / 标题 / 空白等修饰符 → 该提及是**行首条头**。
+_HEAD_POSITION_RE = re.compile(r'^[\s>#*]*$')
+
+
+def _in_bold_span(line, pos):
+    """`pos` 是否落在粗体区间内——按 `**` 的**奇偶**走趟判定，不用「前面有 `**`」的正则。
+
+    🔴 正则版（`\\*\\*[^*\\n]*$`）在一行里已有**闭合**粗体段时必然误判：茆诗松 ch2
+    「`**例2.2.1（分赌本问题）**` …各出赌注 50 法郎」的标签位于该粗体段**之后**，
+    正则仍能把「最后一个 `**` 到行尾」匹配上 → 被当成粗体内 → 守卫形同虚设。
+    奇偶走趟与本项目其它围栏扫描（`_norm_text` / V-E 家族）同一口径。
+    """
+    return line[:pos].count("**") % 2 == 1
+
+
+def _is_note_word_tail(line, label_start, label):
+    """该散文命中的 `注` 是否是一个**复合词的尾巴**（赌注/脚注/…），而非条目标签。
+
+    仅对单字标签 `注` 生效（`例`「条件」「性质」等在前字为中文时普查无一例幻影：
+    它们要么本身就是完整词，要么其后的数字确实指代该词——`行列式性质 6`、
+    `检验条件 2` 都是真引用）。粗体条头内、行首条头位一律不判（见上方注释）。
+    """
+    if label != _NOTE_LABEL or label_start <= 0:
+        return False
+    prev = line[label_start - 1]
+    if not _CJK_CHAR_RE.match(prev):
+        return False
+    if prev + label not in _NOTE_WORD_TAILS:
+        return False
+    if _in_bold_span(line, label_start):
+        return False
+    # 「行首」按复合词**整体**判：前字之前的文本只剩修饰符（见上方注释）。
+    if _HEAD_POSITION_RE.match(line[:label_start - 1]):
+        return False
+    return True
+
+
+def _prose_ms(rx, line):
+    """`rx` 在 `line` 上的散文提及命中，滤掉「复合词尾巴」幻影后再逐条产出。
+
+    只包 `PROSE_*` 的调用点（条头正则 `ENTRY_*` 有 `**` 锚定，本就不可能命中
+    散文短语，不经此缝）。要求各正则的**标签是 group(1)**（现状全部如此）。
+    判据只此一份，避免十个调用点各写一遍而漂移。
+    """
+    for m in rx.finditer(line):
+        if _is_note_word_tail(line, m.start(1), m.group(1)):
+            continue
+        yield m
+
+
 def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                chapter=None):
     """Entries/all_keys from an .md file.
@@ -430,7 +513,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_2.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_2.finditer(line):
+                for m in _prose_ms(PROSE_RE_2, line):
                     if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         continue
                     if _is_letter_slot_tail(line, m.end()):
@@ -457,7 +540,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_TWO_LETTER_C.finditer(line):
                     key = f"{_canon_label(m.group(1))} {m.group(2).upper()}"
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_EN_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_EN_C, line):
                     if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         continue
                     if _is_letter_slot_tail(line, m.end()):
@@ -492,16 +575,16 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_ROSS_SINGLE_C.finditer(line):
                     entries.add(_ross_canon(m.group(1), m.group(2)))
                     allk.add(_ross_canon(m.group(1), m.group(2)))
-                for m in PROSE_RE_ROSS_LETTER.finditer(line):
+                for m in _prose_ms(PROSE_RE_ROSS_LETTER, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(_ross_canon(m.group(1), m.group(2), m.group(3).lower()))
-                for m in PROSE_RE_EN_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_EN_C, line):
                     if _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         continue
                     if _is_letter_slot_tail(line, m.end()):
                         continue
                     allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
-                for m in PROSE_RE_ROSS_SINGLE.finditer(line):
+                for m in _prose_ms(PROSE_RE_ROSS_SINGLE, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(_ross_canon(m.group(1), m.group(2)))
             elif t == ORDINAL_APP:
@@ -515,7 +598,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_APP_BARE_C.finditer(line):
                     key = f"{m.group(1).upper()}.{m.group(2)}-{m.group(3)}"
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_APP_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_APP_C, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                                  f".{m.group(3)}-{m.group(4)}")
@@ -528,7 +611,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                            f".{m.group(3)}")
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_APP2_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_APP2_C, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                                  f".{m.group(3)}")
@@ -539,7 +622,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     key = (f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                            f".{m.group(3)}")
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_APP2_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_APP2_C, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2).upper()}"
                                  f".{m.group(3)}")
@@ -555,7 +638,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     else:
                         key = label
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_2.finditer(line):
+                for m in _prose_ms(PROSE_RE_2, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}")
             else:
@@ -587,7 +670,7 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_EN3_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}"
                     entries.add(key); allk.add(key)
-                for m in PROSE_RE_EN3_C.finditer(line):
+                for m in _prose_ms(PROSE_RE_EN3_C, line):
                     if not _is_foreign_chapter_ref(line, m.start(), m.end(), chapter):
                         allk.add(f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}.{m.group(4)}")
                 # Appendix letter-led items ("**Lemma A.1**") in three-level

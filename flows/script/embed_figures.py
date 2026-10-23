@@ -57,7 +57,7 @@ import argparse
 from PIL import Image
 
 try:
-    import fitz  # PyMuPDF — already a dependency of the figure pipeline
+    import pymupdf as fitz  # PyMuPDF — already a dependency of the figure pipeline
     _HAVE_FITZ = True
 except Exception:
     _HAVE_FITZ = False

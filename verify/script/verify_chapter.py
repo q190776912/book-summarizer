@@ -217,12 +217,22 @@ def chapter_md_groups(book_dir, ch):
     return groups
 
 
+_MERGED_VIEW_LANG = re.compile(r"^\._verify_merged_(?P<label>.+)_(?P<lang>cn|en)\.md$")
+
+
 def _group_lang(grp):
     """判定一个 md 组属于哪种语言：cn（中文）/ en（英文）/ None（未知）。
 
     依据组内首个文件名前缀（与 chapter_md_groups 的命名约定同源）：
       cn → 第N章_* / 附录*_* / 附录.md / 补篇*_* / 补篇.md
       en → ChapterN_* / Appendix*_* / Appendix.md / Supplement*_* / Supplement.md
+
+    🔴 合并视图（`_merged_temp_path` 写出的 `._verify_merged_<章>_<lang>.md`）也认：
+    那种文件名以 `.` 起头、既不是 `第N章` 也不是 `ChapterN`，只把语种写在末尾。消费方
+    拿到的是**视图路径**而不是组，若这里返回 None，「按语种配对单元侧」就会退回源侧
+    （实测 2026-10-23：Weibel ch10 中文合并视图拿英文单元正文去定位 → 1/152 命中 →
+    交付顺序判据在整章中文侧什么都不测，还打印得像个结论）。语种本来就是视图文件名
+    必须携带的信息（见 `_merged_temp_path` 文档），此处只是把它读回来。
     """
     if not grp:
         return None
@@ -231,7 +241,8 @@ def _group_lang(grp):
         return 'cn'
     if b.startswith('Chapter') or b.startswith('Appendix') or b.startswith('Supplement'):
         return 'en'
-    return None
+    m = _MERGED_VIEW_LANG.match(b)
+    return m.group('lang') if m else None
 
 
 # 🔴 同一「章 + 语种」的多份合并交付物 = 重复交付（见 duplicate_merged_deliveries）

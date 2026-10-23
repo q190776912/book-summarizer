@@ -37,7 +37,7 @@ import os, re, json, sys
 from lib.util import chapter_of_page
 
 try:
-    import fitz
+    import pymupdf as fitz
 except Exception:
     print("PyMuPDF (fitz) unavailable — cannot derive precise anchors.")
     sys.exit(1)

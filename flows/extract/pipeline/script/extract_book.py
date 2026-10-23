@@ -76,7 +76,7 @@ for p in (PEK_ROOT, PEK_PKG):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-import fitz
+import pymupdf as fitz
 import cv2
 import numpy as np
 import torch

@@ -34,9 +34,10 @@ silent.
 import lib.boot as b
 b.setup()
 
-from lib.unit_order import (check_contract_anchors, check_section_key_page_order,
+from lib.unit_order import (check_contract_anchors, check_delivered_order,
+                            check_section_key_page_order,
                             check_unit_order, dash_exempt, inherited_desc_anchor_keys,
-                            is_dash_problem,
+                            is_dash_problem, md_unit_positions,
                             iter_unit_nodes, resolve_unit_anchors, _anchor_tables)
 
 
@@ -565,6 +566,31 @@ def test_dash_type_lookup_falls_back_to_contract_but_stays_conservative():
         legacy) == []
 
 
+def test_dash_exercise_record_type_self_exempts_when_contract_exercise_missing():
+    # Weibel《同调代数》ch10 实测：§10.4 里 Exercise 10.4.1 与 Proposition 10.4.1 **撞键**，
+    # 但契约**只登记了同号的 proposition 节点**（exercise 节点是空洞）。清单侧那条习题
+    # 记录自带 ``type=exercise``、不带 ``ntype``（本库清单从不写 ntype）。旧豁免只查
+    # ``key_types['10.4-1']`` → 拿到唯一那条 **proposition** → 判「编号结果条目、不豁免」→
+    # 习题单元经 ``exact['10.4-1']`` 解析到 proposition 的早页 p397，排在 Example 10.4.9
+    # （p401）之后就假报「阅读顺序倒退」（交付侧同理会假报）。
+    # 正解 = 先认清单记录**自带的 type**（exercise 族→豁免），再落回 key_types。
+    c = _ch([_node("proposition", "10.4-1", 397),
+             _node("theorem", "10.4-8", 400),
+             _node("example", "10.4-9", 401)])
+    units = [{"type": "item", "key": "10.4-1"},       # → proposition p397（参与）
+             {"type": "item", "key": "10.4-8"},       # → theorem p400（参与）
+             {"type": "item", "key": "10.4-9"},       # → example p401（参与，游标推到 401）
+             {"type": "exercise", "key": "10.4-1"}]   # 自带 type=exercise → 豁免，不碰游标
+    assert check_unit_order(c, units) == []
+    # 反事实兜底：若同键在契约里**只有**一个编号节点、而习题记录**没**自带习题 type
+    # （退化成 item），旧行为不变 → 仍按编号条目解析到 p397 → 排在 p401 之后被点名。
+    degenerate = [{"type": "item", "key": "10.4-1"},
+                  {"type": "item", "key": "10.4-8"},
+                  {"type": "item", "key": "10.4-9"},
+                  {"type": "item", "key": "10.4-1"}]
+    assert len(check_unit_order(c, degenerate)) == 1
+
+
 def test_dash_exempt_helper():
     assert dash_exempt("11-5", "exercise") is True
     assert dash_exempt("11-5", "problem") is True
@@ -760,3 +786,168 @@ def test_zero_page_node_cleared_from_contract_self_check():
     assert check_contract_anchors(c) == []
     c["sub_sec"][0]["sub_sec"][1]["page_start"] = 337        # 真实倒退（早于其前序 339）
     assert any("9.5-6" in p or "9.5.6" in p for p in check_contract_anchors(c))
+
+
+# ---------------------------------------------------------------------------
+# 交付 md 自身顺序（缺陷①：manifest 转绿 ≠ 交付读对）
+# ---------------------------------------------------------------------------
+def _bodies(*texts):
+    """把若干单元正文写成「归一化非空行」序列（与 U 层 ``_unit_bodies`` 同形态）。"""
+    from lib.unit_order import norm_text
+    out = []
+    for t in texts:
+        lines = t.splitlines() if isinstance(t, str) else t
+        out.append([norm_text(l) for l in lines if norm_text(l)])
+    return out
+
+
+def _delivered_md(*parts):
+    from lib.unit_order import norm_text
+    return norm_text("\n\n".join(parts))
+
+
+def test_delivered_order_flags_cross_page_swap():
+    """交付文本把 p11 的内容搬到 p13 之后 → 抓；manifest 顺序（正确）照旧全绿。"""
+    c = _contract([("11.1", 11), ("11.2", 12), ("11.3", 13)])
+    units = _units(["11.1", "11.2", "11.3"])
+    assert check_unit_order(c, units) == []            # 清单侧无可报（顺序本就对）
+    md = _delivered_md("甲单元正文第一段内容", "丙单元正文第三段内容", "乙单元正文第二段内容")
+    bodies = _bodies("甲单元正文第一段内容", "乙单元正文第二段内容", "丙单元正文第三段内容")
+    pos = md_unit_positions(bodies, md)
+    assert None not in pos and pos[0] < pos[2] < pos[1], pos
+    probs = check_delivered_order(c, units, pos)
+    assert len(probs) == 1, probs
+    assert "11.2" in probs[0] and "p12" in probs[0] and "p13" in probs[0], probs
+    assert "交付 md" in probs[0], probs
+
+
+def test_unit_at_text_offset_zero_still_joins_the_judgment():
+    """章首块的合法偏移 = 0，不能当「没定位到」丢掉。
+
+    正向对照（同 :func:`md_unit_positions` 里 ``A or B`` 那个 bug）：首行只有 1 个字，
+    所以条头兜底必然失败，偏移 0 只能由逐行累加锚点给出。把这块放在交付文本最开头
+    （p13），若它被丢成 ``None``，被跳过的正是**唯一制造倒退的参照**，剩下的
+    甲(p11)→乙(p12) 单调递增 → 整章「零问题」假绿。
+    """
+    c = _contract([("11.1", 11), ("11.2", 12), ("11.3", 13)])
+    units = _units(["11.1", "11.2", "11.3"])
+    late_head = ["丙", "单元正文内容足够长的一段补齐"]      # 首行 <6 字 -> 兜底必失
+    md = _delivered_md("\n".join(late_head), "甲单元正文内容足够长的一段",
+                       "乙单元正文内容足够长的一段")
+    bodies = _bodies("甲单元正文内容足够长的一段", "乙单元正文内容足够长的一段", late_head)
+    pos = md_unit_positions(bodies, md)
+    assert pos[2] == 0 and None not in pos, pos           # 丙 = 章首块，位置可信
+    probs = check_delivered_order(c, units, pos)
+    assert len(probs) == 2 and all("「11.3」" in p for p in probs), probs
+
+
+def test_mixed_key_type_exemption_is_shared_by_both_calibers():
+    """同键挂着「编号条目 + 同号习题」两个节点、记录又不带 ``ntype`` 时，清单口径与
+    交付口径必须**同样**豁免；记录带 ``ntype`` 时又必须**同样**判定。
+
+    Weibel《An Introduction to Homological Algebra》ch5 普查实样（``5.4-4`` 同键 =
+    definition p144 + exercise p147，后随 ``5.4-5`` 契约登记 p143）：交付侧口径曾拿
+    「解析到的**节点**类型」判豁免（节点类型必然具体）→ 清单侧豁免、交付侧不豁免 →
+    8 条假阳。两条闸现在共用 :func:`iter_judged_units`，不允许再各说各话。
+    """
+    c = {"key": "5", "type": "chapter", "name": "Ch", "page_start": 130,
+         "sub_sec": [_node("section", "5.4", 143,
+                           [_node("definition", "5.4-4", 144),
+                            _node("theorem", "5.4-5", 143),
+                            _node("exercise", "5.4-4", 147)])]}
+    def _u(ntype4=None):
+        r4 = {"key": "5.4-4", "type": "item", "ntype": "definition"}
+        if ntype4 is None:
+            r4 = {"key": "5.4-4", "type": "item"}
+        return [_node_rec("5.4", "section"), r4,
+                {"key": "5.4-5", "type": "item"},
+                {"key": "5.4-4", "type": "exercise", "ntype": "exercise"}]
+    # 交付 = 清单同一顺序（节头 → 5.4-4 → 5.4-5 → 习题）
+    pos = [0, 10, 20, 30]
+    units = _u()
+    assert check_unit_order(c, units) == []
+    assert check_delivered_order(c, units, pos) == []      # 同键混用 → 两侧同样豁免
+    units = _u("keep")                                     # 记录自带 ntype=definition
+    assert len(check_unit_order(c, units)) == 1
+    assert len(check_delivered_order(c, units, pos)) == 1  # 两侧同样判定
+
+
+def _node_rec(key, ntype):
+    return {"key": key, "type": ntype, "ntype": ntype}
+
+
+def test_delivered_order_same_page_tie_is_not_asserted():
+    """同页互换**不报**：契约 sub_sec 的列表序在同页没有印面证据（实测 6 处里 4 处
+    是「节习题块登记成父节第一个子节点」的契约缺陷，交付侧才忠于印面）。"""
+    c = _contract([("11.1", 11), ("11.2", 11), ("11.3", 11)])
+    units = _units(["11.1", "11.2", "11.3"])
+    pos = [20, 0, 10]                      # 交付次序与契约前序完全倒过来，页码全同
+    assert check_delivered_order(c, units, pos) == []
+
+
+def test_unlocated_unit_is_skipped_without_resetting_cursor():
+    """定位不到 = 跳过（不算问题、也不重置游标），后面的真倒退仍须被抓。"""
+    c = _contract([("11.1", 11), ("11.2", 12), ("11.3", 13)])
+    units = _units(["11.1", "11.2", "11.3"])
+    probs = check_delivered_order(c, units, [0, None, 30])
+    assert probs == []                                   # 12 页没定位上 -> 无证据可比
+    assert len(check_delivered_order(c, units, [30, None, 0])) == 1
+
+
+def test_dash_exercise_units_stay_exempt_in_delivered_order():
+    """章末 dash 习题（ntype=exercise）在交付侧同样豁免；编号结果条目（example）不豁免。"""
+    c = {"key": "4", "type": "chapter", "name": "Ch", "page_start": 200,
+         "sub_sec": [_node("section", "4.2", 240,
+                           [_node("example", "4.2-2", 250), _node("example", "4.2-3", 249)]),
+                     _node("exercise", "4-7", 241)]}
+    units = [{"key": "4.2-2", "type": "item", "ntype": "example"},
+             {"key": "4-7", "type": "exercise", "ntype": "exercise"},
+             {"key": "4.2-3", "type": "item", "ntype": "example"}]
+    # 交付把 4.2-3（p249）排在 4.2-2（p250）之后 = 真倒退；习题 4-7（p241）夹在中间被豁免
+    assert len(check_delivered_order(c, units, [0, 5, 10])) == 1
+    assert "4.2-3" in check_delivered_order(c, units, [0, 5, 10])[0]
+
+
+def test_inherited_desc_unit_not_asserted_in_delivered_order():
+    """继承锚点的导语容器（desc 节点页 == 所在节起始页）在交付侧同样跳过（判据 7 同源）。"""
+    c = {"key": "4", "type": "chapter", "name": "Ch", "page_start": 200,
+         "sub_sec": [_node("section", "4.2", 228, [_node("description", "D2", 228)]),
+                     _node("section", "4.3", 233, [_node("description", "D3", 233)])]}
+    units = [{"key": "4.2", "type": "section", "ntype": "section"},
+             {"key": "D2", "type": "desc", "ntype": "description"},
+             {"key": "4.3", "type": "section", "ntype": "section"}]
+    assert check_delivered_order(c, units, [0, 100, 50]) == []   # D2 不参与，4.3 也不算倒退
+
+
+# --------------------------------------------------------- md_unit_positions 定位口径
+def _pos_of(texts, md):
+    return md_unit_positions(_bodies(*texts), md)
+
+
+def test_shared_first_line_needs_more_lines_to_be_unique():
+    """首行撞车（多个图单元共用同一行）必须靠累加后续行区分，不能退回首见位置。"""
+    a, b = ['<div style="x">', "第一单元独有的正文内容", "尾部"], ['<div style="x">', "第二单元独有的正文内容", "尾部"]
+    md = _delivered_md("\n".join(b), "\n".join(a))     # 交付里 b 在 a 之前
+    pos = _pos_of([a, b], md)
+    # 各自定位到自己的块，不是同一处；b 合法偏移 = 0（章首），
+    # 用 `A or B` 的真值判断会把它丢成 None —— 这条同时是那个 bug 的负向测。
+    assert None not in pos and pos[0] > pos[1] == 0, pos
+
+
+def test_non_unique_anchor_is_left_unlocated():
+    """整单元正文在交付里出现两次（重复交付）→ 不猜位置，返回 None。"""
+    body = ["这段正文在交付里被贴了两遍", "第二行"]
+    md = _delivered_md("\n".join(body), "别的单元正文", "\n".join(body))
+    assert _pos_of([body], md) == [None]
+
+
+def test_label_fallback_survives_edited_body():
+    """交付做过同行机械替换（正文行对不上）时，粗体条头仍可作为唯一锚点。"""
+    unit = ["**定理3.2**", "这一行在交付侧被改写过了"]
+    md = _delivered_md("引言段落", "**定理3.2** 改写后的交付正文", "尾部段落")
+    pos = _pos_of([unit], md)
+    assert pos[0] is not None and md[:pos[0]].count("定理3.2") == 0, pos
+
+
+def test_empty_md_never_anchors():
+    assert md_unit_positions(_bodies("任意正文"), "") == [None]

@@ -66,7 +66,7 @@ from repairs import Repairs  # repairs.json instantiation lives with its model
 import sys, os, json, glob, re, argparse, difflib
 sys.stdout.reconfigure(encoding="utf-8")
 
-import fitz
+import pymupdf as fitz
 
 REPAIR_DIRNAME = "_mm_repair"
 

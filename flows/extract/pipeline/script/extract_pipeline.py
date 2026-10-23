@@ -137,7 +137,7 @@ def main():
     Path(EXTRACT_DIR).mkdir(parents=True, exist_ok=True)
 
     # Upper bound (end) defaults to the PDF's auto-detected total page count.
-    import fitz as _fitz
+    import pymupdf as _fitz
     with _fitz.open(PDF) as _doc:
         PDF_TOTAL = _doc.page_count
     if args.end is None:

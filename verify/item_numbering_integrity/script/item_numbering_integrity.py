@@ -98,6 +98,22 @@ _TAIL_GAP_CAP = 5
 _SPAN_RE = re.compile(r'\*\*([^\n]*?)\*\*')
 _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)')
 
+# 「(continued)」/「（续）」续部标记（2026-10-24 elements-of-large-sample-theory
+# ch4/ch6 实测）：印面把被后续条目隔断的**同一条目**块续排时，续块条头沿用原编号
+# （"Example 6.1.2 (continued)" / "例 6.1.2（续）"）——它不是该编号的又一次独立
+# 出现，而是同一条目的延续。按普通条目计入，会在「把续部搬到印面正确位置」（Q 层
+# ORDER_MISMATCH 的修法）之后必报「疑似幽灵重复节点」WARN：续部落到更大编号之后
+# → last_pos 序倒挂 → 去重（保留首次）后单调 → 同标签同子块命中。凡条头文本含该
+# 标记的出现记 continuation，幽灵重复的同号二现不计它（证明词开头的续部早已被
+# _PROOF_RE 排除，与此正交互补；"Exercises (Sec. X), continued." 无编号，
+# _parse_entry 直接返回 None，到不了这里）。
+_CONT_MARK_RE = re.compile(r'[（(]\s*(?:continued|cont\.?|续)\s*[)）]', re.IGNORECASE)
+
+
+def _is_continuation_head(inner):
+    """条头文本是否为「(continued)/（续）」续部（沿用原编号的续块，非独立出现）。"""
+    return bool(_CONT_MARK_RE.search(inner or ""))
+
 
 def _is_block_start(txt, pos):
     """Return True iff a `**…**` span at `pos` is a *block-level* heading.
@@ -1403,7 +1419,7 @@ def _md_gap_blocking(ctx):
         return _sub_str[i] if i >= 0 else None
 
     _depth_candidates = sorted({g.depth for g in cfg.ordinal}, reverse=True)
-    entries = []  # (group_key, item_num, unique_key, label, prefix_str, primed, sub_block)
+    entries = []  # (group_key, item_num, unique_key, label, prefix_str, primed, sub_block, cont)
     _demoted = []  # 习题窗两步法候选：(entries 下标, gi, prefix_str, item_num)
     _bare_pending = []  # 裸号习题头候选：(entries 下标, 主窗 gk, key)
     # 🔴 契约习题键（无标签条头的路由真值，判据见 `_contract_exercise_keys`）
@@ -1505,7 +1521,8 @@ def _md_gap_blocking(ctx):
             _dgi = cfg.ordinal.index(cfg.group_for_label(_dw_norm))
             _demoted.append((len(entries), _dgi, prefix_str, item_num))
         entries.append((gk, item_num, key, label, prefix_str,
-                        _own_number_primed(inner), _cur_sub(span.start())))
+                        _own_number_primed(inner), _cur_sub(span.start()),
+                        _is_continuation_head(inner)))
 
     _resolve_bare_ex_candidates(entries, _bare_pending)
     _resolve_demoted_entries(entries, _demoted)
@@ -1524,7 +1541,7 @@ def _md_gap_blocking(ctx):
     # 「幽灵重复」判据把同号二现归到「同标签 + 同子块」——见下方 WARN 分支。
     section_order_meta = defaultdict(list)
     present_md = set()
-    for gk, num, key, label, prefix_str, primed, sub in entries:
+    for gk, num, key, label, prefix_str, primed, sub, cont in entries:
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
         # per-type mode embeds the label ("C.S:LABEL"), combined mode does not
         # ("C.S").  Re-adding `label` here would split a combined section into
@@ -1537,7 +1554,7 @@ def _md_gap_blocking(ctx):
         # 「35 出现在 42 之后」的合法印面会被误判 BLOCKING 错位（见上 _PRIME 注释）。
         if not primed:
             section_order[gk].append(num)
-            section_order_meta[gk].append((num, label, sub))
+            section_order_meta[gk].append((num, label, sub, cont))
 
     # --- route-A: .md 自身引用的 Table/Figure 编号，序列查缺时跳过 -------------
     # Fraleigh 把表/图编入连续章节序号，但 .md 把它们写成正文（如 "Table 1.20
@@ -1701,7 +1718,7 @@ def _md_gap_blocking(ctx):
         seq_f = [n for n in seq
                  if not _ignored_num(gk_key, pref, n, label_candidates, known, ignore)]
         # 与 seq_f 同过滤口径的出现明细（判据只依赖号 n，故两表逐项对齐）。
-        meta_f = [(n, lab, sub) for (n, lab, sub) in section_order_meta.get(gk_key, [])
+        meta_f = [(n, lab, sub, cont) for (n, lab, sub, cont) in section_order_meta.get(gk_key, [])
                   if not _ignored_num(gk_key, pref, n, label_candidates, known, ignore)]
         last_pos = {}
         for i, num in enumerate(seq_f):
@@ -1736,10 +1753,17 @@ def _md_gap_blocking(ctx):
                     # （如 2.6-8 排在 2.6-11 之后，去重后仍非单调）照旧硬阻断。
                     # 子块锚取不到（md 无 `§` 标题）时所有出现落同一锚 → 旧行为不变。
                     _by_key = defaultdict(list)
-                    for n, lab, sub in meta_f:
-                        _by_key[(lab, sub)].append(n)
-                    dups = sorted({n for vals in _by_key.values()
-                                   for n in vals if vals.count(n) > 1})
+                    for n, lab, sub, cont in meta_f:
+                        _by_key[(lab, sub)].append((n, cont))
+                    # 🔴 续块（(continued)/（续））是同一条目的延续而非独立出现：
+                    # 只有同一 (标签, 子块) 桶内**非续**出现 ≥2 次才是真幻影形态
+                    # （Katok §1.1 的第二个 定义1.1.1）。合法续部到更大编号之后
+                    # 不再误报（elements-of-large-sample-theory ch4/ch6 实测）。
+                    dups = set()
+                    for _vals in _by_key.values():
+                        _real = [n for n, _c in _vals if not _c]
+                        dups.update(n for n in set(_real) if _real.count(n) > 1)
+                    dups = sorted(dups)
                     if dups:
                         warnings.append(
                             f"  WARN (non-blocking): 疑似幽灵重复节点 @{pref} [gk={gk_key}]: "

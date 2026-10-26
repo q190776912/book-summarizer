@@ -631,6 +631,21 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                     label = _canon_label(m.group(1))
                     letter = m.group(2) or ''
                     number = m.group(3) or ''
+                    # 🔴 lie《Introduction to Lie Algebras and Representation
+                    # Theory》(Humphreys GTM 9, ORDINAL_HUM=12) 根治（2026-10-26）：
+                    # 裸 `**Example**` / `**Definition**`（标签后既无字母位亦无数字）
+                    # 是**散文条目标签**、非编号条目——Humphreys 体例下 Example/Definition
+                    # 以散文块引用（`> **Example**`）或未编号定义（`**Definition**`）呈现，
+                    # 契约从不登记裸 `例`/`定义` 节点（ch1 契约只登记 `Theorem/Lemma/
+                    # Proposition/Corollary §…`；ch6 才登记带号 `Example §22.4-1`）。
+                    # ENTRY_RE_HUM 把它们收成 `例`/`定义` 落入 extra_entry 假信号桶。
+                    # 真实条目必带编号/字母位（`**Example 1**`→`例1` 契约 `Example §22.4-1`、
+                    # `**Lemma A**`→`引理 A`），故**仅剔除裸 Example/Definition**，
+                    # 不动 Theorem/Lemma/Proposition/Corollary/Remark（其裸头契约已登记、
+                    # 属合法条目）。只动非阻断 EXTRA 桶，truly_missing/阻断逐字节不变；
+                    # ORDINAL_HUM 全库仅 lie 一本使用（已 grep 核实），零跨书回归。
+                    if not letter and not number and label in ('例', '定义'):
+                        continue
                     if letter:
                         key = f"{label} {letter.upper()}"
                     elif number:
@@ -658,6 +673,17 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 if _fig_only:
                     continue
                 for m in ENTRY_RE.finditer(line):
+                    _span = line[m.start():m.end()]
+                    # 🔴 elements《Large Sample Theory》根治（2026-10-26）：
+                    # `> **Proof of (2.1.9).**` / `**证明 (4.1.15).**` 是**证明块引用**
+                    # 的粗体标题，不是编号条目；ENTRY_RE（标签无关）会把其中的
+                    # N.N.N 收成条目键（2.1-9 / 4.1-15）落入 extra_entry 假信号桶。
+                    # 此类块引用由 writing-rules 的 G_HEAD（证明/例 块引用）管辖、非
+                    # B 层条目，故 md 侧直接剔除。与既有「行内数学星号闭合」下游豁免
+                    # （item_numbering_integrity.py line 2779+）同一口径、互不冲突；
+                    # 只动非阻断 EXTRA 桶，truly_missing/阻断逐字节不变。
+                    if re.search(r'(?i)\bproof\s+of\b', _span) or _span.startswith('**证明'):
+                        continue
                     entries.add(normkey(m.group(1)))
                 # 🔴 带深度守卫的三段号扫描（判据见 `_KEY_DEEP_RE` 上方注释）：
                 # 区间写法 `第 10.4-10.6 节` / 更深一层 `1.2.3.4` 不再被截成假三段键。

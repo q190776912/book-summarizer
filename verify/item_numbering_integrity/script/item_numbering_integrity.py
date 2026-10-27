@@ -107,12 +107,34 @@ _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\
 # 标记的出现记 continuation，幽灵重复的同号二现不计它（证明词开头的续部早已被
 # _PROOF_RE 排除，与此正交互补；"Exercises (Sec. X), continued." 无编号，
 # _parse_entry 直接返回 None，到不了这里）。
-_CONT_MARK_RE = re.compile(r'[（(]\s*(?:continued|cont\.?|续)\s*[)）]', re.IGNORECASE)
+# 🔴 2026-10-27 同书 ch7 实测补充**收尾标记**：一条三块式长例会把首块之后的第二、
+# 第三块分别冠以「（续）」与「（完）」/「(continued)」与「(concluded)」（本书
+# §7.4 例 7.4.4："二项分布" / "二项分布（续）" / "二项分布（完）"）。「（完）」
+# 同样是沿用原编号的延续块而非独立条目，漏收它会使 例7.4.4 的非续出现变成两次
+# ⇒ 报假「同号二现 [4]」。故一并纳入 token 集（与 续/continued 同一口径）。
+_CONT_MARK_RE = re.compile(
+    r'[（(]\s*(?:continued|cont\.?|concluded|finished|续|完|完结|终)\s*[)）]',
+    re.IGNORECASE)
 
 
-def _is_continuation_head(inner):
-    """条头文本是否为「(continued)/（续）」续部（沿用原编号的续块，非独立出现）。"""
-    return bool(_CONT_MARK_RE.search(inner or ""))
+def _is_continuation_head(inner, after=None):
+    """条头文本是否为「(continued)/（续）」续部（沿用原编号的续块，非独立出现）。
+
+    续部标记可写在**加粗内部**（"**例 6.1.2（续）**"，本书 ch4/ch6 实测）或**加粗
+    之后的描述性题名**里（"**例 7.1.1** Poisson（续）。"，本书 ch7 §7.1 实测）——
+    后者同样是原条目的延续、而非该编号的又一次独立出现。旧实现只扫加粗内部，会把
+    后者漏判成普通条目：续部的大号/小号下沉因而趟开 `_split_restarting_windows`
+    的重置切窗（主窗 [1,2,3,4] + 续窗 [1,4]），而 2、3 其实在主窗里真实存在，于是
+    报硬 BLOCKING「缺号 2/3」。故此处连同加粗后的题名一并识别。
+    `after` 取加粗后**同一行**的剩余文本，且只看到首个句子为止（遇句读截断），
+    避免把行内正文里的无关括号误判成续部。
+    """
+    if _CONT_MARK_RE.search(inner or ""):
+        return True
+    if after:
+        _tail = re.split(r'[。.!?！？\n]', after, maxsplit=1)[0]
+        return bool(_CONT_MARK_RE.search(_tail))
+    return False
 
 
 def _is_block_start(txt, pos):
@@ -1520,9 +1542,14 @@ def _md_gap_blocking(ctx):
             _dw_norm = _norm_label(_demoted_word)
             _dgi = cfg.ordinal.index(cfg.group_for_label(_dw_norm))
             _demoted.append((len(entries), _dgi, prefix_str, item_num))
+        # 🔴 续部标记可能落在**加粗之内**（ch4/ch6 形）或**加粗之后的描述性题名**
+        #    里（ch7 §7.1 形："**例 7.1.1** Poisson（续）。"）。把加粗后的同一行
+        #    余下文本一并交给 _is_continuation_head，两种写法都能命中。
+        _nl = txt.find('\n', span.end())
+        _after = txt[span.end():_nl] if _nl != -1 else txt[span.end():]
         entries.append((gk, item_num, key, label, prefix_str,
                         _own_number_primed(inner), _cur_sub(span.start()),
-                        _is_continuation_head(inner)))
+                        _is_continuation_head(inner, _after)))
 
     _resolve_bare_ex_candidates(entries, _bare_pending)
     _resolve_demoted_entries(entries, _demoted)
@@ -1541,13 +1568,29 @@ def _md_gap_blocking(ctx):
     # 「幽灵重复」判据把同号二现归到「同标签 + 同子块」——见下方 WARN 分支。
     section_order_meta = defaultdict(list)
     present_md = set()
+    # 🔴 续部位次（(continued)/（续））不占编号序列的第二个席位（本书 ch7 §7.1
+    #    实测）：它是同一条目的延续，却带着原编号。它被计入序列时，与原条目之间的
+    #    字号下沉会趟开 `_split_restarting_windows` 的重置切窗（主窗 [1,2,3,4] +
+    #    续窗 [1,4]），续窗只有 {1,4} ⇒ 2、3 被报成硬 BLOCKING「缺号」，而它们
+    #    其实在主窗里真实存在。故：该号已由**非续位**占据时，续位不再计入任何编号
+    #    序列（缺号窗 groups / 顺序窗 section_order）——与既有的「幽灵重复」判据
+    #    （只数 `if not _c` 的非续出现）同一口径。
+    #    🔴 反向锁：某号**只**以续位出现（原条目缺失）时照常计入，绝不以此隐藏
+    #    真缺项。
+    _owned = defaultdict(set)   # 基窗 gk -> 已被非续位占据的号集合
+    for _gk, _n, _k, _l, _p, _pr, _s, _c in entries:
+        if not _c:
+            _owned[_gk.split('#', 1)[0]].add(_n)
     for gk, num, key, label, prefix_str, primed, sub, cont in entries:
+        # present_md 记录「该号在 .md 中确有出现」，续位也算出现 ⇒ 无条件登记。
+        present_md.add(key)
+        if cont and num in _owned[gk.split('#', 1)[0]]:
+            continue          # 续位：该号已由原条目占据，不再单列
         # Group by `gk` ONLY.  `gk` already encodes the separation decision:
         # per-type mode embeds the label ("C.S:LABEL"), combined mode does not
         # ("C.S").  Re-adding `label` here would split a combined section into
         # per-type sub-sequences -> false "缺号" (the original bug).
         groups[gk].append((num, key))
-        present_md.add(key)
         # 阅读顺序记录（无论 per-type/combined，同一节前缀 §C.S 的编号按出现先后入列，
         # 用于跨类型顺序错乱检测：例如 2.6-8 这种 Example 掉到 2.6-11 这种 Lemma 之后）。
         # 🔴 撇号重述项（Theorem 35'）不占主计数器席位，不入阅读顺序窗，否则

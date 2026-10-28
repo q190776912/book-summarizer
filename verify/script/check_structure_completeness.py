@@ -1433,10 +1433,16 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
         # 判据（两重，防真条目恰与节同号）：候选来自 *_nf 方案且带 label；其 snippet
         # 归一文本与契约里**同序标小节**的标题互为前缀。命中记 section_title：
         # 不回填、不拦闸，且不得喂给 B 层。
+        # 🔴 精确相等不受 8 字符下限约束（Koopman ch15 p421 实测 2026-10-28）：
+        # 印刷节题「15.4 Example」整行归一后仅 "example"（7 字符），却与契约节名
+        # 逐字相等——8 字符下限本为挡**短前缀**的弱匹配（"example" ⊂
+        # "examples and applications…"），整行相等不属弱匹配。仅放宽相等分支，
+        # 前缀分支仍要求 ≥8。
         if str(it.get("scheme", "")).endswith("_nf") and it.get("has_label"):
             st = _sec_titles.get(tuple(c))
             sn = _norm_alnum(it.get("snippet", ""))
-            if st and len(sn) >= 8 and (st.startswith(sn) or sn.startswith(st)):
+            if st and (sn == st or (
+                    len(sn) >= 8 and (st.startswith(sn) or sn.startswith(st)))):
                 _phantom_sec_ck.add(ck)
                 missing_items.append({
                     "key": it["key"], "label": it["label"], "page": it["page"],

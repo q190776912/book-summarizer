@@ -13,7 +13,12 @@
   1. dry-run：节题伪装「Definition 5.1」status=section_title（不拦闸）；
      同号但文本不符的真条头「Definition 5.3」仍 readable（不得吞真缺项）；
      真缺项「定理5.3」仍 readable。
-  2. backfill：只回填真缺项；「Definition 5.1」绝不入契约；再跑 gate PASS。
+  1b. 短节题精确相等（Koopman ch15 形态）：节名「5.5 Example」被整行扫出
+     「Example 5.5」时仍判 section_title（不受 8 字符下限约束）；而节名
+     「5.6 Examples and extensions」下的短前缀「Example 5.6」仍 readable
+     （放宽只限精确相等，不得吞真条头）。
+  2. backfill：只回填真缺项；「Definition 5.1」「Example 5.5」绝不入契约；
+     再跑 gate PASS。
 """
 import json
 import os
@@ -63,6 +68,12 @@ PAGES = {
         "Theorem 5.4. Wilson's theorem.",
     ],
     120: [
+        # 整行节题、归一后 <8 字符（"example"）但**与契约节名精确相等**：
+        # 必须豁免（Koopman ch15 「15.4 Example」实测形态）。
+        "5.5 Example",
+        # 同标签词的**短前缀**：节名 "Examples and extensions" 以 "example"
+        # 开头，但整行不相等 → 视作真条头，不得被精确相等放宽吞掉。
+        "5.6 Example",
         "A closing paragraph without any labelled head.",
     ],
 }
@@ -91,6 +102,10 @@ CHAPTER = {
              {"key": "定理5.4", "type": "theorem", "name": "Theorem 5.4",
               "page_start": 119, "page_end": 119, "sub_sec": []},
          ]},
+        {"key": "5.5", "type": "section", "name": "5.5 Example",
+         "page_start": 120, "page_end": 120, "sub_sec": []},
+        {"key": "5.6", "type": "section", "name": "5.6 Examples and extensions",
+         "page_start": 120, "page_end": 120, "sub_sec": []},
     ],
 }
 
@@ -152,6 +167,14 @@ def main():
         _assert(st.get("Theorem 5.3") == "readable",
                 "genuinely missing Theorem 5.3 still flagged readable (got %s)"
                 % st.get("Theorem 5.3"))
+        _assert(st.get("Example 5.5") == "section_title",
+                "short exact section title 'Example 5.5' exempted as section_title (got %s)"
+                % st.get("Example 5.5"))
+        _assert("Example 5.5" not in rep["gate"]["residual_readable_items"],
+                "short exact section title does not block the gate")
+        _assert(st.get("Example 5.6") == "readable",
+                "short prefix of a longer section title stays readable (got %s)"
+                % st.get("Example 5.6"))
         _assert(rep["gate"]["passed"] is False,
                 "dry-run gate still FAILS due to real missing Theorem 5.3")
 
@@ -162,6 +185,10 @@ def main():
         _assert(not any(k.startswith("Definition 5.1") or k.endswith("定义5.1")
                         for k in bf),
                 "phantom 'Definition 5.1' must NEVER be backfilled (got %s)" % bf)
+        _assert(not any(k == "Example 5.5" for k in bf),
+                "exact section title 'Example 5.5' must NEVER be backfilled (got %s)" % bf)
+        _assert(any(k == "Example 5.6" for k in bf),
+                "real item head 'Example 5.6' was backfilled (got %s)" % bf)
         with open(os.path.join(ext, "book_structure", "ch%d.json" % CH),
                   encoding="utf-8") as f:
             keys = _all_keys(json.load(f))

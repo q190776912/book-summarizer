@@ -50,7 +50,7 @@ python verify/script/check_structure_completeness.py <extract_dir> [ch ...] --ba
   - `reference`（块内命中强引用标记 see/refer to/cf./the following…，或数字前置三级无显式标签）→ **不**自动回填，交人工 / agent 复核（多半是引用而非定义）；
   - `needs_agent`（OCR 字母↔数字无法干净还原）→ 交 agent 凭读图 / 知识回填（沿用 `config/manual_overrides_chN` + `（OCR无法识别）`，见 `verify/missing_label_policy.md`）。
   - `shared_counter`（共享计数器书专属）：该编号已以**另一标签**落在契约里（契约 `评注4.2`，源侧又扫到 `Corollary 4.2 implies…`）。共享一个升序计数器时同号全书只出现一次，源侧这处必是交叉引用/折行续句 → 不回填、闸门不拦，仅留痕供复核（Han-Lin《Elliptic PDEs》ch4 实测）。
-  - `section_title`（节题伪装）：数字前置方案（`*_nf`）把**小节标题行**读成条头——`5.1 Definition and basic properties of …` 的 label 是从标题首词抓来的伪「Definition 5.1」，而契约里同一序标本来就是 `section` 节点。判据：候选带 label 且 snippet 归一文本（剥开头数字、忽略大小写标点）与契约同序标小节标题互为前缀 → 不回填、闸门不拦，且**不喂给 B 层**（否则留下幻影尾号）（Apostol《Introduction to Analytic Number Theory》ch5 §5.1 实测；判据测试 `verify/script/tests/test_section_title_phantom.py`）。同号但文本不符的真条头仍 `readable`。
+  - `section_title`（节题伪装）：数字前置方案（`*_nf`）把**小节标题行**读成条头——`5.1 Definition and basic properties of …` 的 label 是从标题首词抓来的伪「Definition 5.1」，而契约里同一序标本来就是 `section` 节点。判据：候选带 label 且 snippet 归一文本（剥开头数字、忽略大小写标点）与契约同序标小节标题互为前缀 → 不回填、闸门不拦，且**不喂给 B 层**（否则留下幻影尾号）（Apostol《Introduction to Analytic Number Theory》ch5 §5.1 实测；判据测试 `verify/script/tests/test_section_title_phantom.py`）。同号但文本不符的真条头仍 `readable`。整行**精确相等**不受前缀匹配的 8 字符下限约束（短节题「15.4 Example」归一后仅 `example`，Koopman ch15 p421 实测 2026-10-28）；短前缀（`example` ⊂ `examples and extensions…`）仍须 ≥8 字符且判 `readable`。
   - `type_shadow`（契约以无类型 `uncat` 节点承载该 canon，印刷类型词被 OCR 吞）、`suffix_confusion`（字母后缀序标被形近折成数字，`1b`→`18`；契约已持真身 `定理1b`）：同类幻影豁免，均不回填、不拦闸、不喂 B 层（Kreyszig ch4 / do Carmo ch5 实测）。
 
 确认 `readable` 项无误后，**先备份再写回**：

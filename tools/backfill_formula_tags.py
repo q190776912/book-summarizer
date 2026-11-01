@@ -25,6 +25,9 @@
 保险（全部机械，不靠人自觉）：
   - 默认 dry-run，`--apply` 才写盘；写盘前把每个受影响文件备份到
     `<extract>/_bak_formula_tags/<时间戳>/`，逐次追加台账 `<extract>/_formula_tag_fixes.jsonl`。
+    备份件名 = **相对 extract 的路径**（分隔符折成 `+`）、写出按该文件自身的换行符：
+    🔴 旧形 `<父目录名>__<文件名>` 会让 `units/chN/manifest.json` 与
+    `units-translate/chN/manifest.json` 撞名互相盖（两侧本工具都写），回滚时少一本账。
   - **印面佐证闸**：以下五条至少命中一条才放行（`--evidence` 目视说明仍必填 ≥20 字）：
       (a) 该号 `(N)` 出现在该单元页区间的 `page_*.json` 文本里；
       (b) 该号是契约 tag 序列里的**夹心空洞**（`lib.tag_attestation.numbering_gaps`）；
@@ -40,18 +43,26 @@
           用于「契约里那个锚点被 OCR 粘进了表格行/句子（(d) 无从判）+ 宿主页窗不含该页
           （(a) 取不到）」的双盲形态——页号由人给，**号在不在页上仍由工具查**。
     检测趟与修复趟读**同一批谓词**，修复趟不自造第二套判据。
-  - 目标块必须是 **display 公式块**且**当前无 tag**；该号不得已在章内任何块登记（拒绝
-    重复挂号）；单元节点必须在 manifest 有**唯一**记录（同键多单元时必须 `--unit` 指定）。
+  - 目标块必须是 **display 公式块**且**当前无 tag**；该号不得已在**同一节域**登记（拒绝
+    重复挂号；判据见 `contract_tag_domains`——逐节重启编号的书里别节同号是常态，须
+    `--restart-per-section` 具名放行并记台账）；单元节点必须在 manifest 有**唯一**记录
+    （同键多单元时必须 `--unit` 指定）。
   - 🔴 **锚点邻接闸**（否决「号真印但**挂错块**」，判据见 `anchor_adjacency` 上方注释）：该号
     若在契约里有**整块** `(N)` 锚点，目标 display 必须是该锚点的
       ① **紧邻块**（同一条内容序列，左右皆可，多行公式组允许跳过连续锚点），或
-      ② 锚点**向后**跳过若干「非散文碎片」（行内公式 / 不含英文词的 text 碎片）后的
-         **第一条展示式**（印面版式：编号行在展示式**上方**自成一行，同一条公式常被
-         OCR 拆成「首行文字 + display」两块；本书 5 笔点名复核里 4 笔即此形）。
-         向后行走**遇成句英文即停**——本书印面确有「整行散文被编号」的式子
-         （(3.2.26) = 「the assignment … is made at random, i.e., with probability 1/2
-         each …」），它的编号后面跟的是句子，跨过句子去配下一条展示式正是要拦的形。
-    向前不做②的放宽。否则拒绝。动因 = 批量驱动的机械夹逼判据（「前后两在账号之间
+      ② 锚点**向后**跳过若干「非散文碎片」（行内公式 / 不含该书面语句子信号的 text 碎片）
+         后的**第一条展示式**（印面版式：编号行在展示式**上方**自成一行，同一条公式常被
+         OCR 拆成「首行文字 + display」两块；本书 5 笔点名复核里 4 笔即此形），或
+      ③ **仅中文书**：锚点**向前**的第一条展示式——页边编号印在展示式**右缘同一行**，
+         OCR 按列切 → 文本序里编号排在 display 与其续行碎片**之后**（数学分析 ch17 D21
+         (11)-(16) 六处）。只在②走空时才查，且「散文」按汉字判：`f（x）=`、
+         `cos uxdu f(t)cos utdt.` 这类续行不得拦停，而「在这两个公式中，f」必须拦停。
+    「散文」的分档就是③的组成部分：给拉丁书开③ = 实测让 (6.5.10) 倒退到块 49、
+    (3.2.26) 倒退到块 65 两笔**已证伪挂**复活（`_p832_lehmann_bwd.py`），故语种开关
+    不可省。向后行走一律**遇成句散文即停**——本书印面确有「整行散文被编号」的式子
+    （(3.2.26) = 「the assignment … is made at random, i.e., with probability 1/2
+    each …」），它的编号后面跟的是句子，跨过句子去配下一条展示式正是要拦的形。
+    否则拒绝。动因 = 批量驱动的机械夹逼判据（「前后两在账号之间
     唯一未挂号展示块」）对中间的 text/表格块完全失明，实测把真挨着概率表的 (6.5.10)
     挂到了上面那条印面无号的展示式上、把挨着一行**被编号散文**的 (3.2.26) 挂到了下面
     第 32 块的 `I_j` 展示式（2026-10-16 两笔均已 `deregister_formula_tags.py --mispaired` 摘回）。
@@ -60,8 +71,18 @@
     独立块 `(3.5.7)`（本书普查 23 处点名里 8 处即此类，锚点在别节点或挨着整句散文）。
     因此留了具名出口 `--confirm-non-adjacent`：目视印面确认后方可放行，台账记
     `adjacency_confirmed: true`（机械批量驱动不会传这个旗，所以它照样被拦在门外）。
-  - 只在「`json.dumps(obj, indent=2)` 与原字节逐字相同」的文件上整文件重写，否则拒绝；
-    写出后再断言「去掉新增 tag 即回到原字节」，保证零附带改动。
+  - 只在「**某个**统一缩进形（indent=2 / indent=1 / 紧凑 × 有无尾换行）与原字节逐字相同」
+    的文件上整文件
+    重写，写出时按该文件自身的缩进 / 尾换行 / 换行符（LF 或 CRLF）还原，否则拒绝；写出后
+    再断言「去掉新增 tag 即回到原字节」，保证零附带改动。
+    🔴 旧版只认 indent=2 + LF + 无尾换行**一种**形：Kreyszig 实测 11 份分章契约里有 3 种形
+    （ch1/ch3 是 CRLF、ch10 是 indent=1、ch11 是 indent=1+CRLF），于是 ch11 的 3 个 ⑱ 漏号
+    整章无路可回填（2026-10-29）；更糟的是 CRLF 文件读时被隐式折成 LF，按 indent=2 硬写会
+    把整文件换行符换掉，而「回到原字节」断言只在内存里比，抓不到这种附带改动。
+    候选集不是猜的：全架 57 本 × (764 份分章契约 + 1375 份单元 manifest) = 2139 份逐形普查，
+    indent=2 与 indent=1 之外只有 2 份紧凑形，indent=3/4/6/8 **零份**，故候选集列这三形；
+    manifest 侧全部可复现，剩下 54 份「任何一形都对不上原字节」的不规则**契约**仍走拒绝，
+    交人工核对（放宽到它们＝放弃逐字节复现保证）。
 
 用法:
   # 自动定位（推荐）：由 ⑱ 的收割判据点名，无需手填节点
@@ -97,7 +118,8 @@ _boot.setup()
 
 from data.book_structure.book_structure import (node_tags, prime_chapter_kinds,  # noqa: E402
                                                 resolve_chapter_json_path, unit_dir_name)
-from lib.tag_attestation import (collect_contract_tags, glued_anchor_tags,  # noqa: E402
+from lib.page_dir import node_page_dir, rel_page_dir  # noqa: E402
+from lib.tag_attestation import (glued_anchor_tags,  # noqa: E402
                                  numbering_gaps, unharvested_anchor_tags)
 
 _UNIT_TYPES = ("item", "desc", "exercise", "section")
@@ -118,18 +140,53 @@ class Refuse(Exception):
     """拒绝写出（未触碰任何文件）。"""
 
 
-# ── JSON：只在标准 indent=2 形上整文件重写 ──────────────────────────────────
+# ── JSON：只在「某个统一缩进形逐字节复现得了」的文件上整文件重写 ────────────
+# 候选形按 2026-10-29 全库普查（2139 份契约/manifest）实测定，不放宽到没见过的形：
+#   indent=2 → 1935 份；indent=1 → 148 份；紧凑形 → 2 份；其余 54 份（手改/键序不同/
+#   混合缩进）复现不了 ⇒ 继续拒绝。indent=3/4/6/8 语料里**一份都没有**，故不收。
+_INDENTS = (2, 1, None)       # None = 紧凑形（json.dumps 默认分隔符）
+_TRAILS = ("", "\n")
+
+
+def _dumps(obj, indent):
+    if indent is None:
+        return json.dumps(obj, ensure_ascii=False)
+    return json.dumps(obj, ensure_ascii=False, indent=indent)
+
+
+def _shape_of(obj, text):
+    """能逐字节复现 ``text`` 的 (indent, 尾换行)；复现不了返回 None。"""
+    for indent in _INDENTS:
+        body = _dumps(obj, indent)
+        for trail in _TRAILS:
+            if body + trail == text:
+                return (indent, trail)
+    return None
+
+
 def load_strict(path):
-    with io.open(path, encoding="utf-8") as f:
-        raw = f.read()
-    obj = json.loads(raw)
-    if dumps(obj) != raw:
-        raise Refuse("%s：不是 indent=2 标准 JSON 形，拒绝整文件重写（先人工核对）" % path)
-    return obj, raw
+    """读契约 / manifest → (obj, LF 归一文本, shape)。
+
+    ``shape=(indent, 尾换行, 原换行符)``：写出时按它还原，故 CRLF 文件出去还是 CRLF。
+    任一候选形都对不上原字节即拒绝整文件重写——本工具做的是「整文件重生」，形态不纯
+    （手改过、键序不同、混合缩进）时重生＝夹带改写，宁可让人先看一眼。
+    """
+    with open(path, "rb") as f:
+        blob = f.read()
+    nl = "\r\n" if b"\r\n" in blob else "\n"
+    text = blob.decode("utf-8").replace("\r\n", "\n")
+    obj = json.loads(text)
+    shape = _shape_of(obj, text)
+    if shape is None:
+        raise Refuse("%s：不是可逐字节复现的统一缩进 JSON 形（indent=%s × 尾换行 ''/'\\n' "
+                     "均不等），拒绝整文件重写（先人工核对）"
+                     % (path, [i for i in _INDENTS if i]))
+    return obj, text, (shape[0], shape[1], nl)
 
 
-def dumps(obj):
-    return json.dumps(obj, ensure_ascii=False, indent=2)
+def redump(obj, shape):
+    """按 ``load_strict`` 认出的形态重出文本（LF 形；写盘时再换回原换行符）。"""
+    return _dumps(obj, shape[0]) + shape[1]
 
 
 def _mkdir_unique(bak):
@@ -142,6 +199,17 @@ def _mkdir_unique(bak):
         except FileExistsError:
             i += 1
             cand = "%s-%d" % (bak, i)
+
+
+def _bak_name(extract_dir, pth):
+    """备份件文件名 = 相对 extract 的路径（分隔符折成 `+`）。
+
+    🔴 旧形是 `<父目录名>__<文件名>`，而两侧 manifest 的父目录**同名**（`units/ch2/
+    manifest.json` 与 `units-translate/ch2/manifest.json` 都成 `ch2__manifest.json`）→
+    后写的把先写的**盖掉**，译侧那份的备份在回滚时根本不存在（Kreyszig 6 站回填实测）。
+    """
+    rel = os.path.relpath(os.path.abspath(pth), os.path.abspath(extract_dir))
+    return rel.replace("\\", "+").replace("/", "+")
 
 
 # ── 契约遍历（节点 = 带 key 的 dict；内容块 = 带 text/formula/image 的裸 dict）──
@@ -287,12 +355,88 @@ def harvest_candidates(tree):
     return unharvested_anchor_tags(tree) + glued_anchor_tags(tree)
 
 
-def page_anchor_hit(extract_dir, num, lo, hi):
+# 🔴 节域判定在**本工具内自带**，不复用 `lib.tag_attestation._sec_index`：后者的
+#   `_SEC_RE` 只认数字节键（`^[0-9]{1,3}\.[0-9]{1,3}$`），而附录/补篇的节键是字母形
+#   `A.1`/`A.3`（罗马卷位 `II.5` 同理）。2026-10-29 数学分析 appendixA 实测：DA3
+#   （§A.3）已登记的 (1)…(11) 与 DA6（§A.6）印面**逐节重启**的 (1)…(4) 被归进同一个
+#   ``None`` 域 ⇒ 「该号已在账」闸门对 §A.6 直接报 NO-OP，正规回填通道对整类字母节
+#   书关门；邻接闸的否决集（同一 `sec_of` 口径）也随之跨节误否决。
+#   只在这里放宽：**`lib/tag_attestation` 侧的 ⑱/逃逸池判据一字不动**——那套判据已按
+#   全库普查标定，放宽它需要重新校准，不该由本工具的通道问题捎带。
+_DOMAIN_RE = re.compile(r"^(?:[0-9]{1,3}|[A-Za-z]{1,3})\.[0-9]{1,3}$")
+
+
+def _domain_index(tree):
+    """契约树 → {带键节点: 最近的 ``N.M``／字母节祖先键，或 None}。
+
+    三级键（``N.M.K`` / ``A.2.1``）与章键（``chN`` / ``A``）都向上找最近的二级节，
+    与 ``lib`` 侧同一层级语义，只是键形多认字母前缀。
+    """
+    sec = {}
+
+    def walk(node, chain):
+        if isinstance(node, dict):
+            k = node.get("key")
+            nk = chain + [str(k)] if k is not None else chain
+            if k is not None:
+                sec.setdefault(str(k), next((c for c in reversed(nk)
+                                             if _DOMAIN_RE.match(c)), None))
+            for c in node.get("sub_sec") or []:
+                walk(c, nk)
+        elif isinstance(node, list):
+            for c in node:
+                walk(c, chain)
+
+    walk(tree, [])
+    return sec
+
+
+def contract_tag_domains(tree):
+    """契约树 → ``({编号: {节域, …}}, {节点 key: 节域})``；节域 = 公式块所属带键节点的最近 ``§N.M`` 祖先键。
+
+    🔴 为什么按**节**而不是按章（2026-10-29 数学分析 ch17 实测）：印面把公式编号**逐节重启**
+    的书（§17.1 印 (1)…(12)、§17.4 印 (1)…(15)、§17.5 印 (1)…(23)）在同一章里合法地
+    多次出现同一个裸号。旧的「该号已在账 ⇒ NO-OP」用章级集合比较，于是 §17.5 的
+    `(11)…(16)` 六个真漏被 §17.1 的 `(11)(12)`、§17.4 的 `(13)…(16)` 顶掉，整族回填不进
+    正规通道——而 ⑱ 判据本身、以及 verify 的 q-inc（只查同节重号）早已按节取域。
+    无 ``§N.M`` 键的书各块域都是 ``None``，比较退化成原来的章级集合（行为不变）。
+    字母节键的书走本文件的 ``_domain_index``（见其上成因说明），``§A.1`` 与 ``§A.3``
+    是两个域，正如 ``§17.1`` 与 ``§17.4`` 是两个域。
+    """
+    sec = _domain_index(tree)
+    out = {}
+
+    def register(key, blk):
+        tags = [blk.get("tag")] if not blk.get("tags") \
+            else [blk.get("tag")] + list(blk.get("tags") or [])
+        dom = sec.get(str(key))
+        for t in tags:
+            if t:
+                out.setdefault(str(t), set()).add(dom)
+
+    def walk(node, cur_key):
+        for c in child_nodes(node):
+            if c.get("formula") is not None:
+                register(cur_key, c)      # 归到**最近带键祖先**：无键包装层里的块也不能丢
+            walk(c, str(c["key"]) if c.get("key") is not None else cur_key)
+
+    walk(tree, str(tree["key"]) if isinstance(tree, dict) and tree.get("key")
+         is not None else None)
+    return out, sec
+
+
+def page_anchor_hit(extract_dir, num, lo, hi, page_dir=None):
     if not lo:
         return False
     pat = re.compile(r"[(\[（]\s*%s\s*[)\]）]" % re.escape(str(num)))
+    # 🔴 页文件位置走 SSOT `lib.page_dir`：多册书的 `page_*.json` 只在各册子目录里
+    #   （`_extract/上册/`、`_extract/下册/`，且两册页码各自从 1 起）。旧写法直接读
+    #   `extract_dir` 根 ⇒ 每页 `isfile` 皆 False ⇒ 佐证 (a)/(e) 在整本多册书上**静默失效**
+    #   （数学分析 ch17 实测：印面页边 (11)…(16) 明明在 `下册/page_359-361.json` 里，
+    #   工具却报「既不在页区间锚点里」）。单册书 page_dir=extract_dir，行为不变。
+    base = page_dir or extract_dir
     for pno in range(int(lo) - 1, int(hi or lo) + 2):
-        p = os.path.join(extract_dir, "page_%03d.json" % pno)
+        p = os.path.join(base, "page_%03d.json" % pno)
         if not os.path.isfile(p):
             continue
         try:
@@ -306,21 +450,22 @@ def page_anchor_hit(extract_dir, num, lo, hi):
     return False
 
 
-def corroborate(extract_dir, tree, num, unit_node, adj=None, anchor_pages=()):
+def corroborate(extract_dir, tree, num, unit_node, adj=None, anchor_pages=(),
+                page_dir=None):
     reasons = []
     if str(num) in {str(h[0]) for h in numbering_gaps(tree)}:
         reasons.append("(b) 契约 tag 序列夹心空洞")
     if str(num) in {str(n) for _k, n, _f in harvest_candidates(tree)}:
         reasons.append("(c) 闸门⑱收割判据点名")
     if page_anchor_hit(extract_dir, num, unit_node.get("page_start"),
-                       unit_node.get("page_end")):
+                       unit_node.get("page_end"), page_dir=page_dir):
         reasons.append("(a) 页区间 page_*.json 有 (N) 锚点")
     if adj is True:
         reasons.append("(d) 契约内有整块 (N) 锚点且与目标展示式相邻"
                        "（锚点块本身即页文字层收割来的印面证据；条目/证明跨页时 (a) 的"
                        "单页页窗取不到，本条顶上）")
     for p in anchor_pages or ():
-        if page_anchor_hit(extract_dir, num, p, p):
+        if page_anchor_hit(extract_dir, num, p, p, page_dir=page_dir):
             reasons.append("(e) 指定页 p%s 的页文字层里有该号（页号由判用人给出，"
                            "工具自己回查该页，查不到即不认）" % p)
             break
@@ -390,26 +535,52 @@ def _is_display(b):
 # `n-Cov(XN1, XN2) .`）的区别就是后者不含英文词。
 _PROSE_WORD_RE = re.compile(r"[A-Za-z]{5,}")
 _PROSE_PAIR_RE = re.compile(r"\b[A-Za-z]{4,}\b.*\b[A-Za-z]{4,}\b")
+# 🔴 汉字**码位**档，不是 `merge_units._CJK_RE` 那档（后者含 U+3000-303F / U+FF00-FFEF
+#   标点区）：中文教材的公式碎片照抄全书排版体，括号逗号本就用全角（实测 数学分析
+#   D21 的续行块写成 `f（x）=`、`f(t)sin utdt，`），把「含全角标点」当句子证据 = 每个
+#   碎片都被判成散文，倒退 leg 一步都走不动。**句子用汉字写、公式用拉丁写**才是中文书
+#   的真分界。
+_HAN_RE = re.compile(u"[" + chr(0x4E00) + u"-" + chr(0x9FFF) + u"]")
+_CJK_PROSE_LANGS = ("cn", "zh", "zh-cn", "zh_cn", "chinese", "ja", "jp", "ko")
 
 
-def _is_prose_fragment(b):
-    """text 块读起来像**成句英文**（≥1 个 5+ 字母词，或 2 个 4+ 字母词）→ True。
+def cjk_prose_lang(language):
+    """章节 manifest 的 `language` → 该章**正文句子**是否用汉字写（散文判据分叉开关）。"""
+    return str(language or "").strip().lower() in _CJK_PROSE_LANGS
 
-    行内公式块不算散文（它们本就是公式的一部分）。
+
+def _is_prose_fragment(b, cjk_prose=False):
+    """text 块读起来像**成句**（该语言的散文）→ True；公式续行碎片 → False。
+
+    两档按书面语分叉，因为「像散文」的证据在两种排版里完全不同：
+      * 拉丁正文（`cjk_prose=False`，默认）：≥1 个 5+ 字母词或 2 个 4+ 字母词；
+      * 中文正文（`cjk_prose=True`）：**含汉字**。
+    🔴 两档不可互换，实测（2026-10-31 `_p832_lehmann_bwd.py`）把中文档套到 Lehmann 英文
+    契约上，两笔**已证伪挂**立刻复活：`(6.5.10)` 锚点（块 67）倒退到块 49 的展示式、
+    `(3.2.26)` 锚点（块 78）倒退到块 65 —— 因为整段英文散文在汉字档里一律「不含汉字 =
+    可跳过」，行走直接跨句子。反向同样致命：英文档套到中文契约上，`cos uxdu f(t)cos
+    utdt.`（两个 4+ 字母词）被当成句子拦停，真邻接判不出来；而中文句子「在这两个公式中，f」
+    一个 4+ 字母词都没有 → 现行② 在中文书里**跨过汉字句子照样命中远处展示式**
+    （出厂 A/B 实测 1277 处由放行翻成否决，见 `_p835_adj_ab.py`），这才是本函数改分叉的主因。
+
+    行内公式块不算散文（两档都一样：它们本就是公式的一部分）。
     """
     if not isinstance(b, dict) or b.get("text") is None:
         return False
     t = str(b.get("text"))
+    if cjk_prose:
+        return bool(_HAN_RE.search(t))
     return bool(_PROSE_WORD_RE.search(t) or _PROSE_PAIR_RE.search(t))
 
 
-def _first_display_forward(seq, aidx):
+def _first_display_forward(seq, aidx, cjk_prose=False):
     """锚点**向后**（文档序）遇到的第一条 display 的下标；走到序列尾/条目边界则 None。
 
     跳过的是「同一条印面展示式被 OCR 切碎的碎片」：非散文的 `text` 块与**行内**公式块。
     遇到带 key 的子条目（既非 text 亦非 inline formula）或**成句散文**即停——
     散文停下是因为本书印面确有「整行散文被编号」的式子（(3.2.26)），它的编号后面
     跟着的是句子而不是公式；跨过句子去配下一条展示式正是本闸要拦的错挂形。
+    「散文」按 :func:`_is_prose_fragment` 的书面语分档判。
     """
     k = aidx + 1
     while 0 <= k < len(seq) and isinstance(seq[k], dict):
@@ -419,7 +590,7 @@ def _first_display_forward(seq, aidx):
         if standalone_anchor(b):
             k += 1
             continue
-        if _is_prose_fragment(b):
+        if _is_prose_fragment(b, cjk_prose):
             return None
         if b.get("text") is not None or (b.get("formula") is not None
                                          and not b.get("display")):
@@ -429,19 +600,76 @@ def _first_display_forward(seq, aidx):
     return None
 
 
-def anchor_adjacency(tree, blk, num):
+def _first_display_backward(seq, aidx, cjk_prose):
+    """锚点**向前**（文档序倒退）遇到的第一条 display 的下标；越界/撞散文/撞子条目则 None。
+
+    🔴 只在 `cjk_prose` 为真时由 :func:`anchor_adjacency` 调用，且只在向后②**走空**之后
+    顶上（一条锚点不得同时认领两条展示式）。理由是版面方向相反的两形：
+      * 拉丁/中文书都有：编号行**在展示式上方自成一行** ⇒ 文本序里锚点在前，向后走（②）；
+      * 中文教材常见：页边编号排在展示式**右缘同一行** ⇒ OCR 按列切，文本序里编号落在
+        「display + 公式续行」**之后**（实测 数学分析 ch17 D21 六连号：display@17 →
+        续行「cos uxdu f(t)cos utdt.」→「f（x）=」→ 锚点「(11)」@20，余 (12)…(16) 同形）。
+    给拉丁书开这条 leg 会把②精心避开的错挂形重新放行（(6.5.10)/(3.2.26) 实测复活），
+    故语种开关是这条 leg 的一部分，不是可选装饰。
+    """
+    k = aidx - 1
+    while 0 <= k < len(seq) and isinstance(seq[k], dict):
+        b = seq[k]
+        if _is_display(b):
+            return k
+        if standalone_anchor(b):
+            k -= 1
+            continue
+        if _is_prose_fragment(b, cjk_prose):
+            return None
+        if b.get("text") is not None or (b.get("formula") is not None
+                                         and not b.get("display")):
+            k -= 1
+            continue
+        return None
+    return None
+
+
+def anchor_adjacency(tree, blk, num, sec_of=None, own_dom=None, cjk_prose=False):
     """→ (判定, 说明)：判定 True=邻接成立 / False=配对错 / None=契约无整块锚点（不判）。
 
-    两种成立形（印面编号行在展示式**上方**，故向后是版面方向）：
+    三种成立形（前两种左右两版式通用，第三种只在中文书开）：
       * **紧邻**（左右皆可，允许多行公式组共用一列编号时跳过连续锚点）；
       * **向后第一条展示式**：锚点与目标之间只夹着 text/行内碎片（实测：编号行下面
         那条公式常被 OCR 拆成「首行文字 + display」两块，或 display 前先出一条同式
-        的行内形）。**向前**不做这种放宽——实测两个真错挂（(6.5.10) 挨概率表行、
-        (3.2.26) 挨一行被编号的散文）都是「锚点后面跟着散文/表行、目标在远处」。
+        的行内形）。
+      * **向前第一条展示式**（仅 `cjk_prose`，且**只在向后走空时**才查）：页边编号
+        印在展示式右缘同一行，OCR 按列切出来的文本序把编号排到「display + 续行碎片」**后面**
+        （数学分析 ch17 D21 (11)-(16) 六处即此形，2026-10-31 逐处 fitz 裁页确证）。
+    🔴 向后的「遇散文即停」两档都不能少：拉丁书开倒退 = 已证伪挂复活（(6.5.10) 挨概率表、
+    (3.2.26) 挨被编号散文，实测倒退分别落到块 49 / 块 65），中文书不开汉字档 = 公式续行
+    被误判成句子、真邻接判不出来。判据与实测数字见 :func:`_is_prose_fragment` /
+    :func:`_first_display_backward`；影响面 = **出厂判据自身的 A/B**（`_p835_adj_ab.py`：
+    158 个中文书章 / 29893 个 (锚点 × display) 站点）——放宽 716 处（目标块已挂别的号 12 /
+    未挂号 690 / **复现账里既成配对 14**：数学分析 ch17 D21 (11)(12)(14)、appendixA
+    DA4-DA8、周民强 appendix 引理3 (4)、数值分析 ch8 定理22 (4.3)），收紧 1277 处
+    （旧英文档跨过汉字句子的假配）＝净**更严**，不是更松。
     """
     paths = anchor_paths(tree, num)
+    # 🔴 否决集只在**同一编号域**内取（与 `contract_tag_domains` 同一口径）：逐节重启编号
+    #   的书里，别节/别条定义自己的 `(N)` 与本节的 `(N)` 是**两条不同的公式**，拿它们
+    #   否决本节的回填等于用章级集合去判节级编号（数学分析 appendixA 的 (3)(4) 实测：
+    #   `(4)` 的整块锚点在 DA6/DA8 自己的式子上，DA3 的 (4) 被 OCR 粘进了行内，
+    #   旧判据一律「别处有锚点 ⇒ 目标不挨 ⇒ 拒绝」，正规通道对这整类书关门）。
+    #   同域内的锚点照旧全权否决（Lehmann (6.5.10)/(3.2.26) 两笔真错挂都在同域）。
+    dropped = 0
+    if sec_of is not None:
+        keep = []
+        for p in paths:
+            if sec_of.get(str(follow(tree, p[:-1]).get("key"))) == own_dom:
+                keep.append(p)
+        dropped = len(paths) - len(keep)
+        paths = keep
     if not paths:
-        return None, ("契约内无 (%s) 整块锚点（粘连 / 表格行 / OCR 漏），邻接闸不判" % num)
+        return None, ("契约内无 (%s) 整块锚点（粘连 / 表格行 / OCR 漏%s），邻接闸不判"
+                      % (num, "" if not dropped
+                         else "；别节另有 %d 处该号锚点，属别的公式自己的号，不参与本判"
+                              % dropped))
     tp = path_to_block(tree, blk)
     same = [p for p in paths if p[:-1] == tp[:-1]]
     seq = (follow(tree, tp[:-1]).get("sub_sec") or [])
@@ -455,23 +683,41 @@ def anchor_adjacency(tree, blk, num):
                 return True, ("锚点 (%s) 在同一内容序列的块 %d，与目标块 %d 相邻"
                               % (num, aidx, tp[-1]))
     for ap in same:
-        f = _first_display_forward(seq, ap[-1])
+        f = _first_display_forward(seq, ap[-1], cjk_prose)
         if f is not None and f == tp[-1]:
             return True, ("锚点 (%s) 在块 %d，向后跳过 %d 个文字/行内碎片后的**第一条**"
                           "展示式就是目标块 %d（印面编号行在其上方，同一公式被 OCR 切开）"
                           % (num, ap[-1], f - ap[-1] - 1, f))
+    if cjk_prose:
+        # 倒退 leg 只在向后②**走空**的锚点上顶：向后有解时那条解才是印面读法，
+        # 再认一条「前面的展示式」= 让同一锚点同时认领两条公式，闸只会更松不会更准。
+        for ap in same:
+            if _first_display_forward(seq, ap[-1], cjk_prose) is not None:
+                continue
+            b = _first_display_backward(seq, ap[-1], cjk_prose)
+            if b is not None and b == tp[-1]:
+                return True, ("锚点 (%s) 在块 %d，向后没有展示式（其后是散文/条目边界），"
+                              "而**向前**跳过 %d 个无汉字的公式续行/行内碎片后的第一条展示式"
+                              "就是目标块 %d（中文书版式：页边编号印在展示式右缘同一行，"
+                              "OCR 按列切 → 文本序里编号排在 display 与其续行之后）"
+                              % (num, ap[-1], ap[-1] - b - 1, b))
     where = ", ".join("节点 %s 块 %d（挨着 %s）"
                       % (follow(tree, p[:-1]).get("key"), p[-1],
                          _neighbour_head(follow(tree, p[:-1]), p[-1]))
                       for p in paths[:4])
-    fwd = [(_first_display_forward(seq, ap[-1]), ap[-1]) for ap in same]
+    fwd = [(_first_display_forward(seq, ap[-1], cjk_prose), ap[-1]) for ap in same]
     hint = ""
     if same and fwd and fwd[0][0] is not None:
         hint = "；锚点向后第一条展示式在块 %d（不是目标块）" % fwd[0][0]
+    elif cjk_prose and same:
+        b = _first_display_backward(seq, same[0][-1], cjk_prose)
+        if b is not None:
+            hint = "；锚点向前第一条展示式在块 %d（不是目标块）" % b
     return False, ("(%s) 在契约里有整块锚点 %d 处：%s；目标块却在 %s 的块 %d —— "
-                   "既不相邻、也不是锚点向后第一条展示式%s，说明该号印面挨的**不是**"
+                   "既不相邻、也不是锚点%s第一条展示式%s，说明该号印面挨的**不是**"
                    "这条展示式" % (num, len(paths), where,
-                                   follow(tree, tp[:-1]).get("key"), tp[-1], hint))
+                                   follow(tree, tp[:-1]).get("key"), tp[-1],
+                                   "向后或向前" if cjk_prose else "向后", hint))
 
 
 def _neighbour_head(par, aidx):
@@ -566,6 +812,9 @@ def main(argv=None):
     ap.add_argument("--confirm-non-adjacent", action="store_true",
                     help="已目视印面、确认该式确实带此号（契约里那个整块锚点是散文回引被"
                          "OCR 切成独立块）；仅用于放行锚点邻接闸，台账留名")
+    ap.add_argument("--restart-per-section", action="store_true",
+                   help="该书公式编号**逐节重启**（印面已核）：本号已在别节登记属合法形态，"
+                        "放行并把它记进台账的 cross_section_domains；章内连续号的书不要带这个旗")
     ap.add_argument("--anchor-page", default="",
                     help="逗号分隔的物理页号：条目跨页导致 (a) 的宿主页窗取不到号时，"
                          "由判用人指定该号印在哪一页；工具自己回查这些页的文字层，"
@@ -583,7 +832,7 @@ def main(argv=None):
         cpath = resolve_chapter_json_path(a.extract_dir, a.ch_key)
         if not cpath or not os.path.isfile(cpath):
             raise Refuse("找不到分章契约（%s）" % cpath)
-        tree, craw = load_strict(cpath)
+        tree, craw, cshape = load_strict(cpath)
 
         if a.list:
             print("⑱ 收割点名（unharvested + glued）：")
@@ -595,7 +844,7 @@ def main(argv=None):
             return 0
 
         manifests = manifest_paths(a.extract_dir, a.ch_key)
-        man0, _mraw = load_strict(manifests[0][1])
+        man0, _mraw, _mshape = load_strict(manifests[0][1])
 
         if a.list_blocks:
             # 定位辅助：只列块，不做佐证/不写盘，供人工挑 --needle / --block。
@@ -629,11 +878,6 @@ def main(argv=None):
         if not a.auto and not a.node:
             raise Refuse("定位方式缺失：--auto 或 --node")
 
-        if str(a.number) in {str(n) for _k, n in collect_contract_tags(tree)}:
-            print("NO-OP     章 %s 契约已登记 %s（该号在账，无需回填）"
-                  % (a.ch_key, a.number))
-            return 0
-
         unit_keys = {str(u.get("key")) for u in (man0.get("units") or [])
                      if u.get("type") in _UNIT_TYPES}
         pm = parent_map(tree)
@@ -641,6 +885,23 @@ def main(argv=None):
 
         unit_node, blk, how = resolve(tree, a, unit_keys, pm, want_type)
         ukey = str(unit_node.get("key"))
+
+        # 「该号已在账」只在**同节域**里算幂等 NO-OP（见 contract_tag_domains 的成因说明）；
+        # 号只登在别节 = 逐节重启编号的书的常态，须人工具名确认后才放行。
+        tag_dom, sec_of = contract_tag_domains(tree)
+        domains = tag_dom.get(str(a.number), set())
+        own_dom = sec_of.get(ukey)
+        if own_dom in domains or (own_dom is None and domains):
+            print("NO-OP     %s 节的契约已登记 %s（该号在账，无需回填）"
+                  % (own_dom or "本章", a.number))
+            return 0
+        cross = sorted(("本章（无 § 键）" if d is None else str(d)) for d in domains)
+        if cross and not a.restart_per_section:
+            raise Refuse("编号 %s 已在别节登记（域 %s）。两种可能：①该书**章内连续**编号 ⇒ "
+                         "这个号已被真用，本式另有其号或不该挂号，请回印面确认后改用正确编号"
+                         "或走 tools/deregister_formula_tags.py；②该书**逐节重启**编号 ⇒ "
+                         "别节的同号与本节无关，核对印面后加 --restart-per-section 具名放行"
+                         "（台账记录跨节同号）" % (a.number, cross))
 
         if blk.get("formula") is None:
             raise Refuse("目标块不是公式块")
@@ -655,9 +916,15 @@ def main(argv=None):
         # 页窗之外（条目/证明跨页时 `page_start==page_end` 只有 1 页，实测本书 ch6 有
         # 10 个号因此被 (a) 挡住）。邻接成立 = 「号与式在同一内容序列里挨着」，
         # 位置信息比页窗更强，不需要再放宽 (a) 的窗口。
-        adj, adj_note = anchor_adjacency(tree, blk, a.number)
+        # 🔴 散文档与倒退 leg 都按**该章源语言**分叉（`manifests[0]` = units 侧 = 契约
+        #   正文那一侧，与 gate_units/merge_units 读同一个 `language` 字段）：判的是
+        #   「这本书的句子用什么文字写」，不是书名里有没有中文。
+        adj, adj_note = anchor_adjacency(tree, blk, a.number, sec_of=sec_of,
+                                         own_dom=own_dom,
+                                         cjk_prose=cjk_prose_lang(man0.get("language")))
+        page_dir = node_page_dir(a.extract_dir, tree, a.ch_key)
         reasons = corroborate(a.extract_dir, tree, a.number, unit_node, adj=adj,
-                              anchor_pages=anchor_pages)
+                              anchor_pages=anchor_pages, page_dir=page_dir)
         if not reasons:
             raise Refuse("无印面佐证：该号既不在页区间锚点里、也不是夹心空洞、⑱ 未点名、"
                          "契约里也没有与目标相邻的整块锚点、--anchor-page 给的页里也查不到"
@@ -676,38 +943,54 @@ def main(argv=None):
 
         # ① 契约：先按对象身份定位，再在活树上改（node_tags 要看到新号），
         #    最后断言「去掉新增 tag 即回到原字节」，保证零附带改动。
+        # 🔴 「去掉」= 还原**原值**，不是删键：抽取器对「这条展示式印面无号」的显式记录是
+        #   `tag: ""`（全架 2026-10-31 普查：带 tag 键的块 15437 处里 122 处为空串，散布
+        #   12 本书，Lehmann / Evans-SDE / Gelfand–Manin / 数学分析 / Rising Sea…）。旧断言
+        #   一律 `del ["tag"]`，于是这类块**永远**写不进（实测 Rising Sea ch2 `2.1.1.1`：
+        #   佐证、邻接全过，倒在「一致性断言失败」上——断言本该只抓夹带改写，却把合法形态
+        #   当成了夹带）。空串是 falsy，故第 911 行「已登记真号」闸照旧放行，不受影响。
         path = path_to_block(tree, blk)
+        had_tag = "tag" in blk
+        prev_tag = blk.get("tag")
         blk["tag"] = str(a.number)
-        after_craw = dumps(tree)
+        after_craw = redump(tree, cshape)
         undo = copy.deepcopy(tree)
-        del follow(undo, path)["tag"]
-        if dumps(undo) != craw:
+        undo_blk = follow(undo, path)
+        if had_tag:
+            undo_blk["tag"] = prev_tag
+        else:
+            del undo_blk["tag"]
+        if redump(undo, cshape) != craw:
             raise Refuse("契约改动不止目标块的 tag（一致性断言失败），拒绝写出")
         lit = '"tag": "%s"' % a.number
         if after_craw.count(lit) != craw.count(lit) + 1:
             raise Refuse("新增编号串计数异常（拒绝写出）")
 
         new_tags = node_tags(unit_node)
-        targets = [(cpath, craw, after_craw)]
+        targets = [(cpath, craw, after_craw, cshape)]
         touched = []
         src_file = None
         for side, mp in manifests:
-            man, mraw = load_strict(mp)
+            man, mraw, mshape = load_strict(mp)
             entry = pick_entry(man, ukey, a.unit if side == "units" else src_file, side)
             if side == "units":
                 src_file = entry.get("file")
             old_tags = list(entry.get("tags") or [])
             entry["tags"] = new_tags
             touched.append((side, entry.get("file"), old_tags, new_tags))
-            targets.append((mp, mraw, dumps(man)))
+            targets.append((mp, mraw, redump(man, mshape), mshape))
 
         print("章        = %s   契约=%s" % (a.ch_key, os.path.basename(cpath)))
         print("单元节点  = %s（%s，页 %s-%s）"
               % (ukey, unit_node.get("type"), unit_node.get("page_start"),
                  unit_node.get("page_end")))
+        print("页文字层  = %s" % (rel_page_dir(a.extract_dir, page_dir) or "(extract 根，单册)"))
         print("定位方式  = %s" % how)
         print("目标公式  = %s" % str(blk.get("formula"))[:100])
         print("新增编号  = (%s)" % a.number)
+        print("节域      = %s%s" % (own_dom or "本章（无 § 键）",
+                                    "  ⚠️ 跨节同号（逐节重启，--restart-per-section）：%s"
+                                    % "、".join(cross) if cross else ""))
         print("印面佐证  = %s" % "; ".join(reasons))
         print("锚点邻接  = %s%s" % (adj_note,
                                     "  ⚠️ 人工复核确认不相邻落账（--confirm-non-adjacent）"
@@ -715,10 +998,10 @@ def main(argv=None):
         print("目视证据  = %s" % a.evidence.strip())
         for side, fname, old, new in touched:
             print("manifest  %s/%s  tags %s → %s" % (side, fname, old, new))
-        for path_, before, after in targets:
+        for path_, before, after, _sh in targets:
             print("%s %s" % ("=" if before == after else "~",
                              os.path.basename(path_)))
-        if all(b == af for _p, b, af in targets):
+        if all(b == af for _p, b, af, _s in targets):
             print("NO-OP     三本账已一致，无需写出")
             return 0
         if not a.apply:
@@ -727,19 +1010,25 @@ def main(argv=None):
 
         bak = _mkdir_unique(os.path.join(a.extract_dir, "_bak_formula_tags",
                                          time.strftime("%Y%m%d-%H%M%S")))
-        for pth, before, after in targets:
-            io.open(os.path.join(bak, "%s__%s" % (Path(pth).parent.name,
-                                                  os.path.basename(pth))),
-                    "w", encoding="utf-8", newline="\n").write(before)
+        for pth, before, after, sh in targets:
+            # 备份必须**字节可回滚**：按该文件自己的换行符写，否则 CRLF 契约的备份件
+            # 是一棵 LF 树，拿它还原＝顺手改掉全文件换行符（回滚路径本身就是附带改动）。
+            io.open(os.path.join(bak, _bak_name(a.extract_dir, pth)),
+                    "w", encoding="utf-8", newline="").write(
+                before.replace("\n", sh[2]))
             json.loads(after)
-        for pth, _b, after in targets:
-            io.open(pth, "w", encoding="utf-8", newline="\n").write(after)
+        for pth, _b, after, sh in targets:
+            # newline="" + 手工换行：按该文件**自己**的换行符写出（CRLF 契约不会变 LF）
+            io.open(pth, "w", encoding="utf-8", newline="").write(
+                after.replace("\n", sh[2]))
         rec = os.path.join(a.extract_dir, "_formula_tag_fixes.jsonl")
         with io.open(rec, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                                 "extract_dir": os.path.abspath(a.extract_dir),
                                 "ch_key": str(a.ch_key), "number": str(a.number),
                                 "unit_key": ukey, "how": how,
+                                "section_domain": own_dom,
+                                "cross_section_domains": cross,
                                 "formula_head": str(blk.get("formula"))[:80],
                                 "corroboration": reasons,
                                 "anchor_adjacency": adj_note,

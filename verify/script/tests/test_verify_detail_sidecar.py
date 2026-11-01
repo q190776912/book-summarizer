@@ -160,6 +160,68 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(found, ["verify_merged_ch2_cn.json"])
         self.assertFalse(found[0].startswith("."))
 
+    def test_unmeasurable_bucket_shows_on_the_coverage_line(self):
+        """U 层「量不到」桶（空正文占位 / 整块正文 <6 字）已从覆盖率分母剔出，
+        于是覆盖率会显示 100%。此时**报告行必须同屏交代这几条没测**、旁路必须因它们
+        落盘：否则「工具量不到」被静音成「交付没问题」，而 `located == expected` 恰好
+        让旁路的旧触发条件不再命中（2026-10-30 周民强 8 条 + 全架普查 163 条空正文）。"""
+        st = {"units": 132, "expected": 130, "located": 130, "coverage": 100.0,
+              "units_dir": "units", "unmeasurable": 2,
+              "um_keys": [u"description«D12»", u"chapter«appendix»"], "unlocated": []}
+        _v, out = self._run(_base_r(self.ext, md_order_stats=st))
+        self.assertIn(u"100.0%", out)
+        self.assertIn(u"量不到 2 条", out, u"覆盖率 100%% 时必须说出这 2 条没测：%s" % out)
+        self.assertIn(u"D12", out)
+        with io.open(os.path.join(self.ext, VD.SUBDIR,
+                                  "verify_merged_ch2_cn.json"), encoding="utf-8") as f:
+            detail = json.load(f)["detail"]
+        self.assertEqual(detail["md_order_stats"]["unmeasurable"], 2)
+        self.assertEqual(detail["md_order_stats"]["um_keys"], st["um_keys"],
+                         u"旁路须带**全量** um_keys，不受报告行前 12 条截断")
+
+    def test_unlocated_still_reports_beside_unmeasurable(self):
+        """负向对照：正文够长却没出现在交付里的那条仍留在分母并报「未定位」，
+        覆盖率随之 <100%——证明新桶不是把「量不到」扩大成静音豁免的后门。"""
+        st = {"units": 5, "expected": 2, "located": 1, "coverage": 50.0,
+              "units_dir": "units", "unmeasurable": 2,
+              "um_keys": [u"description«D1»"], "unlocated": [u"item«1.2»"]}
+        _v, out = self._run(_base_r(self.ext, md_order_stats=st))
+        self.assertIn(u"已定位 1/2", out)
+        self.assertIn(u"未定位 1 条", out)
+        self.assertIn(u"item«1.2»", out)
+        self.assertIn(u"量不到 2 条", out)
+
+
+    def test_ambiguous_bucket_is_reported_apart_from_unlocated(self):
+        """整块正文在交付里出现 ≥2 次 = 位置歧义（内容在，只是本闸不猜位置），
+        必须与「未定位 = 交付里读不到这块」分桶显示并全量进旁路：2026-10-30 全架
+        571 条残差实测 = 189 歧义 + 71 未定位，混报会让前者冒充后者、把真脱钩的 71 条埋掉。"""
+        st = {"units": 4, "expected": 4, "located": 2, "coverage": 50.0,
+              "units_dir": "units", "unmeasurable": 0, "um_keys": [],
+              "ambiguous": 1, "amb_keys": [u"description«D7»"],
+              "unlocated": [u"item«1.3»"]}
+        _v, out = self._run(_base_r(self.ext, md_order_stats=st))
+        self.assertIn(u"位置歧义 1 条", out, out)
+        self.assertIn(u"description«D7»", out)
+        self.assertIn(u"未定位 1 条", out)
+        self.assertIn(u"item«1.3»", out)
+        with io.open(os.path.join(self.ext, VD.SUBDIR,
+                                  "verify_merged_ch2_cn.json"), encoding="utf-8") as f:
+            detail = json.load(f)["detail"]
+        self.assertEqual(detail["md_order_stats"]["amb_keys"], st["amb_keys"])
+        self.assertEqual(detail["md_order_stats"]["unlocated"], st["unlocated"],
+                         u"两桶各落各的键，旁路不得只留一份")
+
+    def test_ambiguous_alone_still_triggers_sidecar(self):
+        """只有歧义、没有未定位时旁路仍要落盘：歧义留在分母里 ⇒ `located != expected`
+        这条既有条件必须命中（别把它误当成「量不到」那种已剔出分母的桶）。"""
+        st = {"units": 3, "expected": 3, "located": 1, "coverage": 33.3,
+              "units_dir": "units", "unmeasurable": 0, "um_keys": [],
+              "ambiguous": 2, "amb_keys": [u"desc«A»", u"desc«B»"], "unlocated": []}
+        self._run(_base_r(self.ext, md_order_stats=st))
+        p = os.path.join(self.ext, VD.SUBDIR, "verify_merged_ch2_cn.json")
+        self.assertTrue(os.path.isfile(p), u"歧义条目须有全量落点（报告行只印前 12 条）")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

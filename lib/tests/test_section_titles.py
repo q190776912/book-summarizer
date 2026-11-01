@@ -30,8 +30,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from section_titles import (clean_title, dangling_reason, glued_reason,  # noqa: E402
-                            norm_title, title_problems)
+from section_titles import (clean_title, dangling_reason, fold_typeset_markup,  # noqa: E402
+                            glued_reason, norm_title, title_problems)
 
 
 def _contract(pairs):
@@ -187,6 +187,133 @@ class TestContractUnitReconciliation(unittest.TestCase):
         self.assertEqual(probs, [])
 
 
+class TestTrailingDigitShields(unittest.TestCase):
+    r"""⑰ 相等腿的第二通道：**尾部数字被数学模式遮蔽的不对称**不算分叉。
+
+    实测（Fraleigh《AFCAA》6 站，2026-10-31）：账目面按 `tools/fix_section_name.py` 的硬规
+    禁含 `$`/`\`，印面 `Order of (8,4,10) in $\mathbb{Z}_{12} \times \mathbb{Z}_{60} \times
+    \mathbb{Z}_{24}$` 只能写成裸文本 `… Z12 × Z60 × Z24`。`clean_title` 的 `_TRAIL_PAGE`
+    在比对之前运行：裸文本侧收尾是数字 ⇒ 剥掉；`$` 侧收尾是 `$` ⇒ 剥不到。于是
+    `…z12×z60×z` 是 `…z12×z60×z24` 的前缀 → 闸永远判「契约 name 截短」，**回填契约也修不好**。
+
+    第二通道只在「两侧保住尾数后**逐位相等**」时判同形 ⇒ 数字真不同（`Z12`/`Z24`、
+    `360`/`361`）仍报，`_TRAIL_PAGE` 与展示形 `clean_title` 一字节不动。
+    """
+
+    def _site(self, cname, h2):
+        c = _contract([("9.10", cname)])
+        u = [{"type": "section", "key": "9.10", "file": "9.10.md", "name": cname}]
+        return c, u, (lambda _u: h2 + "\n\n正文")
+
+    def test_blackboard_bold_trailing_subscript_passes(self):
+        c, u, read = self._site(
+            "9.10 Example — Order of (8, 4, 10) in Z12 × Z60 × Z24",
+            "## §9.10 Example — Order of $(8, 4, 10)$ in $\\mathbb{Z}_{12} "
+            "\\times \\mathbb{Z}_{60} \\times \\mathbb{Z}_{24}$")
+        self.assertEqual(title_problems(c, u, read), [])
+
+    def test_space_separated_trailing_number_passes(self):
+        """`… Order $360$` vs 裸文本 `… Order 360`：带空格那档同样只遮蔽不对称。"""
+        c, u, read = self._site("9.13 Example — Abelian Groups of Order 360",
+                                "## §9.13 Example — Abelian Groups of Order $360$")
+        self.assertEqual(title_problems(c, u, read), [])
+
+    def test_second_channel_is_what_clears_it(self):
+        """控件：常规形必须**仍然不同形**（否则这条通道没在本案上起作用）。"""
+        cname = "9.10 Example — Order of (8, 4, 10) in Z12 × Z60 × Z24"
+        h2 = ("## §9.10 Example — Order of $(8, 4, 10)$ in $\\mathbb{Z}_{12} "
+              "\\times \\mathbb{Z}_{60} \\times \\mathbb{Z}_{24}$")
+        self.assertNotEqual(norm_title(cname, "9.10"), norm_title(h2, "9.10"))
+        self.assertEqual(norm_title(cname, "9.10", True), norm_title(h2, "9.10", True))
+
+    def test_different_trailing_digits_still_fail(self):
+        c, u, read = self._site(
+            "9.10 Example — Order of (8, 4, 10) in Z12 × Z60 × Z12",
+            "## §9.10 Example — Order of $(8, 4, 10)$ in $\\mathbb{Z}_{12} "
+            "\\times \\mathbb{Z}_{60} \\times \\mathbb{Z}_{24}$")
+        probs = title_problems(c, u, read)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("不一致", probs[0])
+
+    def test_wrong_trailing_number_with_space_still_fails(self):
+        c, u, read = self._site("9.13 Example — Abelian Groups of Order 360",
+                                "## §9.13 Example — Abelian Groups of Order $361$")
+        self.assertEqual(len(title_problems(c, u, read)), 1)
+
+    def test_real_truncation_still_caught_by_dangling(self):
+        """第二通道不许吞掉折行截短：末词是虚词时由 `dangling_reason` 先报（与尾数无关）。"""
+        c = _contract([("6.1", "6.1 The Basics of")])
+        probs = title_problems(c, _units([("6.1", "The Basics of")]),
+                               _read({"6.1.md": "## §6.1 The Basics of Counting\n\n正文"}))
+        self.assertTrue(probs, probs)
+
+    def test_display_form_is_untouched(self):
+        """`clean_title` 默认照剥尾数：展示面（manifest/marker/文案）不因本参数改一个字。"""
+        self.assertEqual(clean_title("## §2 Phase Flows 57", "2"), "Phase Flows")
+        self.assertEqual(clean_title("## §9.10 In Z12 × Z60 × Z24", "9.10"),
+                         "In Z12 × Z60 × Z")     # 现状形态，锁住「展示面不变」这一承诺
+
+
+class TestHyphenTailArtifact(unittest.TestCase):
+    r"""悬空腿的连字符档：`_TRAIL_PAGE` 吃掉「负号+数字」造出的**假**折行残体不算截短。
+
+    与相等腿同源的另一刀（2026-10-31 Fraleigh《AFCAA》§3.12 实测）：印面
+    `Example: Find all solutions of $z^4 = -16$`，账目面按工具硬规只能写裸文本
+    `… z^4 = -16` ⇒ 粘连档剥掉 `16`，展示形**凭空**收在负号上 → ⑰ 报「以连字符收尾
+    （印刷折行标题的续行被丢弃）」。单元 H2 收尾是 `$` ⇒ 剥不到 ⇒ 只有契约侧挨刀。
+    跨架标定（776 章）：豁免只放行这一条，`NEWFAIL 0 / DISPLAY 0`，控件两侧同码全 0
+    （`_p861_hyphen_guard*.json`）。
+    """
+
+    def test_minus_digits_tail_is_not_dangling(self):
+        self.assertIsNone(dangling_reason("3.12 Example: Find all solutions of z^4 = -16",
+                                          "3.12"))
+        self.assertIsNone(dangling_reason("## §3.12 Example: Find all solutions of "
+                                          "$z^4 = -16$", "3.12"))
+
+    def test_real_hyphen_wrap_still_reported(self):
+        """负向：真折行残体（连字符后面**没有数字**）照报，豁免不碰这一支。"""
+        self.assertEqual(dangling_reason("8.5 Inclusion-", "8.5"),
+                         "以连字符收尾（印刷折行标题的续行被丢弃）")
+        self.assertEqual(dangling_reason("## §8.5 Inclusion-", "8.5"),
+                         "以连字符收尾（印刷折行标题的续行被丢弃）")
+
+    def test_dangling_word_after_page_strip_still_reported(self):
+        """负向：虚词档**不豁免**——`Applications of 57` 剥掉页码后露出的 `of` 仍须报。"""
+        self.assertEqual(dangling_reason("6.1 Applications of 57", "6.1"),
+                         "以英文虚词「of」收尾（印刷折行标题的续行被丢弃）")
+
+    def test_title_problems_clears_the_fraleigh_shape(self):
+        c = _contract([("3.12", "3.12 Example: Find all solutions of z^4 = -16")])
+        probs = title_problems(
+            c, _units([("3.12", "Example: Find all solutions of $z^4 = -16$")]),
+            _read({"3.12.md": "## §3.12 Example: Find all solutions of $z^4 = -16$\n\n正文"}))
+        self.assertEqual(probs, [], probs)
+
+    def test_guard_is_what_clears_it(self):
+        """控件：让 `clean_title` 无视 `keep_trailing_digits` ⇒ 假报必须**逐字复现**。"""
+        import section_titles as st
+        saved = st.clean_title
+        try:
+            st.clean_title = lambda text, key="", keep_trailing_digits=False: saved(
+                text, key, False)
+            self.assertEqual(st.dangling_reason("3.12 Example: Find all solutions of "
+                                                "z^4 = -16", "3.12"),
+                             "以连字符收尾（印刷折行标题的续行被丢弃）")
+        finally:
+            st.clean_title = saved
+        self.assertIsNone(dangling_reason("3.12 Example: Find all solutions of z^4 = -16",
+                                          "3.12"))
+
+    def test_real_truncated_contract_still_reported_through_gate(self):
+        """负向：契约真把印面题少写了一段（负号收尾但**单元侧更长**）仍须报出来。"""
+        c = _contract([("3.12", "3.12 Example: Find all solutions of z^4 =")])
+        probs = title_problems(
+            c, _units([("3.12", "Example: Find all solutions of $z^4 = -16$")]),
+            _read({"3.12.md": "## §3.12 Example: Find all solutions of $z^4 = -16$\n\n正文"}))
+        self.assertEqual(len(probs), 1, probs)
+
+
 class TestGluedWords(unittest.TestCase):
     """OCR 吞词间空格：`norm_title` 剥空白看不见，必须由 ⑰ 独立判。"""
 
@@ -257,6 +384,61 @@ class TestTypesetFold(unittest.TestCase):
         self.assertEqual(norm_title("$\\operatorname{Li}(x)$ theorem", ""),
                          norm_title("Li(x) theorem", ""))
 
+    def test_font_family_macros_fold_to_bare_glyphs(self):
+        r"""字体族宏只改字形，账目面必须能用裸字符表达（Fraleigh《AFCAA》实测 133 站）。
+
+        `tools/fix_section_name.py` 的 `--name` 硬禁 `$` 与反斜杠（账目面存印刷裸文本），
+        而旧白名单缺 `\mathbb` 一族 → H2 的 `$\mathbb{Z}$` 折成 `mathbbz`、账目面的 `Z`
+        折成 `z`，两侧**永不同形**：工具自己承诺的裸文本形写不进去，133 个含黑板粗体的
+        节题全部卡死（既不能改判据也不能改正文）。
+        """
+        self.assertEqual(norm_title("Example: $\\mathbb{Z}$ and $2\\mathbb{Z}$ are isomorphic", ""),
+                         norm_title("Example: Z and 2Z are isomorphic", ""))
+        self.assertEqual(norm_title("Subgroups of $\\mathbb{Z}$", ""),
+                         norm_title("Subgroups of Z", ""))
+        for macro in ("mathbb", "mathcal", "mathfrak", "mathscr", "boldsymbol",
+                      "textbf", "texttt", "mathinner"):
+            self.assertEqual(norm_title("The group $\\%s{G}$" % macro, ""),
+                             norm_title("The group G", ""), macro)
+
+    def test_nested_font_macros_fold_to_fixpoint(self):
+        r"""嵌套字体宏须剥到不动点（`\mathbb{\mathcal{X}}` 一层正则只剥外面）。"""
+        self.assertEqual(norm_title("$\\mathbb{\\mathcal{X}}$-spaces", ""),
+                         norm_title("X-spaces", ""))
+
+    def test_font_fold_keeps_letter_content_distinct(self):
+        r"""负向：剥的是**外壳**不是内容——Z 与 Q、Z 与 W 不得折成同一形。"""
+        self.assertNotEqual(norm_title("$\\mathbb{Z}$ and $\\mathbb{Q}$", ""),
+                            norm_title("$\\mathbb{Z}$ and $\\mathbb{Z}$", ""))
+        self.assertNotEqual(norm_title("Subgroups of $\\mathbb{Z}$", ""),
+                            norm_title("Subgroups of W", ""))
+        self.assertNotEqual(norm_title("$\\mathbb{Q}^{+}$", ""), norm_title("$\\mathbb{Q}^{-}$", ""))
+
+    def test_font_fold_is_what_makes_the_pair_agree(self):
+        r"""mutation control：把字体剥壳关掉必须**复现**旧的不同形。
+
+        没有这条控件，「两侧同形」可能来自别处（如 `_TEX_MACRO_RE` 丢反斜杠的顺带效果），
+        日后有人改回归因就查不动了。
+        """
+        import re
+        import section_titles as st
+        lhs, rhs = r"Example: $\mathbb{Z}$ and $2\mathbb{Z}$", "Example: Z and 2Z"
+        self.assertEqual(norm_title(lhs, ""), norm_title(rhs, ""))
+        original = st._FONT_ARG_RE
+        try:
+            st._FONT_ARG_RE = re.compile(r"(?!)")             # 永不匹配 == 剥壳关闭
+            self.assertNotEqual(norm_title(lhs, ""), norm_title(rhs, ""),
+                                "剥壳已生效？那这条等式不该成立，判据归因有误")
+        finally:
+            st._FONT_ARG_RE = original
+
+    def test_gate_passes_on_blackboard_bold_unit_title(self):
+        r"""门控级正例：契约写账目面裸文本、单元按印面写 KaTeX，须放行（Fraleigh 形态）。"""
+        c = _contract([("2.23", "2.23 Example: Z and 2Z Are Isomorphic")])
+        units = _units([("2.23", "Example: $\\mathbb{Z}$ and $2\\mathbb{Z}$ Are Isomorphic")])
+        bodies = {"2.23.md": "## §2.23 Example: $\\mathbb{Z}$ and $2\\mathbb{Z}$ Are Isomorphic\n\n正文"}
+        self.assertEqual(title_problems(c, units, _read(bodies)), [])
+
     def test_gate_passes_on_typeset_unit_title(self):
         c = _contract([("2.2", "2.2 The Mobius function μ(n)"),
                        ("2.8", "2.8 The Mangoldt function Λ(n)")])
@@ -322,6 +504,68 @@ class TestTypesetFold(unittest.TestCase):
                             norm_title("Bounds for $f^{\\prime}(x)$", ""))
 
 
+    # ── 无花括号的字体宏 + `\colon`（Fraleigh《AFCAA》实测三处已把 `mathbb` 写进入档名）──
+    #
+    # 期望值里 `→`/`:` 后**带一个空格**是折叠函数的真实行为，不是笔误：`_TEX_MACRO_RE` 只吃掉
+    # `\` + 宏名，宏名后那个「命令分隔空格」留在原地。这不影响判据——`norm_title` 走
+    # `"".join(t.split())` 把**所有**空白删掉，所以账目面写 `M_{m×n}` 还是 `M_{m × n}` 同形；
+    # 这里钉的是折叠输出本身，供 `account_name` 一类派生通道对照。
+    def test_unbraced_font_macro_folds_to_glyph(self):
+        self.assertEqual(fold_typeset_markup("$\\mathbb R\\to U$"), "R→ U")
+        self.assertEqual(fold_typeset_markup("$\\mathbb Z_n\\to D_n$"), "Zn→ Dn")
+        self.assertEqual(fold_typeset_markup("$\\mathbb Z_n\\to D_n$", keep_scripts=True),
+                         "Z_n→ D_n")
+        self.assertEqual(fold_typeset_markup("$\\mathbf x$"), "x")
+
+    def test_unbraced_fold_is_what_clears_the_pair(self):
+        """控件：把无花括号档关掉必须退回裸词 `mathbb`（差异只来自这一条）。"""
+        import re
+        import section_titles as st
+        text = "$\\mathbb R\\to U$"
+        saved = st._FONT_BARE_RE
+        try:
+            st._FONT_BARE_RE = re.compile(r"(?!)")            # 关掉本条
+            self.assertEqual(fold_typeset_markup(text), "mathbb R→ U")
+        finally:
+            st._FONT_BARE_RE = saved
+        self.assertEqual(fold_typeset_markup(text), "R→ U")
+
+    def test_unbraced_fold_does_not_swallow_relation_macros(self):
+        r"""负向：`\in`/`\to`/`\mid` 不在字体白名单，不许被「宏名+空格+字母」规则吃掉。"""
+        self.assertEqual(fold_typeset_markup("$f \\in \\mathbb{Z}$"), "f ∈ Z")
+        self.assertEqual(fold_typeset_markup("$A \\mid B$"), "A | B")
+        self.assertNotEqual(fold_typeset_markup("$\\mathbb Z$"),
+                            fold_typeset_markup("$\\mathbb Q$"))
+
+    def test_colon_macro_folds_not_the_word_colon(self):
+        self.assertEqual(fold_typeset_markup("$\\phi \\colon \\mathbb{Z} \\to R$"),
+                         "φ : Z → R")
+        self.assertEqual(norm_title(r"31.17 The map $\phi \colon \mathbb{Z} \to R$", "31.17"),
+                         norm_title("31.17 The map φ : Z → R", "31.17"))
+        self.assertNotEqual(norm_title(r"$\phi \colon \mathbb{Z}$", ""),
+                            norm_title(r"$\phi \langle \mathbb{Z}$", ""))
+
+    def test_keep_scripts_only_changes_the_derived_name_face(self):
+        """账目面派生形（`keep_scripts=True`）保住下标结构，比对形照旧剥掉。"""
+        h2 = "2.11 Example: Matrices $M_{m \\times n}(\\mathbb{R})$ Under Addition"
+        self.assertEqual(fold_typeset_markup(h2, keep_scripts=True),
+                         "2.11 Example: Matrices M_{m × n}(R) Under Addition")
+        self.assertNotIn("_", fold_typeset_markup(h2))          # 默认（比对侧）照剥
+        # 派生形与 H2 在闸里同形 ⇒ 账目面写法可用
+        self.assertEqual(norm_title("2.11 Example: Matrices M_{m × n}(R) Under Addition", "2.11"),
+                         norm_title(h2, "2.11"))
+        # 负向：`keep_scripts` 只改**输出形**，不改判据——标记（`_`/`{}`）在闸里照剥所以
+        # 两种写法同形，但**丢掉结构里的字母/关系符**是另一个标题，必须仍不同形。
+        self.assertEqual(norm_title("2.11 Example: Matrices Mm×n(R) Under Addition", "2.11"),
+                         norm_title(h2, "2.11"))
+        self.assertNotEqual(fold_typeset_markup(h2, keep_scripts=True),
+                            fold_typeset_markup(h2))
+        self.assertNotEqual(norm_title("2.11 Example: Matrices M_{m}(R) Under Addition", "2.11"),
+                            norm_title(h2, "2.11"))
+        self.assertNotEqual(norm_title("2.11 Example: Matrices M_{mn}(R) Under Addition", "2.11"),
+                            norm_title(h2, "2.11"))
+
+
 class TestDanglingBracketTail(unittest.TestCase):
     def test_bracket_tail_math_variable_not_dangling(self):
         """Apostol《IANT》实测假阳：`Hurwitz's formula for ζ(s, a)` 末尾的 `a` 是 Hurwitz
@@ -336,6 +580,41 @@ class TestDanglingBracketTail(unittest.TestCase):
         self.assertTrue(dangling_reason("## §6.2 A relation between f ( x ) and", "6.2"))
         self.assertTrue(dangling_reason("## §1.2 Applications of", "1.2"))
         self.assertTrue(dangling_reason("## §5.4 The set S (see Chapt-", "5.4"))
+
+
+class TestMathVariableCapitalTail(unittest.TestCase):
+    r"""收尾的**大写单字母 `A`** 是数学变元，不是冠词（Fraleigh《AFCAA》§20.4/§20.5 实测）。
+
+    跨架普查（776 章 / 58 本，`_p863_dangle_upper_a.py`）：虚词收尾报告总共 4 条
+    = 这 2 站 × 契约/单元两侧，末 token 全部正是 `A`；其余（`of`/`and`/`the`/`a`…）
+    **0 条** ⇒ 收这一档的爆炸半径就是这 2 站。印面这两节只排 `20.4 Definition` /
+    `20.5 Definition`（无描述性节题，裁图 `agent_w3/sheet_ch20_heads.png`），尾部的 `A`
+    是笔记侧描述语里的生成集记号（原书正文即 `G is free on A`）。闸的处方「按印刷全题补全」
+    在这里**无题可补**，只能凭空造尾词 ⇒ 闸门 bug。
+    """
+
+    def test_capital_A_tail_is_not_dangling(self):
+        self.assertIsNone(dangling_reason("20.4 Definition — The free group generated by A",
+                                          "20.4"))
+        self.assertIsNone(dangling_reason("## §20.5 Definition — Free on a set A", "20.5"))
+
+    def test_lowercase_article_tail_still_reports(self):
+        """控件（同一条档、只差大小写）：冠词形态 `a` 收尾必须照报——豁免**只认**大写 `A`。"""
+        self.assertEqual(dangling_reason("6.4 A relation between x and a", "6.4"),
+                         "以英文虚词「a」收尾（印刷折行标题的续行被丢弃）")
+
+    def test_other_capitalized_particles_still_report(self):
+        r"""负向：Title Case 的 `Of`/`The`/`An` 收尾**不豁免**（普查显示这一档零假阳，不收）。"""
+        for t in ("9.3 Field Of", "9.4 The Basis Of", "9.5 An", "9.6 And", "9.7 In"):
+            self.assertTrue(dangling_reason(t, t.split()[0]), t)
+
+    def test_title_problems_clears_the_fraleigh_sites(self):
+        for key, title in (("20.4", "Definition — The free group generated by A"),
+                           ("20.5", "Definition — Free on a set A")):
+            c = _contract([("%s" % key, "%s %s" % (key, title))])
+            probs = title_problems(c, _units([("%s" % key, title)]),
+                                   _read({"%s.md" % key: "## §%s %s\n\n正文" % (key, title)}))
+            self.assertEqual(probs, [], (key, probs))
 
 
 if __name__ == "__main__":

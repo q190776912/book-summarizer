@@ -15,6 +15,9 @@
 对每个 ignore 条目（键 C.S-N，可带标签前缀 / 原因）：
   1) 契约存在性：C.S-N 是否在分章契约（book_structure/ch{N}.json）中？
      - 存在 → SUSPECT：ignore 了一个真实存在的条目（真实条目绝不可进 ignore）。
+     - 例外：**标签限定键**（`Theorem 12.8-3`）在契约该号只挂别的标签时判 SAFE——
+       三级标签前置书的数字键不含标签，同一数字可被多个标签共用，该形用于只豁免
+       幻影标签而不抹掉同号真条目（见 `_label_of_key`）。
   2) 序列洞：C.S-N 不在契约，但前后邻居 C.S-(N-1) 与 C.S-(N+1) 都在契约中？
      → SUSPECT：连续编号序列中的洞，应经 manual_overrides 补回，勿用 ignore 隐藏。
   3) 源内容：在章页面区间内是否存在「带标签但无干净编号」的条头（OCR 丢号迹象）？
@@ -84,18 +87,54 @@ def _canon_key_of(key):
     return None
 
 
+def _label_of_key(key):
+    """ignore 键的**标签限定**部分（`Theorem 12.8-3` → `定理`）；裸键（`12.8-3`）→ None。
+
+    标签限定形是给「同一数字键被多个标签共用」的三级标签前置书用的精确豁免通道
+    （判据侧见 `check_structure_completeness.ignore_hit_item`，Strogatz ch12 实测）。
+    审核侧必须认得它，否则 `契约含 12.8-3` 会因**别的标签**的真条目而误判 SUSPECT
+    （"ignore 了一个真实存在的条目 → 应移除"），把正确的豁免逼回裸键形 = 逼着抹真条目。
+    """
+    s = str(key).strip()
+    m = _LABEL_PREFIX.match(s)
+    if not m:
+        # 无空格的中文形（`定理12.8-3`）：_LABEL_PREFIX 要求尾随空白，这里补一次
+        m2 = _NUM_RE.search(s)
+        if m2 and m2.start() > 0:
+            head = s[:m2.start()].strip()
+            lm = _LABEL_RE.fullmatch(head)
+            if lm:
+                return _canon_label_of(lm.group(1))
+        return None
+    lm = _LABEL_RE.fullmatch(m.group(0).strip())
+    return _canon_label_of(lm.group(1)) if lm else None
+
+
+def _canon_label_of(label):
+    try:
+        from verify_config import _canon_label
+        return _canon_label(str(label).strip().rstrip(".:")) or None
+    except Exception:
+        return None
+
+
 def _load_chapter_canons(ext, ch):
-    """返回该章契约中所有条目的 canon 元组集合。"""
+    """返回 `(该章契约所有条目 canon 集合, {canon: 该 canon 上的标签规范集})`。
+
+    第二张表只服务标签限定豁免的判定：`Theorem 12.8-3` 是否真的抹掉了契约里的
+    Theorem 12.8.3，取决于契约在该号上**挂的是哪个标签**。
+    """
     bs = BookStructure.load(ext)
     if bs is None:
-        return set()
+        return set(), {}
     ch_node = bs.find_chapter(ch)
     if ch_node is None:
-        return set()
+        return set(), {}
     # find_chapter 返回 StructureNode 对象（非 dict），walk 用 .get() 遍历，
     # 先 to_dict() 转回普通字典。
     d = ch_node.to_dict()
     canons = set()
+    canon_labels = {}
 
     def walk(n):
         if n.get("type") in ("chapter", "section"):
@@ -107,9 +146,16 @@ def _load_chapter_canons(ext, ch):
         c = _canon_key_of(n.get("key"))
         if c is not None:
             canons.add(c)
+            labs = canon_labels.setdefault(c, set())
+            lab = _canon_label_of(n.get("type") or "")
+            if lab:
+                labs.add(lab)
+            kl = _label_of_key(n.get("key"))
+            if kl:
+                labs.add(kl)
 
     walk(d)
-    return canons
+    return canons, canon_labels
 
 
 def _chapter_range(ext, ch):
@@ -332,12 +378,25 @@ def run_audit(ext, chapter=None):
         ch_entries = by_ch.get(ch, [])
         if not ch_entries:
             continue
-        canons = _load_chapter_canons(ext, ch)
+        canons, canon_labels = _load_chapter_canons(ext, ch)
         rng = _chapter_range(ext, ch)
         noise = _scan_ocr_noise(ext, rng[0] if rng else None, rng[1] if rng else None, ch=ch)
         for key, reason, src, parsed in ch_entries:
             num = parsed[2] if len(parsed) == 3 else None
             rec = {"key": key, "chapter": ch, "source": src, "reason": reason}
+            _klab = _label_of_key(key)
+            if parsed in canons and _klab:
+                # 标签限定豁免：契约在该号上挂的标签**不含**登记标签 → 豁免的是
+                # 另一标签下的幻影候选（多为散文回指），真实条目仍在校验里。
+                held = canon_labels.get(parsed) or set()
+                if held and _klab not in held:
+                    rec.update(verdict="SAFE",
+                               why="标签限定豁免（登记 %s，契约该号只挂 %s）→ 未抹除同标签真实条目；"
+                                   "请确认 %s 侧该号确非条头"
+                                   % (key, "/".join(sorted(held)), _klab))
+                    safe += 1
+                    results.append(rec)
+                    continue
             if parsed in canons:
                 rec.update(verdict="SUSPECT",
                            why="ignore 了一个真实存在的条目（契约含 %s）→ 真实条目绝不可进 ignore，应移除" % key)

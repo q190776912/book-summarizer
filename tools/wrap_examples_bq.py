@@ -34,6 +34,11 @@ SKILL.md 约定：只有「证明」与「例/Example」进 `>` 块引用；结�
   - 任意标题 `#...`
   - 顶层结构性标签 **定义/定理/引理/推论/命题/断言/公理/注/注记/评注/Definition/...**
   - 下一个 **例/Example**（各自独立成块）
+  - 🔴 **run-in 已包头**（`> **Solution.** 正文…`：头带 `>` 且标签后自带正文）之后的
+    第一个非 `>` 行。这类块在头行即已完整，其后的顶层行是**另起散文**，加 `>` 前缀
+    会把人物小传段/`<div>` 图块/表吞进解答块（Rosen 离散数学 8e 2026-10-28 实测：
+    该吞并即全库 27 处 P1「解答块过长」命中的来源，且 `<div>` 在 blockquote 内
+    根本不渲染）。需要分隔时那是 I 层 `---` 的事，不是本工具的事。
 
 区域内规则：
   - 空行 → `>`（保持 blockquote 连续，不被空行打断）
@@ -62,6 +67,7 @@ STRUCT_RE = re.compile(
     r'|Definition|Theorem|Lemma|Proposition|Corollary|Claim|Axiom|Remark'
     r'|Assumption|Exercise|Problem|Conjecture)\b')
 from lib.regexlib import FMT_HR_RE as HR_RE
+from verify.script.struct_labels import item_head_inline_body
 SEC_RE = re.compile(r'^#{1,6}\s')
 
 
@@ -96,11 +102,16 @@ def wrap_text(text):
             continue
         # 进入例区域：剥掉头上的 `>` 后统一用 `> ` 前缀包裹整段
         region = ['> ' + head]
+        # 头本就带 `>` 且标签后自带正文 = run-in 块已完整，后续非 `>` 行不属于它
+        run_in_quoted = bool(line.lstrip().startswith('>')
+                             and item_head_inline_body(line))
         i += 1
         while i < n:
             l = lines[i]
             if (HR_RE.match(l) or SEC_RE.match(l) or STRUCT_RE.match(l)
                     or EX_RE.match(_strip_leading_bq(l))):
+                break
+            if run_in_quoted and not l.lstrip().startswith('>'):
                 break
             if l.strip() == '':
                 region.append('>')

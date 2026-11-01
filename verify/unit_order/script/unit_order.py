@@ -50,7 +50,8 @@ from data.book_structure.book_structure import (
     chapter_json_path, unit_dir_name, prime_chapter_kinds)
 from lib.unit_markers import is_unit_marker_line
 from lib.unit_order import (check_delivered_order, check_unit_order,
-                            md_unit_positions, norm_text)
+                            md_block_occurrences, md_unit_positions, norm_text,
+                            split_unmeasurable)
 
 #: 源语言单元目录（``units``）与翻译单元目录（``units-translate``）；与
 #: ``merge_units --units-dir`` 的取值同一份拼写。
@@ -194,16 +195,34 @@ def _delivered_order_text(ext, ch, md_text, lang, contract):
     positions = md_unit_positions(bodies, md_text)
     # `merge:false` 单元按书写要求（V-I 集中习题块省略）本就不进交付 md →
     # 既不该被定位，也不该进覆盖率分母（否则每本省略习题的书都显示「覆盖不足」）。
-    expected = [i for i, u in enumerate(m_units)
-                if isinstance(u, dict) and u.get("merge") is not False]
+    expected_all = [i for i, u in enumerate(m_units)
+                    if isinstance(u, dict) and u.get("merge") is not False]
+    # 🔴 分母还要再剔掉**结构上量不到**的单元（空正文占位 / 整块正文 <6 字）：三条锚点
+    # 规则都吃不到它们，计入「未定位」= 把「工具量不到」说成「交付丢内容」，且凡有占位
+    # 单元的书永久 <100%（全架普查 163 条空正文 + 周民强 2 条短头）。剔出分母但**照列**，
+    # 条数与 type«key» 进 `unmeasurable`/`um_keys`，由覆盖率行同屏显示。
+    expected, um = split_unmeasurable(bodies, expected_all)
+
+    def _label(i):
+        return "%s«%s»" % ((m_units[i].get("type") or "?"), str(m_units[i].get("key") or ""))
+
     located = [i for i in expected if positions[i] is not None]
+    # 「定位不到」按**整块正文在交付里出现几次**分成两桶（同一份文本、同一个归一化空间，
+    # 只是数出现次数）：≥2 次 = 这块内容确在交付里、只是位置不可唯一判定（每节同名的
+    # 题集块 / 重复短头），0 次 = 交付里读不到这块正文 = 要取证的真信号。混报会让
+    # 「交付没问题但工具不敢猜位置」和「单元与交付脱钩」共用一个红字，2026-10-30 全架
+    # 571 条实测 = 189 歧义 + 71 读不到（另有 311 条整块唯一，已由 `_md_block_anchor` 归位）。
+    miss = [i for i in expected if positions[i] is None]
+    occ = md_block_occurrences(bodies, md_text)
+    ambig = [i for i in miss if occ[i] >= 2]
+    unloc = [i for i in miss if occ[i] < 2]
     stats = {"units": len(m_units), "expected": len(expected),
              "located": len(located), "units_dir": sub,
              "coverage": (round(100.0 * len(located) / len(expected), 1) if expected else 100.0),
-             "unlocated": ["%s«%s»" % ((m_units[i].get("type") or "?"),
-                                       str(m_units[i].get("key") or ""))
-                           for i in expected if positions[i] is None]}
-    if not expected:
+             "unmeasurable": len(um), "um_keys": [_label(i) for i in um],
+             "ambiguous": len(ambig), "amb_keys": [_label(i) for i in ambig],
+             "unlocated": [_label(i) for i in unloc]}
+    if not expected_all:
         return [], stats
     return check_delivered_order(contract, m_units, positions), stats
 

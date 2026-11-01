@@ -379,6 +379,10 @@
      不是闸门、exit 恒 0）自查**「步骤 8 的印面手修有没有顺手删掉一条显示式」**——这个方向
      verify 看不见（它只比交付与契约/配置，不比「单元内容是否都进了交付」）；命中的候选须逐条
      回印面裁决，不得机械照单元改交付（单元侧也可能比交付陈旧，实测见该工具文档条）。
+   - 收官后可跑 `python tools/census_adjacent_dup_display.py "<book_dir>"`（同为只读报告）自查
+     **「同一条 display 在交付里连印两遍」**——verify 也看不见这个方向（两份都进了契约、两份都
+     对得上）；只有 `SHAPE` 档（两份之间只剩空行/`---`/标题/粗体条头）可点名，`GAP` 档是背景量
+     （合法复述占多数），判据、控件与四本账手术协议见该工具文档条。
 
 ## 本阶段规则（🔴 内联 + 核心原则）
 - **🔴 规则0 — 写源硬闸（MM Repair `apply` 未完成 = 禁止写任何章节）**：启动本流程前，必须确认本书（或本批章节）的 MM Repair 已 `apply` 写回 `page_*.json`（验证法见 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) 出口条件）。**凡 `page_*.json` 仍无 `mm_repaired`/`mm_reviewed` 标记、或 manifest 中该章对应页仍有 `resolved != true` 条目的章节，一律不得动笔。**（`manifest.status` 因 `apply` 无条件设置而不可信，勿以它为放行依据。）宁可先补完 MM Repair（含模式 A 视觉审读——若用户拒绝视觉识别则按 [`../extract/mm_repair/mm_repair.md`](../extract/mm_repair/mm_repair.md) Step 1 的 `VISION = no` 路径：仅模式 B / `MM_UNAVAILABLE`），也不要带着未修复的 OCR 噪声去写总结——写错源再返工的成本远高于先修数据。
@@ -473,6 +477,11 @@
   - 三处**已证假阳机制**（各配负向测试 `tools/tests/test_unit_delivery_coverage_census.py`）：① `merge: false` 的单元（V-I：有专门小标题的集中习题块一律省略）本就不进交付；② 排版脚手架 `\begin{env}{cols}` / `\end{env}` / `&` / `\\` / `\left` 不携带数学内容（Fraleigh ch29/0034 印面 Example 30.1：单元 array 对齐式 vs 交付行内散文式，内容一字未丢）；③ 块体剥 `\tag{}` 后能对上 = `TAG_FORM`（记法差异不是丢失；methods-of-homological-algebra 单元 `\tag{1.2}` vs 交付 `\tag{I.2}`，印面是罗马章号 → 交付为真）。
   - ⚠️ **踩过的坑**：交付侧**不得按文件名 ASCII/非 ASCII 分中英两侧**建 haystack。Evans-SDE 的 EN 交付名里带弯引号（`Chapter3_Brownian_Motion_and_“White_Noise”.md`），分侧后它被划成中文版 → 「源单元 → EN 交付」在全书法报 216+21 条。两版交付数学内容由 parity 1:1 锁定，合一个 haystack 不丢判别力。
   - 全库首跑标定（2026-10-21，51 书）：v1 未归一 = **971** 候选 → 补三处机制后 = **63** 需人读 + 120 TAG_FORM（降幅 93%）。逐簇开验后**未见一例交付内容丢失**，剩下两形：单元侧陈旧记法（数值分析 ch2/0057 单元留 OCR 欧式逗号 `f(27,7)=4,1` 而交付已按印面写 `27.7=4.1`；Elliptic ch3/0023 定界符尺寸与 `\|f\|` 写法分叉），与 `TAG_FORM`。逐条印面裁决另立 backlog（不在本判据范围内）。
+- `tools/census_adjacent_dup_display.py`：**交付内「同一条 display 就近连印两遍」普查**（🔴 只读报告、exit 恒 0，不做闸门；归一内核复用 `census_unit_delivery_coverage.block_core`，语料遍历复用其 `_book_dirs` 出厂入口）。补的盲区：印面把「条目标号 + 式子」印在**同一行**（`引理 6.6.2  lim (1/n)r(P(n))=0.`）时，收割期却切成两个契约节点——一个 `description` 只持那一行公式 + 紧邻的编号项（持同句碎片或只在 `name` 里留题面）→ 两个单元 → `merge` 后同一条式子在交付里**印两遍**，写手还会为那条「孤格式」补一句印面并不存在的桥接散文（遍历论 ch6 D18 实测：「推论6.4.1 的结论为」= 臆造）。
+  - 两档口径，🔴 **只有第二档可点名**：`GAP`（同内核两次出现行距 ≤ `--gap`，默认 20）只作背景量——2026-10-31 跨 58 书 **105 条**，逐条读下来多数是**合法复述**（定理在证明末尾再写一遍、推导链里隔几句再现），「近距离」本身不是判据，做成闸门会把正确交付判违规（同「merge 手修不得与单元逐字对齐」那条死规则同理）；`SHAPE`（两份之间**只剩**空行 / `---` / `#` 标题 / 粗体条头 `**xxx**：`）才点名「无主式子紧跟条目题面」，同次普查基线 **6 条 / 2 本**（Katok ch13 §13.4 + ch6 §6.2、Fraleigh ch17，各含中英孪生）。
+  - 真修在**收割处**（`attach_content` / `lib.numbering`：公式与条目号同一行时须归同一节点，不得另起 `description`），不在交付处；收官书交付禁重 merge，所以本工具的输出是「逐处印面取证 → 四本账定点手术（契约节点删除+块重挂父 / manifest 记录摘除 / 单元文件移入备份目录 / 交付整行删除）」的工单来源，不是批量豁免清单。
+  - known_true 控件（`--control <术前交付备份 md>`，零命中不可信）：`_extract/_bak_d23_dedup/*/第6章_变分原理.md` 须点名 **2 处**（该快照早于 D18 手术），`_bak_d18_dedup/*` 须只点名 **1 处**（D23 已修，不得再报）——两份合起来同时验证「抓得到」与「已修的不再抓」。
+  - 负向测试 `tools/tests/test_census_adjacent_dup_display.py`（12 例）：中间多一句**散文** ⇒ 只落 GAP、不落 SHAPE；行首带 `>` 的证明围栏复述 ⇒ **前后任一份**带 `>` 都不配（该用例在 2026-10-31 收窄前实测失败；收窄后 GAP 148→105、SHAPE 6 条**一条未变** = 纯假阳防护）；多行 `$$…$$` 的配对基准必须是块**结束行**（用起始行会让块自身的尾巴被当成「之间内容」→ SHAPE 永不成立 = 静默失明）；`MIN_CORE` 拦短内核；`_FILLER` 正则字节钉死，改它须重跑控件 + 全语料基线。
 - `tools/split_chapters`：规则3 拆章（文件级结构拆分，非格式/校验，故归入 `tools/`）。
 - `verify/script/verify_chapter.py`：步骤 8 批量校验（`--all` / `--fix`，语言无关，源/译共用）。
 

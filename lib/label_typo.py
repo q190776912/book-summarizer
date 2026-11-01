@@ -26,6 +26,17 @@
 ④ 其后紧跟序标数字（**允许裸单号** ``1``，附录/章内计数器书页就印 "THEOREM 2"）。
 全书目普查（53 本 / 含分册目录，2026-09-30）该形态**只命中 1 处**，就是这条真条头，
 零假阳——所以本补救不会给别的书凭空造条目。与形近型同样只改块首、其余逐字保留。
+
+🔴 同一函数还负责**中文形近型**残字（郑大钟《线性系统理论》2ed ch3 实测 2026-11-01）：
+印刷条头「结论3.22」被 OCR 把末字读成「结论3.22」的形近字 →「结诊3.22」「结沦3.27」，
+按正字构造的 CN 二级正则整体失配 → 该族（本书**主定理族**）逐条掉出契约 → B 层只剩
+整段缺号死锁。判据（对齐形近型「宁缺毋滥」）：① 块首是**纯中文**词、长度与某 config
+声明的中文标签**相等**；② 该词**不是**任何正字（正字条头无需补救）；③ 前 (len-1) 字与
+某正字**逐字相等**、**仅末字**不同（末字替换，不做首字替换——`论` 结尾的「结论/推论」
+共享尾字，首字残字「缩论/绪论」离两者都是编辑距离 1、**有歧义**，一律不猜、交人工判读）；
+④ 命中正字**恰好一个**（多个 = 歧义 = 不补救）；⑤ 其后紧跟点分序标（`3.22` 形态）——
+条头版式必要条件。**只改块首这一个词**，其余字符与偏移量不变。零假阳：纯中文标签集合
+由调用方按书 config 传入，非本书标签不触发。
 """
 import re
 
@@ -37,6 +48,10 @@ _LABEL_ORD_AFTER_RE = re.compile(r"^\s*[0-9]+(?:[.\-·，．,][0-9]+){1,2}")
 # 断词型的序标判据放宽到「至少一段数字」：附录/章内重启的书就印裸单号条头。
 _SPLIT_ORD_AFTER_RE = re.compile(r"^\s*[0-9]+(?:[.\-·，．,][0-9]+){0,2}")
 _SPLIT_HEAD_RE = re.compile(r"^\s*([A-Za-z]{2,})\s+([A-Za-z]{2,})(?![A-Za-z])")
+# 中文形近型的序标判据：块首中文标签之后紧跟点分序标（二级/三级），分隔符容忍
+# OCR 中英标点混用（. - · ，．,、）**与其内外侧的空格**（实测「结诊3. 34」点号后带
+# 空格）。与 EN 形近型同为「至少一段分隔」= 条头版式必要件。
+_CN_ORD_AFTER_RE = re.compile(r"^\s*[0-9]+(?:\s*[.\-·，．,、]\s*[0-9]+){1,2}")
 
 
 def edit_dist_1(a, b):
@@ -56,11 +71,14 @@ def edit_dist_1(a, b):
 
 def label_typo_normalize(txt, labels):
     """把块首**残缺的类型词**归一为 ``labels`` 中的正字，返回改写后的文本；
-    无需改写（或不满足判据）返回 None。两类形态：形近型（Theorerm）与断词型（THEO REM）。"""
+    无需改写（或不满足判据）返回 None。三类形态：形近型（Theorerm）、断词型
+    （THEO REM）、中文形近型（结诊，末字残字，2026-11-01 郑大钟实测）。"""
     canon = {w.lower(): w for w in (labels or []) if w}
     if not canon:
         return None
-    return _typo_normalize(txt, canon) or _split_word_normalize(txt, canon)
+    return (_typo_normalize(txt, canon)
+            or _split_word_normalize(txt, canon)
+            or _cn_typo_normalize(txt, canon))
 
 
 def _typo_normalize(txt, canon):
@@ -93,3 +111,41 @@ def _split_word_normalize(txt, canon):
     if not _SPLIT_ORD_AFTER_RE.match(txt[m.end():]):
         return None
     return txt[:m.start(1)] + canon[word] + txt[m.end(2):]
+
+
+_CJK_ONLY_RE = re.compile(r"[一-鿿]+")
+
+
+def _cn_typo_normalize(txt, canon):
+    """中文形近型：块首纯中文词，**仅末字**残、前 (len-1) 字与某 config 中文标签逐字
+    相等，命中**恰好一个**该形正字，其后紧跟点分序标 → 归一为正确标签。首字残字
+    （缩论/绪论）离「结论/推论」皆编辑距离 1 = 歧义，本通道一律不猜（不做首字替换），
+    交人工判读。纯字母词表（canon 无中文标签）时恒返回 None = 对英文书零影响。"""
+    txt = txt or ""
+    # 候选正字：纯中文、长度 >= 2 的 config 标签
+    labs = [lab for lab in canon.values()
+            if len(lab) >= 2 and _CJK_ONLY_RE.fullmatch(lab)]
+    if not labs:
+        return None
+    lab_set = set(labs)
+    matches = []
+    for L in {len(lab) for lab in labs}:
+        if len(txt) < L:
+            continue
+        token = txt[:L]
+        if not _CJK_ONLY_RE.fullmatch(token):
+            continue
+        if token in lab_set:             # 已是正字 = 无需补救
+            continue
+        prefix = token[:L - 1]
+        cands = [lab for lab in labs
+                 if len(lab) == L and lab[:L - 1] == prefix and lab[-1] != token[-1]]
+        if len(cands) != 1:              # 歧义（0 或 >=2）= 不猜
+            continue
+        if not _CN_ORD_AFTER_RE.match(txt[L:]):   # 条头版式必要件
+            continue
+        matches.append((L, cands[0]))
+    if len(matches) != 1:                # 跨长度再歧义 = 不猜
+        return None
+    L, lab = matches[0]
+    return lab + txt[L:]

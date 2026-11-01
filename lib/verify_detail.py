@@ -58,7 +58,12 @@ def _computed(r):
     # 否则每章每语种都会多出一个小 JSON（收官书满 corpus 的零信息产物）。
     st = r.get("md_order_stats") or {}
     if st and (r.get("md_order_problems")
-               or int(st.get("located") or 0) != int(st.get("expected") or 0)):
+               or int(st.get("located") or 0) != int(st.get("expected") or 0)
+               # 「量不到」也触发：分母已剔掉它们，覆盖率会显示 100%，此时旁路 JSON
+               # 是这些条目的**唯一全量落点**（报告行只印前 12 条）。
+               # 「位置歧义」不需要单独条件：它留在分母里却没被定位，`located != expected`
+               # 已经把它兜住了（这正是它与「量不到」的差别）。
+               or int(st.get("unmeasurable") or 0) > 0):
         out["md_order_stats"] = _plain(st)
     return out
 

@@ -279,5 +279,54 @@ class TestEmbeddedSectionHeading(unittest.TestCase):
         self.assertIn("(27)", probs[0])
 
 
+class TestAdjacentBracketFactor(unittest.TestCase):
+    """`(N)` **左边紧贴右括号** = 算式里的一项（相邻括号因子），不是回指。
+
+    实测成因（2026-10-31 Fraleigh《AFCAA》ch23 §23.1，印面 p.194）：Z₁₂ 陪积链
+    `(2)(6) = (6)(2) = (3)(4) = (4)(3) = … = (9)(8) = 0` 在抽取期落成**没有 `$` 围栏**的
+    text 块 ⇒ 判据②剥不掉这段数学 ⇒ 陪集 `(3)` 被当成「散文回指了式 (3)」。
+    跨架标定：本条只消解该站（src/trg 各 1），新增 0 条。
+    🔴 左邻**算符**（`= + * / < > …`）那一档也试过：同架报告面**零差异**（假引用撞不到
+    `\\tag` 池）⇒ 只多一层遮蔽风险，**不收**（`_p866_crossref_flank_ab.py --rules leadop`）。
+    即：链上左邻 `=` 的号（`（4）`/`(8)`/`(6)`…）**仍**进引用集，只是本节池里只有 `3`，
+    收紧③把它们全部挡在站点之外——本条收紧要挡的正是「假引用恰好与真 `\\tag` 同号」这一档。
+    """
+
+    def test_glued_paren_product_chain_not_counted(self):
+        """链上**左邻右括号**的号一律不算回指；`=` 直接贴着的每一档仍算（实测见下）。"""
+        self.assertEqual(prose_ref_numbers("=（4）(3)=0and（11-2)（11-3"), {"4"})
+        self.assertEqual(
+            prose_ref_numbers("=(8)(6)=(6)(10)=(10)(6)=(8)(9)=(9)(8)=0"),
+            {"6", "8", "9", "10"})
+
+    def test_control_space_before_paren_still_counts(self):
+        """控件：把左边的紧贴拆开（前面留空格）⇒ 照旧算回指——证明是这条收紧在放行。"""
+        self.assertEqual(prose_ref_numbers("= (4) (3) = 0 and ..."), {"4", "3"})
+
+    def test_end_to_end_residue_chain_not_reported(self):
+        """收紧③要求「号在同节 `\\tag` 池在账」⇒ 链上残留的假引用（4/8）不成站点。"""
+        tree = _chapter([
+            _sec("23.1", [_txt("=（4）(3)=0and（11-2)（11-3"),
+                          _txt("=(8)(6)=(6)(10)=(6)(3)=0"),
+                          _formula("{\\begin{array}{rl}&{(2)(6)=(6)(2)}\\end{array}}",
+                                   "3")]),
+        ])
+        probs = dropped_crossref_problems(
+            tree, {"23.1": ["We find 6 and 11, for $(6-2)(6-3)=(4)(3)=0$.\\n"
+                            "$$\\tag{3}$$"]}, "ch23")
+        self.assertEqual(probs, [])
+
+    def test_end_to_end_control_reported_when_prose_ref(self):
+        """反向：同一节里印面**真的**回指了式 (3)（空格隔开）⇒ 单元丢了照判。"""
+        tree = _chapter([
+            _sec("23.1", [_txt("We find 6 and 11, using (3) for the products."),
+                          _formula("{\\begin{array}{rl}&{(2)(6)}\\end{array}}", "3")]),
+        ])
+        probs = dropped_crossref_problems(
+            tree, {"23.1": ["We find 6 and 11.\n$$\\tag{3}$$"]}, "ch23")
+        self.assertEqual(len(probs), 1)
+        self.assertIn("(3)", probs[0])
+
+
 if __name__ == "__main__":
     unittest.main()

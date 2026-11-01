@@ -66,7 +66,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import attach_content as _ac
 from embed_figures import short_caption as _fig_short_caption, page_px_width as _fig_page_px_width
-from lib.figure_io import load_fig_labels as _load_fig_labels, fig_label_alt as _fig_label_alt
+from lib.figure_io import load_fig_labels as _load_fig_labels
+from lib.figure_alt import build_alt as _fig_build_alt
 
 _CJK = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
 
@@ -299,10 +300,9 @@ def _img_html(path):
     entry = ctx.get("index_by_basename", {}).get(_os.path.basename(path)) or {}
     labels = ctx.get("labels") or ["图"]
     cap_raw = entry.get("caption", "") or ""
-    cap = _fig_short_caption(cap_raw, labels)
-    mt = re.search(rf"(?:{_fig_label_alt(labels)})\s*\d+(?:\.\d+)*", cap_raw, re.IGNORECASE)
-    tag = mt.group(0) if mt else (labels[0] if labels else "图")
-    alt = (tag + " " + cap).replace('"', "'")
+    # alt 与 embed_figures 走同一份装配（lib.figure_alt.build_alt）：号取登记 label，
+    # 题注自己就以标签词开头时不重说一遍
+    alt = _fig_build_alt(cap_raw, entry.get("label"), labels, _fig_short_caption)
     bbox = entry.get("bbox") or None
     if bbox:
         crop_w = bbox[2] - bbox[0] + 16
@@ -504,7 +504,10 @@ def _render_node(node, out, lang="cn"):
 def _tidy_separators(lines, owners=None):
     """草稿分割线整理（2026-08-29 Koopman 书实测）：
     1) 堆叠 ``---`` 合并——嵌套小节边界各自 emit ``---``（子节末 + 父节末），
-       产生 "``---`` 空行 ``---``" 堆叠；间距 ≤2 行的 ``---`` 组合并为一个；
+       产生 "``---`` 空行 ``---``" 堆叠；凡只被空行隔开的 ``---`` 串一律并为一个
+       （🔴 2026-10-30 周民强 ch1 实测：旧写法另设「间距 ≤2 行」上限，空单元
+       多吐一个空行就让间距变成 3 而逃出合并，第 2 遍又把空行规整成恰一个，
+       于是交付里留下 ``---``／空行／``---`` 的假分隔）；
     2) 每个保留的 ``---`` 上下恰有一个空行（V-F：``---`` 上下必须空行）；
     3) 连续多空行折叠为单个空行。幂等。
 
@@ -520,7 +523,7 @@ def _tidy_separators(lines, owners=None):
                 k = last + 1
                 while k < n and not lines[k].strip():
                     k += 1
-                if k < n and lines[k].strip() == "---" and k - last <= 2:
+                if k < n and lines[k].strip() == "---":
                     last = k
                 else:
                     break

@@ -25,8 +25,9 @@ import json, re, os, sys
 from extract_items_en import extract_items_en
 from lib.regexlib import SEP_TIGHT, SEP_NUMERIC, strip_head_noise
 from lib.numbering import ordinal_depth
+from lib.label_typo import label_typo_normalize
 from verify_config import (ORDINAL_TWO_LEVEL, ORDINAL_THREE_LEVEL,
-                        BookConfig, GroupConfig)
+                        ORDINAL_SINGLE, BookConfig, GroupConfig)
 
 # ---------------------------------------------------------------------------
 # Label word -> semantic label (canonical CN).  Case-insensitive so English
@@ -332,7 +333,58 @@ def _add_match(m, txt, p, i, all_blocks, raw_matches, active_section_label, chap
 # (**定义1.1**：, **定理1.1**：). The three-level N.S-N regex is deliberately
 # NOT used here (it manufactures false-positive phantom keys for this scheme).
 # ---------------------------------------------------------------------------
-def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_first=True):
+# ---------------------------------------------------------------------------
+# 🔴 抽取器识别的类型词必须与本书 verify_config 声明的编号族一致（设计意图见
+# `config/verify_config` 注释「新增标签只改 config」）。历史实现把类型词硬编码在
+# lab_re / single_re 里，与 config 的 ordinal 组名**脱节**：某族在 config 里登记为
+# 编号组、却没进硬编码词表 → 抽取器一条不抽 → 契约整族缺席 → B 层对空组无「缺号」
+# 可报 → 完整性闸门**假绿**（郑大钟《线性系统理论》实测：`结论N.M` 是全书主定理族、
+# OCR 里 581 个不同号，但默认词表无「结论」→ 13 章契约 0 条结论，闸门全绿而内容全丢）。
+# 对策：把 config 声明的**纯中文**组名并入默认词表（**只增不减**——默认串逐字保留，
+# 无新增标签的书行为零变化；英文组名交 EN 抽取器，不混进 CN 正则）。
+_DEFAULT_LAB_ALT = r'定义|定理|引理|推论|命题|性质|注|例(?![如])'
+_DEFAULT_SINGLE_ALT = r'定义|定理|引理|推论|命题|例|性质|注|习题'
+_DEFAULT_LAB_SET = {"定义", "定理", "引理", "推论", "命题", "性质", "注", "例"}
+_DEFAULT_SINGLE_SET = {"定义", "定理", "引理", "推论", "命题", "例", "性质", "注", "习题"}
+
+
+def _cfg_cn_labels(cfg):
+    """verify_config.ordinal 各组 name 里的纯中文类型词，按**该组 type** 分流。
+
+    返回 ``(two_labels, single_labels)``：type==ORDINAL_TWO_LEVEL 的组名进 ``two_labels``
+    （并入 lab_re），type==ORDINAL_SINGLE 的组名进 ``single_labels``（并入 single_re）。
+    🔴 必须分流而非一律并入两条正则：把**仅二级**的族（郑大钟「结论」）灌进 single_re
+    会让「结论3,8」这类**点号被 OCR 读成逗号**的二级头，被 single_re 抢先把标签+首数
+    截成裸「结论3」幻影键（真实 8 被丢），与 lab_re 的正解「结论3.8」并存 → 契约出现
+    重复/截断键、B 层真缺号被幻影洗白。去重、剔除 uncat/英文词。
+    """
+    two, single = [], []
+    try:
+        for g in (getattr(cfg, "ordinal", None) or []):
+            dest = {ORDINAL_TWO_LEVEL: two, ORDINAL_SINGLE: single}.get(
+                getattr(g, "type", None))
+            if dest is None:
+                continue
+            for nm in (getattr(g, "name", None) or []):
+                s = str(nm).strip()
+                if s and s != "uncat" and re.fullmatch(r'[一-鿿]{1,6}', s) and s not in dest:
+                    dest.append(s)
+    except Exception:
+        pass
+    return two, single
+
+
+def _merge_alt(default_alt, default_set, cfg_labels):
+    """默认 alternation 串逐字在前，仅追加 config 里默认词表未含的中文词（长词优先）。"""
+    extra = [l for l in cfg_labels if l not in default_set]
+    extra.sort(key=lambda x: (-len(x), x))
+    if not extra:
+        return default_alt
+    return default_alt + "|" + "|".join(re.escape(l) for l in extra)
+
+
+def extract_items_two_level(extract_dir, chapter, start_page, end_page,
+                            chapter_first=True, cfg=None):
     all_blocks = []
     for p in range(start_page, end_page + 1):
         fpath = os.path.join(extract_dir, f"page_{p:03d}.json")
@@ -352,7 +404,19 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
     # chapter_first=False（节基书，如数学物理方程）时首数为节号，不做章过滤。
     # 例(?!如)：钟玉泉《复变函数论》等书例题亦用两级号（例1.1）；排除「例如」
     # 误匹配（"例如 2.714…" 这类小数会被当成 例2.71 条目）。
-    lab_re = re.compile(r'(定义|定理|引理|推论|命题|性质|注|例(?![如]))\s*(\d+)\s*' + SEP_TIGHT + r'\s*(\d+)')
+    _cfg_two_labels, _cfg_single_labels = _cfg_cn_labels(cfg)
+    _lab_alt = _merge_alt(_DEFAULT_LAB_ALT, _DEFAULT_LAB_SET, _cfg_two_labels)
+    _single_alt = _merge_alt(_DEFAULT_SINGLE_ALT, _DEFAULT_SINGLE_SET, _cfg_single_labels)
+    # 🔴 点号被 OCR 读成逗号（郑大钟实测「结论3,8」「结论 3,14」）：二级号分隔符在
+    # SEP_TIGHT 之外并容 **全/半角逗号 + 、**。逗号只在「标签紧邻 N,M」且过 _is_head
+    # 块首守卫时生效，散文枚举（"由定义3，4知…"）位于块中部被 _is_head 拦下，不误伤。
+    # 注意**不**加空白作分隔符（否则 "例如 2 714" 之类小数/枚举会被当条目）。
+    _sep2 = '[' + SEP_TIGHT[1:-1] + '，,、]'
+    lab_re = re.compile(r'(' + _lab_alt + r')\s*(\d+)\s*' + _sep2 + r'\s*(\d+)')
+    # 中文形近补救词表（lib/label_typo）：本书实际匹配的全部中文标签（默认 ∪ config），
+    # 供块首「结诊/定议」等末字残字归一为正文（缩论/绪论首字残=歧义，交人工判读）。
+    _typo_labels = sorted(_DEFAULT_LAB_SET | _DEFAULT_SINGLE_SET
+                          | set(_cfg_two_labels) | set(_cfg_single_labels))
     # 交叉引用守卫（谷超豪《数学物理方程》实测）：正文提及他章/他节条目时，
     # 提及点前紧邻「第X章」「…中的」「不满足」「推出」「利用」等引用语境词
     # （"如果初始资料不满足定理3.1中的正则性要…"、"可立即推出第一章中的引理3.1"）。
@@ -383,6 +447,11 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
         _backfill_whitelist = set()
 
     for p, y, txt in all_blocks:
+        # 🔴 中文形近补救（单一真源 lib/label_typo）：把块首末字残的类型词
+        # （结诊/结沦/定议…，且其后紧跟点分序标）归一为本书 config/默认词表里的正字，
+        # 再交 lab_re 匹配。CJK 通道**只替换等长块首词**、偏移不变 → 下面 _is_head /
+        # 交叉引用守卫沿用原 m.start()。词表纯中文时英文两通道恒 None（对英文书零影响）。
+        txt = label_typo_normalize(txt, _typo_labels) or txt
         for m in lab_re.finditer(txt):
             c = int(m.group(2)); num = int(m.group(3))
             if chapter_first and c != chapter:
@@ -435,6 +504,16 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
                     _saw_cjk_punc = True
                     break
             _tail_bracket = any(_ch_ in '（（）之.,；：！？' for _ch_ in _tail[:6])
+            # 🔴 ASCII 半角方括号标题分隔符（郑大钟《线性系统理论》实测：条头一律写作
+            # 「结论N.M[标题]」用 ASCII '['，而非全角「（」。被压扁判据的拉丁/数学字符类
+            # 特意收了 `[`，于是凡标题以拉丁/数学词起头的真条头——「结论11.22[SISO …]」、
+            # 「结论7.51[(E-A) …]」、「结论12.44[BIB0 …]」——其尾串首字符 '[' 命中该字符
+            # 类、且其后 6 字符内暂无 CJK，就被误判为压扁幻影 reject，真条目静默丢失
+            # （B 层报「缺号」却无从回填）。开括号（半角 '['、全角 '［'、'【'）是「标题起
+            # 手」的确定信号，绝非「条号被数字黏连」的幻影特征，须一并计入 _tail_bracket 抑制
+            # 误杀。冯琦《集合论》的幻影尾串为拉丁/数学/等号/点起头（定理1.61Va、例1.70 =0.、
+            # 例1.272·w），不含开方括号 → 零影响；其真标题用全角「（」本已被原集合覆盖。
+            _tail_bracket = _tail_bracket or _tail[:1] in '[［【'
             if (_tail[:1] in '.·＝＝.＝=' or
                 (bool(_tail) and re.match(r'[A-Za-z0-9∈∞≠≤≥><\[\]\-，湮]', _tail[:1])
                  and not _saw_cjk_punc and not _tail_bracket)):
@@ -463,13 +542,13 @@ def extract_items_two_level(extract_dir, chapter, start_page, end_page, chapter_
 
     # 单级条目（推论/例/性质/习题）：块首「标签+数字」，数字后非数字/小数点
     # （排除 "定理2.1" 这类两级号），并拒绝助词紧随的引用形态（"例2和例3"）。
+    # 「与/和/或」仅在构成枚举引用（"例2和例3"、"定理1或定理2"）时才拒；后随非
+    # 「标签+数字」（如 性质4 的陈述以 "与S(Rⁿ)上的情形类似…" 开头，谷超豪《数学
+    # 物理方程》ch6 §4 实测）不拒。alternation 与 lab_re 同源（config 并入）。
     single_re = re.compile(
-        r'^(定义|定理|引理|推论|命题|例|性质|注|习题)\s*(\d+)(?![\d.．·])'
+        r'^(' + _single_alt + r')\s*(\d+)(?![\d.．·])'
         r'(?![的之中即及时前后都均也是])'
-        # 「与/和/或」仅在构成枚举引用（"例2和例3"、"定理1或定理2"）时才拒；
-        # 后随非「标签+数字」（如 性质4 的陈述以 "与S(Rⁿ)上的情形类似…" 开头，
-        # 谷超豪《数学物理方程》ch6 §4 实测）不拒。
-        r'(?!(?:[与和或]\s*(?:定义|定理|引理|推论|命题|例|性质|注)\s*\d))')
+        r'(?!(?:[与和或]\s*(?:' + _single_alt + r')\s*\d))')
     single_raw = []
     for p, y, txt in all_blocks:
         # 行首粘连标点（'．例9…'）先剥离再匹配；正文快照仍取原始 txt。
@@ -514,7 +593,7 @@ def extract_items(extract_dir, chapter, start_page, end_page, manual_overrides=N
     if primary == ORDINAL_TWO_LEVEL:
         items, warnings, blocking = extract_items_two_level(
             extract_dir, chapter, start_page, end_page,
-            chapter_first=getattr(cfg, 'chapter_first', True))
+            chapter_first=getattr(cfg, 'chapter_first', True), cfg=cfg)
         if manual_overrides:
             existing = {it['key']: idx for idx, it in enumerate(items)}
             for mo in manual_overrides:

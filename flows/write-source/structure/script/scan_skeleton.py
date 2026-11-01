@@ -926,8 +926,8 @@ _SEC_SEP_RE = re.compile(r'[.\-–·/．－〜]')
 _SEC_HEAD_RE = re.compile(
     r'^(?:[§8Ss$\*\-–—－•·\s])*(\d+(?:[.\-–·/．－〜]\d+)*)')
 _SEC_TITLE_LABEL_RE = re.compile(
-    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
-    r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
+    r'(定义|定理|引理|命题|推论|结论|例|公理|练习|评注|准则|图|表|'
+    r'Definition|Theorem|Lemma|Proposition|Corollary|Conclusion|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)')
 # 标题首字符白名单：真小节标题可能以数学符号开头（Brin & Stuck §5.3
 # "∈-Orbits"——∈ 不是 alnum，旧 isalnum 检查整节漏检）。
@@ -990,8 +990,8 @@ def _proof_title_is_prose(rest_stripped):
 
 # 标签词 + 后随数字 = 条目标题；仅含标签词（无数字）是合法章节标题。
 _SEC_TITLE_LABEL_NUM_RE = re.compile(
-    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
-    r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
+    r'(定义|定理|引理|命题|推论|结论|例|公理|练习|评注|准则|图|表|'
+    r'Definition|Theorem|Lemma|Proposition|Corollary|Conclusion|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table)\s*\d')
 
 # ---------------------------------------------------------------------------
@@ -1032,19 +1032,36 @@ _SEC_TITLE_LABEL_NUM_RE = re.compile(
 # 判据测试：tests/test_xref_wrap_phantom_section.py
 # ---------------------------------------------------------------------------
 _XREF_TAIL_RE = re.compile(
-    r'(定义|定理|引理|命题|推论|例|公理|练习|评注|准则|图|表|'
-    r'Definition|Theorem|Lemma|Proposition|Corollary|Example|Axiom|Exercise|'
+    r'(定义|定理|引理|命题|推论|结论|例|公理|练习|评注|准则|图|表|'
+    r'Definition|Theorem|Lemma|Proposition|Corollary|Conclusion|Example|Axiom|Exercise|'
     r'Remark|Figure|Fig|Table|Section|Sect|§)\s*[,:;]?\s*$',
     re.IGNORECASE)
 
 
-def _xref_wrap_phantom(prev_line, ln, m_end):
-    """True = 本行行首的点分编号是**上一行换行交叉引用**的编号，不是节号。"""
+def _xref_wrap_phantom(prev_line, ln, m_end, is_successor=False):
+    """True = 本行行首的点分编号是**上一行换行交叉引用**的编号，不是节号。
+
+    条件①（`prev_line` 停在裸标签词上，见 `_XREF_TAIL_RE`）始终必成立；
+    条件②有两种书体形态：
+      · 拉丁体例：编号后紧跟句点（Lehmann "3.3.1. Replacing…"——引用句的句号）。
+      · 中文体例：编号后直接接中文续句（郑大钟《线性系统理论》实测 2026-11-01：
+        「…但不满足结论 / 7.40 中属性(ii)与(iv)。」「…可把图 / 13.17 所示…」。
+        中文交叉引用不会像拉丁那样在引用号后落一个「.」，而是被断块后的续句
+        （所示/中属性/满足/由此…）直接顶住编号）。中文形态额外要求候选号
+        **不是本章接续节号**（`not is_successor`），避免「上一块恰好停在
+        裸标签词 + 下一块恰是真节头」这一罕见巧合误杀真节；拉丁形态沿用
+        原保守判据，不改动其匹配语义。"""
     if not prev_line:
         return False
-    if ln[m_end:m_end + 1] != '.':
-        return False
-    return _XREF_TAIL_RE.search(prev_line) is not None
+    tail = ln[m_end:]
+    # 拉丁：编号紧跟句点 ⇒ 引用句终止符（原有行为，零回归）。
+    if tail[:1] == '.':
+        return _XREF_TAIL_RE.search(prev_line) is not None
+    # 中文：编号后可选单个空白，紧接汉字 ⇒ 交叉引用被断块后接续句。额外受
+    # `is_successor` 保护：只有「候选号非本章接续节号」才判为换行引用。
+    if not is_successor and re.match(r'^\s?[一-鿿]', tail):
+        return _XREF_TAIL_RE.search(prev_line) is not None
+    return False
 
 
 # 习题区闩锁内的「真节标题」判据（配合 scan() 的闩锁守卫使用）：
@@ -1126,10 +1143,12 @@ def _section_header_info(ln, ch=None, depths=None, max_depth=6,
         depth = len(comps)
         if depths is not None and depth not in depths:
             return None
-        # 🔴 换行交叉引用否决（见 _XREF_TAIL_RE 注释，Lehmann ch3 §3.3.1 实测）：
-        # 上一行停在标签词上且本行编号后紧跟句点 ⇒ 该编号是被引用的条目号，撤销
-        # 节头候选（无条件，不吃序位/白名单豁免）。
-        if _xref_wrap_phantom(prev_line, ln, m_end):
+        # 🔴 换行交叉引用否决（见 _XREF_TAIL_RE / _xref_wrap_phantom 注释）：
+        # 上一块停在标签词上 + 本块以点分编号开头 ⇒ 该编号是被引用的条目号。
+        # 拉丁形态（编号后紧跟句点）无条件撤销；中文形态（编号后接汉字续句）
+        # 额外受「候选号 = 本章接续节号」保护，误杀真节的风险压到与拉丁同级。
+        _xref_succ = (successor_num is not None and num_str == successor_num)
+        if _xref_wrap_phantom(prev_line, ln, m_end, is_successor=_xref_succ):
             return None
         # 🔴 三级条/练习头否决（Rising Sea 实测 57 处）：印刷体例「编号紧跟
         # 题头」的书，`C.S.` 后若直接粘连大写字母（'10.1.E.EXERCISE …' /

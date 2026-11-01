@@ -38,6 +38,16 @@ manifest 单元记录可带 ``"merge": false``：该单元仍受 gate 全套门�
 writing-rules V-I 规定集中习题块在最终总结中一律省略，而修书方可同时要求习题在
 单元层保留（习题单元 + 习题节壳单元打此标记，两侧 manifest 均须携带以保 parity）。
 
+英文侧标题清洗闸（``heading_emptied_by_cjk_clean``，2026-10-30）
+-------------------------------------------------------------
+``clean_cjk``（仅 ``language == "en"``）整行删 CJK。一条**题名只有中文**的标题
+（``# Chapter 7: 线性演化方程``）洗完后只剩 ``# Chapter 7:``，交付里那一章就没有题名。
+写侧源单元语言闸豁免 ``#`` 行（双语括注合法），故本脚本在拼接前 **拒绝**这种形态：
+须把单元标题改成书印的英文题名（章级 = ``_extract/chapter_map.json`` 的 ``name_en``
+或章扉页文字层；节级 = 该节印面标题行）。合法双语标题（``# Chapter 1: 基本概念
+Basic Concepts``）与印面本就纯编号的节题（``### §7.1.1``）不受影响；全架 56 本普查
+命中 9 条、零假阳。
+
 用法
 ----
     python flows/write-source/script/merge_units.py <extract_dir> <ch> [-o <out_md>]
@@ -95,6 +105,49 @@ def _read_body(path):
 
 # CJK（含全/半角标点）字符类：文件名语种守卫与正文 clean_cjk 共用同一口径。
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+")
+
+# 🔴 标题「被清洗掏空」检测（2026-10-30 Evans 4 章 + Arnold ODE 5 章实测）。
+# clean_cjk 整行删 CJK：一条题名只有中文的标题（`# Chapter 7: 线性演化方程`）清洗后
+# 只剩 `# Chapter 7:`——**交付里那一章没有题名**。写侧的源单元语言闸
+# （check_unit_quality #24 `source_language_problems`）**豁免 `#` 标题行**（双语标题是
+# 写手给读者的括注），两道口径叠起来恰好没人拦：闸放行、merge 掏空。
+# 只认「剥 CJK 前题名区非空 → 剥后为空」这一种形态，故合法双语标题
+# （`# Chapter 1: 基本概念 Basic Concepts`）与印面本就是纯编号的节题
+# （`### §7.1.1`，Evans 书内实测存在）都不受影响。全架 56 本普查命中 9 条、零假阳
+# （探针 p605_empty_en_headings_census.py）。
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(.*)$")
+# 编号骨架 = 「Chapter 7」「§2.1」「Appendix A」「第 3 章」这类**不是题名**的部分。
+_NUM_SKELETON_RE = re.compile(
+    r"^\s*(?:(?:chapter|section|appendix|part|exercises?|problems?)"
+    r"\s*[\dIVXLC.]+(?:\s*\.\d+)*"
+    r"|[\u7b2c][\u4e00-\u9fff\d]+[\u7ae0\u8282\u90e8\u5f55][\u4e00-\u9fff\d]*"
+    r"|[\u00a7]?\d+(?:\.\d+)*)"
+    r"[\s.:()\u2014-]*", re.I)
+
+
+def _title_region(rest):
+    s = rest
+    for _ in range(3):                     # 「Chapter 7 §2.1 :」这种连写最多剥三层
+        m = _NUM_SKELETON_RE.match(s)
+        if not m or m.end() == 0:
+            break
+        s = s[m.end():]
+    return s.strip(" \t:.\u2014\uff1a")
+
+
+def heading_emptied_by_cjk_clean(line):
+    """该标题行经 CJK 清洗后是否**连题名一起没了** → 返回 (剥前题名, 剥后残留) 或 None。"""
+    m = _HEADING_RE.match(line)
+    if not m:
+        return None
+    rest = m.group(1)
+    if not _CJK_RUN_RE.search(rest):
+        return None
+    before = _title_region(rest)
+    after = _title_region(_CJK_RUN_RE.sub("", rest))
+    return (before, after) if before and not after else None
+
 
 
 def _map_name_en(ext, ch_key):
@@ -244,7 +297,25 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
     if clean_cjk is None:
         clean_cjk = (language == "en")     # 翻译版（cn）自动不清 CJK
     if clean_cjk:
-        lines = [re.sub(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+", "", ln) for ln in lines]
+        emptied = []
+        for i, ln in enumerate(lines):
+            hit = heading_emptied_by_cjk_clean(ln)
+            if hit:
+                emptied.append((owners[i], ln.strip(), hit[0]))
+        if emptied:
+            raise SystemExit(
+                "[merge_units] 🔴 英文侧标题的**题名只有中文**，被 CJK 清洗整条删掉（%d 处）"
+                "——这样拼出的交付里那些章/节**没有题名**（`# Chapter 7:`）。"
+                "题名列 = 剥 CJK 前剩下的中文题名：\n%s\n"
+                "修法 = 把该单元标题行改成**书印的英文题名**（章级题名取 "
+                "`_extract/chapter_map.json` 的 `name_en`，或章扉页 page_NNN.json 文字层；"
+                "节级取该节印面标题行）。双语括注（`# Chapter 1: 基本概念 Basic Concepts`）"
+                "本身合法，闸只拦「剥完什么都不剩」；🔴 不得反过来用 --no-clean-cjk 放行，"
+                "那会把中文标题混进英文版。"
+                % (len(emptied), "\n".join(
+                    "  x %s L%d: %r（题名 %r 会整条消失）" % (f or "?", i + 1, ln, t)
+                    for (i, (f, ln, t)) in enumerate(emptied))))
+        lines = [_CJK_RUN_RE.sub("", ln) for ln in lines]
         # owners 不受影响（行数不变，仅内容去 CJK）
     return lines, owners
 

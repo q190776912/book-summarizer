@@ -71,10 +71,10 @@ _TRAIL_DOT = re.compile(r"[.．。]\s*$")
 # `Mobius`，六条**都对**的标题被判「两侧互非前缀（其中一侧被 OCR 改写）」并索要
 # 「统一五处」，实际是逼写手把印面写法降级去迁就 OCR 残骸（闸门 bug 的经典形态：
 # 闸把正确做法判死）。折形只在**比对**里做，`clean_title`（展示形）一律不动。
-#   折叠三件事：① 剥数学定界符与宏包装（`$`、`\text{}`/`\mathrm{}`/`\operatorname{}`
-#   取内容、未知宏丢反斜杠、花括号丢）；② 常见希腊字母宏映射成同一码位（`\mu`→μ、
-#   `\varphi`→φ…，大小写都收，因 OCR 侧可能给出大写 Φ）；③ NFD 剥组合符（变音符
-#   ö → o），使 `Möbius` 与 OCR 的 `Mobius` 归一。
+#   折叠三件事：① 剥数学定界符与宏包装（`$`、字体族宏 `\text{}`/`\mathrm{}`/
+#   `\operatorname{}`/`\mathbb{}`/`\mathcal{}`… 一律取内容、未知宏丢反斜杠、花括号丢）；
+#   ② 常见希腊字母宏映射成同一码位（`\mu`→μ、`\varphi`→φ…，大小写都收，因 OCR 侧可能给出大写 Φ）；
+#   ③ NFD 剥组合符（变音符 ö → o），使 `Möbius` 与 OCR 的 `Mobius` 归一。
 # 🔴 折叠**不放松**截短判定：真截短（契约 `p(n)` vs 印面 `\varphi(n)` 一类 OCR 误读、
 # 以及悬空虚词）照旧由前缀关系与 `dangling_reason` 报出。
 _GREEK_TEX = {
@@ -101,6 +101,9 @@ _SYMBOL_TEX = {
     "dots": "\u2026", "ldots": "\u2026", "cdots": "\u22ef", "vdots": "\u22ee",
     "pm": "\u00b1", "mp": "\u2213", "cdot": "\u00b7", "bullet": "\u2219",
     "ast": "*", "star": "\u22c6", "circ": "\u2218",
+    # `\colon` 是「映射读法」的关系冒号（`$\phi \colon \mathbb{Z} \to R$`，Fraleigh §31.17
+    # 实测）；缺映射时退化成裸词 `colon` 写进账目面，等于在 SSOT 里凭空多一个词。
+    "colon": ":",
     # 🔴 导数撇号：写手在节题里写 `$\zeta ^ { \prime } ( s )$`（印面 ζ′(s) 的规范 KaTeX
     # 写法）而 OCR/契约侧给 `ζ'(s)`。不收录 `\prime` 时宏名退化成裸词 `prime`，两侧
     # **永不同形** → `norm_title` 判「互非前缀（一侧被 OCR 改写）」，`fix_section_name`
@@ -126,26 +129,56 @@ _SYMBOL_TEX = {
     "implies": "\u21d2", "impliedby": "\u21d0", "iff": "\u21d4",
 }
 _TEX_MACRO_RE = re.compile(r"\\([a-zA-Z]+)")
-_TEX_ARG_RE = re.compile(
-    r"\\(?:mathrm|text|textrm|textit|mathit|mathbf|mathsf|operatorname|bm)"
-    r"\s*\{([^{}]*)\}")
+# 🔴 **字体族宏**只改字形、不加内容：印面的黑板粗体 ℤ 在账目面只能存裸字符 `Z`
+# （`tools/fix_section_name.py` 的 `--name` 硬禁 `$` 与反斜杠，文档自己写明「账目面存印刷
+# 裸文本…写裸字符即可」）。旧白名单缺 `mathbb`/`mathcal` 一族，宏名退化成正文里的
+# `mathbb`，于是 `$\mathbb{Z}$` 折成 `mathbbz` 而账目面的 `Z` 折成 `z`——**两侧永不同形**，
+# 工具承诺的裸文本形根本无法表达，`--name` 怎么写都 MISMATCH（Fraleigh《AFCAA》实测 133 个
+# 含黑板粗体的节题全卡在此）。补齐后折形仍**只作用于比对侧**，展示形 `clean_title` 不动。
+# 🔴 不含 `binom`/`mathop`：前者是**双参数**宏（`\binom{a}{b}` 单参正则会啃成 `a{b}`），
+# 后者是算子声明而非字体，剥了会改变内容形。
+_FONT_ARG_RE = re.compile(
+    r"\\(?:mathrm|text|textrm|textit|mathit|mathbf|mathsf|operatorname|bm"
+    r"|mathbb|mathcal|mathfrak|mathscr|boldsymbol|mathbold|textbf|texttt"
+    r"|mathinner|mbox|hbox)\s*\{([^{}]*)\}")
+# 兼容旧的单参宏名集合（同一批宏，保留别名以免外部读者按旧名检索不到）
+_TEX_ARG_RE = _FONT_ARG_RE
+# 🔴 **无花括号**的字体宏写法：`\mathbb R\to U`（Fraleigh《AFCAA》§8.2/§8.7/§8.8 实测）。
+# 只认「宏名 + 空白 + 单个字母/数字」，因为 `\mathbbR` 会被 TeX 读成宏名 `mathbbR`。
+# 缺这一条时 `\mathbb` 退化成裸词 `mathbb`，节题折成 `mathbb R→ U`：⑰ 判「互非前缀」，
+# 而 `fix_section_name` 按它折出来的形写进账目面就留下 `mathbb` 这个**根本不存在的词**
+# （实测 3 处已入档，须按本条重刷）。`binom`/`mathop` 仍不进白名单（双参数/非字体）。
+_FONT_BARE_RE = re.compile(
+    r"\\(?:mathrm|text|textrm|textit|mathit|mathbf|mathsf|operatorname|bm"
+    r"|mathbb|mathcal|mathfrak|mathscr|boldsymbol|mathbold|textbf|texttt"
+    r"|mathinner|mbox|hbox)\s+([A-Za-z0-9])")
 _TEX_SPACING_RE = re.compile(r"\\[,;! ]")
 
 
-def fold_typeset_markup(text):
+def fold_typeset_markup(text, keep_scripts=False):
     r"""把 LaTeX/KaTeX 排版形折成**可与裸 OCR 文本比对**的形态（纯函数）。
 
-    `$\mu(n)$` → `μ(n)`；`\text{Selberg}` → `Selberg`；`\mid` → `|`；`\Foo` → `Foo`；
-    `$`/`{}`/上下标标记 `^` `_` 剥除。只供 `norm_title` 比对用；展示形（`clean_title`）
-    绝不调用它。
+    `$\mu(n)$` → `μ(n)`；`\text{Selberg}` → `Selberg`；`\mathbb{Z}` → `Z`；
+    `\mathbb R` → `R`；`\mid` → `|`；`\colon` → `:`；`\Foo` → `Foo`；
+    `$`/`{}`/上下标标记 `^` `_` 剥除。只供 `norm_title` 比对用；展示形
+    （`clean_title`）绝不调用它。
 
     🔴 上下标标记一并剥除：写手对同一印面可写 `\sigma_a(n)` 或 `\sigma_{a}(n)`，
     花括号折叠后前者留 `σ_a`、后者留 `σa`——不剥 `_` 就是「两侧互非前缀」假阳。
     剥后 `^`/`_` 在两侧同形，真残缺（少词、误读字母）仍由前缀关系与
     `dangling_reason` 独立捕获。
+
+    `keep_scripts=True` 只给**账目面派生**用（`tools/fix_section_name.py` 的裸文本名）：
+    剥 `$` 与宏名反斜杠，但保留 `^`/`_`/`{}`，于是 `M_{m\times n}(\mathbb{R})` 折成
+    `M_{m×n}(R)` 而不是 `Mm×n(R)`——后者把印面的下标结构抹平，写进 SSOT 就是一处新损伤。
+    比对侧恒用默认（`norm_title` 会剥掉它们，两种写法同形，判据不受影响）。
     """
     t = str(text or "")
-    t = _TEX_ARG_RE.sub(lambda m: m.group(1), t)
+    prev = None
+    while prev != t:                    # 反复剥到不动点：嵌套字体宏 `\mathbb{\mathcal{X}}`
+        prev = t
+        t = _FONT_ARG_RE.sub(lambda m: m.group(1), t)
+        t = _FONT_BARE_RE.sub(lambda m: m.group(1), t)
     t = _TEX_SPACING_RE.sub("", t)
 
     def _macro(m):
@@ -153,7 +186,7 @@ def fold_typeset_markup(text):
         return _GREEK_TEX.get(name) or _SYMBOL_TEX.get(name) or name
 
     t = _TEX_MACRO_RE.sub(_macro, t)
-    for ch in "$\\{}^_":
+    for ch in (("$\\") if keep_scripts else ("$\\{}^_")):
         t = t.replace(ch, "")
     return t
 
@@ -189,9 +222,15 @@ def title_of(body):
     return ""
 
 
-def clean_title(text, key=""):
-    """标题的**展示形态**：去 `#`/`§`/序标/尾部页码残渣，保留大小写与标点。"""
+def clean_title(text, key="", keep_trailing_digits=False):
+    """标题的**展示形态**：去 `#`/`§`/序标/尾部页码残渣，保留大小写与标点。
+
+    `keep_trailing_digits=True` 只给**比对的第二条通道**用（见 `norm_title`），展示形
+    一律按默认走——尾部数字照剥，manifest/marker/文案/文件名不受本参数影响。
+    """
     t = _drop_ordinal(text, key)
+    if keep_trailing_digits:
+        return t
     prev = None
     while prev != t:                      # 反复剥（'Termi- 57' 式多重残渣）
         prev = t
@@ -202,13 +241,23 @@ def clean_title(text, key=""):
 _BARE_LOCAL_ORDINAL = re.compile(r"^\d{1,2}[.\u00b7、]\s+")
 
 
-def norm_title(text, key=""):
-    """比对用归一形：无空白、撇号统一、小写、去尾点，并折排版标记与变音符。
+def norm_title(text, key="", keep_trailing_digits=False):
+    r"""比对用归一形：无空白、撇号统一、小写、去尾点，并折排版标记与变音符。
 
     折形只做**比对侧**同形（KaTeX `\mu` ↔ OCR 的 μ、`Möbius` ↔ OCR 的 `Mobius`），
     展示形 `clean_title` 不受影响；截短判定仍走 `dangling_reason` 与前缀关系。
+
+    `keep_trailing_digits=True` ⇒ 跳过 `_TRAIL_PAGE` 的尾数剥除。存在的理由是一条
+    **遮蔽不对称**（2026-10-31 Fraleigh《AFCAA》6 站实测）：`tools/fix_section_name.py`
+    硬禁账目面含 `$`/`\`，印面 `Order of (8,4,10) in $\mathbb{Z}_{12} \times \mathbb{Z}_{60}
+    \times \mathbb{Z}_{24}$` 只能写成裸文本 `… Z12 × Z60 × Z24`——收尾是数字 ⇒ 被当页码剥掉，
+    而单元 H2 收尾是 `$` ⇒ 剥不到。于是同一印面两侧永判「契约 name 是单元标题的前缀
+    （契约侧截短）」，**修契约也修不好**（改了名照样红）。第二通道让这类站点在
+    「两侧尾数字逐位相同」时同形；它**只可能多放行两侧本来就一致的情形**，
+    差异真在数字上（`Z12` vs `Z24`、`Order 360` vs `Order 361`）两侧仍不同形，
+    照旧由前缀/互非前缀判据报出。负向用例见 `lib/tests/test_section_titles.py`。
     """
-    t = clean_title(text, key)
+    t = clean_title(text, key, keep_trailing_digits=keep_trailing_digits)
     # numeric-local（bare_head）二级小节会把标题渲染成裸整数序号起头（如 "### 2. Phase
     # Spaces"）。那个 "2. " 是**展示产物**：既不是标题文字，也不等于节点 key（key 形如
     # "1.2"，_drop_ordinal 的前缀剥离命不中）。若不剥掉，单元侧 "2. Phase Spaces" 与
@@ -230,6 +279,19 @@ def dangling_reason(title, key=""):
     if not t:
         return None
     if t.endswith("-") or t.endswith("\u2010") or t.endswith("\uff0d"):
+        # 🔴 **尾连字符可能是 `_TRAIL_PAGE` 吃数字吃出来的**（2026-10-31 Fraleigh《AFCAA》
+        # §3.12 实测）：账目面按 `tools/fix_section_name.py` 的硬规只能写裸文本，印面
+        # `Example: Find all solutions of $z^4 = -16$` 写成 `… z^4 = -16` ⇒ 粘连档把 `16`
+        # 当页码剥掉，展示形就**凭空**收在那个负号上 → 报「以连字符收尾（折行续行被丢弃）」。
+        # 单元 H2 侧收尾是 `$` ⇒ 同一剥除命不中 → 只有契约侧挨这一刀。与 `norm_title` 的
+        # 保尾数通道同源（`$` 遮蔽不对称），只是这条打在**悬空腿**上。
+        # 判据取「把尾数保住后还收在连字符上吗」：真折行残体（`8.5 Inclusion-`）数字保住与否
+        # 都是 `-` 收尾 ⇒ 照报；只有「连字符纯由剥数字暴露」这一种形态豁免。
+        # 虚词档**不豁免**（`Applications of 12` 一类剥掉页码后露出的 `of` 仍须报），
+        # 所以下面只在这一支上重算，`words`/`raw_last` 一律用展示形。
+        if not clean_title(title, key, keep_trailing_digits=True).endswith(
+                ("-", "\u2010", "\uff0d")):
+            return None
         return "以连字符收尾（印刷折行标题的续行被丢弃）"
     words = [w for w in re.split(r"\s+", t) if w]
     if not words:
@@ -245,6 +307,17 @@ def dangling_reason(title, key=""):
     if raw_last.endswith(_CLOSE_TAIL):
         return None
     last = raw_last.strip(".,;:!?()\u201c\u201d\u2018\u2019\u300c\u300d\uff08\uff09")
+    # 🔴 **大写单字母 `A` 是数学变元，不是冠词**（2026-10-31 Fraleigh《AFCAA》§20.4
+    # `Definition — The free group generated by A`、§20.5 `Definition — Free on a set A`
+    # 实测）。这两节的印面只排 `20.4 Definition` / `20.5 Definition`（无描述性节题，
+    # 裁图 `agent_w3/sheet_ch20_heads.png`），尾部 `A` 来自笔记侧描述语里印面的生成集记号
+    # （原书正文即 `G is free on A`、`F[A]`）。闸的处方在此处要求「按印刷全题补全」，而印面
+    # **没有**更长的题可补 ⇒ 只能凭空造尾词，属闸门 bug 的经典形态。
+    # 收档范围**只取这一形态**：跨架普查（776 章 / 58 本，`_p863_dangle_upper_a.py`）虚词收尾
+    # 报告总共 4 条 = 2 站 × 契约/单元两侧，末 token 全部正是 `A`；其余虚词收尾报告 **0 条**。
+    # 大小写敏感因此不必扩到 `Of`/`The`/`An`（Title Case 里它们仍照报），爆炸半径就是这 2 站。
+    if last == "A":
+        return None
     if last.lower() in DANGLE_EN:
         return "以英文虚词「%s」收尾（印刷折行标题的续行被丢弃）" % last
     return None
@@ -345,6 +418,11 @@ def title_problems(contract, units, read_body, compare_names=True):
             continue
         cn, un = norm_title(cname, key), norm_title(head, key)
         if cn == un or not cn or not un:
+            continue
+        # 🔴 第二通道：两侧**保住尾部数字**再比一次。相等 ⇒ 唯一可能的差异就是
+        # `_TRAIL_PAGE` 只够得着一侧（账目面裸文本 `… Z24` vs H2 `… $\mathbb{Z}_{24}$`
+        # 的遮蔽不对称），不是真残缺；判据强度不降（数字不同形照样落进下面的前缀分支）。
+        if norm_title(cname, key, True) == norm_title(head, key, True):
             continue
         if un.startswith(cn):
             kind = "契约 name 是单元标题的前缀（契约侧截短）"

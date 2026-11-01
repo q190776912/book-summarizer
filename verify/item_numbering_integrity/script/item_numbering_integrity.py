@@ -444,6 +444,16 @@ _ENTRY_LABELS = (
     r'|Conjectures|Conjecture|Assertions|Assertion|Assumptions|Assumption'
     r'|Conditions|Condition'
     r'|Calculations|Calculation'
+    # 🔴 Weibel ch10 印面勘验（2026-10-29，_extract 页带 p294.log 实测）：该书把
+    # 部分条目印成**纯描述性条头**，号前没有类型词——「Exegesis 10.2.3」(印面 p376)
+    # 「Prototype 10.3.5 (Localizations of rings)」(p381)「Exact Functors 10.5.2」(p392)。
+    # 缺这三词时条头解析不出编号 → 共享计数器窗假「缺号 3 / 5 / 2」（BLOCKING）。
+    # 此前交付同时写了「**10.2.3 (Exegesis)**」编号在前的一式两份，num-first 兜底
+    # 掩盖了词表缺口；按印面去重（只留 label-first 形）后暴露。
+    # 全架普查（51 本交付 md，正则 `\*\*(词)\s*\d`）命中 6 处=本书这 6 个条头本身，
+    # 故本次放宽对其它书逐字节惰性。CN 侧同形词一并登记。
+    r'|Exegesis|Prototype|Exact Functors'
+    r'|疏解|原型|正合函子'
 )
 # 🔴 Weibel「Calculation 6.2.1」这类以计算命名的条目：缺该类型词时条头解析
 # 不出编号 → 假「缺号」（实测 ch6 §6.2 报缺 1）。
@@ -464,6 +474,8 @@ _LABEL_NORM = {
     '要求': 'Requirement', 'Requirement': 'Requirement',
     '猜想': 'Conjecture', '断言': 'Assertion', '假设': 'Assumption',
     '假定': 'Assumption', '条件': 'Condition',
+    # Weibel ch10 描述性条头（见 _ENTRY_LABELS 注记）：CN 形与 EN 形同一条目。
+    '疏解': 'Exegesis', '原型': 'Prototype', '正合函子': 'Exact Functors',
     'Variation': 'Variation', 'Porism': 'Porism',
 }
 

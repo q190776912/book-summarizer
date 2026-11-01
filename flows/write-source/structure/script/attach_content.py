@@ -1468,6 +1468,35 @@ def _dedupe_sibling_nodes(node):
             return 0
         return bisect.bisect_left(bounds, p) - 1
 
+    def _bare(name, key):
+        """name 就是裸 key（OCR 只报出条号、没标题）→ 视为重号空壳的一翼。"""
+        return str(name or "").strip() == str(key or "").strip()
+
+    def _parallel_restarting(keep, new):
+        """同 (key, type) 却落在**不同页**、且**两侧都带实质且互不相同的标题**——
+        这是原书把某个裸号计数器（郑大钟《线性系统理论》ch4 的 `注N` 等）在**同一节内**
+        按定义/例题分组**重启**产生的两条**真条目**，而非 scan_skeleton 双行空壳。
+
+        判据刻意与 Rosen 空壳形态互补：Rosen 的两行里必有一行是裸号名（banner 行标题
+        == key，或子题行 name==key），`_bare` 命中 → 返回 False → 照旧合并；只有当两行
+        各自都是「key + 不同实质标题」且分处不同页时，才认定为平行重启条目 → 不合并。
+        真重印（同标题同条号）因 `name` 相等也被排除。"""
+        try:
+            kp = int(keep.get("page_start") or 0)
+            np = int(new.get("page_start") or 0)
+        except (TypeError, ValueError):
+            return False
+        if kp == 0 or np == 0 or kp == np:
+            return False
+        key = str(keep.get("key") or "").strip()
+        kn = str(keep.get("name") or "").strip()
+        nn = str(new.get("name") or "").strip()
+        if _bare(kn, key) or _bare(nn, key):
+            return False
+        if kn == nn:
+            return False
+        return True
+
     merged, by_id = [], {}
     for c in kids:
         if not (isinstance(c, dict) and "key" in c and "type" in c):
@@ -1484,6 +1513,13 @@ def _dedupe_sibling_nodes(node):
             merged.append(c)
             continue
         keep, new = by_id[slot], c
+        # 🔴 节内重启计数器的两条**真条目**（不同页 + 各自带不同实质标题）不得合并：
+        # 合并会把 keep 的 page_start 顶到 new 的晚页、却仍留在早槽位 → 文档序页码倒退
+        # （ANCHOR-SANITY 拒绝落盘）并吞掉一条真内容。各留各的槽位（骨架已按页排好序）。
+        if _parallel_restarting(keep, new):
+            by_id[slot] = c          # 后续同键者改与**最新**代表比对
+            merged.append(c)
+            continue
         try:
             later = int(new.get("page_start") or 0) > int(keep.get("page_start") or 0)
         except (TypeError, ValueError):

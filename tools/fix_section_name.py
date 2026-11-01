@@ -18,7 +18,9 @@
   ④ 单元首行 marker 的 `name=`                                                  —— 交 `tools/sync_translate_markers.py`
      （该工具以 manifest 为真值复位 marker，正文一字节不动；本工具在报告里给出确切命令）
   ⑤ 单元正文 H2（`## §N.M …`）                                                  —— 本工具**只校验**：
-     修完必须与 `--name` 在 `lib.section_titles.norm_title` 下相等，否则报 MISMATCH
+     修完必须与 `--name` 相等，两条通道按序取先命中者：`norm_title` 直接相等 = `MATCH`；
+     仅在**保住尾部数字**后相等 = `MATCH-DIGIT`（节题收尾是 `Z_24` 一类下标数字时，
+     H2 侧有 `$` 遮蔽、账目面裸文本没有，见 `check_heading` 文档）；都不等 = `MISMATCH` 拒绝
 
 保险：
   - 默认 dry-run，`--apply` 才写盘；写盘前把每个受影响文件备份到 `<extract>/_bak_section_names/<时间戳>/`。
@@ -247,8 +249,40 @@ def plan(extract_dir, ch_key, sec_key, new_name, evidence, allow_bare=False):
     return targets, unit_file, old
 
 
+def _norm_keep_digits(text, sec_key):
+    """⑤ 腿的第二通道 = 与闸 ⑰ **同一实现**的保尾数比对形。
+
+    故意不自己造哨兵、不自己写正则：工具与闸必须共享同一条判据，否则会出现
+    「工具 MATCH-DIGIT 放行、重跑闸仍判红」的分叉（Fraleigh 6 站正是这种分叉的形态）。
+    判据侧的参数含义见 `lib.section_titles.norm_title`。
+    """
+    return norm_title(text, sec_key, True)
+
+
 def check_heading(unit_file, sec_key, new_name):
-    """⑤ 本工具只校验：单元 H2 与修后契约名须在 norm_title 下相等。"""
+    """⑤ 本工具只校验：单元 H2 与修后契约名须在 `norm_title` 下相等。
+
+    两条通道，按序取先命中者：
+      `MATCH`       两侧 `norm_title` 直接相等（常规形）。
+      `MATCH-DIGIT` 常规形不等，但**保尾数**形相等 —— 只放行这一类差异，因为它是
+                    `_TRAIL_PAGE` 的**数学模式遮蔽不对称**产物，不是真残缺：
+                    Fraleigh《AFCAA》ch9/9.10 实测，印面节题
+                    `Order of (8,4,10) in Z_12 x Z_60 x Z_24` 在单元里写成 KaTeX
+                    `$\mathbb{Z}_{12} \times \mathbb{Z}_{60} \times \mathbb{Z}_{24}$`，
+                    收尾是 `$` ⇒ `_TRAIL_PAGE` 命不中，`24` 留住；而账目面按本工具
+                    「`--name` 禁含 `$`/`\`」的硬规只能写裸文本 `… Z24`，收尾就是数字
+                    ⇒ `24` 被当页码残渣剥掉 → 同一印面永不同形，6 个站点全卡在这一步。
+                    修法是**判据的第二通道**（`norm_title(..., keep_trailing_digits=True)`，
+                    闸 ⑰ 与本工具共用同一条）：`_TRAIL_PAGE` 与展示形一律不动，只在
+                    「两侧保住尾数后逐位相等」时判同形 ⇒ 数字真不同形
+                    （`Z12` vs `Z24`、`Order 360` vs `Order 361`）仍走 MISMATCH 拒绝。
+                    `heading_check` 台账里 `MATCH-DIGIT` 与 `MATCH` 可区分，事后可审。
+      `MISMATCH`    两条都不等 = 单元侧写错或 `--name` 不是印面形 → 拒绝。
+
+    已知残留（本工具不制造也不掩盖，属共享判据性质）：若一侧真丢了下标数字
+    （契约 `… Z` vs H2 `… Z24`），常规形会把 H2 侧的 `24` 也当页码剥掉 → 假 MATCH。
+    该形态由 `title_problems` 的悬空判据与前缀关系独立捕获，不在本腿的职责内。
+    """
     head = None
     for ln in io.open(unit_file, encoding="utf-8").read().split("\n"):
         if ln.startswith("#"):
@@ -257,7 +291,12 @@ def check_heading(unit_file, sec_key, new_name):
     if head is None:
         return "NO-HEADING", None
     a, b = norm_title(new_name, sec_key), norm_title(head, sec_key)
-    return ("MATCH" if a == b else "MISMATCH"), (head, a, b)
+    if a == b:
+        return "MATCH", (head, a, b)
+    a2, b2 = _norm_keep_digits(new_name, sec_key), _norm_keep_digits(head, sec_key)
+    if a2 == b2:
+        return "MATCH-DIGIT", (head, a2, b2)
+    return "MISMATCH", (head, a, b)
 
 
 def _mkdir_unique(bak):
@@ -317,6 +356,9 @@ def main(argv=None):
         print("单元 H2   = %s  %s" % (status, unit_file))
         if status == "MISMATCH":
             print("            契约侧归一=%r / 单元侧归一=%r" % (detail[1], detail[2]))
+        elif status == "MATCH-DIGIT":
+            print("            （保尾数通道命中：两侧仅差 `_TRAIL_PAGE` 的数学模式遮蔽不对称，"
+                  "非真残缺）")
         for path, before, after, _o in targets:
             print("%s %s" % ("=" if before == after else "~", os.path.basename(path)))
         if status == "MISMATCH":

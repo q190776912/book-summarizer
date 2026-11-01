@@ -49,6 +49,7 @@ from verify.script.struct_labels import (
     G_EX_RE, G_PF_RE, G_TOPLEVEL_BREAK_RE,
     G_ITEM_BQ_HEAD_RE,
     G_BQ_BOLD_HEAD_BOUNDARY_RE,
+    item_head_inline_body,
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
@@ -128,6 +129,13 @@ def check_g_quote_continuity(md_file):
           `>` 开头但不是新 item 的头——同一个 blockquote 被劈成两段。
       (2) **半包例子**（writing-rules V-F）：块头带 `>` 而正文留在顶层裸奔——即
           裸空行后接顶层散文，且该 `>` 组除头行外没有任何正文行。
+    🔴 (2) 只适用于**整行只有标签**的头（`> **例 3.1.1**`）。头行自带正文的
+       **run-in 形态**（`> **Solution.** Sentences 1 and 2 …`）**不算半包**——块在该行
+       即已完整（判据 SSOT = `struct_labels.item_head_inline_body`；Rosen 离散数学 8e
+       2026-10-28 全库标定：本判据现存 10 条报告 100% 是 run-in 假阳、0 条纯标签头，
+       而对假阳走「折进块」修法会把人物小传段/`<div>` 图块/表吞进解答块，交付随即与
+       印面分叉并造出 27 处 P1「解答块过长」命中）。run-in 块后若确需分隔线，由
+       `check_i_prose_separator` 按其原有「块内另有正文行」口径报缺 `---`。
     合法（不判）：裸空行后接新 item 头、或 `---`/标题/顶层 `**标签**`/`$$`/表格/
     `<div` 等自带边界的块；以及**正文完整的 item 块**结束后接顶层散文（该处缺的
     是 `---`，由 `check_i_prose_separator` 报，消息指向正确判据）。
@@ -145,7 +153,8 @@ def check_g_quote_continuity(md_file):
         ln = lines[i]
         if G_ITEM_BQ_HEAD_RE.match(ln):
             in_block = True
-            body_seen = False
+            # run-in 头自带正文 = 块在该行已完整；只有纯标签头才需要看后续 `>` 行
+            body_seen = bool(item_head_inline_body(ln))
             continue
         if G_TERM.match(ln) and not ln.lstrip().startswith('>'):
             in_block = False

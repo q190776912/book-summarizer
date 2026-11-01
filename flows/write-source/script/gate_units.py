@@ -61,7 +61,9 @@
   🔴 门控仍保留 ①标记替换 ②单元级质量 ③公式序标对账 ③b图片/空正文/章级图片
   覆盖对账 ④真实 KaTeX 渲染 + ⑦⑧完整性核对 + ⑨章级习题重号（幻影条目契约痕迹）
   + ⑩契约→manifest 反向覆盖对账 + ⑪单元结构阅读顺序（页码单调）+ 单元标签编号须
-  契约在账（质量校验第 23 项）。
+  契约在账（质量校验第 23 项）+ ⑳图 alt 卫生（判据/取数真源 ``lib/figure_alt_audit``，
+  与回写工具 ``tools/clean_figure_alts`` 同一份；只有「脏 alt」拦门，「未登记 src」与
+  「登记题注自己脏」两档进 detail 计数、不拦）。
 
 完整性核对（防漏项）：
   ⑦ manifest 中每个单元都有对应文件（无缺失、无多余文件）；
@@ -148,7 +150,7 @@ import check_unit_quality as _quality
 from lib.unit_order import check_unit_order
 from lib.problem_coverage import coverage_problems, page_floor_problems, \
     chapter_exercise_problems, duplicate_exercise_statement_problems, \
-    vi_omitted_problem_blocks
+    vi_omitted_problem_blocks, consolidated_head_chains
 from lib.tag_attestation import (tag_attestation_problems,
                                  unharvested_anchor_problems,
                                  attested_numbers)
@@ -156,6 +158,7 @@ from lib.crossref_attestation import dropped_crossref_problems
 from lib.section_titles import title_problems as _section_title_problems
 from lib.unit_markers import marker_manifest_mismatch
 from lib.numbering import formula_tag_noise
+from lib.figure_alt_audit import chapter_alt_problems
 
 _OUT_RE = re.compile(r"<!-- book-summarizer (DRAFT|DONE) unit: id=(\S+) type=(\S+) key=(.*?) name=(.*?) -->")
 
@@ -457,15 +460,21 @@ def _unit_body_reader(out_dir):
 _PAGE_CACHE = {}
 
 
-def _page_block_loader(ext):
+def _page_block_loader(ext, cache=None):
     """→ load(pdf_page) = 该页文本块内容的**阅读序**列表；无 page_NNN.json 时给 None。
 
     闸门只数「行首题号」，OCR 糊掉的数学不影响判据；阅读序按 bbox 顶边排（抽取期
     ``text`` 块本身的顺序不保证）。整本书的页文件在进程内缓存。
+    ``cache`` 可传入独立字典：卷子布局（各卷页号**都**从 1 起）共用一张表会互相盖页。
+    🔴 缓存键**必须带 ext**：只按页号缓存时，同一进程里接着跑第二本书会拿到**第一本书**
+    的页（实测：连跑复变→黎曼几何，ch1 §2 的「EXERCISES」证据凭空消失）。
     """
+    cache = _PAGE_CACHE if cache is None else cache
+
     def load(pg):
-        if pg in _PAGE_CACHE:
-            return _PAGE_CACHE[pg]
+        key = (ext, pg)
+        if key in cache:
+            return cache[key]
         # 🔴 页文件名有零补齐惯例（Kreyszig = page_031.json，部分书 = page_31.json）：
         # 只试一种命名会让前 99 页**静默**查不到 → 页侧下限对第一章整章失明。
         path = None
@@ -484,23 +493,57 @@ def _page_block_loader(ext):
                 val = [str(b.get("text") or "") for b in blocks]
             except Exception:
                 val = None
-        _PAGE_CACHE[pg] = val
+        cache[pg] = val
         return val
     return load
+
+
+def _volume_page_loaders(ext):
+    """卷子目录（``_extract/上册``、``_extract/下册``…）的页块加载器列表。
+
+    只喂闸 ⑫ 的 **V-I 印面证据**（免除义务），不喂任何**造义务**的页侧判据：这种布局
+    下 flat 目录里没有 ``page_*.json``，``_page_block_loader(ext)`` 对整本书失明（全库
+    普查 1/58 本 = 数学分析），而各卷页号**都**从 1 起 → 必须一卷一张缓存表。
+    合格标题须自带本章/本节序标（`lib/problem_coverage._vi_head_qualifies`），所以
+    「拿别卷的习题块给本章豁免」不会发生（上册在 ch16 同页号区间印的是「练习题6.6」）。
+    下划线开头的目录（``_mm_repair``/``_backup_*``）是修复中间件，不作页源。
+    """
+    out = []
+    try:
+        names = sorted(os.listdir(ext))
+    except Exception:
+        return out
+    for n in names:
+        d = os.path.join(ext, n)
+        if n.startswith("_") or not os.path.isdir(d):
+            continue
+        if not glob.glob(os.path.join(d, "page_*.json")):
+            continue
+        out.append(_page_block_loader(d, cache={}))
+    return out
 
 
 _PAGE_LABEL_CACHE = {}
 
 
-def _page_label_loader(ext):
+def _page_label_loader(ext, contract=None, ch_key=None):
     """→ load(pdf_page) = 该页**可能承载编号**的块文本（正文 + MFD 公式 latex）。
 
     读页口径与**收割处剔除**同源（`lib.tag_attestation.dir_page_loader`，闸门 ⑭ 的
     判据也只住在那儿）——旧实现在本文件另写一份读页逻辑，`build_structure` 想复用
     就得第三份，三份必然分叉。公式块只有 ``bbox``/``latex`` 两个字段可用，按 y 排序即可。
+
+    🔴 **多册书必须走 :func:`lib.page_dir.node_page_dir`**（2026-10-30 数学分析实测）：
+    分册书的 ``page_*.json`` 只放在 ``_extract/上册|下册/`` 里，顶层一个都没有。旧实现
+    只给 ``ext`` → 该章页窗**一页也读不到** → ⑭ 的「缺页文件不判」把整章判成空，闸门在
+    这种书上**静默失效**（收割处 `build_structure` 用的是 `dir_page_loader(page_dir, ext)`，
+    于是「剔除按真口径、复查按空口径」）。数学分析 ch3 ``0x`` / ch16 ``1n`` 两个幻影 tag
+    就是这么漏过 ⑭ 的（普查 `tools/census_gate14_bare_blindness.py --loader-diff`）。
+    单册书 `node_page_dir` 返回 ``ext``，行为逐字节不变。
     """
     from lib.tag_attestation import dir_page_loader
-    return dir_page_loader(ext)
+    from lib.page_dir import node_page_dir
+    return dir_page_loader(node_page_dir(ext, contract or {}, ch_key), ext)
 
 
 def _render_check_chapter(ext, out_dir, units):
@@ -638,6 +681,7 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     ``only_unit``：文件名（manifest 的 `file`）。**逐单元自检**模式——只跑该单元的
     单元级校验（同一套装配参数：tag 真值/噪声过滤、契约正文、照抄闸、语言闸、标签对账）
     与该单元的真实 KaTeX 渲染，跳过与别的单元有关的章级闸（图片全集、⑩⑪⑫⑬⑱⑲）。
+    ⑳ 图 alt 卫生**不跳过**（它是逐单元属性，只把报告面收窄到该文件，判据一字不动）。
     给写手用的入口必须由**本门控自己**提供：外部脚本另起一次 `check_body` 调用少传一个
     参数就是一片假绿——实测 Lehmann ch1 `tools/_selfcheck_unit.py` 不传 `ext_dir`/`ch`
     ⇒ 第 19 项「顶层散文照抄」整个缺席，写手据此翻 DONE，章门控再把同一单元打回
@@ -850,6 +894,11 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
         if not matched:
             return False, ("%s 单元 %s 不在 %s/manifest.json 里（先核对 file 名或重跑拆分）。"
                            % (chapter_label(ch_key), only_unit, units_sub))
+        # 🔴 ⑳ **照跑**（只喂这一个文件）：alt 卫生是逐单元属性，批量章门控才按章做——
+        #   自检不跑它，写手据自检翻 DONE 后章门控会把同一文件打回（见函数 docstring 的
+        #   Lehmann 教训）。参照腿仍是本章全部文件，只报这一行。
+        problems.extend(chapter_alt_problems(
+            ext, ch_key, units_sub=units_sub, only_unit=only_unit)[0])
         # 🔴 真实 KaTeX 渲染**照跑**（只喂这一个单元）：它是逐单元属性，只是章门控为了
         #   省 node 启动次数才批量做——自检不跑它等于继续给假绿。
         problems.extend(_render_check_chapter(
@@ -927,8 +976,19 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     _page_loader = _page_block_loader(ext)
     _vi_omitted = vi_omitted_problem_blocks(contract, units, _unit_body_reader(out_dir),
                                             _page_loader, _span)
+    # 🔴 V-I 的**印面**证据（闸 ⑫ 专用，见 ``lib/problem_coverage.consolidated_head_chains``）：
+    # 章末/节末带标题的集中题块被抽取期灌进最后一节的子树、**标题块却没跟着灌**时，
+    # ``consolidated_cut`` 在契约文本束里切不到它，⑫ 就把印面的题号 1..N 当成本节欠账
+    # （2026-10-28 实测 7 处：复变 ch2§3/ch9§2、黎曼几何 ch1§2/ch3§4/ch5§3、
+    # 数学分析 ch16§16.2/§16.3——全部回印面坐实是带标题题块）。标题只认**属于本章/本节
+    # 序标**的形态，且卷子布局（``_extract/上册``+``下册``，页号各自从 1 起）走
+    # ``extra_loaders``；这些证据**不进** ⑬ 的页侧下限（⑬ 保持英文窄口径，否则把 V-I
+    # 认可的省略变成新的欠账 = 假阳洪水）。
+    _head_chains = consolidated_head_chains(contract, _page_loader, _span,
+                                            ch_key=ch_key,
+                                            extra_loaders=_volume_page_loaders(ext))
     problems.extend(coverage_problems(contract, units, _unit_body_reader(out_dir),
-                                      vi_omitted=_vi_omitted))
+                                      vi_omitted=_vi_omitted, head_chains=_head_chains))
     # 🔴 章级闸 ⑬：习题数的**页侧**下限对账（``_extract/page_NNN.json``）。⑫ 拿契约当
     # 真值，可契约自己会瞎：有的节末整页习题在抽取期根本没进契约（跨页题块被丢、或被
     # 灌进**另一节**的子树），于是「印刷 10 题 / 契约 4 题 / 单元写了 5 题」在 ⑫ 里是
@@ -959,7 +1019,7 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     # 印面证据只能人工裁页目视取得。登记的 ``known_book`` 即人工确证通道，与 Q 层
     # （要求写 `\tag`）**共用同一份登记**（`attested=`），否则闸会逼写手删掉照印面
     # 写对的编号——判据与豁免见 `lib/tag_attestation.py` 文档串。
-    problems.extend(tag_attestation_problems(contract, _page_label_loader(ext),
+    problems.extend(tag_attestation_problems(contract, _page_label_loader(ext, contract, ch_key),
                                              chapter_label(ch_key),
                                              attested=known_book))
     # 🔴 章级闸 ⑮：习题集题号**跨单元连续**对账（体例真值，不依赖契约）。⑫/⑬ 拿契约或
@@ -993,8 +1053,11 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     # 其展示式却没登记 `tag`，于是单元对账（契约 tag ↔ 正文 `\tag`）根本不知道该号存在，
     # 章级 tag 集合比较又常被**同章别处的同号**掩盖（Strogatz 3e ch13 实测：§13.5 印面
     # `(1)` 紧跟 `r e^{i\psi}=\langle e^{i\theta}\rangle`，契约无 tag、单元从 `\tag{2}`
-    # 起写，而 `(1)` 在 §13.4 也在账 → ⑭/Q 层/单元级判据全绿）。修法在**收割/回填**
-    # （给契约补 `tag` + manifest `tags`，单元再补 `\tag{}`），不是让写手凭空编号。
+    # 起写，而 `(1)` 在 §13.4 也在账 → ⑭/Q 层/单元级判据全绿）。修法有两条，按节点选：
+    # 普通节点 → 收割/回填（给契约补 `tag` + manifest `tags`，单元再补 `\tag{}`）；
+    # 单元正文里带自成一行习题标题的节点（习题尾块折进定理节点时键不含 `-`，④ 够不着，
+    # 复变函数论 ch6 实测）→ 先回印面裁向，多半是把小问标号 `(N)` 恢复进正文，判据②认，
+    # **不动契约、不写 `\tag`**。两条都不许让写手凭空编号。
     # 判据保守（全语料 462 章实测：相邻+落点 491 处 → 叠四条收紧后 21 处，逐处抽检为真
     # 漏）：①节点有单元记录；②该号在**同节**（无 § 祖先时退全章）单元正文里既不以
     # `\tag` 也不以 `(N)` 出现过（换排版形态渲染过 = 没丢）；③编号形态干净（排除
@@ -1017,6 +1080,18 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     # 不改公式不重编号。源/译两目录复用同一判据（`_read_body_ch` 已按 units_sub 取正文）。
     problems.extend(dropped_crossref_problems(
         contract, _bodies_by_key, chapter_label(ch_key)))
+    # 🔴 章级闸 ⑳：**图 alt 卫生**（写手侧 `embed_figures` 装配的同一套判据，在门控复检）。
+    # 三种真实缺陷：图号碎字（`FI G U RE`/`Figur`）、号后粘连（`3.4An…` = 号与题注首词
+    # 之间空格被吃）、粘连词（OCR 把 `betweenthe` 灌进 alt）。alt 是交付里唯一可读的图题
+    # 文本（读屏/搜索/图注缺字时全靠它），碎字与半词截断在正文侧看不见，步骤 8 verify 也
+    # 只对**图名/数量**对账，不对 alt 文案 —— 于是脏 alt 一路绿到交付。
+    # 判据与取数的真源在 `lib/figure_alt.py` / `lib/figure_alt_audit.py`（回写工具
+    # `tools/clean_figure_alts.py` 从同一处取数，两边的「谁写脏了」不可能漂）。
+    # 🔴 只有「脏 alt」拦门；「未登记 src」（图改名波的账）与「登记题注自己脏」（须印面
+    # 取证清）两档**只报数不拦**——alt 侧没有题注真值可判，判了就是逼写手凭空编题注。
+    # `units_sub` 决定报哪半区的行，参照腿永远是本章全部文件（含交付）。
+    alt_problems, alt_note = chapter_alt_problems(ext, ch_key, units_sub=units_sub)
+    problems.extend(alt_problems)
     # 🔴 章级序标校验（B 层 _md_gap_blocking / O 层 check_ordinal_subitem_gaps）不在本门控冗余重跑：
     # B 层条目编号的权威检测在步骤 3 structure 完整性闸门（check_structure_completeness 第 3 步），
     # 步骤 8 verify 在最终合并 md 复检 B 层、且仅步骤 8 校验 O 层；缺口由 backfill_ordinals.py
@@ -1026,11 +1101,14 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     # 启发式（裸命令 / $ 配对 / 闭合）抓不到的 \begin 不配对、未定义宏等
     # 真渲染错误在门控即拦，不再漏到步骤 8 verify / 最终输出。
     problems.extend(_render_check_chapter(ext, out_dir, units))
+    # 🔴 ⑳ 的**分桶计数永远随 detail 打印**（PASS 也打）：门控没有 WARN 通道，量不到的
+    # 档（未登记 src / 题注自己脏）只在 FAIL 时打就等于静音。
     if problems:
-        return False, "%s 门控未通过（%d 处）：\n  %s" % (
-            chapter_label(ch_key), len(problems), "\n  ".join(problems))
-    return True, "%s 门控通过：%d 个单元全部改好（含 %d 个编号项，含真实 KaTeX 渲染）" % (
-        chapter_label(ch_key), len(units), sum(1 for u in units if u["type"] == "item"))
+        return False, "%s 门控未通过（%d 处）：\n  %s\n  %s" % (
+            chapter_label(ch_key), len(problems), "\n  ".join(problems), alt_note)
+    return True, "%s 门控通过：%d 个单元全部改好（含 %d 个编号项，含真实 KaTeX 渲染）｜ %s" % (
+        chapter_label(ch_key), len(units), sum(1 for u in units if u["type"] == "item"),
+        alt_note)
 
 
 def main():

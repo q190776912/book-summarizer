@@ -5,6 +5,14 @@
 
 用法：
     python config/verify_config/make_config.py <extract_dir> [--force]
+    python config/verify_config/make_config.py <extract_dir> --set-formula <ch|appendix|supplement> \
+        --formula-type <码> --formula-scope <1|2|3> [--formula-bare-number true|false] --evidence <印面>
+
+    后一条是**只补缺**的人工登记通道：探测层为防小问标号 `(1)(2)` 被误判成公式编号族，
+    对绝对下限 `--formula-min-count`（默认 30）以下的段一律不选举——薄段（如只有 20 页、
+    23 个右缘裸号的附录）于是永久欠一份 `formula` 配置，Q 层静默 no-op 却照样报 PASS。
+    本通道把「印面证据」写进 `formula_audit` 落账，只往缺 `formula` 的段插这一个键
+    （`ch` 段一律不碰），不放宽任何判据。成因与纪律见 `_set_formula_block`。
 
 行为：
   1. 若 <extract_dir>/verify_config.json 已存在且非 --force：打印跳过并 exit 0。
@@ -81,6 +89,7 @@ import sys
 import json
 import re
 import glob
+import argparse
 
 sys.stdout.reconfigure(encoding='utf-8')
 from typing import List
@@ -88,6 +97,7 @@ from lib.numbering import ordinal_depth
 from lib.numbering import resolve_formula_type, FORMULA_LEAD_DIGIT
 from lib.numbering import is_fig_label_name as _is_fig_kw  # SSOT（与 figure_io / primary_group 同源）
 from lib.ordinal_styles import OrdinalStyle
+from lib.page_dir import resolve_page_dir  # 多册书页目录唯一真源（见 `_special_page_files`）
 from verify_config import (ORDINAL_LANGUAGE_DEFAULT,
                            ORDINAL_APP, ORDINAL_APP2, ORDINAL_HUM,
                            SCOPE_BOOK, SCOPE_CHAPTER,
@@ -511,6 +521,7 @@ LABEL_FORMS = [
     ("Corollary",   ["Corollary", "推论"]),
     ("Proposition", ["Proposition", "命题"]),
     ("Conjecture",  ["Conjecture", "猜想"]),
+    ("Conclusion",  ["Conclusion", "结论"]),
     ("Algorithm",   ["Algorithm", "算法"]),
     ("Example",     ["Example", "例", "例题", "例子"]),
     ("Remark",      ["Remark", "评注", "注", "注记", "附注", "Note", "Commentary"]),
@@ -2479,20 +2490,31 @@ def _detect_special_chapters(extract_dir, kind):
 
 
 def _special_page_files(extract_dir, chapters):
-    """指定章覆盖的 page_*.json 文件列表（按 start..end 区间并集）。"""
-    nums = set()
+    """指定章覆盖的 page_*.json 文件列表（按各章自己的页区间，章序 + 页序）。
+
+    🔴 页目录必须**按章**走 SSOT `lib.page_dir.resolve_page_dir`：多册书的
+    `page_*.json` 只放在各册子目录里（`_extract/上册/`、`_extract/下册/`，且各册
+    页码都从 1 起），旧写法在 `extract_dir` **根**拼 `page_NNN.json` ⇒ 对整类多册书
+    恒返回 None ⇒ appendix/supplement 段永远探测不到自己的编号体例（2026-10-29
+    数学分析实测：附录 A 印在 **上册** p456-475，而 `_extract` 根一个 `page_*.json`
+    都没有，`_backfill_missing_formula_cfg` 就此空转，Q 层对整个附录永久 no-op +
+    WARN——「已存在则跳过」闸 + 无页区间 = 该段的 `formula` 键谁都补不上）。
+    单册书 `resolve_page_dir` 直接返回 `extract_dir`，取到的文件与旧写法逐字相同。
+    顺序按「章序 → 页序」而非路径字典序：`detect_formula` 的 scope 判据读的是
+    **页序**上的序号重置，多册书按路径排序会把两册交错。
+    """
+    files, seen = [], set()
     for c in chapters:
-        s = c.get('start')
-        e = c.get('end')
-        if isinstance(s, int) and isinstance(e, int):
-            for n in range(s, e + 1):
-                nums.add(n)
-    if not nums:
-        return None
-    files = []
-    for n in sorted(nums):
-        fp = os.path.join(extract_dir, f'page_{n:03d}.json')
-        if os.path.exists(fp):
+        s, e = c.get('start'), c.get('end')
+        if not (isinstance(s, int) and isinstance(e, int)):
+            continue
+        page_dir = resolve_page_dir(
+            extract_dir, c.get('ch') or c.get('num') or c.get('chapter'))
+        for n in range(s, e + 1):
+            fp = os.path.join(page_dir, f'page_{n:03d}.json')
+            if fp in seen or not os.path.exists(fp):
+                continue
+            seen.add(fp)
             files.append(fp)
     return files or None
 
@@ -2961,6 +2983,131 @@ def _backfill_missing_formula_cfg(extract_dir, cfg_path, data):
     return filled
 
 
+_FORMULA_SCOPES = (1, 2, 3)                 # 1=全书连续 / 2=每章重启 / 3=每节重启
+_SET_FORMULA_SECTIONS = ("ch", "appendix", "supplement")
+_SET_FORMULA_EVIDENCE_MIN = 20              # 与 tools/backfill_formula_tags.py 同一取证下限
+
+
+def _formula_pages_for_section(extract_dir, section):
+    """该段**自己的**页窗文件列表；``ch`` 返回 None（= 全书扫描，历史口径不变）。"""
+    if section == "ch":
+        return None
+    kind = KIND_APPENDIX if section == "appendix" else KIND_SUPPLEMENT
+    chs = _detect_special_chapters(extract_dir, kind)
+    return _special_page_files(extract_dir, chs) if chs else None
+
+
+def _set_formula_block(extract_dir, section, ftype, scope, evidence,
+                       bare_number=None):
+    """人工具名登记某段的 ``formula`` 体例——探测层证据不足时的唯一正规写入口。
+
+    🔴 为什么需要这条通道（2026-10-29 数学分析 appendixA 实测）：`detect_formula`
+    的单段择族要过**全书下限** `_FORMULA_MIN_COUNT = 30` 枚右缘 `(N)`（防 Silverman
+    型「散文括号编号」假阳，是**对的**保守判据），而附录段只扫**自己那 20 页**：
+    本书附录 A 印面右缘共 23 枚公式号 ⇒ 恒不过闸 ⇒ `appendix.formula` 谁都补不上
+    （`_backfill_missing_formula_cfg` 探测 None 就什么都不写）。把 30 降到段窗口比例
+    并不安全——中文书的小问标号 `(1)(2)(3)(4)(5)` 在同一页窗里同样是右缘裸号，降闸
+    等于给整类书**自动**造出一套并不存在的公式编号体例。
+    所以这里不放宽任何判据，只把**人已从印面读出的结论**按纪律落账：
+      * `--evidence` 必填且 ≥20 字（页 / 编号列 / 渲染方式），与回填契约 tag 的通道同一取证下限；
+      * 只往「该段**没有** `formula` 键」里写——已选举过的段拒绝改动（改判是另一个决定，
+        且 `--force` 会顺带洗掉 scope / 划分 / strict 等人工账）；
+      * `type` 必须是 `ORDINAL_DEPTH` 已登记的码或 formula-only 码（15/16/17/18），
+        `scope` 必须 ∈ {1,2,3}——**无默认值**，与加载期 `require_complete` 同一纪律；
+      * `bare_number` 先按该段页窗探测；探测不出就必须由 `--formula-bare-number` 具名给，
+        工具绝不代拟；
+      * 落账同时写 `formula_audit`（谁写的 / 何时 / 印面原话 / 页窗），与
+        `register_formula.py` 的 `known_book_audit` 同一可审阅形态。
+    返回 (rc, 变更说明)；rc=2 表示拒绝且**零写入**。
+    """
+    def refuse(msg):
+        return 2, "REFUSED: " + msg
+
+    if section not in _SET_FORMULA_SECTIONS:
+        return refuse("--set-formula 只认 %s，拿到 %r"
+                      % ("/".join(_SET_FORMULA_SECTIONS), section))
+    if len(str(evidence).strip()) < _SET_FORMULA_EVIDENCE_MIN:
+        return refuse("--evidence 必填且不少于 %d 字（印面出处：页 / 编号列 / 渲染方式），"
+                      "本通道落的是**人工印面结论**，不是兜底默认"
+                      % _SET_FORMULA_EVIDENCE_MIN)
+    if not os.path.exists(os.path.join(extract_dir, '_extraction_done.json')):
+        return refuse("缺 _extraction_done.json（MM Repair 未完成），页窗文字层还不可信，"
+                      "不得登记编号体例")
+    cfg_path = os.path.join(extract_dir, 'verify_config.json')
+    if not os.path.exists(cfg_path):
+        return refuse("缺 verify_config.json——整份生成走 make_config.py（不带 --set-formula）")
+    try:
+        with open(cfg_path, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except Exception as e:
+        return refuse("verify_config.json 解析失败：%s" % e)
+    if not isinstance(data, dict):
+        return refuse("verify_config.json 不是外层 map 格式，无段可登记")
+    seg = data.get(section)
+    if not isinstance(seg, dict):
+        return refuse("%s 段在 verify_config.json 里不存在——该 kind 的章须先由 "
+                      "make_config.py 生成子配置（缺该键时本通道不代造整段）" % section)
+    if seg.get('formula') is not None:
+        return refuse("%s 段已有 formula=%s——本通道只补「缺该键」的段。要改判已有体例，"
+                      "先回印面复核，再决定是否需要 `--force`（注意 --force 会洗掉 "
+                      "scope / 划分 / strict 等人工账，须先备份）"
+                      % (section, json.dumps(seg['formula'], ensure_ascii=False)))
+
+    try:
+        code = int(ftype)
+    except (TypeError, ValueError):
+        return refuse("--formula-type %r 不是体例码（整数）" % (ftype,))
+    try:
+        lead, ncomp = resolve_formula_type(code, False)
+    except Exception:
+        return refuse("--formula-type %r 不是已登记的体例码（ORDINAL_DEPTH 键，或 "
+                      "formula-only 15=字母两段 / 16=罗马两段 / 17=字母三段 / 18=罗马三段）"
+                      % (ftype,))
+    if not ncomp:
+        return refuse("--formula-type %r 的段数为 0（无编号体例），不该开 Q 层" % (ftype,))
+    try:
+        scp = int(scope)
+    except (TypeError, ValueError):
+        return refuse("--formula-scope %r 不是整数（1=全书连续 / 2=每章重启 / 3=每节重启，"
+                      "无默认值）" % (scope,))
+    if scp not in _FORMULA_SCOPES:
+        return refuse("--formula-scope %r 非法（只认 1/2/3）" % (scope,))
+
+    pages = _formula_pages_for_section(extract_dir, section)
+    detected = {"type": code, "scope": scp, "ignore": []}
+    formula_cfg = _finalize_formula_cfg(extract_dir, cfg_path, detected,
+                                        section, pages)
+    if bare_number is not None:
+        formula_cfg["bare_number"] = bool(bare_number)
+    if "bare_number" not in formula_cfg:
+        return refuse("该段页窗证据不足以判定 bare_number（无默认值原则：探测不出就不代拟）。"
+                      "请核对印面后具名给值：`--formula-bare-number true`（正文确有裸排公式号）"
+                      "或 `false`（公式号一律带括号 / 裸号噪声型书）")
+
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    formula_cfg["formula_audit"] = {
+        "set_by": "make_config.py --set-formula",
+        "at": stamp,
+        "evidence": str(evidence).strip(),
+        "scan_pages": len(pages) if pages else None,
+        "note": "探测层未择出该段体例（页窗内右缘裸号少于全书下限），值由人依印面登记",
+    }
+    seg['formula'] = formula_cfg
+    bak_dir = os.path.join(extract_dir, '_bak_make_config',
+                           time.strftime("%Y%m%d-%H%M%S"))
+    os.makedirs(bak_dir, exist_ok=True)
+    with open(os.path.join(bak_dir, 'verify_config.json'), 'wb') as fh:
+        fh.write(open(cfg_path, 'rb').read())
+    with open(cfg_path, 'w', encoding='utf-8') as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    return 0, ("APPLIED %s.formula=%s（备份=%s；台账记在 formula_audit）\n"
+               "  下一步：①逐号把印面确实读得到、抽取器读不到的号走 "
+               "register_formula.py --chapter <该段章键> --number <N> --evidence … 登记 known_book；"
+               "②Q 层自此对该段生效——复跑 verify 核对 \\\\tag 对账，出现 MISSING/FABRICATED "
+               "先回印面取证再判（**已收官书禁重跑 build_structure / 重 merge**，按单元同行镜像协议补账）"
+               % (section, json.dumps(formula_cfg, ensure_ascii=False), bak_dir))
+
+
 def _declare_same_style_flat(cfg_path, data, special):
     """扁平（legacy）`verify_config.json` 的**只写声明**增量通道。
 
@@ -3085,8 +3232,43 @@ def _upgrade_missing_special_keys(extract_dir, cfg_path):
     return 0
 
 
-def main():
-    args = sys.argv[1:]
+def _cli_set_formula(argv):
+    """`--set-formula` 子命令的解析壳（详见 `_set_formula_block` 的成因与纪律）。"""
+    ap = argparse.ArgumentParser(
+        prog="make_config.py <_extract> --set-formula <段> ...",
+        description="人工具名登记某段的 formula 体例（探测层页窗证据不足时的正规写入口）")
+    ap.add_argument("extract_dir")
+    ap.add_argument("--set-formula", required=True, choices=list(_SET_FORMULA_SECTIONS),
+                    help="登记哪一段：ch / appendix / supplement")
+    ap.add_argument("--formula-type", required=True,
+                    help="体例码（ORDINAL_DEPTH 键，或 formula-only 15/16/17/18）")
+    ap.add_argument("--formula-scope", required=True,
+                    help="编号重置窗口：1=全书连续 / 2=每章重启 / 3=每节重启（无默认值）")
+    ap.add_argument("--formula-bare-number", default=None,
+                    help="true=正文确有裸排公式号 / false=一律带括号；"
+                         "省略时先按该段页窗探测，探测不出则拒绝（不代拟）")
+    ap.add_argument("--evidence", required=True,
+                    help="印面出处原话（页 / 编号列 / 渲染方式），≥20 字")
+    a = ap.parse_args(argv)
+    bn = a.formula_bare_number
+    if bn is not None:
+        if str(bn).strip().lower() in ("true", "1", "yes"):
+            bn = True
+        elif str(bn).strip().lower() in ("false", "0", "no"):
+            bn = False
+        else:
+            print("[make_config] REFUSED: --formula-bare-number %r 只认 true/false" % bn)
+            return 2
+    rc, msg = _set_formula_block(a.extract_dir, a.set_formula, a.formula_type,
+                                 a.formula_scope, a.evidence, bare_number=bn)
+    print("[make_config] %s" % msg)
+    return rc
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if '--set-formula' in args:
+        return _cli_set_formula(args)
     force = '--force' in args
     pos = [a for a in args if not a.startswith('-')]
     if not pos:

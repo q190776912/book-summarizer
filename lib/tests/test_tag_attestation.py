@@ -23,11 +23,17 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 
 from tag_attestation import (collect_contract_tags, tag_attestation_problems,
-                             strip_unattested, unattested_tags,
+                             strip_unattested, unattested_tags, condemned_map,
                              unharvested_anchor_tags, unharvested_anchor_problems,
                              glued_anchor_tags, glued_anchor_problems,
+                             exercise_context_keys,
                              numbering_gaps, numbering_gap_problems,
-                             margin_anchor_audit, page_anchor_index, number_column)
+                             margin_anchor_audit, page_anchor_index, number_column,
+                             bare_only_leg_enabled, lettered_leg_enabled, _condemned,
+                             _label_index, _label_index_by_page, anchor_locations,
+                             operand_only_paren_anchor, standalone_label_sites,
+                             paren_block_is_factor_form, _num_shape,
+                             _standalone_labels, _LATEX_STYLE_MACROS)
 
 
 def formula_block(tag, tags=None):
@@ -144,7 +150,7 @@ class TestPhantom(unittest.TestCase):
         tree = contract(tags, lo=10, hi=12)
         pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"] for p in range(10, 13)}
         probs = tag_attestation_problems(tree, loader(pages))
-        self.assertTrue(any("2n" in p and "含字母" in p for p in probs), probs)
+        self.assertTrue(any("2n" in p and "字母尾巴" in p for p in probs), probs)
 
     def test_lettered_tag_with_standalone_anchor_passes(self):
         """印面确有 `(18.10a)` 时形态启发式必须让位（2026-10-01 Koopman ch18 实测）。
@@ -166,7 +172,7 @@ class TestPhantom(unittest.TestCase):
         pages = {p: ["%d" % n for n in range(1, 20)] + ["18.10a"]
                  for p in range(500, 502)}
         probs = tag_attestation_problems(tree, loader(pages))
-        self.assertTrue(any("18.10a" in p and "含字母" in p for p in probs), probs)
+        self.assertTrue(any("18.10a" in p and "字母尾巴" in p for p in probs), probs)
 
     def test_lettered_factorial_anchor_still_flagged(self):
         """`(2n)!!` 是双阶乘不是编号：块内任意位置的括号形态**不构成** lettered 豁免。
@@ -179,7 +185,7 @@ class TestPhantom(unittest.TestCase):
         pages = {p: ["%d" % n for n in range(1, 20)] + ["(2n)!!", "2·4..(2n)"]
                  for p in range(304, 307)}
         probs = tag_attestation_problems(tree, loader(pages))
-        self.assertTrue(any("2n" in p and "含字母" in p for p in probs), probs)
+        self.assertTrue(any("2n" in p and "字母尾巴" in p for p in probs), probs)
 
     def test_lettered_dominant_chapter_not_flagged(self):
         """字母编号书（Kreyszig `(7a)` 型）不得被判据③误伤：纯整数太少时字母是体例。"""
@@ -317,7 +323,7 @@ class TestHumanAttestedExemption(unittest.TestCase):
         tags = [str(n) for n in range(34, 60)] + ["2n"]
         tree = contract(tags, lo=10, hi=12)
         pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"] for p in range(10, 13)}
-        self.assertTrue(any("含字母" in p for p in
+        self.assertTrue(any("字母尾巴" in p for p in
                             tag_attestation_problems(tree, loader(pages))))
         self.assertEqual(tag_attestation_problems(tree, loader(pages),
                                                   attested=["2n"]), [])
@@ -333,6 +339,124 @@ class TestHumanAttestedExemption(unittest.TestCase):
         tree = contract(["3", "25"], lo=10, hi=20)
         self.assertEqual(unattested_tags(tree, loader(self.PAGES)),
                          unattested_tags(tree, loader(self.PAGES), attested=None))
+
+
+class TestLetteredLegEvidencePaths(unittest.TestCase):
+    """判据③的「本章体例不用字母」有**两条证据腿**，且分母读**全量** tag。
+
+    动因（2026-10-30 跨 58 书 / 477 契约行普查，`tools/census_gate14_lettered_blindness.py`）：
+    旧口径只有一条契约侧比例腿，而且它的样本是**摘掉 `attested` 之后**的 tag 集 —— 于是
+    「登记得越多、闸越弱」。基础\\数学分析 把 ``known_book`` 写成 `1..30`（本书编号正是章内
+    `(1)`..`(30)` 型），采样纯整数 tag 塌到 0–2 个，`n_numeric >= 5` 这道门**永远**进不去，
+    该腿在全语料**点名 0 处＝死代码**，13 个公式残渣字母尾幻影（`2x` / `2M` / `12x` / `0x`）
+    全部放过。两条改动的分工：
+      * 分母读全量（登记只豁免**裁决**，不豁免**体例样本**）→ `test_full_registry...`；
+      * 加印面侧证据（页窗里「整块就是 `(号)`」的独立编号 ≥5 且字母尾 ≤10%）→
+        `test_printed_convention...`；它读的是页窗，与契约厚薄、登记多少无关，方向才对。
+    反向保护同样测：印面自己就在用字母编号的章（Numerical-Methods ch11 实测 15 块独立编号
+    里 13 块带字母尾）不许被形态启发式开口；页窗量不到体例（独立块 <5，数学分析 ch8 /
+    Evans-SDE 附录实测）也不许猜。
+    """
+
+    def _kinds(self, tree, pages, attested=None):
+        return _condemned(tree, loader(pages), attested)[1]
+
+    def test_full_registry_does_not_gut_the_convention_sample(self):
+        tree = contract([str(n) for n in range(1, 31)] + ["2x"], lo=10, hi=12)
+        pages = {p: ["%d" % n for n in range(1, 31)] + ["2x"]
+                 for p in range(10, 13)}
+        # 30 个纯整数号全部「已登记」：旧口径下体例样本 = 0 个整数 → 腿关 → `2x` 逃过
+        self.assertEqual(self._kinds(tree, pages, attested=[str(n) for n in range(1, 31)]),
+                         {"2x": "lettered"})
+
+    def test_registered_numbers_stay_exempt_although_in_the_denominator(self):
+        """全量样本只喂**分母**；`attested` 里的号照旧不得判毒（登记 = 人工确证真印）。"""
+        tree = contract([str(n) for n in range(1, 16)] + ["7a"], lo=10, hi=12)
+        pages = {p: ["(%d)" % n for n in range(1, 16)] + ["7a"]
+                 for p in range(10, 13)}
+        self.assertEqual(set(self._kinds(tree, pages)), {"7a"})
+        self.assertEqual(self._kinds(tree, pages, attested=["7a"]), {})
+        self.assertEqual(tag_attestation_problems(tree, loader(pages),
+                                                  attested=["7a"]), [])
+
+    def test_printed_convention_names_lettered_phantom_when_contract_is_thin(self):
+        """契约侧两条门都进不去（整数 3 个 <5；括号 tag 3 个 → bare-only 腿也关），
+        但页窗有 7 块「整块就是 `(号)`」的纯整数独立编号 → 印面侧腿点名 `3x`。"""
+        tree = contract(["1", "2", "3", "3x"], lo=10, hi=12)
+        pages = {p: ["(%d)" % n for n in range(1, 8)] + ["3x"]
+                 for p in range(10, 13)}
+        self.assertEqual(self._kinds(tree, pages), {"3x": "lettered"})
+        probs = "\n".join(tag_attestation_problems(tree, loader(pages)))
+        self.assertIn("独立印刷号", probs)
+
+    def test_below_five_standalone_blocks_is_unmeasurable_not_a_verdict(self):
+        """页窗只有 4 块独立编号（数学分析 ch8 实测形态）→ 体例**量不到**，不许由 tag
+        分布猜；补到 5 块即开口。"""
+        tree = contract(["3", "2M"], lo=10, hi=12)
+        pages = {p: ["(%d)" % n for n in range(1, 5)] + ["2M"]
+                 for p in range(10, 13)}
+        self.assertEqual(self._kinds(tree, pages), {})
+        pages[10] = list(pages[10]) + ["(5)"]
+        self.assertEqual(self._kinds(tree, pages), {"2M": "lettered"})
+
+    def test_printed_lettered_convention_keeps_the_leg_shut(self):
+        """印面字母尾 >10%（Numerical-Methods ch11 型：15 块独立编号里 13 块带字母尾）
+        = 本章**真用**字母编号 → 形态启发式不开口，
+        只在页窗里查无锚点的号仍由判据①处理。"""
+        tree = contract(["9x", "9w"], lo=10, hi=11)
+        pages = {p: ["(1)", "(2)", "(9x)", "(9y)", "(9z)", "9w"]
+                 for p in range(10, 12)}
+        self.assertEqual(self._kinds(tree, pages), {})
+
+    def test_roman_prefix_labels_are_not_lettered_convention(self):
+        """印面是 `V.1`..`V.6`（罗马数字章**前缀**）时，印面腿不得被「含字母」挤死。
+
+        methods-of-homological-algebra ch5 实测：30 块独立编号里 29 块含字母，但**没有一块
+        带字母尾巴** —— 旧口径（`_LETTER_RE` 数分母）下该章契约里的 `9x` / `9y`（公式内部的
+        裸残渣）永远量不到体例矛盾（＝当时全架剩下的 2 个失明站点；2026-10-31 改口径后
+        两个号都被点名，已按 fitz 裁剪目视裁定为笛卡尔方框箭头标号 `g_χ`/`g_y` 的 OCR 误读
+        并摘账）。
+        """
+        tree = contract(["9x", "9y"], lo=10, hi=11)
+        pages = {p: ["(%s)" % x for x in ("V.1", "V.2", "V.3", "V.4", "V.5", "V.6")]
+                 + ["9x", "9y"] for p in range(10, 12)}
+        self.assertEqual(self._kinds(tree, pages),
+                         {"9x": "lettered", "9y": "lettered"})
+
+    def test_prefix_lettered_tag_is_not_a_criterion_three_candidate(self):
+        """字母**章位**号（`V.9` 型）没有尾巴 → 不是判据③的候选；页窗里查无此号时由判据①
+        判（`unattested`），而不是「形态与本章体例矛盾」。"""
+        tree = contract(["V.9"], lo=10, hi=11)
+        pages = {p: ["(%s)" % x for x in ("V.1", "V.2", "V.3", "V.4", "V.5")]
+                 for p in range(10, 12)}
+        self.assertEqual(self._kinds(tree, pages), {"V.9": "unattested"})
+
+    def test_message_names_the_evidence_that_fired(self):
+        """报文要说清是哪条证据证的「本章不用字母」：契约侧证的不得写成印面侧的话，
+        否则读者会以为页窗里有独立编号（印面其实量不到）。"""
+        tree = contract([str(n) for n in range(34, 60)] + ["2n"], lo=10, hi=12)
+        pages = {p: ["%d" % n for n in range(34, 60)] + ["2n"]
+                 for p in range(10, 13)}
+        probs = "\n".join(tag_attestation_problems(tree, loader(pages)))
+        self.assertIn("不带字母尾巴", probs)
+        self.assertNotIn("独立印刷号", probs)
+
+    def test_condemned_map_matches_the_set_export(self):
+        """普查出口（`condemned_map`）与收割/闸门用的集合出口（`unattested_tags`）
+        必须是同一趟裁决 —— 两处各算一份 `setdefault` 链就会悄悄分叉。"""
+        tree = contract(["7", "25", "1.104"], lo=10, hi=20)
+        pages = {p: ["(%d)" % n for n in range(1, 20)] for p in range(10, 21)}
+        mapping = condemned_map(tree, loader(pages))
+        self.assertEqual(set(mapping), unattested_tags(tree, loader(pages)))
+        self.assertEqual(mapping["25"], "unattested")
+        self.assertEqual(mapping["1.104"], "unattested")
+
+    def test_lettered_leg_needs_lettered_tags_at_all(self):
+        """纯整数章没有字母尾 → 腿不成立（`n_lettered=0` 是硬门，两条证据腿都别想开口）。"""
+        self.assertFalse(lettered_leg_enabled(50, 0, 30, 0))
+        self.assertTrue(lettered_leg_enabled(0, 1, 20, 0))
+        self.assertFalse(lettered_leg_enabled(0, 1, 20, 4))
+        self.assertFalse(lettered_leg_enabled(0, 1, 4, 0))
 
 
 class TestAttestedNumbersRegistry(unittest.TestCase):
@@ -611,6 +735,56 @@ class TestUnharvestedAnchors(unittest.TestCase):
         joined = "\n".join(probs)
         self.assertIn("收割漏号", joined, probs)
         self.assertIn("(1)", joined)
+
+    def test_exercise_context_switches_prescription_not_verdict(self):
+        """习题语境只换**处方**不换**判定**：照旧报，但不逼写手写 `\\tag{N}`。
+
+        实测 复变函数论（钟玉泉第五版）ch6：契约把「第六章习题」尾块折进
+        `定理6.13`（键不含 `-`，④ 后半条例够不着），印面 `(3)` 是 (一)1 的小问标号，
+        旧措辞却写「须回填契约 tag + manifest 后由单元补 \\tag{3}」——照做就是凭空编号。
+        """
+        tree = self.tree([self.disp("\\frac{1}{(z-\\alpha)^m}"), self.txt("(3)")],
+                         key="定理6.13")
+        bodies = {"定理6.13": ["正文 (2) 在账\n\n> ## 第六章习题\n\n" + chr(92) + "tag{2}\n"]}
+        probs = unharvested_anchor_problems(tree, bodies, chapter_label="ch6")
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("小问标号", probs[0])
+        self.assertIn("先回印面裁向", probs[0])
+        self.assertNotIn("须回填契约 tag", probs[0])
+
+    def test_no_exercise_heading_keeps_harvest_prescription(self):
+        """负向：正文没有习题标题 → 旧处方原样保留（回填契约 tag + `\\tag{N}`）。"""
+        tree = self.tree([self.disp("a = b"), self.txt("(3)")])
+        bodies = {"13.5": [chr(92) + "tag{2}\n"]}
+        probs = unharvested_anchor_problems(tree, bodies)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("收割漏号，须回填契约 tag + manifest 后由单元补 "
+                      + chr(92) + "tag{3}", probs[0])
+        self.assertNotIn("小问标号", probs[0])
+
+    def test_prose_mention_of_exercises_is_not_a_heading(self):
+        """负向：从句式散文提到习题 ≠ 习题标题（尾锚把整行锁死，防语境被冒领）。"""
+        bodies = {"D3": ["由第五章习题（二)第14题，可知 f 解析。\n",
+                         "Exercise 3 shows the bound is sharp.\n",
+                         chr(92) + "tag{2}\n"]}
+        self.assertEqual(exercise_context_keys(bodies), set())
+        tree = self.tree([self.disp("a = b"), self.txt("(3)")], key="D3")
+        probs = unharvested_anchor_problems(tree, bodies)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("须回填契约 tag", probs[0])
+
+    def test_exercise_heading_recognised_shapes(self):
+        """标题侧的正/负形：`## 第六章习题`/`**Exercises**`/裸「习题」/**引用壳 `> ##`**
+        算；带句子的长行与 `习题解》` 一类不算。"""
+        ok = ["## 第六章习题", "### 习题", "习题", "**Exercises**", "## Problems",
+              "## 第六节 思考题", "## 习题（第 200 页）",
+              "> ## 第六章习题", "> > ## 习题", "> 习题"]     # 单元尾块的实际书写形
+        bad = ["## 6.13 分歧覆盖定理", "习题与提要见书末", "由第六章习题（二)第5题可知",
+               "问题在于该级数是否收敛", "## 例 6.20", "> 由第五章习题（二)第14题，可知"]
+        for s in ok:
+            self.assertEqual(exercise_context_keys({"K": [s + "\n"]}), {"K"}, s)
+        for s in bad:
+            self.assertEqual(exercise_context_keys({"K": [s + "\n"]}), set(), s)
 
 
 class TestGluedAnchors(unittest.TestCase):
@@ -926,5 +1100,273 @@ class TestMarginAnchorAuditGlued(unittest.TestCase):
             ["7", "8"])
 
 
+class TestLegExtraction(unittest.TestCase):
+    """``bare_only_leg_enabled`` 与 ``_condemned`` 里那条腿必须是**同一处算术**。
+
+    抽成函数的动机：只读普查 ``tools/census_gate14_bare_blindness.py`` 要报「腿为什么关」，
+    自己再写一遍 ``>= 5 and >= 0.9 *`` 就等着两边漂移。这里把真值表和 `_condemned` 的
+    实际翻转钉在一起。
+    """
+
+    def test_truth_table(self):
+        self.assertFalse(bare_only_leg_enabled(4, 0))     # paren 证据不足：本就不该开
+        self.assertTrue(bare_only_leg_enabled(5, 0))
+        self.assertTrue(bare_only_leg_enabled(9, 1))      # 9 >= 0.9*10
+        self.assertFalse(bare_only_leg_enabled(0, 9))
+        # 🔴 方向性缺陷的证据（不是回归）：幻影多一个 → 分母变大 → 腿自己关掉
+        self.assertFalse(bare_only_leg_enabled(9, 2))
+
+    def _pages(self, bare):
+        return {p: ["(%d)" % n for n in range(1, 10)] + [str(x) for x in bare]
+                for p in range(10, 21)}
+
+    def test_condemned_flips_exactly_with_the_leg(self):
+        one = contract(["1", "2", "3", "4", "5", "6", "7", "8", "9", "30"])
+        _t, k1 = _condemned(one, loader(self._pages([30])))
+        self.assertEqual(k1, {"30": "bare-only"})
+        self.assertTrue(bare_only_leg_enabled(9, 1))
+
+        two = contract(["1", "2", "3", "4", "5", "6", "7", "8", "9", "30", "31"])
+        _t, k2 = _condemned(two, loader(self._pages([30, 31])))
+        self.assertEqual(k2, {})                          # 腿被自己的幻影压死 → 放行
+        self.assertFalse(bare_only_leg_enabled(9, 2))
+
+
+class TestLabelIndexByPage(unittest.TestCase):
+    """按页锚点索引 ≡ 章级索引的键集（普查要的是「锚在哪一页」这一维，不是第二套判据）。"""
+
+    def test_keys_equal_label_index(self):
+        pages = {10: ["(7)", "42"], 11: ["(8)", "42", "x = 9"], 12: None}
+        paren, bare = _label_index(loader(pages), 10, 12)
+        p_by, b_by = _label_index_by_page(loader(pages), 10, 12)
+        self.assertEqual(set(p_by), paren)
+        self.assertEqual(set(b_by), bare)
+
+    def test_pages_are_attributed_not_merged(self):
+        _p, b_by = _label_index_by_page(
+            loader({10: ["(7)", "42"], 11: ["(8)", "42"]}), 10, 11)
+        self.assertEqual(b_by["42"], {10, 11})
+        self.assertEqual(b_by.get("7"), None)             # 括号形不进裸排集
+        # 🔴 章级并集给不出的东西：只有一个裸块在**别的页**，本地就没锚（幻影自证的通道）
+        _p2, one_page = _label_index_by_page(loader({10: ["42"], 11: ["7"]}), 10, 11)
+        self.assertEqual(one_page["42"], {10})
+        self.assertEqual(one_page["7"], {11})
+
+
+class TestAnchorLocations(unittest.TestCase):
+    """假锚通道的举证来源：`anchor_locations` 要能**按页把原块交回来**，
+    且「裸块」按整块成立（`tools/deregister_formula_tags.py --false-anchor` 打印的
+    `假锚证据` 就是这份；判据松一分，摘除真号的通道就宽一分）。
+    """
+
+    def test_bare_needs_the_whole_block(self):
+        locs = anchor_locations(loader({10: ["29"],
+                                         11: ["page 29 of 41", "see 29 above"]}),
+                                 10, 11)
+        self.assertEqual(set(locs["29"]["bare"]), {10})
+        self.assertEqual(locs["29"]["paren"], {})
+        self.assertNotIn("41", locs)          # 混排块里的数字一个都不算锚点
+
+    def test_raw_block_is_kept_for_forensics(self):
+        """归一化号会骗人（`(12)` 与 `x^2 = (12) + 1` 是两种印面），台账要原块。"""
+        locs = anchor_locations(loader({10: ["(12)", "x^2 = (12) + 1"]}), 10, 10)
+        self.assertEqual(locs["12"]["paren"][10],
+                         ["(12)", "x^2 = (12) + 1"])
+        self.assertEqual(locs["12"]["bare"], {})
+
+    def test_samples_are_distinct_blocks_and_capped(self):
+        r"""同一个原块（去首尾空白）只记一次，样本上限 3 块——假锚通道的台账打印靠这份。
+
+        四个块都必须是**白名单壳**宏：`\a`/`\b` 一类未收录的命令按新折平留在形态里，
+        整块就不再是「纯编号形」，测不到「去重 + 截 3」这条本意（2026-10-30 该缺陷修复时
+        旧夹具正是靠无差别删宏才凑出 4 个锚点）。
+        """
+        locs = anchor_locations(loader({10: ["29", "  29  ", "\\mathbf { 29 }"]}),
+                                10, 10)
+        self.assertEqual(locs["29"]["bare"][10], ["29", "\\mathbf { 29 }"])
+        locs = anchor_locations(
+            loader({10: ["\\mathbf { 29 }", "\\mathrm { 29 }",
+                         "\\text { 29 }", "\\mathsf { 29 }"]}),
+            10, 10)
+        self.assertEqual(len(locs["29"]["bare"][10]), 3)
+
+    def test_is_the_source_of_label_index_by_page(self):
+        """同一处算术：按页索引必须由本函数投影出来，不许第二份匹配。"""
+        pages = {10: ["(7)", "42"], 11: ["(8)", "42", "x = 9"], 12: None}
+        locs = anchor_locations(loader(pages), 10, 12)
+        p_by, b_by = _label_index_by_page(loader(pages), 10, 12)
+        self.assertEqual(p_by, {n: set(d["paren"]) for n, d in locs.items()
+                               if d["paren"]})
+        self.assertEqual(b_by, {n: set(d["bare"]) for n, d in locs.items()
+                                if d["bare"]})
+
+
+class TestAnchorFormWhitelist(unittest.TestCase):
+    r"""🔴 折平**只**许删排版壳：内容宏留在形态里，否则展示式自己的括号会**造出**一个
+    印面上根本不存在的 `(N)` 锚点。动因（基础\数学分析 下册 物理页 259 = 印刷 245 实测）：
+    旧 `_label_forms` 用 `\\[a-zA-Z]+` 无差别删宏名，于是
+    `f ^ { \prime } \left( { \frac { 1 } { n \pi } } \right)` 被折成 `f'(1n)'`
+    ——幻影 tag `1n` / `1x` 拿到「括号锚点」→ ⑭ 判不出毒，且
+    `tools/deregister_formula_tags.py --false-anchor` 见「有 `(N)` 锚点」即**机械拒绝**，
+    把真幻影分流到 `--mispaired`（处方指向一个并不存在的宿主节点）。
+
+    放宽判据的每一分都得两头测：假阳（公式残渣不得成锚）与反向误伤（壳里的真号必须照旧
+    成锚）。跨 776 章契约行 / 1,412,735 去重块的 A/B 见
+    `tools/census_gate14_anchor_forms.py`（paren 站点 −3430/+15、bare −7343/+1、
+    裁决变化仅 1 条、`known_true` 四档全数保住）。
+    """
+
+    def test_content_macros_do_not_fabricate_a_paren_anchor(self):
+        """七条纯公式块（无一条印面带编号）在旧折平下各自造出 `1n`/`1x`/`12` 一类假锚。"""
+        for blk in [r"f ^ { \prime } \left( { \frac { 1 } { n \pi } } \right)",
+                    r"\left( { \frac { 1 } { x } } \right)",
+                    r"g ( x ) = \Big( \frac { \pi } { 2 } \Big)",
+                    r"\int _ { 0 } ^ { 1 } \left( \frac { 1 } { 2 } \right) dx",
+                    r"\left( \frac { n + 1 } { n } \right) ^ { n }",
+                    r"a _ { n } = ( 1 + \frac { 1 } { n } ) ^ { n } < ( e )",
+                    r"( \frac { 1 } { 2 } )"]:
+            self.assertEqual(anchor_locations(loader({10: [blk]}), 10, 10), {}, blk)
+
+    def test_shell_macros_still_yield_their_printed_numbers(self):
+        """真锚点靠的正是这批壳：字体/加粗/文本包装、定界符尺寸、老式字体切换开关。
+
+        `({\\it20.60})`（Iwaniec–Kowalski p462）是这条的**存在理由**：命令名后面直接跟数字，
+        按整词取名才命中——旧白名单分支用 `\\b` 时在这里反向误伤过一次。
+        """
+        locs = anchor_locations(loader({10: [
+            r"( 7 \mathbf { c } ^ { \prime } )",
+            r"\mathbf { 29 }",
+            r"({\it20.60})",
+            r"( 7 ^ { * } )",
+            r"(2. 7. 5)",
+        ]}), 10, 10)
+        self.assertEqual(set(locs), {"7c'", "29", "20.60", "7*", "2.7.5"})
+        self.assertEqual(set(locs["29"]["bare"]), {10})
+        for n in ("7c'", "20.60", "7*", "2.7.5"):
+            self.assertEqual(set(locs[n]["paren"]), {10}, n)
+
+    def test_number_glued_into_a_formula_line_is_still_an_anchor(self):
+        """既有口径不变：编号被 OCR 粘进公式行时按**块内任意位置**命中，内容宏不是障碍。"""
+        locs = anchor_locations(loader({10: [r"\sum_k (12) + \pi"]}), 10, 10)
+        self.assertEqual(set(locs["12"]["paren"]), {10})
+        self.assertEqual(locs["12"]["paren"][10], [r"\sum_k (12) + \pi"])
+
+    def test_accent_macros_are_content_not_shell(self):
+        """`\\dot`/`\\hat` 的参数是**数学内容**，删掉就会把 `\\dot{2}` 之外的东西贴进括号 →
+        不收进白名单；同一块里真印的 `(2)` 照旧命中，说明「不收录」不等于「吃掉锚点」。"""
+        self.assertNotIn("dot", _LATEX_STYLE_MACROS)
+        locs = anchor_locations(loader({10: [r"\dot { x } = ( 2 )"]}), 10, 10)
+        self.assertEqual(set(locs["2"]["paren"]), {10})
+
+
+class TestOperandOnlyParenAnchor(unittest.TestCase):
+    r"""假锚通道的分流判据：页窗里的 `(N)` 是**算式里的一项**还是**页边编号**。
+
+    动因（2026-10-31 Fraleigh《AFCAA》ch23 §23.1 印面 p.194 实测）：那页排的是 Z₁₂ 零因子
+    的陪积链 `(2)(6) = (6)(2) = (3)(4) = … = (9)(8) = 0`，**整章页边一个公式编号也没印**
+    （300 dpi 右缘裁剪 + 页窗 p208–220 跨距普查），可契约里躺着幻影 `tag:"3"` /
+    `tags:["3","8"]`。⑭ 判不出它毒（括号锚点走「块内任意位置」口径，`(3)` 就在阵列**内容**
+    里），而 `tools/deregister_formula_tags.py --false-anchor` 旧口径「有一个 `(N)` 就拒」
+    又把它分流到 `--mispaired`——那条处方要求指认一个印面上不存在的宿主展示块。
+    """
+
+    def test_factor_chain_in_a_numberless_chapter_clears(self):
+        """整章无独立编号块 + 每处 `(N)` 都贴括号/运算符 ⇒ 放行（本案四块原样）。"""
+        pages = {10: [
+            "(2)(6)=(6)(2)=(3)(4)=(4)(3)=(3)(8)=(8)(3)",
+            "=(4)(6)=(6)(4)=(4)(9)=(9)(4)=(6)(6)=(6)(8)",
+            "for（6-2）（6-3）=（4）(3)=0and（11-2)（11-3)=（9）（8)=0inZ12.",
+            r"{ \begin{array} { r l } & { ( 2 ) ( 6 ) = ( 6 ) ( 2 ) = ( 3 ) ( 4 ) "
+            r"= ( 4 ) ( 3 ) \end{array} }",
+            "( 6 - 2 ) ( 6 - 3 ) = ( 4 ) ( 3 ) = 0"]}
+        for num, want in (("3", 4), ("8", 3)):
+            ok, why, ev = operand_only_paren_anchor(loader(pages), 10, 10, num)
+            self.assertTrue(ok, "%s：%s %s" % (num, why, ev))
+            # 放行时证据块要**原样**交给台账打印：只有含该号括号锚点的块才算。
+            self.assertEqual(len(ev), want, "%s：%s" % (num, ev))
+
+    def test_any_standalone_label_in_the_window_keeps_the_refusal(self):
+        """🔴 承重墙的控件：同一批陪积链里**加一处**独立编号块 `(7)`，判据立刻翻回拒。
+
+        「印面这一章有没有编号列」是放行唯一的章级依据——页窗里只要还印着整块就是 `(N)`
+        的号，`(N)` 是编号的可能性就没被排除，通道必须照旧拒。
+        """
+        base = ["(2)(6)=(6)(2)=(3)(4)=(4)(3)=(3)(8)=(8)(3)"]
+        ok, _why, _ev = operand_only_paren_anchor(loader({10: base}), 10, 10, "3")
+        self.assertTrue(ok)
+        ok, why, ev = operand_only_paren_anchor(
+            loader({10: base + ["(7)"]}), 10, 10, "3")
+        self.assertFalse(ok)
+        self.assertIn("独立编号块", why)
+        self.assertIn("(7)", ev[0])
+
+    def test_glued_label_at_block_edge_is_number_form_not_factor(self):
+        """页边编号被 OCR 粘在块首/块尾（一侧空着、一侧贴普通文字）仍是**编号本形**：
+        「粘进公式行」的既有口径（`anchor_locations`）不许被本判据吃掉。"""
+        for blk, num in (["(12) p(k) = 1", "12"],
+                         ["x + y = z (12)", "12"]):
+            ok, why, ev = operand_only_paren_anchor(loader({10: [blk]}), 10, 10, num)
+            self.assertFalse(ok, blk)
+            self.assertIn("编号本形", why)
+
+    def test_roman_label_column_does_not_attest_a_bare_arabic_number(self):
+        """承重墙从「整章任一独立编号块」收窄到「**同号形**」（2026-10-31 GM 实测）。
+
+        Gelfand–Manin 页边印的是章级罗马号 `(III.41)`，而正文里 `F(\\mathcal{G})`、`f'(9)`
+        这类**函子自变量**被 OCR 成 `(9)`：旧墙被罗马号列永久撑住，章章都印 `(III.x)` 的书里
+        任何裸阿拉伯幻影都声称不了假锚，只能改口 `--mispaired` 去指认一个印面上不存在的主展示块。
+        """
+        pages = {10: ["(III.41)", "(111.12)",
+                      "F(a) : F(9) —→ F(limG) = lim(F o G)",
+                      "23. Construction of f'(9)",
+                      "8(9)"]}
+        ok, why, ev = operand_only_paren_anchor(loader(pages), 10, 10, "9")
+        self.assertTrue(ok, "%s %s" % (why, ev))
+        # 同一页窗里只要多出**一个**裸号独立块，同号形墙立刻落回：照旧拒。
+        blocks = pages[10] + ["(9)"]
+        ok, why, ev = operand_only_paren_anchor(loader({10: blocks}), 10, 10, "9")
+        self.assertFalse(ok)
+        self.assertIn("同号形", why)
+        self.assertIn("(9)", ev[0])
+
+    def test_num_shape_separates_the_two_label_columns(self):
+        """号形三档口径：纯数字 `plain` / 带分隔点 `dotted` / 带字母 `lettered`。"""
+        self.assertEqual(_num_shape("2"), "plain")
+        self.assertEqual(_num_shape("12"), "plain")
+        self.assertEqual(_num_shape("7c"), "lettered")
+        self.assertEqual(_num_shape("11.12"), "dotted")
+        self.assertEqual(_num_shape("III.41"), "dotted")
+        self.assertNotEqual(_num_shape("III.41"), _num_shape("9"))
+        self.assertEqual(_num_shape("7"), _num_shape("9"))
+
+    def test_function_application_is_factor_only_when_zero_gap(self):
+        """`F(9)`/`T(1)`/`f'(9)`＝**函数应用**（左括号零间隙贴拉丁字母/数字/撇号）算内容；
+        带间隙的 `z (9)`、中文的 `其中(9)` 不算 —— 那两形正是页边号被切进正文行的样子。"""
+        for blk, num in (("F(a) : F(9) —→ F(limG)", "9"),
+                         ("8(9)", "9"),
+                         ("23. Construction of f'(9)", "9"),
+                         ("T →Y →→ C(r) —→T(1)", "1"),
+                         (r"\longrightarrow } } & { { T ( 1 ) } }", "1")):
+            self.assertIs(paren_block_is_factor_form(blk, num), True, blk)
+        for blk, num in (("x + y = z (9)", "9"),
+                         ("其中(9)成立", "9"),
+                         ("On the contrary, in (2) we can consider", "2")):
+            self.assertIs(paren_block_is_factor_form(blk, num), False, blk)
+
+    def test_no_paren_anchor_at_all_is_not_a_clearance(self):
+        """页窗里根本没有 `(num)` 时说「放行」是空转——调用方（假锚通道）此时没有门要开。"""
+        ok, why, _ev = operand_only_paren_anchor(
+            loader({10: ["29", "page 41 of 60"]}), 10, 10, "29")
+        self.assertFalse(ok)
+        self.assertIn("无需分流", why)
+
+    def test_standalone_labels_projects_the_same_sites(self):
+        """一处匹配：lettered 豁免的强证据口径必须是本判据那份 sites 的投影。"""
+        pages = {10: ["(7)", "(12)  label", "> (3).", "( 2 ) ( 6 ) = ( 6 ) ( 2 )"]}
+        self.assertEqual(_standalone_labels(loader(pages), 10, 10),
+                         set(standalone_label_sites(loader(pages), 10, 10)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

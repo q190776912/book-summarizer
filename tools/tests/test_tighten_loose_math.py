@@ -12,6 +12,12 @@
     漏小数点的误读就是把错值钉死；
   · **绝不制造新事故**：控制字与字母之间的空格不删（`\\in T` 不能变 `\\inT`）、
     text 模式参数内不删（`\\text{ a s }` 的空格是内容）、`$$` 围栏外观不动。
+
+第三档（`--collapse-digits`，**默认关**）把语义档里的「逐位摊开」也收拢：数学模式里普通
+空格不产生排版效果，`0 . 5 7 7` 今天渲染的就是 0.577，所以收拢与机械档同为渲染中性、
+不补位也不改字符（真漏一位收拢后仍漏，不会变成另一个值）。本测必须同时钉住
+「开档后判据归零」与「开档后字母/`\\text{}`/`\\tag{}`/`\\ ` 仍不被碰」，以及
+「**关掉该档即复现**原来越界被拒」——豁免只放行数字面内的空白，别的照旧。
 """
 import importlib.util
 import os
@@ -43,6 +49,11 @@ def tighten(text):
     return cq.tighten_math_text(text)
 
 
+def tighten_d(text):
+    """同一修法器 + 第三档（数字面收拢）。"""
+    return cq.tighten_math_text(text, collapse_digits=True)
+
+
 def judge(text):
     return cq.loose_math_problems(text)
 
@@ -55,6 +66,25 @@ def mech_left(text):
         if any(p.search(f) for p in cq.LOOSE_MATH_MECHANICAL):
             n += 1
     return n
+
+
+def _tmpfile(body):
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "0001_item_x.md")
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+    return p
+
+
+def _forge(p, fn, commit=True, digits=False):
+    """伪造修法器输出跑一遍落盘守卫：`digits` 透传给 `only_safe_whitespace_deletions`。"""
+    orig = cq.tighten_math_text
+    try:
+        cq.tighten_math_text = fn
+        got = tlm.tighten_file(p, commit, 0, digits=digits)
+    finally:
+        cq.tighten_math_text = orig
+    return got
 
 
 class Mechanical(unittest.TestCase):
@@ -180,6 +210,128 @@ class NeverTouched(unittest.TestCase):
         self.assertEqual(tighten(src)[0:2], (src, 0))
 
 
+class DigitsTier(unittest.TestCase):
+    r"""第三档（`collapse_digits=True`）：数学模式里的数字面空白**不产生排版**，
+    故收拢与机械档同为渲染中性；但字母接缝、`\text{}`、`\tag{}`、`\ ` 仍一概不碰。
+    """
+
+    def test_decimal_and_thousands_runs(self):
+        out, _c, mech, sem = tighten_d(r"$0 . 5 7 7 2 1 5$ 与 $1 0 5 , 1 2 0$")
+        self.assertIn("$0.577215$", out)
+        self.assertIn("$105, 120$", out)        # 逗号后保留一个空格（区分两种读法）
+        self.assertEqual((mech, sem), (0, 0))
+        self.assertEqual(judge(out), [])
+
+    def test_run_after_mechanical_tier(self):
+        """OCR 常见形：上下标先机械归一，数字面再收拢（同一趟）。"""
+        out, _c, mech, sem = tighten_d(r"$1 0 6 ^ { 2 }$ 与 $x _ { 1 0 6 }$")
+        self.assertIn("106^{2}", out)
+        self.assertIn("x_{106}", out)
+        self.assertEqual((mech, sem), (0, 0))
+        self.assertEqual(judge(out), [])
+
+    def test_two_digit_spread_stays_outside_both_faces(self):
+        r"""**口径边界**：判据语义档要「三位连排」才报，本档跟着同一条件，不越界焊两位。
+
+        `1 0 ^ { 6 }` 里机械档修的是 `^ {` 接缝，两位摊开 `1 0` 判据不报 → 本档也不碰。
+        宁可留判据盲区，也不能把「只改判据看过的地方」这条让掉：跨 51 书批量跑时，
+        越界的那一侧没有账可查。
+        """
+        out, _c, mech, sem = tighten_d(r"$1 0 ^ { 6 }$")
+        self.assertEqual(out, r"$1 0^{6}$")
+        self.assertEqual((mech, sem), (0, 0))
+        self.assertEqual(judge(out), [])
+
+    def test_flag_off_is_the_default_and_leaves_digits(self):
+        src = r"$3 . 1 . 1$ 与 $1 0 6$"
+        out, ch, mech, sem = tighten(src)
+        self.assertEqual(out, src)
+        self.assertEqual((ch, mech, sem), (0, 0, 2))
+
+    def test_exemption_off_reproduces_the_refusal(self):
+        """关掉数字档 → 同一条收拢必须被守卫拒（证明放行的是这个开关，不是守卫松了）。"""
+        p = _tmpfile(MARK + "\r\n" + "$1 0 6$" + "\r\n")
+
+        def forged(t, collapse_digits=False):
+            return t.replace("1 0 6", "106"), 1, 0, 0
+
+        self.assertTrue(_forge(p, forged, digits=False)[4])
+        _c, _m, _s, wrote, refused = _forge(p, forged, digits=True)
+        self.assertFalse(refused)
+        self.assertTrue(wrote)
+        with open(p, encoding="utf-8") as f:
+            self.assertIn("$106$", f.read())
+
+    def test_letter_join_still_refused_with_digits_on(self):
+        """数字档开着时字母/控制字接缝的收拢**仍**被拒——豁免只放行数字面内的空白。"""
+        p = _tmpfile(MARK + "\r\n" + "$x \\in T$" + "\r\n")
+
+        def forged(t, collapse_digits=False):
+            return t.replace("\\in T", "\\inT"), 1, 0, 0
+
+        _c, _m, _s, wrote, refused = _forge(p, forged, digits=True)
+        self.assertTrue(refused)
+        self.assertFalse(wrote)
+
+    def test_cli_flag_collapses_and_clears_the_nonzero_exit(self):
+        p = _tmpfile(MARK + "\r\n" + "$3 . 1 . 1$ 与 $1 0 6$" + "\r\n")
+        self.assertEqual(tlm.main([p, "--commit"]), 1)        # 不开档：语义档仍在，rc=1
+        self.assertIn("$3 . 1 . 1$", open(p, encoding="utf-8", newline="").read())
+        self.assertEqual(tlm.main([p, "--commit", "--collapse-digits"]), 0)
+        got = open(p, encoding="utf-8", newline="").read()
+        self.assertIn("$3.1.1$ 与 $106$", got)
+        self.assertTrue(got.startswith(MARK + "\r\n"))         # 首行 marker 与 CRLF 不动
+        self.assertEqual(judge(got), [])
+
+    def test_letters_and_control_words_still_never_joined(self):
+        r"""数字档只放行**数字面内**的空白：`\in T`、`\cdot x`、`a b` 照旧一律不动。"""
+        src = r"$x \in T$ 与 $1 0 6 \cdot x$ 与 $a b$"
+        out, _c, mech, sem = tighten_d(src)
+        self.assertIn("\\in T", out)
+        self.assertIn("106 \\cdot x", out)      # 数字面收拢，与 `\` 的接缝空白保留
+        self.assertIn("a b", out)
+        self.assertEqual((mech, sem), (0, 0))
+
+    def test_text_mode_digits_are_content_and_stay_semantic(self):
+        r"""`\text{1 9 5 7}` 的空格在 text 模式里**会**渲染 → 收拢会改排版，必须不碰；
+        判据照样报它（真须人工），所以数字档开着也不许把语义档谎报成 0。"""
+        src = r"$\text{1 9 5 7}$"
+        out, _c, mech, sem = tighten_d(src)
+        self.assertIn("\\text{1 9 5 7}", out)
+        self.assertEqual(mech, 0)
+        self.assertEqual(sem, 1)
+        self.assertTrue(judge(out))
+
+    def test_tag_content_still_exempt(self):
+        src = r"$$a _ { n } = 1 0 6 \tag { 3 . 1 }$$"
+        out, _c, mech, sem = tighten_d(src)
+        self.assertIn("\\tag { 3 . 1 }", out)
+        self.assertIn("a_{n}", out)
+        self.assertIn("= 106 ", out)
+        self.assertEqual((mech, sem), (0, 0))
+
+    def test_escaped_space_survives_with_digits_on(self):
+        r"""`{ \ }` 的 `\ ` 是可打印空格——数字档开着也不能变成 `\}`。"""
+        src = r"$$\begin{array}{l}{\begin{array}{l}{{U _ { 1 } = \cdot \, Z _ { 1 } \cdots ,}} \\ { \ } \\ {U _ { 2}}\end{array}}\end{array}$$"
+        out, _c, mech, sem = tighten_d(src)
+        self.assertIn(r"{\ }", out)
+        self.assertNotIn(r"\}", out)
+        self.assertEqual((mech, sem), (0, 0))
+
+    def test_idempotent_with_digits(self):
+        src = r"$x _ { 1 } + 0 . 5 7 7$ 与 $\frac { 1 } { 1 0 6 }$"
+        once = tighten_d(src)[0]
+        self.assertEqual(tighten_d(once)[0], once)
+        self.assertEqual(tighten_d(once)[1], 0)
+        self.assertEqual(judge(once), [])
+
+    def test_prose_and_tables_still_not_viewed(self):
+        src = "第 3 . 1 . 1 节见 p. 12 ，表 $\\begin{array}{cc} 1 & 2 \\\\ 3 & 4 \\end{array}$"
+        out, ch, mech, sem = tighten_d(src)
+        self.assertEqual(out, src)
+        self.assertEqual((ch, mech, sem), (0, 0, 0))
+
+
 class FileLevel(unittest.TestCase):
     def test_marker_guard_refuses_write(self):
         """首行 marker 被改动 → 拒绝写盘（结构性首行与 manifest 逐字对账）。"""
@@ -189,8 +341,8 @@ class FileLevel(unittest.TestCase):
             f.write(MARK + "\r\n" + "$X _ { t }$" + "\r\n")
         orig = cq.tighten_math_text
         try:
-            cq.tighten_math_text = lambda t: (MARK.replace("DONE", "DRAFT") + "\r\nx\r\n",
-                                              1, 0, 0)
+            cq.tighten_math_text = lambda t, collapse_digits=False: (
+                MARK.replace("DONE", "DRAFT") + "\r\nx\r\n", 1, 0, 0)
             with self.assertRaises(SystemExit):
                 tlm.tighten_file(p, True, 0)
         finally:
@@ -225,35 +377,19 @@ class FileLevel(unittest.TestCase):
 class Audit(unittest.TestCase):
     """落盘前的机械证明独立于修法器（伪造越界输出，必须被拦下且不写盘）。"""
 
-    def _file(self, body):
-        d = tempfile.mkdtemp()
-        p = os.path.join(d, "0001_item_x.md")
-        with open(p, "w", encoding="utf-8", newline="") as f:
-            f.write(body)
-        return p
-
-    def _forge(self, p, fn, commit=True):
-        orig = cq.tighten_math_text
-        try:
-            cq.tighten_math_text = fn
-            got = tlm.tighten_file(p, commit, 0)
-        finally:
-            cq.tighten_math_text = orig
-        return got
-
     def test_joining_control_word_letters_refused(self):
-        p = self._file(MARK + "\r\n" + "$x \\in T$" + "\r\n")
-        _c, _m, _s, wrote, refused = self._forge(
-            p, lambda t: (t.replace("\\in T", "\\inT"), 1, 0, 0))
+        p = _tmpfile(MARK + "\r\n" + "$x \\in T$" + "\r\n")
+        _c, _m, _s, wrote, refused = _forge(
+            p, lambda t, collapse_digits=False: (t.replace("\\in T", "\\inT"), 1, 0, 0))
         self.assertTrue(refused)
         self.assertFalse(wrote)
         with open(p, encoding="utf-8") as f:
             self.assertIn("\\in T", f.read())
 
     def test_joining_digits_refused(self):
-        p = self._file(MARK + "\r\n" + "$1 0 6$" + "\r\n")
-        _c, _m, _s, wrote, refused = self._forge(
-            p, lambda t: (t.replace("1 0 6", "106"), 1, 0, 0))
+        p = _tmpfile(MARK + "\r\n" + "$1 0 6$" + "\r\n")
+        _c, _m, _s, wrote, refused = _forge(
+            p, lambda t, collapse_digits=False: (t.replace("1 0 6", "106"), 1, 0, 0))
         self.assertTrue(refused)
         self.assertFalse(wrote)
 
@@ -263,22 +399,22 @@ class Audit(unittest.TestCase):
         修前档正是靠「右邻是闭括号」放过它，把 array 空行焊成 `\}` 字面闭括号——
         判据与审计都查不出（括号照样配平），只有真实渲染会炸，故这道必须写在守卫里。
         """
-        p = self._file(MARK + "\r\n" + "${ \\ }$" + "\r\n")
-        _c, _m, _s, wrote, refused = self._forge(
-            p, lambda t: (t.replace("\\ }", "\\}"), 1, 0, 0))
+        p = _tmpfile(MARK + "\r\n" + "${ \\ }$" + "\r\n")
+        _c, _m, _s, wrote, refused = _forge(
+            p, lambda t, collapse_digits=False: (t.replace("\\ }", "\\}"), 1, 0, 0))
         self.assertTrue(refused)
         self.assertFalse(wrote)
         self.assertFalse(tlm.only_safe_whitespace_deletions(r"${ \ }$", r"${\}$"))
 
     def test_char_change_and_line_drop_refused(self):
-        p = self._file(MARK + "\r\n" + "$x_1$ 文字" + "\r\n")
-        _c, _m, _s, wrote, refused = self._forge(p, lambda t: (t.replace("文字", "文宇"), 1, 0, 0))
+        p = _tmpfile(MARK + "\r\n" + "$x_1$ 文字" + "\r\n")
+        _c, _m, _s, wrote, refused = _forge(p, lambda t, collapse_digits=False: (t.replace("文字", "文宇"), 1, 0, 0))
         self.assertTrue(refused)
-        p2 = self._file(MARK + "\r\n" + "$x_1$" + "\r\n")
-        self.assertTrue(self._forge(p2, lambda t: (MARK + "\r\n", 1, 0, 0))[4])
+        p2 = _tmpfile(MARK + "\r\n" + "$x_1$" + "\r\n")
+        self.assertTrue(_forge(p2, lambda t, collapse_digits=False: (MARK + "\r\n", 1, 0, 0))[4])
 
     def test_legit_output_passes_audit(self):
-        p = self._file(MARK + "\r\n" + "$X _ { t } = \\frac { 1 } { 2 }$" + "\r\n")
+        p = _tmpfile(MARK + "\r\n" + "$X _ { t } = \\frac { 1 } { 2 }$" + "\r\n")
         ch, _m, _s, wrote, refused = tlm.tighten_file(p, True, 0)
         self.assertFalse(refused)
         self.assertTrue(wrote)
@@ -286,7 +422,7 @@ class Audit(unittest.TestCase):
 
     def test_big_delimiter_seam_is_safe(self):
         r"`\Big |`→`\Big|` 属定界符档（审计允许 `|` 邻侧删空白），字母之间仍不许。"""
-        p = self._file(MARK + "\r\n" + "${ \\Big | } \\in T \\quad 1 0 6$" + "\r\n")
+        p = _tmpfile(MARK + "\r\n" + "${ \\Big | } \\in T \\quad 1 0 6$" + "\r\n")
         _c, _m, _s, wrote, refused = tlm.tighten_file(p, True, 0)
         self.assertFalse(refused)
         self.assertTrue(wrote)
@@ -297,10 +433,10 @@ class Audit(unittest.TestCase):
         self.assertIn("1 0 6", got)
 
     def test_main_exits_nonzero_on_refusal(self):
-        p = self._file(MARK + "\r\n" + "$x \\in T$" + "\r\n")
+        p = _tmpfile(MARK + "\r\n" + "$x \\in T$" + "\r\n")
         orig = cq.tighten_math_text
         try:
-            cq.tighten_math_text = lambda t: (t.replace("\\in T", "\\inT"), 1, 0, 0)
+            cq.tighten_math_text = lambda t, collapse_digits=False: (t.replace("\\in T", "\\inT"), 1, 0, 0)
             rc = tlm.main([p, "--commit"])
         finally:
             cq.tighten_math_text = orig

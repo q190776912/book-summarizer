@@ -712,8 +712,8 @@ def source_language_problems(body, language):
     一个 CJK 字符」（8 本已收官 EN 书标定，2026-09-28）：单字命中几乎全是**别的缺陷**
     或**故意的双语括注**——OCR 把 QED 框 □ 读成 `口`、λ 读成 `入`、≡ 读成 `三`、`+` 读成
     `十`（Weibel / Serre / Robinson 各书实测数十处，自有 OCR 残留闸管），而
-    `**Definition A.1-2 (Paradigm 范式)**`、`# Chapter 1: 基本概念` 是写手为读者加的
-    术语对照，不是中文正文。整段中文必然含 ≥5 连续汉字，跑不掉。
+    `**Definition A.1-2 (Paradigm 范式)**` 是写手为读者加的术语对照，不是中文正文。
+    整段中文必然含 ≥5 连续汉字，跑不掉。
     🔴 只对**明确传入非中文语言**的调用生效：调用方拿不到语言（None）= 该闸不跑，
     绝不误伤中文书（CN 书源正文本就中文）。
     """
@@ -722,9 +722,14 @@ def source_language_problems(body, language):
     probs = []
     for i, ln in enumerate(body.splitlines(), start=1):
         t = ln.strip()
-        # 🔴 `#` 标题行豁免（2026-09-28 全库标定）：收官书里存在**双语章/节标题**
-        #   （`# Chapter 4: 主要定理的证明`、`# Chapter 5: 流形上的微分方程`）——写手给
-        #   标题加的读者向括注，不是中文正文；本闸要拦的是**承载内容的散文**。
+        # 🔴 `#` 标题行豁免（2026-09-28 全库标定）：本闸拦的是**承载内容的散文**，
+        #   标题行由 `merge_units.heading_emptied_by_cjk_clean` 单独管——它拒绝「题名只有
+        #   中文」的英文侧标题（clean_cjk 剥完什么都不剩 = 交付里那章没题名）。
+        #   🔴 历史：当初豁免放行的 9 个 `# Chapter N: <纯中文题名>`（Evans ch7/8/11/12 +
+        #   Arnold-ODE ch1-5）不是双语括注，而是**缺陷**——2026-10-30 已按印面改成英文题名，
+        #   改后复普查 EN 侧单元标题行含 CJK 的 = 0（39 份 EN manifest 全扫）。
+        #   所以这道豁免是**前瞻放行**（写手日后加「保留英文题名」的对照标题），不是
+        #   在替存量假阳背书名；两道口径合起来才完整：括注合法，题名不能只有中文。
         if not t or t.startswith(("<div", "</div", "<img", "<!--", "#")):
             continue
         hit = _CJK_RUN_RE.search(t)
@@ -1081,8 +1086,100 @@ def tighten_frag(frag):
     return "".join(parts), n + k
 
 
-def tighten_math_text(text):
+_DIGIT_RUN_CHARS = "0123456789., \t"
+
+
+def _collapse_digits_bare(frag):
+    r"""**第三档（opt-in）**：把逐位摊开的数字面收拢（`0 . 5 7 7`→`0.577`、`1 0 2 4`→`1024`）。
+
+    动手条件（三条同时满足，缺一不碰）：
+      ① 该数字面里判据语义档 `_LOOSE_MATH_DIGIT` **确实命中**——`1 0`（两位）判据不报，
+         本档同样不碰，两侧口径保持一致；
+      ② 删的**只有空白**，且空白两侧都落在数字面（`0-9` `.` `,`）内——数学模式里空白不
+         产生排版效果，所以「摊开 → 收拢」**渲染逐字不变**（与机械档同一条性质：
+         `0 . 5 7 7 2 1 5` 今天渲染的就是 0.577215）；
+      ③ 不在 text 模式组内（`\text{1 9 5 7}` 的空格是内容）、不在 `\tag{}` 内。
+    🔴 **逗号后保留一个空格**：`1 0 5 , 1 2 0`→`105, 120` 而不是 `105,120`——收拢本身
+    渲染中性，但把两个并列数写成千分位整数是**读法**事故，留这个空格把两种读法分开。
+    数字面被 `\`（`\,` `\ ` `\cdot`）截断时只收拢各段内部，接缝的空白不动。
+    → `(new, n_changed)`
+    """
+    out, n, stack = [], 0, []
+    i, ln = 0, len(frag)
+    while i < ln:
+        c = frag[i]
+        if c == "{":
+            stack.append(bool(_LOOSE_MATH_TEXT_ARG.search(frag, 0, i)))
+            out.append(c)
+            i += 1
+            continue
+        if c == "}":
+            if stack:
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        if c.isdigit() and not any(stack):
+            j = i
+            while j < ln and frag[j] in _DIGIT_RUN_CHARS:
+                j += 1
+            run, tail = frag[i:j], ""
+            k2 = len(run)
+            while k2 > 0 and run[k2 - 1] in " \t":
+                k2 -= 1
+            tail = run[k2:]
+            run = run[:k2]
+            if not _LOOSE_MATH_DIGIT.search(run):
+                out.append(run + tail)
+                i = j
+                continue
+            buf, k, last = [], 0, ""
+            while k < len(run):
+                ch = run[k]
+                if ch in " \t":
+                    m = k
+                    while m < len(run) and run[m] in " \t":
+                        m += 1
+                    if last != ",":
+                        n += 1
+                    else:
+                        buf.append(" ")
+                    last = " "
+                    k = m
+                    continue
+                buf.append(ch)
+                last = ch
+                k += 1
+            out.append("".join(buf) + tail)
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), n
+
+
+def collapse_digits_frag(frag):
+    """数字档按 `\tag{…}` 摘段后收拢（与机械档同一豁免面）。"""
+    tags = list(_LOOSE_MATH_TAG.finditer(frag))
+    if not tags:
+        return _collapse_digits_bare(frag)
+    parts, pos, n = [], 0, 0
+    for m in tags:
+        seg, k = _collapse_digits_bare(frag[pos:m.start()])
+        parts.append(seg)
+        parts.append(m.group(0))
+        n += k
+        pos = m.end()
+    seg, k = _collapse_digits_bare(frag[pos:])
+    parts.append(seg)
+    return "".join(parts), n + k
+
+
+def tighten_math_text(text, collapse_digits=False):
     """整篇正文的机械档反转 → `(new_text, n_changed, 机械档残留, 语义档残留)`。
+
+    `collapse_digits=True` 时追加**第三档**数字收拢（`_collapse_digits_bare`，同样只删
+    空白、渲染中性），收拢后仍残留的语义档 = 被 `\`/text 组截断的真歧义形，仍须人工。
 
     只改数学片段内的空白，且**同行替换**（行结构、围栏、`>` 前缀、缩进一概不动）；
     行首单元 marker 与围栏标记行不在遍历面内，天然零风险。残留两档由调用方决定是否
@@ -1094,6 +1191,9 @@ def tighten_math_text(text):
     edit_by_line = {}
     for k, a, b, frag in spans:
         new, n = tighten_frag(frag)
+        if collapse_digits:
+            new, n2 = collapse_digits_frag(new)
+            n += n2
         if n:
             edit_by_line.setdefault(k, []).append((a, b, new))
     for k, edits in edit_by_line.items():

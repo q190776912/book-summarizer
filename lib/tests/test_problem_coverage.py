@@ -21,11 +21,12 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 
 from problem_coverage import (_is_tail_ref_name, consolidated_cut,
-                              coverage_problems, longest_run_from_one,
-                              page_floor_problems, page_problem_floors,
-                              tail_reference_cut, unit_run_length,
-                              vi_omitted_problem_blocks,
-                              _chapter_takes_exercises, _skip_consolidated)
+                              consolidated_head_chains, coverage_problems,
+                              longest_run_from_one, page_floor_problems,
+                              page_problem_floors, tail_reference_cut,
+                              unit_run_length, vi_omitted_problem_blocks,
+                              _chapter_takes_exercises, _skip_consolidated,
+                              _vi_head_qualifies)
 
 
 def txt(t, line_start=True):
@@ -464,7 +465,8 @@ class TestCoverageViExemption(unittest.TestCase):
 
     def test_no_printed_head_is_not_exempt(self):
         # fail-closed：页窗里看不见习题小标题 → 没有 V-I 触发证据 → 一律照报
-        #（复变函数论 / 数学分析 / 黎曼几何 的 10 条即此形态，不得被本豁免吞掉）
+        #（本通道的证据只有「英文 Problems 标题」这一种形；中文「第二章习题」与
+        #  「EXERCISES」走 TestVIPageHeadEvidence 那条通道，2026-10-28 实测）
         a = sec_page("section", "4.2", CON6, (), 50, 51)
         om, cov, floor = self._gates(chapter(a), [unit("4.2", "")],
                                      {"4.2": "prose only"}, pages=lambda pg: None)
@@ -658,6 +660,190 @@ class TestTailReferenceCut(unittest.TestCase):
         md = "1. item"
         problems = coverage_problems(root, [unit("9.1", md)], _read({"9.1": md}))
         self.assertEqual(problems, [])   # 契约下限 = 标题前的 1..1 → 无缺失
+
+
+class TestVIPageHeadEvidence(unittest.TestCase):
+    """``consolidated_head_chains``：闸 ⑫ 免除通道的**印面**证据（2026-10-28 实测）。
+
+    缺陷形态（复变 ch2 §3 / ch9 §2、黎曼几何 ch1 §2 / ch3 §4 / ch5 §3）：抽取期把章末
+    集中题块灌进最后一节的契约子树，**标题块却没灌进同一个文本束** → ``consolidated_cut``
+    切不到；⑬ 的 ``_PAGE_HEAD_RE`` 只认 ``Problems``/``Problem Set N.M``，因而
+    ``vi_omitted_problem_blocks`` 也走不到 → V-I 认可省略的书被报「缺 N 项」。
+    本函数只产**免除**证据（方向单调 = 只会少报），故词表可放宽到中英两种体例形；
+    放宽**不得**外溢到 ⑬ 的下限（见 ``test_page_side_gate_stays_blind``）。
+    """
+
+    def chains(self, pages, sec="3", ps=75, ch_key="2", span=(70, 80), extra=()):
+        root = chapter(sec_page("section", sec, [], (), ps, ps))
+        return consolidated_head_chains(root, lambda pg: pages.get(pg), span,
+                                        ch_key=ch_key, extra_loaders=list(extra))
+
+    def test_cn_chapter_head_gives_chain(self):
+        # 复变函数论 p75「第二章习题」形：中文章号前缀 + 体例词，其后题号 1..3
+        pages = {75: ["第二章习题", "1. 设 f 在 D 内解析。", "2. 证明 u、v 为共轭调和函数。",
+                      "3. 举例说明。"]}
+        self.assertEqual(self.chains(pages), {"3": (75, "第二章习题", 3)})
+
+    def test_bare_exercises_head_numbered_running_header_rejected(self):
+        # do Carmo 章末页：页眉带印刷页码「Exercises 45」不合格，同页裸「EXERCISES」合格
+        pages = {59: ["Exercises    45", "EXERCISES", "1. Prove A.", "2. Prove B.",
+                      "3. Prove C."]}
+        got = self.chains(pages, sec="2", ps=59, ch_key="1", span=(50, 70))
+        self.assertEqual(got, {"2": (59, "EXERCISES", 3)})
+
+    def test_head_of_another_chapter_is_not_evidence(self):
+        # 负向：ch9 的页窗里出现别章标题「第二章习题」→ 不给本章免除（卷子/页眉混排防呆）
+        pages = {273: ["第二章习题", "1. a", "2. b", "3. c"]}
+        self.assertEqual(self.chains(pages, sec="2", ps=273, ch_key="9",
+                                     span=(270, 280)), {})
+
+    def test_volume_split_page_needs_matching_ordinal(self):
+        # 数学分析 上册/下册页号各自从 1 起：同一页号 297 上别卷的「练习题6.7」不得作数，
+        # 只有序标属于本章的「练习题16.2」合格（extra_loaders 只喂本函数）。
+        up = {297: ["练习题6.7", "1. a", "2. b", "3. c", "4. d"]}
+        down = {297: ["练习题16.2", "1. 求极限。", "2. 讨论连续性。", "3. 证明。"]}
+        got = self.chains(up, sec="16.2", ps=297, ch_key="16", span=(287, 316),
+                          extra=[lambda pg: down.get(pg)])
+        self.assertEqual(got, {"16.2": (297, "练习题16.2", 3)})
+
+    def test_items_before_the_head_are_not_counted(self):
+        # 标题**之前**的编号属正文列举 → 链只从标题之后数
+        pages = {75: ["1. 正文列举", "2. 正文列举", "第二章习题",
+                      "1. 题一", "2. 题二", "3. 题三"]}
+        self.assertEqual(self.chains(pages), {"3": (75, "第二章习题", 3)})
+
+    def test_no_head_is_fail_closed(self):
+        pages = {75: ["1. a", "2. b", "3. c", "4. d"]}
+        self.assertEqual(self.chains(pages), {})
+
+    def test_prose_mention_is_not_a_head(self):
+        # 负向：句中出现体例词不是独立小标题（否则把该写的判成不必写）
+        pages = {75: ["解答请见书末的习题部分", "1. a", "2. b", "3. c"]}
+        self.assertEqual(self.chains(pages), {})
+
+    def test_page_side_gate_stays_blind(self):
+        # 🔴 词表分家的直接锁：同一份中文页窗喂给 ⑬ 必须给出**空下限**，
+        # 放宽豁免侧的词表绝不能顺手把 V-I 认可的省略变成新的写作义务。
+        root = chapter(sec_page("section", "3", [], (), 75, 75))
+        pages = {75: ["第二章习题", "1. a", "2. b", "3. c", "4. d", "5. e"]}
+        loader = lambda pg: pages.get(pg)                      # noqa: E731
+        self.assertEqual(page_problem_floors(root, loader, (70, 80)), {})
+        self.assertEqual(vi_omitted_problem_blocks(root, [unit("3", "")],
+                                                   _read({}), loader, (70, 80)), set())
+
+    def test_head_qualification_table(self):
+        for text, ch, sec, want in (
+                ("Exercises", "1", "2", True),
+                ("EXERCISES", "3", "4", True),
+                ("Exercises 45", "1", "2", False),          # 45 = 印刷页码
+                ("练习题16.2", "16", "16.2", True),
+                ("练习题6.7", "16", "16.2", False),          # 别卷/别章
+                ("第九章习题", "9", "2", True),
+                ("第九章习题", "2", "3", False),
+                ("第二章习题", None, "2", False),          # 章号未知 → 带第N章一律不合格
+                ("第16章习题", "16", "2", True),
+                ("习题 三", "3", "2", True),                 # 无阿拉伯序标 → 不因中文数字拒
+        ):
+            self.assertEqual(_vi_head_qualifies(text, ch, sec), want, (text, ch, sec))
+
+
+class TestCoverageHeadChainExemption(unittest.TestCase):
+    """闸 ⑫ 接线：免除证据必须**只在**「印面链覆盖契约链 且 本章不收题」时生效。"""
+
+    def _root(self):
+        return chapter(sec_page("section", "4.2", CON6, (), 50, 51))
+
+    def _probs(self, body="prose only", extra_units=(), **kw):
+        units = [unit("4.2", "")] + list(extra_units)
+        return coverage_problems(self._root(), units,
+                                 _read({"4.2": body}), **kw)
+
+    def test_exempt_when_printed_chain_covers_contract(self):
+        self.assertEqual(self._probs(head_chains={"4.2": (50, "Problems", 6)}), [])
+
+    def test_refused_when_printed_chain_is_shorter(self):
+        # 印面只有 5 题、契约却有 6 → 第 6 项不是「印面块覆盖」，缺口照报
+        probs = self._probs(head_chains={"4.2": (50, "Problems", 5)})
+        self.assertEqual(len(probs), 1)
+        self.assertIn("缺 6 项", probs[0])
+
+    def test_refused_without_evidence(self):
+        self.assertEqual(len(self._probs(head_chains={})), 1)
+
+    def test_default_argument_keeps_old_verdict(self):
+        # 负向：不传 head_chains 时判据与旧版逐字相同（豁免须由调用方显式接线）
+        self.assertEqual(len(self._probs()), 1)
+
+    def test_refused_when_chapter_takes_exercises(self):
+        # 收题体例（manifest 有 exercise 单元）→ 本通道对每节整体失效
+        u = unit("4.3", "")
+        u["type"] = "exercise"
+        probs = self._probs(extra_units=[u], head_chains={"4.2": (50, "Problems", 99)})
+        self.assertEqual(len(probs), 1)
+        self.assertIn("缺 6 项", probs[0])
+
+    def test_refused_when_contract_registers_exercise_node(self):
+        root = chapter(sec_page("section", "4.2", CON6,
+                                [node("exercise", "4.2-1", [txt("1. q")])], 50, 51))
+        probs = coverage_problems(root, [unit("4.2", "")], _read({"4.2": "prose"}),
+                                  head_chains={"4.2": (50, "Problems", 99)})
+        self.assertEqual(len(probs), 1)
+
+    def test_unit_side_list_does_not_block_the_exemption(self):
+        """设计锁：本通道只谈**契约侧归属**，故单元侧写过 1..3 也照样免。
+
+        「抄了一半」的风险由 ``takes`` 兜：整章不收题的书，节内编号列举必是本节自己的
+        内容（复变 ch2 §3 = 4、do Carmo ch1 §2 = 3 实测），不是题块前几题。
+        """
+        self.assertEqual(
+            self._probs(body="1. 条件一\n2. 条件二\n3. 结论",
+                        head_chains={"4.2": (50, "第二章习题", 6)}), [])
+        # 同一段正文，本章一旦收题 → 立刻是真欠账
+        u = unit("4.3", "")
+        u["type"] = "exercise"
+        self.assertEqual(len(self._probs(body="1. 条件一\n2. 条件二\n3. 结论",
+                                        extra_units=[u],
+                                        head_chains={"4.2": (50, "Problems", 6)})), 1)
+
+    def test_sibling_key_evidence_does_not_exempt(self):
+        self.assertEqual(len(self._probs(head_chains={"4.3": (50, "Problems", 99)})), 1)
+
+
+class TestUnitNumberStreams(unittest.TestCase):
+    """单元侧号流按**形态**分开数（2026-10-28 数学分析 ch16 §16.2/§16.3 实测）。
+
+    写手按中文排版把题号写成 ``1．``（全角点 U+FF0E）、每题下的若干小问写成 ``（1）``：
+    旧判据①closer 类不含 ``．`` → 顶层题号整体隐形；②把顶层号与小问号混在一条流里 →
+    小问每次从 1 重启把主链劈断。两处合起来让写全 7 题的节数到 4 → 闸 ⑫ 报「缺 3 项」。
+    """
+
+    SEVEN = "\n".join(["%d．题目 %d" % (i, i) for i in range(1, 8)])
+
+    def test_fullwidth_dot_top_level_counted(self):
+        self.assertEqual(unit_run_length([self.SEVEN]), 7)
+
+    def test_subquestions_do_not_break_top_level_chain(self):
+        lines = []
+        for t in range(1, 8):
+            lines.append("%d．题干 %d" % (t, t))
+            lines.extend("　　（%d）小问" % s for s in range(1, 4))
+        self.assertEqual(unit_run_length(["\n".join(lines)]), 7)
+
+    def test_paren_only_stream_still_counted(self):
+        md = "\n".join("（%d）判断正误。" % i for i in range(1, 6))
+        self.assertEqual(unit_run_length([md]), 5)
+
+    def test_real_gap_is_still_reported(self):
+        # 🔴 负向：放宽形态不许掩盖真缺口——写 1．2．3．4．5．7．（缺 6）仍须报「缺 2 项」
+        root = chapter(node("section", "16.3", [txt("%d. item" % i) for i in range(1, 8)]))
+        md = "\n".join(["1．a", "2．b", "3．c", "4．d", "5．e", "7．g"])
+        probs = coverage_problems(root, [unit("16.3", md)], _read({"16.3": md}))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("缺 2 项", probs[0])
+
+    def test_halfwidth_forms_unchanged(self):
+        self.assertEqual(unit_run_length(["\n".join("%d. p" % i for i in range(1, 6))]), 5)
+        self.assertEqual(unit_run_length(["\n".join("%d) p" % i for i in range(1, 4))]), 3)
 
 
 if __name__ == "__main__":

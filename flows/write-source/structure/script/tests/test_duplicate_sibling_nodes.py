@@ -96,6 +96,36 @@ class TestDuplicateSiblingNodes(unittest.TestCase):
         _dedupe_sibling_nodes(ch)
         self.assertEqual(str(ch), once, "重复执行必须幂等")
 
+    def test_parallel_restarting_remarks_not_merged(self):
+        # 郑大钟《线性系统理论》ch4 实测：`注N` 计数器在同一节 §4.1 内按「能控/能观测」
+        # 两个分组各自从 1 重启 → 两个真·注1，分处 p160 / p162，标题各不相同。旧逻辑把
+        # 它们当重号空壳合并，keep(p160) 的 page_start 被顶到 162 却留在早槽位 → 文档序
+        # 页码倒退（ANCHOR-SANITY 拒绝落盘）并吞掉一条真内容。二者必须各自保留。
+        ch = _n("4", "chapter", "能控性和能观测性", 157, 234, [
+            _n("4.1", "section", "定义", 157, 162, [
+                _n("例4.1", "example", "例4.1 给定连续时间线性时不变系统", 158),
+                _n("注1", "remark", "注1 能控性和能达性属于表征系统受控状态…", 160),
+                _n("注3", "remark", "注3 能控性和能达性都是相对于时间区间…", 160),
+                _n("定义4.8", "definition", "定义4.8 系统不完全能观测", 162),
+                _n("注1", "remark", "注1 从工程实际角度·系统为不完全能观测…", 162),
+            ]),
+        ])
+        _dedupe_sibling_nodes(ch)
+        sec = ch["sub_sec"][0]["sub_sec"]
+        zhus = [c for c in sec if c["key"] == "注1"]
+        self.assertEqual(len(zhus), 2, "节内重启的两条真注1 必须各自保留，不得合并")
+        self.assertEqual([z["page_start"] for z in zhus], [160, 162],
+                         "保留各自真实页码，锚点不得被顶歪")
+
+    def test_parallel_restarting_requires_non_bare_distinct_names(self):
+        # 反例：Rosen 双行里必有一行是裸号名（banner 行 name==key）→ 不是平行条目，照旧合并。
+        ch = _n("6", "chapter", "Counting", 400, 470, [
+            _n("6.6", "exercise", "Exercise Set 6.6", 452),
+            _n("6.6", "exercise", "6.6", 455),
+        ])
+        _dedupe_sibling_nodes(ch)
+        self.assertEqual(len(ch["sub_sec"]), 1, "带裸号名一翼的重号仍须合并")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

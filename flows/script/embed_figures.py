@@ -42,7 +42,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib")):
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
-from lib.figure_io import load_fig_labels, fig_label_alt, FIGURE_LABELS_DEFAULT
+from lib.figure_io import load_fig_labels, fig_label_alt
+from lib.figure_alt import build_alt, clip_words, strip_caption_lead
 import figure_index
 import figure_embed_overrides
 
@@ -134,15 +135,16 @@ HEAD_RE = re.compile(r"^\s*>\s*\*{0,2}(?:证明|证|例)")
 TERM_RE = re.compile(r"^(?:---+\s*$|##\s|\*\*[^*]+\*\*)")
 
 
-def short_caption(cap, labels=None):
-    if labels is None:
-        labels = FIGURE_LABELS_DEFAULT
-    # strip the leading figure-label prefix (图 / Figure / Fig …) so the embedded
-    # caption doesn't duplicate the number already shown on the cropped image.
-    s = re.sub(rf"^(?:{fig_label_alt(labels)})\s*\d+(?:\.\d+)*\s*", "", cap or "", flags=re.IGNORECASE).strip()
+def short_caption(cap, label=None, labels=None):
+    """alt 的「体」：剥掉「标签词 + 号」后的题注（号的裁决与剥法都在 `lib.figure_alt`）。
+
+    剥号与截断都走 `lib.figure_alt`——写手、`clean_figure_alts`（回写）、`gate_units`（
+    校验）三处共用一份判据，任何一处自带正则都会漂移。
+    """
+    s = strip_caption_lead(cap, label, labels)
     s = re.sub(r"图中.*$", "示意图", s)
     s = re.sub(r"中的.*$", "示意图", s)
-    return s[:40]
+    return clip_words(s, 40)
 
 
 def parse_ref(cap):
@@ -634,9 +636,9 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
                 continue
             # ---- idx is NOT None here: build the markdown image embed ----
             cap_raw = f.get("caption", "") or ""
-            cap = short_caption(cap_raw, fig_labels)
-            mt = re.search(rf"(?:{fig_label_alt(fig_labels)})\s*\d+", cap_raw, re.IGNORECASE)
-            tag = mt.group(0) if mt else (fig_labels[0] if fig_labels else "图")
+            # alt 由 lib.figure_alt.build_alt 一次装配（号取登记 label；题注自己就以
+            # 标签词开头时不再重说一遍——脏源在登记侧的脏题注，不在拼装）
+            alt = build_alt(cap_raw, f.get("label"), fig_labels, short_caption)
             # use <img> with proportional width attribute so the image
             # occupies the same fraction of the reader's column width as it
             # did in the original book page. The percentage is derived from
@@ -652,7 +654,6 @@ def embed_chapter(book_dir, ch, overrides, dry_run, do_scan):
             else:
                 pct = 45.0
             rel = "figure/" + fname   # 🔴 2026-09-01 起书根相对（figure 与 md 同级）
-            alt = (tag + " " + cap).replace('"', "'")
             img = ('<img src="%s" alt="%s" width="%s%%" height="auto">\n' % (rel, alt, pct))
             if is_proof:
                 pb = find_proof(lines, idx)

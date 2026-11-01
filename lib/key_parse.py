@@ -154,7 +154,11 @@ def normkey(s):
 # 🔴 `练习` 在此收录：`_LABEL_CANON` 的 Exercise / 习题 都正名为 `练习`，exercise
 # group 的契约键就是 `练习N…`；CN 词表不收它就等于 CN 侧 md 条头整族解析不出。
 # (`习题` 暂不收：与 `练习` 同义但正名相同，收录面待评估，见 book 侧回归。)
-CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '命题', '例', '示例', '评注', '注释',
+# 🔴 `结论` 在此收录：郑大钟《线性系统理论》主定理族 `结论N.M`，`_LABEL_CANON` 的
+# Conclusion / 结论 正名为 `结论`、`TYPE_TO_LABEL_CN['conclusion']='结论'`；CN 词表不收它
+# 就等于交付 md 里 `**结论N.M**` 条头整族解析不出键 → 中文版 B 层「truly missing」。
+# （四表一致性由 config/verify_config/tests/test_property_label_recognized.py 钉死。）
+CN_LABEL_KINDS = ['定义', '定理', '引理', '推论', '结论', '命题', '例', '示例', '评注', '注释',
                   '注', '注记', '公理', '断言', '猜想', '条件', '假设', '算法', '性质',
                   '问题', '练习']
 # Combined (used when ordinal == ORDINAL_EN so either language matches).
@@ -524,6 +528,17 @@ def keys_in_md(path, ordinal=ORDINAL_THREE_LEVEL, groups=None,
                 for m in ENTRY_RE_EN_C.finditer(line):
                     key = f"{_canon_label(m.group(1))}{m.group(2)}.{m.group(3)}"
                     entries.add(key); allk.add(key)
+                # 🔴 字母位后缀计数器（S. Ross《A First Course in Probability》体例：
+                # 节内重置 + `Example 2a..2e`）。该正则此前只接在 ORDINAL_SINGLE 分支上
+                # （ORDINAL_ROSS=11 折进 type 1 时补的），两级分支走不到 → md 侧不产键，
+                # A 层把契约真身 `例2a` 判成 TRULY MISSING（Ross 实测 41+ 处，10 章全红）。
+                # 与单级分支同一正则、同一规范键（`_ross_canon` = 标签 + 数字 + 小写字母），
+                # 故两分支对同一物理条头逐字同键；`_fig_only` 组不参与（图形计数器不带
+                # 字母位条目，`Fig 2a` 是版面子图标号，归图管线管辖）。
+                if not _fig_only:
+                    for m in ENTRY_RE_ROSS_LETTER_C.finditer(line):
+                        key = _ross_canon(m.group(1), m.group(2), m.group(3).lower())
+                        entries.add(key); allk.add(key)
                 for m in ENTRY_RE_EN_SINGLE_C.finditer(line):
                     if _fig_only:
                         continue

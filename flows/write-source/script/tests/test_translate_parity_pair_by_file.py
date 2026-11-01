@@ -114,5 +114,60 @@ class TestPairByFile(unittest.TestCase):
         self.assertTrue(any("单元数不一致" in p for p in probs), probs)
 
 
+class TestContractFields(unittest.TestCase):
+    """PAIR_FIELDS 含契约登记四件（tags/images/content/ntype）——MR ch8 0037 实测盲区。
+
+    2026-10-28：源侧按印面把 `\\tag{8.99}–{8.102}` 归还给 0038 后，译侧 0037 的 manifest
+    记录仍挂着这 4 式。判据 2 比**单元正文**的 tag 集合（两侧正文一致 → 不报），
+    gate 却拿**该单元自己的** manifest 期望值 → 「源 gate 绿 / 译 gate 红 / parity 绿」。
+    全库 33,649 个配对单元普查：除这 1 处外四个字段源/译恒等，故判据无假阳代价。
+    """
+
+    def _pair(self, **tgt_kw):
+        src = _u("0037", "0037_desc_D15.md", type="desc", ntype="description",
+                 tags=["8.92", "8.93"], images=[], content=131)
+        tgt = _u("0037", "0037_desc_D15.md", type="desc", ntype="description",
+                 tags=["8.92", "8.93"], images=[], content=131)
+        tgt.update(tgt_kw)
+        return ctp.pair_units([src], [tgt])
+
+    def test_stale_translate_tags_is_a_problem(self):
+        """真实事故形态：译侧多记 8.99–8.102 → 必须点名单元并点名 tags。"""
+        probs, _pairs = self._pair(tags=["8.92", "8.93", "8.99", "8.100"])
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("0037_desc_D15.md", probs[0])
+        self.assertIn("tags", probs[0])
+
+    def test_identical_contract_fields_are_clean(self):
+        """两侧登记完全一致（含空 images / content 数字）→ 零问题，判据不添假阳。"""
+        probs, pairs = self._pair()
+        self.assertEqual(probs, [], probs)
+        self.assertEqual(len(pairs), 1)
+
+    def test_image_and_content_drift_each_reported(self):
+        for kw in ({"images": ["figure/ch08_fig8.7.png"]}, {"content": 130},
+                   {"ntype": "descriptionx"}):
+            probs, _ = self._pair(**kw)
+            self.assertEqual(len(probs), 1, "%s → %s" % (kw, probs))
+            self.assertIn(next(iter(kw)), probs[0], probs[0])
+
+    def test_absent_field_treated_as_empty_not_a_drift(self):
+        """一侧登记为空表/空串、另一侧整个缺键 → 现口径视为相同（判据放宽处要留痕）。
+
+        钉住 `str(rec.get(fld) or "")` 的语义：它把 `[]`/`""`/`0`/缺键一律折成空串。
+        非空 → 缺键**仍算漂移**（见 test_stale_translate_tags_is_a_problem 的反向）。
+        """
+        src = _u("0037", "0037_desc_D15.md", type="desc", ntype="",
+                 name="", tags=[], images=[], content=0)
+        tgt = {"id": "0037", "file": "0037_desc_D15.md", "type": "desc",
+               "key": "0037", "name": ""}                # 四个契约字段全部缺键
+        probs, _ = ctp.pair_units([src], [tgt])
+        self.assertEqual(probs, [], probs)
+        tgt2 = dict(tgt, tags=["8.99"])                  # 反向：源空、译凭空多记
+        probs2, _ = ctp.pair_units([src], [tgt2])
+        self.assertEqual(len(probs2), 1, probs2)
+        self.assertIn("tags", probs2[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

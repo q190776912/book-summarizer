@@ -97,7 +97,14 @@ _NUM_LINE_RE = _build_num_re(r"\(?", r"[.)\]]")
 # 单元侧（我们写的 md）：中文排版惯例写 `（1）`（微分遍历论 ch2 定理2.1.9 的
 # (1)–(4) 条）。只认半角时单元侧数不到 → 「契约 1..4 / 单元没有任何编号项」的假
 # 「整块漏写」FAIL，闸 ⑫ 误杀全绿章节；放宽只让单元链变长 = 只可能少报不会多报。
-_NUM_LINE_RE_UNIT = _build_num_re(r"[(（]?", r"[.)\]）]")
+# 🔴 收尾再补**全角句号** ``．``（U+FF0E）：中文教材的顶层题号印/写作 ``1．``
+# （数学分析 ch16 练习题16.2/16.3 全章如此），旧字符类只有半角 ``.`` → 写手 7 题
+# 全在却数不到，报「契约 1..7 / 单元只写到 4」。同方向：只让单元链变长。
+_NUM_LINE_RE_UNIT = _build_num_re(r"[(（]?", r"[.)\]）．]")
+# 号流**分形态**（见 ``unit_run_length``）：顶层条目 ``1.``/``1．`` 与题下小问
+# ``（1）``/``(1)`` 各自成链。
+_NUM_UNIT_BARE_RE = _build_num_re(r"(?![（(])", r"[.．]")
+_NUM_UNIT_PAREN_RE = _build_num_re(r"[(（]", r"[)）]")
 
 _CONTAINER_TYPES = ("chapter", "section", "subsection")
 
@@ -413,29 +420,51 @@ def unit_run_length(texts: Iterable[str]) -> int:
 
     单元侧用 ``_NUM_LINE_RE_UNIT``：我们写的 md 按中文排版惯例写 `（1）`，
     与契约侧 OCR 的 `(1)` 是同一编号项的不同排版形态。
+
+    🔴 链按**形态**分开数，取最大：顶层条目 ``1.``/``1．`` 与题下小问 ``（1）`` 混在
+    一条号流里会互相打断（数学分析 ch16 §16.3 实测：写手 ``1．``–``7．`` 七题齐全，
+    但每题下的 ``（1）…（7）`` 把号流劈成 ``1,1..7,2,3,...``，混流最长只到 6 →
+    闸 ⑫ 报「契约 1..7 / 单元只写到 6」）。分开数只会让单元侧**变长** = 少报方向，
+    与原设计取向一致；混流那条一并保留取 max，保证任何历史形态的结果不缩短。
     """
-    nums = []
+    streams = ([], [], [])
     for t in texts:
         for line in t.splitlines():
-            n = _num(line, _NUM_LINE_RE_UNIT)
-            if n:
-                nums.append(n)
-    return longest_run_from_one(nums)
+            for i, rex in enumerate((_NUM_LINE_RE_UNIT, _NUM_UNIT_BARE_RE,
+                                     _NUM_UNIT_PAREN_RE)):
+                x = _num(line, rex)
+                if x:
+                    streams[i].append(x)
+    return max(longest_run_from_one(s) for s in streams)
 
 
 def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]],
                       read_body, min_run: int = 3,
-                      vi_omitted: Optional[Iterable[str]] = None) -> List[str]:
+                      vi_omitted: Optional[Iterable[str]] = None,
+                      head_chains: Optional[Dict[str, Tuple[int, str, int]]] = None) -> List[str]:
     """节级编号内容覆盖对账 → 问题列表（空 = 通过）。
 
     ``read_body(unit)`` 返回该单元的正文（去掉首行 DONE 注释后的 md）。
     ``vi_omitted``：由 ``vi_omitted_problem_blocks`` 给出的「V-I 授权整块省略」节键集
     （印面确有专门习题小标题、且本章一套题集都没收）。给则跳过这些节，不给（默认）
     = 判据与旧版逐字相同。
+    ``head_chains``：由 ``consolidated_head_chains`` 给出的**印面**证据
+    ``{节键: (页号, 标题, 标题之后印面的最大题号)}``。给则按 V-I 再免一类：该节契约侧
+    那条编号链的号码**整段被印面块覆盖**（``n_contract <= 印面题号``）时，链本身就是
+    带标题的集中题块（抽取期把题面灌进了本节子树、标题却没灌进来，所以
+    ``consolidated_cut`` 切不到），按 V-I 属**整块省略**、不该由本闸索要。
+    🔴 与 ``vi_omitted`` 那条的区别：本条只谈**契约侧**归属，故不看单元侧写了多少
+    （一节里另有一串 ``1.2.3.`` 正文列举时 ``n_unit != 0``，``vi_omitted`` 永不生效，
+    而这条照样免——复变 ch2 §3、do Carmo ch1 §2 实测形态）。
+    🔴 为什么「不看 n_unit」不会把 V-I 的「选择写入须逐题写全」放掉：本章一旦有任何
+    收题体例信号（``_chapter_takes_exercises``），本通道对**每一节**整体失效，于是
+    「抄了一半」只可能出现在仍照常报缺失的书里；本通道只在**整章一套题都没收**的书上
+    生效，而那类书的「写了 3 题」必是本节自己的列举，不是题块的前 3 题。
     """
     if not root:
         return []
     skip = set(vi_omitted or ())
+    takes = bool(head_chains) and _chapter_takes_exercises(root, units)
     problems = []
     for sec_key, n_contract, keys in contract_run_lengths(root):
         if n_contract < min_run:
@@ -445,6 +474,9 @@ def coverage_problems(root: Optional[Dict[str, Any]], units: List[Dict[str, Any]
         n_unit = unit_run_length(b for b in bodies if b)
         if n_unit < n_contract:
             if sec_key in skip and n_unit == 0:
+                continue
+            hc = (head_chains or {}).get(sec_key)
+            if hc and not takes and n_contract <= hc[2]:
                 continue
             problems.append(
                 "节 %s 的编号内容有缺失：契约里编号 %s 连成一条（题面/条目通常整块被"
@@ -551,6 +583,123 @@ def page_problem_floors(root: Optional[Dict[str, Any]], page_loader,
     return floors
 
 
+# ---------------------------------------------------------------------------
+# V-I 省略侧的「集中习题块」页窗证据（**只用于豁免义务，绝不用于下限**）
+# ---------------------------------------------------------------------------
+# 为什么必须与 ``_PAGE_HEAD_RE`` 分成两张词表：那张是闸 ⑬ 的**触发器**——标题认得越宽，
+# ⑬ 就越要求「该节页窗里印的题逐题写全」，而 writing-rules V-I 对**有专门小标题的集中
+# 习题块**规定「一律省略」；中文教材章末的「习题 / 练习题16.2 / 第N章习题」正是这种块，
+# 给它们在 ⑬ 那侧开门 = 逼写手恢复 V-I 认可的省略（假阳洪水，故 ⑬ 保持英文窄口径）。
+# 本侧相反：证据只用来**免除**闸 ⑫ 的契约侧义务，方向单调（只会少报，不会多报），
+# 所以可以按体例放宽到中英两种标题形态。
+# 实测（2026-10-28，7 处 ⑫ FAIL 逐条回印面坐实，全部是章末/节末**带标题集中题块**被抽取期
+# 灌进最后一节的契约子树，而 ``consolidated_cut`` 切不到——标题块根本没进同一个文本束）。
+# 格式「契约链 / 单元链 / 印面标题(页, 其后最大题号)」：
+#   复变函数论 ch2 §3 = 8 / 4 / p75「第二章习题」(26)   ← 题块 1..26 与 6 个小节标题混灌
+#   复变函数论 ch9 §2 = 6 / 0 / p273「第九章习题」(6)
+#   黎曼几何  ch1 §2  = 6 / 3 / p59「EXERCISES」(17)
+#   黎曼几何  ch3 §4  = 3 / 0 / p91「EXERCISES」(14)
+#   黎曼几何  ch5 §3  = 4 / 3 / p133「EXERCISES」(8)
+#   —— 以上 5 条 ``takes=False``（整章一套题都没收，V-I 体例），由本通道免除。
+#   数学分析 ch16 §16.2 / §16.3 = 7 / 4 / p291「练习题16.1」(7)、p304「练习题16.3」(7)
+#   —— ``takes=True``（该章收了题），本通道**必须**拒；真因是单元侧 ``1．``（全角点）与
+#   子题 ``（1）`` 混在一条号流里把主链打断，见 ``unit_run_length`` 的分形态号流。
+_VI_HEAD_MAX_LEN = 20
+_VI_HEAD_RE = re.compile(
+    r"^\s*(?:>\s*)?" + _OCR_BULLET + r"\s*"
+    r"(?:第\s*[一二三四五六七八九十百0-9]+\s*章|[A-Z]?[IVXLC]+\s*章)?\s*"
+    r"(?:" + _CN_SET_WORDS + r"|Exercises?|Problems?|Problem\s*Set)"
+    r"\s*(?:[\d.]+\s*[.:：]?|[一二三四五六七八九十]+\s*|[.:：]?)\s*$", re.IGNORECASE)
+_VI_NUM_RE = re.compile(r"^\s*[（(]?(\d{1,2})[.)）\]]" + _AFTER_NUM)
+_CJK_NUM = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7,
+            "八": 8, "九": 9, "十": 10}
+
+
+def _cjk_int(text: str) -> Optional[int]:
+    """「二」「十六」「二十三」→ 2 / 16 / 23（只支持 ≤99，章号够用；解析不了给 None）。"""
+    s = (text or "").strip()
+    if s.isdigit():
+        return int(s)
+    if "十" in s:
+        a, _, b = s.partition("十")
+        if a and any(c not in _CJK_NUM for c in a):
+            return None
+        if b and any(c not in _CJK_NUM for c in b):
+            return None
+        return (_CJK_NUM.get(a, 1) if a else 1) * 10 + (_CJK_NUM.get(b, 0) if b else 0)
+    if s and all(c in _CJK_NUM for c in s) and "零" not in s:
+        return _CJK_NUM[s[-1]] if len(s) == 1 else None
+    return None
+
+
+def _vi_head_qualifies(text: str, ch_key: Optional[str], sec_key: str) -> bool:
+    """标题自带的序标必须**属于本章/本节**，否则这条证据不作数。
+
+    🔴 这一步是卷子目录（``_extract/上册``+``下册``，页号各自从 1 起）能不能用的关键：
+    数学分析 ch16（下册 287-316）的页窗里，上册同一页号区间印的是 ch6 的「练习题6.6/6.7」，
+    只按标题词形判就会拿**别卷**的块给本章豁免；带上序标（须等于章号、节号或 ``16.2``
+    这种「章号.节号」）后，只有真属本章的标题才合格。裸标题（do Carmo 章末页眉
+    ``Exercises``、``EXERCISES``）无序号 → 合格；带页码的页眉（``Exercises    45``，
+    45 是印刷页码）在本章键为 1 时不合格，但同页的裸 ``EXERCISES`` 会给出证据。
+    🔴 ``第N章`` 的 N **只能对上章号**：复变 ch9 的节键就是 ``2``，把中文章号并进「章号或
+    节号」里判，会让别章的「第二章习题」给本章 §2 发免除证据（负向测
+    ``test_head_of_another_chapter_is_not_evidence`` 抓到的形态）。阿拉伯序标（``练习题16.2``）
+    仍按「节号 / 章号 / ``章号.节号``」任一对上即合格；带 ``第N章`` 而 ``ch_key`` 未知 → 不合格。
+    """
+    toks = re.findall(r"\d+(?:\.\d+)*", text)
+    keys = {str(sec_key)}
+    if ch_key is not None:
+        keys.add(str(ch_key))
+    matched = {t for t in toks
+               if t in keys or any(t.startswith(k + ".") for k in keys if k)}
+    m = re.search(r"第\s*([一二三四五六七八九十百0-9]+)\s*章", text)
+    if m:
+        v = _cjk_int(m.group(1))
+        if v is None or ch_key is None or str(v) != str(ch_key):
+            return False
+    return not toks or bool(matched)
+
+
+def consolidated_head_chains(root: Optional[Dict[str, Any]], page_loader,
+                             chapter_span: Tuple[int, int],
+                             ch_key: Optional[str] = None,
+                             extra_loaders: Iterable[Any] = (),
+                             max_num: int = 30) -> Dict[str, Tuple[int, str, int]]:
+    """→ {节键: (页号, 标题原文, 标题之后页窗里出现过的最大题号)}。
+
+    ``page_loader(page)`` 同 ``page_problem_floors``；``extra_loaders`` 给卷子目录等多布局
+    用（**只喂本函数**，不喂 ⑬ 的下限，否则会把 V-I 认可的省略变成新的欠账）。
+    看不见标题 = 该节不出现在结果里 = 不豁免（fail-closed）。
+    """
+    out: Dict[str, Tuple[int, str, int]] = {}
+    if not root:
+        return out
+    loaders = [page_loader] + list(extra_loaders)
+    for key, lo, hi in _section_windows(root, chapter_span):
+        best: Optional[Tuple[int, str, int]] = None
+        for ld in loaders:
+            for pg in range(lo, hi + 1):
+                blocks = ld(pg) or []
+                for bi, t in enumerate(blocks):
+                    s = (t or "").strip()
+                    if not s or len(s) > _VI_HEAD_MAX_LEN or not _VI_HEAD_RE.match(s):
+                        continue
+                    if not _vi_head_qualifies(s, ch_key, key):
+                        continue
+                    n = 0
+                    for q in range(pg, hi + 1):
+                        seq = blocks[bi + 1:] if q == pg else (ld(q) or [])
+                        for u in seq:
+                            mm = _VI_NUM_RE.match((u or "").strip())
+                            if mm and int(mm.group(1)) <= max_num:
+                                n = max(n, int(mm.group(1)))
+                    if best is None or n > best[2]:
+                        best = (pg, s, n)
+        if best is not None:
+            out[key] = best
+    return out
+
+
 def _chapter_takes_exercises(root: Dict[str, Any], units: List[Dict[str, Any]]) -> bool:
     """本章笔记是否**收了习题**（体例信号之一；「别的节抄了题集」另由 floors 侧核）。
 
@@ -612,9 +761,13 @@ def vi_omitted_problem_blocks(root: Optional[Dict[str, Any]], units: List[Dict[s
          这条把那种整块漏写继续判成欠账。
     全库 56 书 / 744 章只读普查标定：闸 ⑬ floors 命中 23 章 / 86 条，报问题的 8 条
     全在本形态（豁免后 8 → 0，其余书一条不受影响）；闸 ⑫ 全书 15 条里本形态 5 条
-    （全在这本书），另 10 条（复变函数论 / 数学分析 / 黎曼几何）页窗**无**习题小标题
-    → 不豁免，逐字照报。正/负两侧判据测试见
-    ``lib/tests/test_problem_coverage.py``（TestPageFloorViExemption / TestCoverageViExemption）。
+    （全在这本书）。另 7 条（复变函数论 / 数学分析 / 黎曼几何，2026-10-28 复核）页窗
+    **有**小标题，但本函数的证据来自 ⑬ 的 floors，而 ``_PAGE_HEAD_RE`` 只认
+    ``Problems`` / ``Problem Set N.M`` 英文形 → 「第二章习题」「EXERCISES」都看不见
+    → floors 空 → 到不了豁免。该 7 条由 ``consolidated_head_chains`` 的宽词表**只走
+    免除方向**解决（见其上注释），⑬ 的窄口径保持不变。正/负两侧判据测试见
+    ``lib/tests/test_problem_coverage.py``（TestPageFloorViExemption /
+    TestCoverageViExemption / TestVIPageHeadEvidence / TestCoverageHeadChainExemption）。
     """
     if not root:
         return set()

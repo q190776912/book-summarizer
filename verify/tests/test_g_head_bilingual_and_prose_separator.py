@@ -27,13 +27,14 @@ for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
         break
 else:
     _ROOT = str(Path(__file__).resolve().parents[2])
-for _p in (_ROOT, os.path.join(_ROOT, "lib")):
+for _p in (_ROOT, os.path.join(_ROOT, "lib"), os.path.join(_ROOT, "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import lib.boot as _boot
 _boot.setup()
 
 from format_verify import check_g_quote_continuity, check_i_prose_separator
+from wrap_examples_bq import wrap_text
 
 
 def _run(text):
@@ -71,17 +72,50 @@ class TestSymmetricVerdicts(unittest.TestCase):
             self.assertEqual(len(i), 1,
                              f"{k}: item 块后接顶层散文必须两侧同口径报缺 `---`")
 
-    def test_half_wrapped_example_still_caught_both_languages(self):
-        # V-F 328「半包例子」：只有头行带 `>`，正文裸奔 → G 层判，I 层不重复报
-        cn = _run("> **例 7.4.1**：考虑系统\n\n"
+    def test_label_only_head_halfwrap_still_caught_both_languages(self):
+        # V-F 328「半包例子」：**整行只有标签**的头带 `>`、正文裸奔 → G 层判，I 层不重复报
+        cn = _run("> **例 7.4.1**\n\n"
                   "相邻两个质量弹簧系统的运动方程为 $M \\ddot x = K x$。\n")[0]
-        en = _run("> **Example 7.4.1**: consider the system\n\n"
+        en = _run("> **Example 7.4.1**\n\n"
                   "The equations of motion are $M \\ddot x = K x$.\n")[0]
         self.assertEqual(len(cn), 1)
         self.assertEqual(len(en), 1, "EN 半包例子旧版完全漏检，现须与 CN 同判")
-        self.assertEqual(_run("> **例 7.4.1**：考虑系统\n\n"
+        self.assertEqual(_run("> **例 7.4.1**\n\n"
                               "相邻方程为 $M \\ddot x = K x$。\n")[1], [],
                          "半包只报 G 层一条，I 层不得重复报缺 `---`")
+
+    def test_run_in_head_is_a_complete_block_not_halfwrap(self):
+        """run-in 头（标签后自带正文）= 块在该行已完整（Rosen 离散数学 8e 2026-10-28 根治）。
+
+        旧判据把 `body_seen` 定义成「头行**之后**有无 `>` 正文行」，run-in 头永远为假
+        → 报「半包」，而该报文的修法（`tools/wrap_examples_bq`、`verify --fix` G 层）
+        会把其后的顶层段落整片加 `>` 并进块内。全库标定：本判据现存 10 条报告
+        **10 条全是 run-in、0 条纯标签头**，逐条对印面（do Carmo 流形导论
+        Ch2_5 L35 / Ch2_7 L95 / Ch3_11 L142 / Ch3_14 L451、do Carmo 曲线曲面
+        Ch5_5 L422）均为「run-in 块 → 空行 → 另起散文」的合法形态。
+        """
+        for text in ("> **Example.** The Euclidean space $\\mathbb{R}^{n}$ is covered "
+                     "by a single chart.\n\nRecall that the Hausdorff condition is "
+                     "hereditary.\n",
+                     "> **证明**：设 $t \\in T_m$，则结论成立。\n\n下面回忆一个引理。\n"):
+            g, i = _run(text)
+            self.assertEqual(g, [], "run-in 头不得判半包（假阳，修法会吞并散文）")
+            self.assertEqual(i, [], "run-in 头单独成块时其后散文不强制 `---`（印面形态）")
+
+    def test_run_in_solution_inside_open_block_still_needs_hr(self):
+        """块内另有 `>` 正文行时，I 层按原口径追 `---`——run-in 解答头不得成为豁免。
+
+        Rosen 离散数学 8e ch1/0006 实测：`> **Example 2.**` 题面 + 列表 + `> **Solution.**`
+        run-in 解答，其后顶层散文在**已收官交付**里正是用 `---` 分隔；改判据前该处由
+        I 层正确报缺 `---`（同时被 G 层误报半包），两个相反修法并存才是 #11 吞并的根源。
+        """
+        text = ("> **Example 2.** Consider the following sentences.\n>\n"
+                "> 1. What time is it?\n> 2. Read this carefully.\n>\n"
+                "> **Solution.** Sentences 1 and 2 are not propositions.\n\n"
+                "Letters denote propositional variables.\n")
+        g, i = _run(text)
+        self.assertEqual(g, [], "G 层不再抢报（消掉与 I 层的修法冲突）")
+        self.assertEqual(len(i), 1, "缺 `---` 须由指向正确修法的 I 层单独报")
 
     def test_true_split_flagged_both_languages(self):
         cn = _run("> **例 3.1.1**：陈述。\n> 陈述续行。\n\n> 被劈开的第二段。\n")[0]
@@ -196,6 +230,34 @@ class TestOrdinalPrefixedHead(unittest.TestCase):
                     "prose after block\n")
         self.assertEqual(g, [])
         self.assertEqual(i, [], "Exercise 不在 item 关键词表内，不得开块")
+
+
+class TestWrapToolKeepsRunInBlockBounded(unittest.TestCase):
+    """`tools/wrap_examples_bq.wrap_text` 不得把 run-in 块之后的顶层散文加 `>` 吞进块内。
+
+    这条判据的假阳之所以是**破坏性**的，正因为 G 层的自动修法走 wrap_text：
+    Rosen 离散数学 8e ch1/0006 被吞进去的是人物小传段、`<div>` 图块与其后正文，
+    交付随即与印面分叉（`<div>` 在 blockquote 内还无法渲染）。
+    """
+
+    def test_run_in_head_does_not_swallow_following_prose(self):
+        text = ("<!-- u -->\n> **Example 2.** Consider the following sentences.\n>\n"
+                "> **Solution.** Sentences 1 and 2 are not propositions.\n\n"
+                "Letters denote propositional variables.\n\n"
+                "**Aristotle (384 B.C.E.-322 B.C.E.).** He was born in Stagirus.\n")
+        out, changed = wrap_text(text)
+        self.assertIn("\nLetters denote propositional variables.", out)
+        self.assertIn("\n**Aristotle", out)
+        self.assertFalse(any(l.startswith("> Letters") or l.startswith("> **Aristotle")
+                             for l in out.split("\n")), "run-in 块后的散文不得被加 `>` 吞并")
+
+    def test_label_only_head_still_folds_its_bare_body(self):
+        # 正向：真正的半包（整行只有标签）仍须把裸正文收进块——放宽不得丢掉这条能力
+        text = ("<!-- u -->\n> **Example 2.1**\n\n"
+                "The equations of motion are $M \\ddot x = K x$.\n")
+        out, changed = wrap_text(text)
+        self.assertIn("> The equations of motion", out)
+        self.assertEqual(changed, 1)
 
 
 if __name__ == "__main__":

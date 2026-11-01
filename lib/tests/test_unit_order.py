@@ -941,6 +941,46 @@ def test_non_unique_anchor_is_left_unlocated():
     assert _pos_of([body], md) == [None]
 
 
+def test_unique_whole_block_anchors_short_section_head():
+    """6–11 字的节头单元（`##§A.1`）整块在交付里唯一 → 必须归位。
+
+    旧口径下这条单元两头都不着：行锚点要凑够 12 字前缀（整块才 6 字）、条头兜底要
+    剥掉 `##` 后仍 ≥6 字（只剩 `§A.1` 4 字）。2026-10-30 全架普查 571 条「未定位」里
+    **311 条**是这一类——正文一字不差在交付里且只出现一次，却被报成像丢了内容。
+    """
+    import lib.unit_order as uo
+    head = u"##§A.1"
+    md = _delivered_md(u"上一章的正文内容", head + u"\n本节正文从这里开始", u"章末其它正文")
+    bodies = _bodies(head)
+    pos = md_unit_positions(bodies, md)
+    assert pos == [md.find(head)] and pos[0] is not None, pos
+    # 变异对照：摘掉整块锚点这条腿，同一输入必须回到「定位不到」——证明归位的是它，不是巧合
+    orig = uo._md_block_anchor
+    uo._md_block_anchor = lambda lines, m: None
+    try:
+        assert md_unit_positions(bodies, md) == [None]
+    finally:
+        uo._md_block_anchor = orig
+
+
+def test_repeated_whole_block_is_ambiguous_not_absent():
+    """「定位不到」按整块出现次数分两桶，出现 ≥2 次 ≠ 交付里没有这块内容。
+
+    歧义（内容在，位置不可唯一判定）与读不到（内容不在）对读者的含义相反，调用方靠
+    :func:`md_block_occurrences` 拿次数分桶；本函数只提供次数，不做裁决。
+    """
+    from lib.unit_order import md_block_occurrences
+    head = u"##§A.1"
+    md = _delivered_md(head + u"\n第一段正文", u"中间其它正文", head + u"\n第二段正文")
+    bodies = _bodies(head)
+    assert md_unit_positions(bodies, md) == [None], md
+    occ = md_block_occurrences(bodies, md)
+    assert occ == [2], occ                                   # 同形块两处 = 歧义
+    assert md_block_occurrences(_bodies(u"##§B.9交付里没有这块"), md) == [0]  # 0 次 = 真信号
+    # 空正文没有「整块」可比 → 记 0，但它是量不到（<6 字），不进这两桶（见 split_unmeasurable）
+    assert md_block_occurrences(_bodies(u""), md) == [0]
+
+
 def test_label_fallback_survives_edited_body():
     """交付做过同行机械替换（正文行对不上）时，粗体条头仍可作为唯一锚点。"""
     unit = ["**定理3.2**", "这一行在交付侧被改写过了"]
@@ -951,3 +991,151 @@ def test_label_fallback_survives_edited_body():
 
 def test_empty_md_never_anchors():
     assert md_unit_positions(_bodies("任意正文"), "") == [None]
+
+
+# ------------------------------------------------- 覆盖率分母：结构上量不到的单元
+def test_split_unmeasurable_keeps_locatable_units_in_denominator():
+    """空正文 / 整块正文短于条头下限 → 量不到（剔出分母）；够长的正文一律留在分母，
+    **哪怕它这次没定位上**（重复交付那条）——「可测而未测中」是必须看见的信号。"""
+    from lib.unit_order import _MD_MIN_LABEL_CHARS, split_unmeasurable
+    pool = u"甲乙丙丁戊己庚辛壬癸"
+    bodies = _bodies(
+        u"",                                     # 占位空单元（契约节点无正文可镜像）
+        pool[:_MD_MIN_LABEL_CHARS - 1],          # 短于条头下限的小节头（周民强 `（一）闭集` 形态）
+        u"足够长的一段单元正文内容",
+        u"这段正文在交付里被贴了两遍")            # 够长但不唯一 = 可测而未测中
+    meas, um = split_unmeasurable(bodies, [0, 1, 2, 3])
+    assert um == [0, 1], (meas, um)
+    assert meas == [2, 3], (meas, um)
+
+
+def test_label_floor_and_bucket_threshold_agree():
+    """分母剔除线必须由**锚点规则的下限**决定，不能各写一个数：
+    差 1 字 → 两条规则都吃不到（`md_unit_positions` 给 None）且判为量不到；
+    正好到线且唯一 → 能定位且留在分母。谁把兜底下限写成与分母剔除线不一致的另一个数，这条就红。
+    """
+    from lib.unit_order import _MD_MIN_LABEL_CHARS, split_unmeasurable
+    pool = u"甲乙丙丁戊己庚辛壬癸"
+    exact = pool[:_MD_MIN_LABEL_CHARS]           # 到线：条头兜底够，行锚点仍不够 12 字
+    short = pool[:_MD_MIN_LABEL_CHARS - 1]       # 差 1 字：两条锚点规则都不够
+    md = _delivered_md(exact + u"后面跟着的其它正文", u"另一段单元正文内容")
+    bodies = _bodies(short, exact)
+    pos = md_unit_positions(bodies, md)
+    meas, um = split_unmeasurable(bodies, [0, 1])
+    assert (pos[0] is None) == (0 in um), (pos, meas, um)
+    assert (pos[1] is not None) == (1 in meas), (pos, meas, um)
+    assert um == [0] and meas == [1], (pos, meas, um)
+
+
+# --------------------------------------------------- U 层 stats 装配（分母真的换了没）
+def _u_layer_mod():
+    """按**绝对路径**加载 U 层脚本。
+
+    🔴 不能用裸名 `import unit_order`：`lib/unit_order.py` 与
+    `verify/unit_order/script/unit_order.py` 同裸名，两者目录都在 boot 注入的 sys.path 里，
+    解析结果取决于路径顺序——测试会静默测错模块（测到纯函数那份，装配侧零覆盖）。
+    """
+    import importlib.util
+    import os
+    path = os.path.join(b.root(), "verify", "unit_order", "script", "unit_order.py")
+    spec = importlib.util.spec_from_file_location("_u_layer_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _tmp_book(tmp, recs, md_parts):
+    """最小 `_extract` 树：`book_structure/ch1.json` 契约 + `units/ch1/` 单元与 manifest。
+
+    ``recs`` = [(id, type, key, 正文, merge 记号 or None)]，``md_parts`` = 交付文本片段。
+    """
+    import json
+    import os
+    from lib.unit_order import norm_text
+    bs = os.path.join(tmp, "book_structure")
+    ud = os.path.join(bs, "units", "ch1")
+    os.makedirs(ud)
+    units = []
+    for (uid, utype, key, body, merge) in recs:
+        fn = "%04d_%s_%s.md" % (uid, utype, key)
+        with open(os.path.join(ud, fn), "w", encoding="utf-8") as f:
+            f.write(body)
+        rec = {"id": uid, "file": fn, "type": utype, "key": key, "hash": "0" * 40}
+        if merge is False:
+            rec["merge"] = False
+        units.append(rec)
+    with open(os.path.join(ud, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump({"language": "cn", "units": units}, f, ensure_ascii=False, indent=1)
+    nodes = [{"key": "1", "type": "chapter", "name": "第一章", "page_start": 10,
+              "page_end": 20, "sub_sec": []}]
+    for (uid, utype, key, _body, _m) in recs:
+        nodes[0]["sub_sec"].append({"key": key, "type": "item", "name": key,
+                                    "page_start": 10 + uid, "page_end": 10 + uid})
+    with open(os.path.join(bs, "ch1.json"), "w", encoding="utf-8") as f:
+        json.dump(nodes[0], f, ensure_ascii=False, indent=1)
+    return tmp, "\n\n".join(md_parts), norm_text("\n\n".join(md_parts))
+
+
+def test_layer_stats_move_short_units_out_of_denominator_but_still_list_them():
+    """空正文 / 短正文不进分母（覆盖率不再被它们拖红），**但必须照列**；
+    正文够长却没出现在交付里的那条**仍**算未定位——证明这不是「静音豁免」。"""
+    import json
+    import os
+    import tempfile as _tf
+    mod = _u_layer_mod()
+    tmp = _tf.mkdtemp()
+    try:
+        present = u"这一段正文足够长并且确实出现在交付文本里"
+        absent = u"这一段正文足够长可是交付文本里没有它"
+        recs = [(1, u"section", u"1.1", present, None),
+                (2, u"description", u"D1", u"", None),        # 占位空单元
+                (3, u"description", u"D2", u"（一）闭", None),  # 短于条头下限
+                (4, u"item", u"1.2", absent, None),
+                (5, u"item", u"1.3", u"习题块整块省略不进交付", False)]
+        ext, _raw, md = _tmp_book(tmp, recs, [present, u"其它单元的正文内容"])
+        with open(os.path.join(ext, "book_structure", "ch1.json"), encoding="utf-8") as f:
+            contract = json.load(f)
+        probs, st = mod._delivered_order_text(ext, "1", md, "cn", contract)
+        assert st["units"] == 5, st
+        # 分母 = 进交付的 4 条再剔掉 2 条量不到 = 2；merge:false 那条从一开始就不算
+        assert st["expected"] == 2 and st["located"] == 1, st
+        assert st["unmeasurable"] == 2, st
+        assert st["um_keys"] == [u"description«D1»", u"description«D2»"], st
+        assert st["unlocated"] == [u"item«1.2»"], st              # 真没交付的长正文照样报
+        assert st["ambiguous"] == 0 and st["amb_keys"] == [], st   # 出现 0 次不算歧义
+        assert st["coverage"] == 50.0, st
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_layer_splits_repeated_blocks_from_absent_ones():
+    """同一份交付文本里的残差必须按「整块出现几次」分成两桶各自有名有姓：
+    ≥2 次 → `ambiguous`/`amb_keys`（内容在，位置不可判，本闸不判序）；
+    0 次 → `unlocated`（交付读不到这块正文 = 须取证的真信号）。
+    混成一桶 = 让「工具不敢猜位置」冒充「交付丢内容」，那 189 条全架实测就是被这个混报埋掉的。
+    """
+    import json
+    import os
+    import tempfile as _tf
+    mod = _u_layer_mod()
+    tmp = _tf.mkdtemp()
+    try:
+        dup = u"这一段正文足够长，交付里把它贴了两遍"
+        absent = u"这一段正文足够长，交付里一个字都没有"
+        recs = [(1, u"item", u"1.1", dup, None),
+                (2, u"item", u"1.2", dup, None),      # 与 1.1 同形（每节同名题集块那一类）
+                (3, u"item", u"1.3", absent, None)]
+        ext, _raw, md = _tmp_book(tmp, recs, [dup, u"中间其它正文内容", dup])
+        with open(os.path.join(ext, "book_structure", "ch1.json"), encoding="utf-8") as f:
+            contract = json.load(f)
+        probs, st = mod._delivered_order_text(ext, "1", md, "cn", contract)
+        assert st["expected"] == 3 and st["located"] == 0, st
+        assert st["ambiguous"] == 2, st
+        assert st["amb_keys"] == [u"item«1.1»", u"item«1.2»"], st
+        assert st["unlocated"] == [u"item«1.3»"], st
+        # 两桶都不得被算进「已定位」：位置不可判就是不判序，宁可不测
+        assert st["coverage"] == 0.0, st
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)

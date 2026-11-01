@@ -91,3 +91,50 @@ def test_bold_label_adjacent_to_inline_math_survives():
     r"""粗体标签紧贴行内数学（`**推论 4.13（$X^*$ 可分）**`）：标签号在 `$` 之外，仍须提取。"""
     body = "**推论 4.13.** 若 $X^*$ 可分则 $X$ 可分，见 $X^{**}$。\n"
     assert _labels(body) == ["4.13"], _labels(body)
+
+
+# ── 条头英文括注里的字面单星（2026-10-28 measure-integration ch10 实测 3 处假 FAIL）──
+
+def test_english_gloss_with_literal_star_is_not_invisible():
+    r"""真实样本：`**10.11 $T^*$ 是有界线性映射 (T* is a bounded linear map)**`。
+    括注里的 `T*` 是字面单星，旧字符类 `[^*\n]+` 一遇 `*` 即断 → 译侧提不出条目号，
+    与源侧 `['10.11']` 分叉成假 FAIL。数学掩码后两侧都必须给出 10.11。"""
+    en = r"**10.11 $T^*$ is a bounded linear map**: Suppose $V$ and $W$ are spaces.\n"
+    cn = (r"**10.11 $T^*$ 是有界线性映射 (T* is a bounded linear map)**："
+          "设 $V$ 与 $W$ 是空间。\n")
+    assert _labels(en) == ["10.11"], _labels(en)
+    assert _labels(cn) == ["10.11"], _labels(cn)
+
+
+def test_gloss_with_double_star_operator_is_extracted():
+    r"""`**10.96 $T^* T - \|T\|^2 I$ 不可逆 (T*T - IT||²I is not invertible)**`：
+    括注含 `T*T`（两个单星，彼此不相邻），仍须抓到 10.96。"""
+    cn = r"**10.96 $T^* T - \|T\|^2 I$ 不可逆 (T*T - IT||²I is not invertible)**：若 $T$ 有界。\n"
+    assert _labels(cn) == ["10.96"], _labels(cn)
+
+
+def test_single_star_does_not_merge_two_real_labels():
+    """负向：允许单星**不得**把两个真粗体段并成一个——`**` 仍是硬边界。
+    星号写在**散文**里（不在数学内），才会真正走到 `_BOLD_RE` 上；若跨度能吞掉
+    `**`，第一条编号就会被吞、中间散文编号（9.9）会被提成伪号。"""
+    body = ("**定理 3.4.** 设 a * b 给定，参见 9.9。\n"
+            "\n"
+            "**推论 3.5.** 由 a * b 可得。\n")
+    assert _labels(body) == ["3.4", "3.5"], _labels(body)
+
+
+def test_missing_translation_label_is_still_a_real_gap():
+    """负向：本修只让「写了但提不出」的标签现形；译侧**根本没写**条目号时仍须报缺，
+    否则判据 5 被放宽成恒真。"""
+    en = r"**10.73 $T$ compact $\iff$ $T^*$ compact**: Suppose $T$.\n"
+    cn = "**紧算子伴随也紧**：设 $T$ 是紧算子。\n"
+    assert _labels(en) == ["10.73"], _labels(en)
+    assert _labels(cn) == [], _labels(cn)
+
+
+def test_prose_star_between_sentences_creates_no_phantom_number():
+    """负向：散文里的孤立星号（未被数学包住）不得与别处星号凑成假标签。"""
+    body = ("**习题 5.2.** 证明 $f * g = g * f$，其中 $f$ 与 $g$ 如 5.9 所设。\n"
+            "\n"
+            "注：此处 * 表示卷积，参见 5.9 节的记号。\n")
+    assert _labels(body) == ["5.2"], _labels(body)

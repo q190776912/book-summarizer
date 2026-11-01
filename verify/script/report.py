@@ -650,11 +650,27 @@ def print_result(r):
         # 覆盖率是这道闸的**可信度**，必须与问题同屏：定位不到 = 跳过 = 不测，
         # 所以 coverage 低时「没有问题」根本不能作为证据。
         _un = md_st.get('unlocated') or []
+        _um = md_st.get('um_keys') or []
+        _amb = md_st.get('amb_keys') or []
         print(f"\nU-LAYER DELIVERED ORDER COVERAGE: 已定位 {md_st.get('located')}/"
               f"{md_st.get('expected')}（{md_st.get('coverage')}%，单元侧 = "
               f"{md_st.get('units_dir')}）" + ("" if not _un else
-              f"；未定位 {len(_un)} 条（前 {min(len(_un), 12)} 条：{', '.join(_un[:12])}"
-              + ("，全量见 verify_detail 旁路" if len(_un) > 12 else "") + "）"))
+              f"；未定位 {len(_un)} 条（整块正文在交付里出现 0 次 = 单元与交付脱钩，须取证；"
+              f"前 {min(len(_un), 12)} 条：{', '.join(_un[:12])}"
+              + ("，全量见 verify_detail 旁路" if len(_un) > 12 else "") + "）")
+              # 「量不到」= 整块正文 <6 字（空正文占位 / 极短节头），三条锚点规则结构上都
+              # 吃不到它（lib/unit_order.split_unmeasurable）。已从分母剔出，但**必须同屏**：
+              # 只报 coverage 100% 而不说这几条没测，等于把「工具量不到」静音成「交付没问题」。
+              + ("" if not _um else
+              f"；另有量不到 {md_st.get('unmeasurable')} 条（正文 <6 字，占位/短头，不计入分母；"
+              f"前 {min(len(_um), 12)} 条：{', '.join(_um[:12])}"
+              + ("，全量见 verify_detail 旁路" if len(_um) > 12 else "") + "）")
+              # 「歧义」= 整块正文在交付里出现 ≥2 次：内容确实在，但位置不可唯一判定，
+              # 本闸对它不判序。与「读不到」分开报，否则「工具不敢猜位置」会冒充「交付丢内容」。
+              + ("" if not _amb else
+              f"；位置歧义 {md_st.get('ambiguous')} 条（整块正文在交付里出现 ≥2 次，不判序；"
+              f"前 {min(len(_amb), 12)} 条：{', '.join(_amb[:12])}"
+              + ("，全量见 verify_detail 旁路" if len(_amb) > 12 else "") + "）"))
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。

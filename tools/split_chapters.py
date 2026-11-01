@@ -124,7 +124,8 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
     force=True 时忽略该文件自身的字符数检查（用于章级「任一语言超标 →
     两种语言都拆」的配对规则；force=False 时若自身未超阈值则跳过）。
     """
-    text = open(path, encoding='utf-8').read()
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
     if not force and len(text) <= threshold:
         return []
 
@@ -239,7 +240,8 @@ def split_one_file(path, threshold, num, lang, dry_run=False, force=False):
             diverged.append(name)
             continue
         try:
-            old = open(os.path.join(book_dir, name), encoding='utf-8').read()
+            with open(os.path.join(book_dir, name), encoding='utf-8') as f:
+                old = f.read()
         except OSError:
             continue
         (superseded if old == new else diverged).append(name)

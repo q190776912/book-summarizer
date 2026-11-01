@@ -51,7 +51,7 @@ from check_section_attribution import (        # 条目↔节归属闸（锚点�
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2, ORDINAL_VAKIL,
-    LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN,
+    LABEL_TO_TYPE, LABEL_TO_TYPE_LC, TYPE_TO_LABEL_EN, TYPE_TO_LABEL_CN,
     _LABEL_CANON, _canon_label, _load_ignore_file,
 )
 
@@ -1019,9 +1019,12 @@ def synthetic_item_md(tree):
 # insert_item 的定位循环 `if _ct not in _ITEM_TYPES: continue` 会跳过猜想节点，
 # 回填条目越过在位的邻近大号、插错阅读序（定理7.31 落到 猜想7.32 之后 →
 # B 层「顺序错乱」假象）。凡 TYPE_TO_LABEL_CN 里的条目类型都须在列。
-_ITEM_TYPES = {"definition", "theorem", "lemma", "corollary",
-               "proposition", "example", "remark", "conjecture",
-               "assertion", "assumption", "condition", "axiom", "property"}
+# 🔴 2026-11-01 根治漂移：旧实现手抄一份类型名，已两次落后于 TYPE_TO_LABEL_CN
+# （缺 algorithm，新增 conclusion 时又缺）——郑大钟《线性系统理论》结论/算法族即
+# 因缺列而在 insert_item 定位时被跳过。改为**从 TYPE_TO_LABEL_CN 派生**，只排除
+# 非条目/习题/兜底类（exercise/problem/uncat），今后新增条目类型自动在列、零漂移。
+_ITEM_TYPES = {t for t in TYPE_TO_LABEL_CN
+               if t not in ("exercise", "problem", "uncat")}
 
 
 def _contract_item_num_tuples(tree):
@@ -1031,13 +1034,18 @@ def _contract_item_num_tuples(tree):
     ``Theorem 2.25`` 的形态与 ``§2.25`` 完全同构，OCR 把定理号误排到行首时
     会被 section 扫描当成节头）。同一 (章,号) 已作为条目落地进契约，则它
     绝不可能是缺失节——真实缺节不会同时是一个已捕获条目，故剔除属纠错而非掩盖。
+
+    🔴 练习/问题节点同样计入否决集（与 B 层 `_is_exercise_gap` 同判据）：章末习题号
+    ``6.22`` / ``8.14``（郑大钟《线性系统理论》ch6 p397 / ch8 p490 实测）OCR 排到行首时
+    形态与 ``§6.22`` 完全同构，D 层会把它读成「缺失尾节」，而契约里该 (章,号) 早已作为
+    ``exercise`` 落地——真实缺节不会同时是一条已捕获习题，故须一并否决，否则假红阻断闸门。
     """
     out = set()
 
     def _walk(n):
         t = getattr(n, "type", None) if not isinstance(n, dict) else n.get("type")
         key = getattr(n, "key", None) if not isinstance(n, dict) else n.get("key")
-        if t in _ITEM_TYPES and key:
+        if (t in _ITEM_TYPES or t in ("exercise", "problem")) and key:
             ds = re.findall(r"\d+", str(key))
             if ds:
                 out.add(tuple(int(x) for x in ds))
@@ -1080,6 +1088,73 @@ def _foreign_sections(bs, ch):
             if re.fullmatch(r"\d+", k):
                 foreign.add(int(k))
     return foreign
+
+
+_CANON_OWNER_CACHE = {}
+
+
+def _chapter_canon_owners(bs):
+    """全书契约条目裸键（小写）→ {承载该键的章 key}。
+
+    「他章已登记」交叉引用降级的证据源（Fraleigh《A Course in Abstract Algebra》
+    实测 2026-10-29）：该书条号恒为 ``标签 章.序``（``Definition 8.1`` 属 ch8），
+    按**页区间**扫描时章界重叠/前后文回指都会把邻章真身扫进本章（ch14 p150 的
+    ``Definition 1.1`` 属 ch1、ch13 p150 的 ``Definition 14.3`` 属 ch14）。这些键
+    已由归属章契约承载，本章交付里没有它是**正确**的；判 readable 会逼出重复
+    编号的回填。`_foreign_sections` 修不了它：那套判据要求节键是裸数字，而本书
+    节键是点分形（``14.1``），foreign 集恒空。
+
+    按 `bs.root` 实例缓存（同一进程逐章复用），键形与 `_contract_item_keys` 同源。
+    """
+    root = getattr(bs, "root", None) if bs is not None else None
+    if root is None:
+        return {}
+    hit = _CANON_OWNER_CACHE.get(id(root))
+    if hit is not None and hit[0] is root:
+        return hit[1]
+    owners = {}
+
+    def walk(n, owner):
+        for c in getattr(n, "sub_sec", None) or []:
+            ck = str(getattr(c, "key", "") or "").strip()
+            if getattr(c, "type", None) == "chapter":
+                owner = ck
+            if getattr(c, "type", None) not in ("chapter", "section",
+                                                "description", "proof") and ck:
+                owners.setdefault(ck.lower(), set()).add(owner)
+            walk(c, owner)
+
+    walk(root, "")
+    _CANON_OWNER_CACHE[id(root)] = (root, owners)
+    return owners
+
+
+def _cross_chapter_registered(c, it, ch, owners):
+    """点分编号书交叉引用判据：返回承载该 canon 的**归属章 key**，非交叉引用返回 None。
+
+    成立条件（三重，防把真实漏项洗成 reference）：
+      ① canon 是全 int 的两段以上元组（点分编号形），且首段 != 本章 key —— 按本书
+         体例，该号**按定义**属于首段那一章；
+      ② 归属章（key == str(c[0])）的契约**确实**登记了同一裸键 —— 真身在册，本章
+         交付没有它才正确；首段那章也丢了它 → holders 不含首段，照旧拦闸。
+    裸键比对用三种书写形（规范中文标签 + 点分号 / 扫描项原 key 去空格 / 原标签
+    + 点分号），因契约侧与源侧的标签语言、空格位置随书的 `language` 与 OCR 形而变。
+    """
+    if not isinstance(c, tuple) or len(c) < 2 or not owners:
+        return None
+    if not all(isinstance(x, int) for x in c):
+        return None
+    holder = str(c[0]).strip()
+    if holder == str(ch).strip():
+        return None
+    dotted = ".".join(str(x) for x in c)
+    cands = {str(_canon_label(str(it.get("label")))) + dotted,
+             str(it.get("key") or "").replace(" ", "").lower(),
+             str(it.get("label") or "").strip().lower() + dotted}
+    for k in cands:
+        if holder in owners.get(k, set()):
+            return holder
+    return None
 
 
 def step2_sections(ch, start, end, ext, cfg, tree):
@@ -1260,6 +1335,41 @@ def _prose_predicate_ref(entry, tree, canon):
     return lead
 
 
+def ignore_hit_item(ignore_normkeys, item):
+    """源侧扫描项 `item` 是否命中 agent 已核实的 ignore 键集合（已 normkey 化）。
+
+    两种登记形：
+      * **裸键** `"12.8-3"` —— 旧行为，恒命中该键的**所有**标签。
+      * **标签限定** `"Theorem 12.8-3"` / `"定理12.8-3"` —— 只豁免该标签下的同号项。
+
+    为什么要标签限定形：三级**标签前置**书的数字键不含标签，同一数字可被多个标签
+    共用。Strogatz ch12 实测（2026-10-29）：印刷 §12.8 把 `Proposition 12.8.3` 排了
+    **两次**（物理 p452/p454，都是真条目），而 p459 段首
+    `Theorem 12.8.3 gives a practical way of constructing a picture of A.` 是全书不存在
+    的定理号之**散文回指**（印本自身笔误，当作 Theorem 12.8.2）——两者扫描键同为
+    `12.8-3`。只有裸键形时，想豁免那条回指就必须把两条真实条目一并从源侧校验里抹掉
+    （= 「在 ignore 登记假缺号会抹掉真实条目」反模式）；散文谓语判据的条件③按设计也
+    拦着它（契约确有 theorem 12.8-1/2）。裸键分支不变 → 既有书零回归。
+    """
+    if not ignore_normkeys:
+        return False
+    from key_parse import normkey
+    k = normkey(str(item.get("key", "")))
+    if k in ignore_normkeys:
+        return True
+    lab = str(item.get("label") or "").strip()
+    if not lab or lab == "uncat":
+        return False
+    cands = {"%s %s" % (lab, k), "%s%s" % (lab, k)}
+    try:
+        cl = _canon_label(lab)
+        if cl:
+            cands |= {"%s %s" % (cl, k), "%s%s" % (cl, k)}
+    except Exception:
+        pass
+    return any(normkey(c) in ignore_normkeys for c in cands)
+
+
 def _drop_exercise_region_items(ch, start, end, ext, cfg, items):
     """剔除「章末集中习题区」内的源条目候选（判据 = 产出侧 `build_structure` 3a-2 同源）。
 
@@ -1319,6 +1429,11 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
             and cfg.primary_type == ORDINAL_TWO_LEVEL and cfg.language == "en"):
         _foreign_secs = _foreign_sections(bs, ch)
 
+    # 「他章已登记」交叉引用证据表（裸键 -> 归属章 key，按 bs.root 缓存）。
+    # 不加类型守卫：判据自身要求「首段是章号位 + 归属章契约确实持有该键」，
+    # 对单级/三级/中文书只是恒不成立的额外一次查表。
+    _canon_owners = _chapter_canon_owners(bs)
+
     raw_items = [it for it in scan_raw_items(ext, ch, start, end, cfg.primary_type, cfg.chapter_first, cfg.language,
                                              groups=getattr(cfg, "ordinal", None),
                                              two_level_items=getattr(cfg, "two_level_items", False))
@@ -1336,8 +1451,7 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
     if _ign:
         try:
             _ignk = {_normkey(str(k)) for k in _ign}
-            raw_items = [it for it in raw_items
-                         if _normkey(str(it.get('key', ''))) not in _ignk]
+            raw_items = [it for it in raw_items if not ignore_hit_item(_ignk, it)]
         except Exception:
             pass
 
@@ -1518,6 +1632,22 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                 "has_label": it.get("has_label", False),
                 "status": "reference",
                 "note": "cross-chapter reference (section %d owned by another chapter)" % c[0],
+            })
+            continue
+        # 🔴 「他章已登记」交叉引用降级（Fraleigh 实测 2026-10-29，11 处）：该扫描项的
+        # 规范键已由**编号首段那一章**的契约承载（点分编号书 ``Definition 8.1`` 属 ch8，
+        # 本页区间只是重叠/回指带出）。与 `_foreign_secs` 那条同判 reference、不回填、
+        # 不拦闸，但证据形不同：本条按契约实际登记判，故节键为点分形（``14.1``）的书
+        # 也生效——那类书 `_foreign_sections`（只认裸数字节键）恒返回空集。
+        _xreg = _cross_chapter_registered(c, it, ch, _canon_owners)
+        if _xreg:
+            missing_items.append({
+                "key": it["key"], "label": it["label"], "page": it["page"],
+                "snippet": it["snippet"], "canon": list(c),
+                "has_label": it.get("has_label", False),
+                "status": "reference",
+                "note": "cross-chapter reference (chapter %s contract already "
+                        "registers this canon)" % _xreg,
             })
             continue
         if _shared and c in canon_labels:

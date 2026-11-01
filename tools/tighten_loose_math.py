@@ -9,15 +9,22 @@ r"""tools/tighten_loose_math.py — 松散 OCR 数学形态的**机械档**归�
 🔴 分档：只反转 `LOOSE_MATH_MECHANICAL` 两档空白——①「标记/命令与开括号之间」
 （`X _ { t }`→`X_{ t }`、`\left (`→`\left(`）；②括号**内侧**与 `} {` 接缝
 （`X_{ t }`→`X_{t}`、`\frac{ a }{ b }`→`\frac{a}{b}`）。两档都只删紧邻括号的空白，
-渲染中性、可逆。`LOOSE_MATH_SEMANTIC`（数字逐位摊开 `1 0 6` / `3 . 1 . 1`）**不改**：
+渲染中性、可逆。`LOOSE_MATH_SEMANTIC`（数字逐位摊开 `1 0 6` / `3 . 1 . 1`）默认**不改**：
 焊起来遇到「OCR 真漏了一位/小数点」就是把错值钉死，须写手读印面重写。
 text 模式参数（`\text{ a s }`）内侧空格是内容，同样不改。工具把残留逐条打印并非零退出。
+
+🟡 第三档 `--collapse-digits`（opt-in，默认关）：收拢**数字面内**的空白
+（`0 . 5 7 7 2 1 5`→`0.577215`，`1 0 5 , 1 2 0`→`105, 120`——逗号后的一个空格保留）。
+立论依据是数学模式里普通空格**不产生排版**，故与机械档同为渲染中性；它不补位、不改字符，
+所以「OCR 漏了一位」在这条通道里不会被掩盖成另一个值（漏位仍是漏位，只是不再摊开）。
+仍然保守：字母/控制字之间的空白（`\in T`）不并、`\text{…}` 与 `\tag{…}` 内不并、`\ ` 不并；
+证明守卫 `audit(..., digits=True)` 只额外放行两侧都落在 `0-9 . ,` 的空白段。
 
 已收官书的返修姿势（与规则「禁重 merge」一致）：**单元与交付 md 同一趟同行替换**，
 不重拼、不动契约/清单；单元正文变了 → 另跑 `tools/resync_src_hash.py` 重同步 src_hash。
 
 用法：
-    python tools/tighten_loose_math.py <文件或目录>... [--commit] [--show N]
+    python tools/tighten_loose_math.py <文件或目录>... [--commit] [--show N] [--collapse-digits]
 目录 = 递归收 `*.md`。默认 dry-run（打印每个文件的改动处数与样例），`--commit` 才写盘。
 退出码：有机械档残留（= 反转没吃干净，属本工具缺陷）或存在语义档待人工 → 1。
 """
@@ -44,8 +51,12 @@ _SAFE_R = "{[()}])_^|"
 _SAFE_L = "{[(}])_^|"
 
 
-def only_safe_whitespace_deletions(a, b):
-    """b 由 a **只删空白**得到、且每段被删空白邻侧合规 → True；否则 False。"""
+def only_safe_whitespace_deletions(a, b, digits=False):
+    """b 由 a **只删空白**得到、且每段被删空白邻侧合规 → True；否则 False。
+
+    `digits=True` 时额外放行**数字面内**的空白（两侧都落在 `0-9 . ,`）——数学模式里这些
+    空白不产生排版效果，「摊开→收拢」渲染逐字不变；字母/控制字之间的空白照旧一律拒。
+    """
     i = j = 0
     while i < len(a) and j < len(b):
         if a[i] == b[j]:
@@ -61,13 +72,17 @@ def only_safe_whitespace_deletions(a, b):
         right = a[k] if k < len(a) else ""
         if left == "\\":
             return False                       # `\ ` 是内容（转义空格），不是摊开
-        if not (right in _SAFE_R or left in _SAFE_L):
+        ok = right in _SAFE_R or left in _SAFE_L
+        if not ok and digits:
+            ok = ((left in "0123456789.," and right in "0123456789")
+                  or (left in "0123456789" and right in "0123456789.,"))
+        if not ok:
             return False
         i = k
     return a[i:].strip() == "" and b[j:].strip() == ""
 
 
-def audit(before, after):
+def audit(before, after, digits=False):
     """整文件级机械证明 → 问题列表（空 = 通过）。"""
     if len(before) != len(after):
         return ["行数变了"]
@@ -76,6 +91,10 @@ def audit(before, after):
         probs.append("`$` 总数变了")
     nb = sum(1 for l in before if l.strip() == "---")
     na = sum(1 for l in after if l.strip() == "---")
+    nb2 = sum(1 for l in before if l.startswith(">"))
+    na2 = sum(1 for l in after if l.startswith(">"))
+    if nb2 != na2:
+        probs.append("行首 `>` 数量变了 %d→%d" % (nb2, na2))
     if nb != na:
         probs.append("`---` 行数变了 %d→%d" % (nb, na))
     for i, (a, b) in enumerate(zip(before, after), start=1):
@@ -85,8 +104,8 @@ def audit(before, after):
             probs.append("L%d 首行 marker 被改" % i)
         elif re.sub(r"\s", "", a) != re.sub(r"\s", "", b):
             probs.append("L%d 非纯删空白的改动" % i)
-        elif not only_safe_whitespace_deletions(a, b):
-            probs.append("L%d 删了括号/上下标之外的空白" % i)
+        elif not only_safe_whitespace_deletions(a, b, digits):
+            probs.append("L%d 删了括号/上下标/数字面之外的空白" % i)
         if len(probs) >= 5:
             break
     return probs
@@ -105,15 +124,15 @@ def md_files(paths):
     return out
 
 
-def tighten_file(path, commit, show):
+def tighten_file(path, commit, show, digits=False):
     with open(path, encoding="utf-8", newline="") as f:
         raw = f.read()
     marker = raw.split("\n", 1)[0]
-    new, changed, mech_left, sem_left = cq.tighten_math_text(raw)
+    new, changed, mech_left, sem_left = cq.tighten_math_text(raw, collapse_digits=digits)
     if marker.startswith("<!--") and new.split("\n", 1)[0] != marker:
         # 结构性首行（单元 marker）必须逐字不动——它与本侧 manifest 记录逐字对账。
         raise SystemExit("[tighten_loose_math] 🔴 首行 marker 被改动，拒绝写盘：%s" % path)
-    probs = audit(raw.split("\n"), new.split("\n"))
+    probs = audit(raw.split("\n"), new.split("\n"), digits=digits)
     if probs:
         print("!! %s：机械证明不过，拒绝写盘 %s" % (path, probs))
         return changed, mech_left, sem_left, False, True
@@ -139,6 +158,9 @@ def main(argv=None):
     ap.add_argument("paths", nargs="+")
     ap.add_argument("--commit", action="store_true", help="写盘（默认 dry-run）")
     ap.add_argument("--show", type=int, default=0, help="每个文件打印前 N 条 before/after")
+    ap.add_argument("--collapse-digits", action="store_true",
+                    help="追加第三档：收拢数学片段内逐位摊开的数字面（只删数字面内的空白，"
+                         "渲染中性；默认关，残留的真语义歧义仍交人工）")
     a = ap.parse_args(argv)
     files = md_files(a.paths)
     if not files:
@@ -147,7 +169,7 @@ def main(argv=None):
     tot_ch = tot_mech = tot_sem = n_written = n_refused = 0
     sem_spots = []
     for p in files:
-        changed, mech, sem, wrote, refused = tighten_file(p, a.commit, a.show)
+        changed, mech, sem, wrote, refused = tighten_file(p, a.commit, a.show, digits=a.collapse_digits)
         tot_ch += changed
         tot_mech += mech
         tot_sem += sem
@@ -160,10 +182,12 @@ def main(argv=None):
                   % (os.path.basename(p)[:68], changed,
                      " 已写盘" if wrote else "",
                      "  语义档 %d 处待人工" % sem if sem else ""))
-    print("\n[tighten_loose_math] %s：%d 文件 / 改动 %d 处 / 写盘 %d 文件；"
+    print("\n[tighten_loose_math] %s%s：%d 文件 / 改动 %d 处 / 写盘 %d 文件；"
           "机械档残留 %d（须为 0）；拒绝落盘 %d 文件（须为 0）；"
           "语义档 %d 处（须人工读印面重写）"
-          % ("已提交" if a.commit else "dry-run", len(files), tot_ch, n_written,
+          % ("已提交" if a.commit else "dry-run",
+             " +数字收拢档" if a.collapse_digits else "",
+             len(files), tot_ch, n_written,
              tot_mech, n_refused, tot_sem))
     for p in sem_spots[:10]:
         print("   语义档：%s" % p)

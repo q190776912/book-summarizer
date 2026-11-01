@@ -275,5 +275,121 @@ class SupplementChapterTest(unittest.TestCase):
         self.assertEqual(tree["sub_sec"][0]["name"], "S.2")
 
 
+class TrailingSubscriptDigitTest(unittest.TestCase):
+    """⑤ 腿的「保尾数」通道（Fraleigh《AFCAA》ch9/9.10 等 6 站实测）。
+
+    印面节题 `9.10 Example: Order of (8, 4, 10) in Z_12 x Z_60 x Z_24`：单元 H2 写 KaTeX
+    `$\\mathbb{Z}_{12} \\times \\mathbb{Z}_{60} \\times \\mathbb{Z}_{24}$`（收尾 `$`），
+    而本工具硬禁 `--name` 含 `$`/`\\` ⇒ 账目面只能写裸文本 `… Z24`（收尾是数字）。
+    `clean_title` 的 `_TRAIL_PAGE` 在**比对之前**运行，把裸文本侧的 `24` 当页码残渣剥掉，
+    `$` 侧却因收尾非数字而留住 → 同一印面两侧永不同形，6 个站点全卡在 MISMATCH。
+
+    修法＝**判据的第二通道**（`norm_title(..., keep_trailing_digits=True)` 只在两侧保住
+    尾数后逐位相等时判同形），闸 ⑰ 与本工具的⑤腿共用同一条实现；`_TRAIL_PAGE` 本体与
+    展示形 `clean_title` 一字节不动，真页码残渣与真错数字仍各自被抓住。
+    """
+
+    H2_BB = ("## §2.3 Order of $(8, 4, 10)$ in "
+             "$\\mathbb{Z}_{12} \\times \\mathbb{Z}_{60} \\times \\mathbb{Z}_{24}$")
+    NAME_BB = "2.3 Order of (8, 4, 10) in Z12 × Z60 × Z24"
+    OLD_TRUNC = "2.3 Order of (8, 4, 10) in Z"
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.E = self._td.name
+        self.bs = os.path.join(self.E, "book_structure")
+        self.u = os.path.join(self.bs, "units", "ch2")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _mkbb(self, h2, contract_name, manifest_name=None):
+        _mk(self.E, h2=h2, contract_name=contract_name,
+            manifest_name=contract_name if manifest_name is None else manifest_name)
+
+    def _ledger(self):
+        p = os.path.join(self.E, "_section_name_fixes.jsonl")
+        return json.loads(io.open(p, encoding="utf-8").read().strip().split("\n")[-1])
+
+    # ── 正向：黑板粗体下标数字节题修得动，且台账能区分通道 ──────────────
+    def test_blackboard_bold_trailing_digit_is_applied(self):
+        self._mkbb(self.H2_BB, self.OLD_TRUNC)
+        self.assertEqual(_run(self.E, name=self.NAME_BB, apply=True), 0)
+        tree = json.load(io.open(os.path.join(self.bs, "ch2.json"), encoding="utf-8"))
+        self.assertEqual(tree["sub_sec"][0]["name"], self.NAME_BB)
+        self.assertEqual(self._ledger()["heading_check"], "MATCH-DIGIT")
+
+    def test_plain_channel_still_wins_when_h2_has_no_math_shield(self):
+        """H2 也写成裸文本（两侧都被 `_TRAIL_PAGE` 剥尾数）→ 常规形先命中，台账记 `MATCH`。
+
+        锁「两条通道的取序」：只有常规形判不出时才允许走保尾数，避免把 `MATCH` 通道
+        变成默认，事后审计就分不清哪些站点靠哨兵过关。
+        """
+        h2 = "## §2.3 Order of (8, 4, 10) in Z12 x Z60 x Z24"
+        self._mkbb(h2, self.OLD_TRUNC)
+        self.assertEqual(_run(self.E, name="2.3 Order of (8, 4, 10) in Z12 x Z60 x Z24",
+                              apply=True), 0)
+        self.assertEqual(self._ledger()["heading_check"], "MATCH")
+
+    # ── 控件：把第二通道关掉必须复现现状（= 仍 MISMATCH）───────────────
+    def test_channel_off_reproduces_the_old_refusal(self):
+        from lib.section_titles import norm_title
+        saved = fsn._norm_keep_digits
+        unit = os.path.join(self.u, "0008_section_2_3.md")
+        _mk(self.E, h2=self.H2_BB, contract_name=self.OLD_TRUNC)
+        try:
+            fsn._norm_keep_digits = lambda t, k: norm_title(t, k)   # 关掉保尾数
+            self.assertEqual(fsn.check_heading(unit, "2.3", self.NAME_BB)[0], "MISMATCH")
+        finally:
+            fsn._norm_keep_digits = saved
+        self.assertEqual(fsn.check_heading(unit, "2.3", self.NAME_BB)[0], "MATCH-DIGIT")
+
+    def test_channel_is_the_same_one_the_gate_uses(self):
+        """工具的第二通道必须**就是判据那条**（`norm_title(..., keep_trailing_digits=True)`）。
+
+        各写一份实现 ⇒ 「工具 MATCH-DIGIT 放行、重跑闸仍判红」的分叉（本轮要根治的形态）。
+        """
+        from lib.section_titles import norm_title
+        for t in (self.NAME_BB, self.H2_BB, OLD, self.OLD_TRUNC, "2.3 Group Z 57"):
+            self.assertEqual(fsn._norm_keep_digits(t, "2.3"), norm_title(t, "2.3", True))
+
+    # ── 负向：只有「尾部数字」这一类差异能走该通道 ────────────────────
+    def _assert_refuse_bb(self, name):
+        self._mkbb(self.H2_BB, self.OLD_TRUNC)
+        cpath = os.path.join(self.bs, "ch2.json")
+        craw = _read(cpath)
+        self.assertEqual(_run(self.E, name=name, apply=True), 2)
+        self.assertEqual(_read(cpath), craw)
+        self.assertFalse(os.path.exists(os.path.join(self.E, "_section_name_fixes.jsonl")))
+
+    def test_refuse_wrong_trailing_digit(self):
+        """`Z25` vs 印面 `Z24`：常规形会剥掉两侧尾数后假同形？不会——H2 侧有 `$` 遮蔽，
+        保尾数形必须逐位相等，故仍拒。"""
+        self._assert_refuse_bb("2.3 Order of (8, 4, 10) in Z12 × Z60 × Z25")
+
+    def test_refuse_wrong_subscript_in_the_middle(self):
+        self._assert_refuse_bb("2.3 Order of (8, 4, 10) in Z13 × Z60 × Z24")
+
+    def test_refuse_name_missing_the_subscript_group(self):
+        """少一整段（只写到 `Z12`）不是「尾数遮蔽不对称」，不许放行。"""
+        self._assert_refuse_bb("2.3 Order of (8, 4, 10) in Z12")
+
+    def test_refuse_name_missing_words(self):
+        self._assert_refuse_bb("2.3 Order of (8, 4, 10)")
+
+    # ── 展示形不受影响：新通道只活在比对里 ─────────────────────────────
+    def test_display_form_still_strips_trailing_page_digits(self):
+        """`clean_title`（manifest/marker/闸门文案读的展示形）默认照剥尾数，
+        新参数只服务比对腿；否则 `Phase Flows 57` 这类真残渣会改到展示面。"""
+        from lib.section_titles import clean_title
+        self.assertEqual(clean_title("2.3 Phase Flows 57", "2.3"), "Phase Flows")
+        self.assertEqual(clean_title("2.3 Phase Flows 57", "2.3", keep_trailing_digits=True),
+                         "2.3 Phase Flows 57".replace("2.3 ", ""))
+
+    def test_norm_keep_digits_matches_h2_exactly(self):
+        self.assertEqual(fsn._norm_keep_digits(self.NAME_BB, "2.3"),
+                         fsn._norm_keep_digits(self.H2_BB, "2.3"))
+
+
 if __name__ == "__main__":
     unittest.main()

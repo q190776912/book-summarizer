@@ -418,6 +418,10 @@ _LABEL_CANON = {
     'Axiom': '公理', '公理': '公理',
     'Assertion': '断言', '断言': '断言',
     'Conjecture': '猜想', '猜想': '猜想',
+    # 结论/Conclusion：郑大钟《线性系统理论》以「结论N.M」作全书主定理族（独立
+    # 章内计数器）。此前 _LABEL_CANON 无此项 → _type_of('结论') 落 uncat、且抽取器
+    # 词表也不认（见 extract_items 的 config 并入修复）。登记为正式类型 conclusion。
+    'Conclusion': '结论', '结论': '结论',
     'Condition': '条件', '条件': '条件',
     'Assumption': '假设', '假设': '假设', '假定': '假设',
     'Algorithm': '算法', '算法': '算法',
@@ -453,7 +457,7 @@ _LABEL_CANON = {
 EN_LABEL_KINDS = ['Definition', 'Theorem', 'Lemma', 'Corollary', 'Proposition',
                   'Example', 'Problem', 'Remark', 'Axiom', 'Assertion', 'Conjecture',
                   'Assumption', 'Condition', 'Algorithm', 'Commentary', 'Application',
-                  'Variation', 'Porism', 'Exercise', 'Property']
+                  'Variation', 'Porism', 'Exercise', 'Property', 'Conclusion']
 # 🔴 `Property` 补入（Lasota《Chaos, Fractals and Noise》ch8 实测）：本节印面以
 # `Property 1.–5.` 立目，md 双侧照印面写成 `**Property 1.**` / `**性质1.**`。
 # `_LABEL_CANON` 与 TYPE_TO_LABEL_CN/EN 一直认 Property↔性质（契约侧 type='property'
@@ -481,6 +485,7 @@ TYPE_TO_LABEL_CN = {
     'remark': '评注', 'exercise': '练习', 'problem': '问题',
     'assertion': '断言', 'conjecture': '猜想', 'assumption': '假设',
     'algorithm': '算法', 'axiom': '公理', 'property': '性质',
+    'conclusion': '结论',
     # 条件类编号环境（控制论文献常见 "Condition 5.1"，_LABEL_CANON 已把
     # Condition/条件 正名为「条件」）：不登记进本表会让契约侧 type='condition'
     # 节点经 TYPE_TO_LABEL.get 落到 'uncat'、被 B 层 extracted 排除 → 假 EXTRA。
@@ -493,6 +498,7 @@ TYPE_TO_LABEL_EN = {
     'remark': 'Remark', 'exercise': 'Exercise', 'problem': 'Problem',
     'assertion': 'Assertion', 'conjecture': 'Conjecture', 'assumption': 'Assumption',
     'algorithm': 'Algorithm', 'axiom': 'Axiom', 'property': 'Property',
+    'conclusion': 'Conclusion',
     'condition': 'Condition',
     'uncat': 'uncat',
 }

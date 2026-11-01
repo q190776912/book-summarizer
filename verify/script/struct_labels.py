@@ -201,6 +201,36 @@ G_ITEM_BQ_HEAD_RE = re.compile(
 G_BQ_BOLD_HEAD_BOUNDARY_RE = re.compile(r'^\s*>\s*\*\*[^*\n]{1,60}?\*\*')
 
 
+def item_head_inline_body(ln):
+    """`>` item 头行**自带**的正文（run-in 形态）；不构成 run-in 头时返回 None。
+
+    判据 = 匹配 `G_ITEM_BQ_HEAD_RE` 后，在该头的粗体标签闭合 `**` **之后**还有非空
+    内容。例：`> **Solution.** Sentences 1 and 2 are not propositions …` → 返回
+    `Sentences 1 and 2 …`；而 `> **例 3.1.1**`（整行只有标签）→ 返回 None。
+
+    🔴 为什么这条要进 SSOT（Rosen 离散数学 8e + Gardner 抽象代数 全库 27 处 P1 命中
+    实测 2026-10-28）：G 层的「半包例子」判据旧把 `body_seen` 定义为「头行**之后**是否
+    出现过 `>` 正文行」，于是 run-in 头（正文写在标签同一行）永远算「正文裸奔」，其修法
+    = 把后面顶层段落并进同一个 `>` 块。真语料标定（58 本三侧全量）：该判据现存 **10 条
+    报告全部是 run-in 头、0 条纯标签头**，且逐条对印面取证（do Carmo 流形导论
+    Ch2_5 L35、Ch2_7 L95、Ch3_11 L142、Ch3_14 L451/L528、Ch6_23 L162、do Carmo 曲线
+    曲面 Ch5_5 L422 等）均为「run-in 块 → 空行 → 另起散文」的**印面合法形态**——即 10 条
+    全是假阳。而按「折进块」去修真语料时，被吞进去的是**人物小传段、`<div>` 图块、表**
+    （`<div>` 在 blockquote 内还根本无法渲染，见 format_verify G_TERM 注释），交付随与
+    印面分叉。故 run-in 头必须视为**块已完整**：块后散文若要分隔，由 I 层按既有规则追
+    `---`（该层用「块内另有正文行」定义完整，不受本次影响）。
+    """
+    m = G_ITEM_BQ_HEAD_RE.match(ln)
+    if not m:
+        return None
+    rest = ln[m.end():]
+    k = rest.find('**')
+    if k < 0:
+        return None
+    tail = rest[k + 2:].strip()
+    return tail or None
+
+
 # ── 共享「条目级 --- 分隔线」补齐（I-LAYER 检测逻辑的唯一实现） ────────────
 #
 # check_i_separators（校验）与 fix_i_separators（自动修）与 merge_units（拼接期

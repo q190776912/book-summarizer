@@ -112,7 +112,7 @@ _DASH_PROBLEM_RE = re.compile(r"\d+(?:\.\d+)*-\d+")
 # **维持旧豁免** = 不给类型奇怪的书新增误报。
 _NUMBERED_NTYPES = frozenset({
     "definition", "theorem", "lemma", "proposition", "corollary",
-    "example", "remark", "axiom", "property",
+    "example", "remark", "axiom", "property", "conclusion",
 })
 
 
@@ -704,6 +704,16 @@ def resolve_unit_anchors(
 _MD_MIN_ANCHOR_CHARS = 12
 #: 一个单元最多吃掉多少行来凑唯一；仍不唯一 = 定位失败（跳过，不猜）。
 _MD_MAX_ANCHOR_LINES = 14
+#: 条头兜底锚点的最小字符数（:func:`_md_label_anchor` 用；与行锚点的 12 字下限同源）。
+#:
+#: 🔴 整块正文短于此值（含**空正文**）的单元，三条锚点规则**结构上**都吃不到：行锚点要
+#: ≥12 字、整块锚点与本条同源要 ≥6 字、label 兜底要 ≥6 字（还要求剥掉标记后仍够长）。
+#: 这不是「交付丢了内容」，而是「这道闸测不了它」，所以覆盖率
+#: 分母必须把它单独分出来报，否则凡有占位空单元/短小节头的书都永久 <100%：2026-10-30 全架
+#: 普查 46 本共 2174 条「未定位」，其中 163 条是空正文（``遍历论_孙文祥`` 13/13、
+#: ``real-analysis-for-graduate-students`` 45/45、``高等代数`` 22 条），周民强另有 2 条
+#: 正文仅 5/3 字（`（一）闭集` / `#附录`）。见 :func:`split_unmeasurable`。
+_MD_MIN_LABEL_CHARS = 6
 
 
 def norm_text(text: Any) -> str:
@@ -736,6 +746,25 @@ def _md_line_anchor(lines: List[str], md: str) -> Optional[int]:
     return None
 
 
+def _md_block_anchor(lines: List[str], md: str) -> Optional[int]:
+    """整块正文（各行直接拼接）在归一化交付文本里**恰好出现一次** → 返回其偏移。
+
+    补的是前两条规则之间的一道缝：行锚点要求「凑够 12 字的前缀唯一」，条头兜底要求
+    「剥掉 ``#``/``>`` 之后仍 ≥6 字且唯一」——于是**整块本身就唯一**的短单元两头都不着：
+    2026-10-30 全架普查 571 条「未定位」里有 311 条属于这一类，全是 6–11 字的节头单元
+    （``##§A.1`` / ``##§2同态群``：整块 6–7 字 <12 过不了行锚点，剥掉 ``##`` 只剩 4–5 字
+    又过不了条头下限），它们的正文在交付里**一字不差且只出现一次**。
+
+    可信度与条头兜底同级（同一个 ≥6 字下限 + 同一个「唯一才可用」闸），不引入新的猜测：
+    出现 0 次 → ``None``（正文读不到，属要看见的信号）；出现 ≥2 次 → ``None``
+    （位置不唯一，由 :func:`md_block_occurrences` 记成「歧义」而不是冒充定位）。
+    """
+    whole = u"".join(lines)
+    if len(whole) < _MD_MIN_LABEL_CHARS or md.count(whole) != 1:
+        return None
+    return md.find(whole)
+
+
 def _md_label_anchor(lines: List[str], md: str) -> Optional[int]:
     """兜底定位：交付做过**内容级**修订（同行机械替换、块内加注）的单元，整行前缀
     可能对不上，改用首行的**条头**（``**…**`` 粗体头或 ``#``/``>`` 标题残段）定位。
@@ -747,9 +776,52 @@ def _md_label_anchor(lines: List[str], md: str) -> Optional[int]:
     first = lines[0]
     m = re.search(r"\*\*[^*]{2,26}\*\*", first)
     cand = m.group(0) if m else (re.sub(r"^>+|^#+", "", first)[:26] or None)
-    if not cand or len(cand) < 6 or md.count(cand) != 1:
+    if not cand or len(cand) < _MD_MIN_LABEL_CHARS or md.count(cand) != 1:
         return None
     return md.find(cand)
+
+
+def split_unmeasurable(
+    bodies: List[List[str]],
+    idxs: List[int],
+) -> Tuple[List[int], List[int]]:
+    """把下标分成「锚点规则测得到」与「**结构上**测不到」两堆，供覆盖率分母用。
+
+    测不到 = 整块归一化正文短于 :data:`_MD_MIN_LABEL_CHARS`（含空正文占位单元）：三条
+    定位规则都吃不到它（行锚点 ≥12 字、整块锚点与条头兜底 ≥6 字），把它计入「未定位」= 把工具量不到
+    说成交付丢内容，并且让每本有占位单元的书永久 <100%。分出来单列而不是静音：条数与
+    ``type«key»`` 都要出现在覆盖率行里，读者仍能看见这些单元。
+
+    注意 **不**把「正文够长但锚点不唯一」划进来——那是可测而未测中，属于要看见的信号
+    （其中「整块出现 ≥2 次」由 :func:`md_block_occurrences` 再分出去单列，别和「读不到」混报）。
+    """
+    meas, um = [], []
+    for i in idxs:
+        whole = u"".join(bodies[i]) if 0 <= i < len(bodies) else u""
+        (um if len(whole) < _MD_MIN_LABEL_CHARS else meas).append(i)
+    return meas, um
+
+
+def md_block_occurrences(
+    bodies: List[List[str]],
+    md_text: str,
+) -> List[int]:
+    """每条单元**整块正文**在归一化交付文本里的出现次数（与 ``bodies`` 等长）。
+
+    「定位不到」有两种完全不同的成因，分母与报告必须把它们分开，否则「交付里有这块」
+    和「交付里读不到这块」共用一个红字：
+      * 0 次 = 正文在交付里读不到 = **真信号**（单元与交付脱钩，须取证）；
+      * ≥2 次 = 正文确在交付里，但同形块多处出现 → 位置不可唯一判定，本闸对它**不判序**，
+        单列为「歧义」（2026-10-30 普查 189 条，形态是 ``**习题(Exercises)**`` 这类
+        每节同名的题集块、以及同一短头在章内重复）。
+    调用方只需对**未定位**的下标取用；全量算一次的代价与 :func:`md_unit_positions` 同级。
+    """
+    md = norm_text(md_text)
+    out = []
+    for lines in bodies:
+        whole = u"".join(lines)
+        out.append(md.count(whole) if whole else 0)
+    return out
 
 
 def md_unit_positions(
@@ -757,6 +829,12 @@ def md_unit_positions(
     md_text: str,
 ) -> List[Optional[int]]:
     """每条单元正文在**归一化交付文本**里的偏移（定位不到 = ``None``）。
+
+    三条规则按证据强弱依次兜底：① 行前缀唯一（:func:`_md_line_anchor`，最强：块头起算）；
+    ② 整块正文唯一（:func:`_md_block_anchor`，补短单元那条缝）；
+    ③ 条头唯一（:func:`_md_label_anchor`，用于交付做过内容级修订、整块不再逐字相等的单元）。
+    三者都以「唯一」为前提——出现多次就不猜位置（由 :func:`md_block_occurrences` 量出次数，
+    供调用方分「歧义 / 读不到」两桶）。
 
     ``bodies``：与单元等长的「非空归一化正文行」列表（首行标记注释须已剥掉），
     由调用方读取单元文件给出——本函数只做纯文本定位，不碰磁盘。
@@ -768,6 +846,8 @@ def md_unit_positions(
             out.append(None)
             continue
         pos = _md_line_anchor(lines, md)
+        if pos is None:
+            pos = _md_block_anchor(lines, md)
         if pos is None:
             # 🔴 必须是 `is None`，不能写 `or`：章首单元的合法偏移就是 0，
             # 用真值判断会把「定位在文本最开头」当成定位失败丢掉，而章首那块往往

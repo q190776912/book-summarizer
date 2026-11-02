@@ -707,6 +707,28 @@ class TestUnharvestedAnchors(unittest.TestCase):
         bodies = {"13.5": ["body with no 2 or 4 anywhere\n"]}
         self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
 
+    def test_math_index_paren_is_not_a_neighbor(self):
+        r"""判据④负向：兄弟单元正文里的 KaTeX 块位指标 `^{(11)}` 不是「印刷裸编号」。
+
+        实测动因（郑大钟《线性系统理论》ch10 例10.3，2026-11-02）：契约把印面右缘的
+        **分块矩阵块位标签** `(12)` 误收成锚点，成为候选漏号；同节兄弟单元 0092 忠实照
+        印面写了 `\eta_1^{(11)}`（第 (1,1) 块的行列表记号）。旧 `_UNIT_PAREN_RE` 把
+        `(11)` 当裸编号收进逃逸池 → 判据④「(12) 有邻居 11」假命中 → 整章凭空变红。
+        收紧后的后顾 `(?<![\\^_{\\\\])` 排除 `^{...}` 之后的数学分组括号 → 池里没有 "11"
+        → 判据④不成立 → 不报。真正的印刷裸编号（行首/空白/中文标点后）仍会被收（见
+        :meth:`test_number_already_rendered_in_section_escapes`）。
+        """
+        tree = self.tree([self.disp(r"\mathbf{D}_{\mathrm{hc}}^{-1}\mathbf{D}_{\mathrm{Lc}}"),
+                          self.txt("(12)", line_start=True, indent=24.8)])
+        # 候选 (12) 需靠邻居 11/13 才够着判据④；0092 的 `^{(11)}` 恰是唯一会喂 "11" 的串
+        bodies = {"13.5": [r"$\eta_1^{(11)}$ 与 $\eta_1^{(1q)}$ 组成块阵\n"]}
+        self.assertEqual(unharvested_anchor_problems(tree, bodies), [])
+        # 对照：把同一 (11) 换成真·印刷裸编号形态（空白后独立成括），邻居即成立、照报
+        bodies_real = {"13.5": ["矩阵见表 \\qquad (11) 处\n"]}
+        probs = unharvested_anchor_problems(tree, bodies_real)
+        self.assertEqual(len(probs), 1, probs)
+        self.assertIn("(12)", probs[0])
+
     def test_exercise_key_exempt(self):
         """判据④后半：键含 `-`（习题条目）的号与公式号不同源，不判。"""
         tree = self.tree([self.disp("x = y"), self.txt("(1)")], key="11.2-3")

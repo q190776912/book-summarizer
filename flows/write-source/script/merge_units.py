@@ -85,7 +85,9 @@ from data.book_structure.book_structure import (chapter_json_path, chapter_label
 import render_draft as _rd
 import split_draft_units as _split
 import gate_units as _gate
-from verify.script.struct_labels import insert_item_separators as _insert_item_seps
+from verify.script.struct_labels import (
+    insert_item_separators as _insert_item_seps,
+    insert_prose_separators as _insert_prose_seps)
 
 _DONE_RE = re.compile(r"<!-- book-summarizer (?:DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
 _CH_NAME = re.compile(r"^([0-9A-Za-z]+)\s+(.+)$", re.DOTALL)
@@ -317,6 +319,17 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
                     for (i, (f, ln, t)) in enumerate(emptied))))
         lines = [_CJK_RUN_RE.sub("", ln) for ln in lines]
         # owners 不受影响（行数不变，仅内容去 CJK）
+
+    # 🔴 单元边界上的「`>` item 块 → 顶层散文」分隔线补齐（V-F / `i_prose_sep`，与
+    # `check_i_prose_separator` 共用 `struct_labels` 同一检测逻辑）：上面的类型状态机
+    # 只在 `desc` 接在 `item` 后补线，而一个契约节点常把「节标题 + 例块」打进**同一个
+    # section 单元**——块尾在上一单元、散文在下一 `desc` 单元时 `prev == "heading"`，
+    # 那条**判据必需**的线就永远补不出来（Fraleigh ch25 实测：复位把交付里的 `---` 删掉，
+    # 事后整书 verify `F:2`）。 owners 在此仍逐行有效 ⇒ 只补**跨单元**的缺口；单元内部缺
+    # 的那条归单元层闸（跑同一判据，且带「译本结构继承源本」豁免），拼接器不改写过闸单元
+    # 的正文。必须排在最后一步：检测对象就是本函数返回的那份文本形制（跨架 1415 章次-侧
+    # A/B 实测：边界口径零翻面）。
+    lines, owners = _insert_prose_seps(lines, owners)
     return lines, owners
 
 

@@ -74,13 +74,24 @@ _IMG_RE = re.compile(r"<img\b", re.I)
 _IMG_SRC_RE = re.compile(r'src="([^"]+)"', re.I)
 _SHOW = 12          # 每段最多打印多少行（超出只报计数）
 
-# 🔴 F 层围栏回归守卫用判据（20+ 档里只取「加围栏会新增」的 5 档）
+# 🔴 F 层围栏回归守卫用判据（20+ 档里取「整件覆写会新增」的 6 档）
+# 第 6 档 2026-11-02 补进（Fraleigh《A First Course in Abstract Algebra》ch25 实测）：
+# 复位把**交付里有、单元拼接侧没有**的 `---` 删掉，前五档全是围栏 `>` 判据 ⇒ 量不到
+# 「`>` 块结束 → 顶层散文缺 `---`」（writing-rules V-F），事后整书 verify 报 `F:2`、rc=1。
+# 单元层同样拦不住：那块 `> **Example…**` 的尾行在 `0006_section_25_2.md`、紧跟的散文在
+# `0007_desc_D2.md`，`check_unit_quality` 按**单文件**跑 ⇒ 跨单元的这条违规只在**整章
+# 上下文**现形（与 `_f_findings` 里记的 `> $$` 同一现象、同一根治口径）。
+# ⚠️ 译本侧的「结构继承源本」豁免（`inherited_structure_exemptions`，判据 `i_prose_sep`）
+# 需要**配对源 md**，本守卫只看单侧文本 ⇒ 对「删 `---` 后与源本计数相等、verify 本会豁免」
+# 的复位偏保守。保守是有意取向：REFUSE 只是分流器（一个字节都不写），拦下后人工裁定，
+# 不许为了放行把这一档删掉。
 _FV_DIR = os.path.join(os.path.dirname(_HERE), "verify", "format_verify", "script")
 _F_BQ_CHECKS = ("check_h_statement_in_blockquote",   # 陈述内容误包 `>`（`> $$` / `> （N）`）
                 "check_unlabeled_blockquotes",       # 无合法标签的自由 `>` 块
                 "check_excessive_bq_empty_lines",    # 块内连续空 `>` 行 > 1
                 "check_displaymath_gt",              # `$$…$$` 内混进 `>`
-                "check_nested_blockquotes")          # 嵌套 `> >`
+                "check_nested_blockquotes",          # 嵌套 `> >`
+                "check_i_prose_separator")           # `>` 块 → 顶层散文缺 `---`（V-F）
 
 
 def _f_findings(text):

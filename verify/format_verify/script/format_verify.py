@@ -53,6 +53,7 @@ from verify.script.struct_labels import (
     N_ITEM_RE,
     H_STRUCT_BQ_RE, H_INLINE_STRUCT_BQ_RE, TOP_LEVEL_HEADER_RE,
     I_ITEM_RE, I_ITEM_EXAMPLE_RE,
+    NON_PROSE_START_RE, find_prose_separator_gaps,
 )
 from lib.regexlib import G_HEAD, FMT_HR_RE, FMT_SEC_RE
 from long_row_check import check_long_formula_rows, LONG_FORMULA_CHECK_ENABLED  # 显示公式行过长（tag 重叠）WARN；受开关控制
@@ -105,7 +106,9 @@ G_TERM = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$\s*$|<div|\s*\|)')
 NESTED_BQ = re.compile(r'^>\s*>\s*\S')
 
 # 顶层「非散文」块起始：这些块自带边界语义，item 块与其之间不要求 `---`。
-_NON_PROSE_START = re.compile(r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$|<div|\s*\||>)')
+# 🔴 定义在 `struct_labels`（与拼接期补齐 `insert_prose_separators`、I 层检测
+# `find_prose_separator_gaps` 同一份），此处只留旧名别名，勿再各自抄一份。
+_NON_PROSE_START = NON_PROSE_START_RE
 
 
 def check_g_quote_continuity(md_file):
@@ -206,38 +209,19 @@ def check_i_prose_separator(md_file):
     `$$`/表格/`<div`，也非新的 `>` 块）→ 缺 `---`。块尾的空 `>` 行（`>`/`> `）与
     其后的顶层散文之间同样缺 `---`——空 `>` 行是块**内**留白，不是块间分隔线。
     不判：文件结束、`---` 已在位、下块自带边界（标题/标签/公式/表格/图）。
+
+    行走逻辑本体在 `struct_labels.find_prose_separator_gaps`（拼接期补齐
+    `insert_prose_separators` 共用同一份，免「merge 补了 verify 还判缺」的分歧）。
     """
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
     except Exception:
         return []
-    n = len(lines)
-    out = []
-    i = 0
-    while i < n:
-        if not G_ITEM_BQ_HEAD_RE.match(lines[i]):
-            i += 1
-            continue
-        j = i + 1
-        body = False
-        while j < n and lines[j].startswith('>'):
-            if lines[j].strip() not in ('>', '> '):
-                body = True
-            j += 1
-        if not body:
-            i = j
-            continue                      # 半包由 G 层报，不在此重复
-        k = j
-        while k < n and lines[k].strip() == '':
-            k += 1
-        if k < n and not _NON_PROSE_START.match(lines[k]) \
-                and not G_ITEM_BQ_HEAD_RE.match(lines[k]):
-            out.append(f"  x L{j}: missing `---` between the `> **例/证明**` block "
-                       f"(ends L{j}) and the descriptive prose at L{k+1}: "
-                       f"{lines[k].strip()[:50]}")
-        i = j
-    return out
+    return ["  x L%d: missing `---` between the `> **例/证明**` block "
+            "(ends L%d) and the descriptive prose at L%d: %s"
+            % (j, j, k + 1, lines[k].strip()[:50])
+            for (_head, j, k) in find_prose_separator_gaps(lines)]
 
 # ===========================================================================
 # 译本「结构继承源本」豁免谓词（SSOT：单元门控与文档级 verify 共用同一份判据）
@@ -1174,12 +1158,110 @@ def check_heading_blank_above(md_file):
 # ===========================================================================
 # M-LAYER: `>` lines inside display math blocks
 # ===========================================================================
+# 被引用块包起来的 display math 的围栏行（`> $$`，容 `>  $$` 这类过度缩进形）。
+_BQ_MATH_FENCE_RE = re.compile(r"^\s*>\s*\$\$\s*$")
+
+
+def _is_bq_blank(line):
+    """空引用行（``>`` / ``> ``）——本文件 M 层三个函数（`bq_math_inner_blanks` /
+    `bq_deletable_inner_blanks`）的字形定义。
+
+    ⚠️ 不是全文件的唯一一份：G/H/N 层各有内联的同形字面量（如
+    `check_excessive_bq_empty_lines` 里 `s in ('>', '> ')`），改这里**不会**改到它们。
+    """
+    return line.strip() in (">", "> ")
+
+
+def bq_math_fence_spans(lines):
+    """引用块 display math 的**配对**围栏 → ``[(开门下标, 关门下标)]``（0 起）。
+
+    走位与判据逐字一致：开门后向前找第一个关门；找不到（未配对）就**不猜关门**，从开门的
+    下一行接着扫。判据（`bq_math_inner_blanks`）与删除决策（`bq_deletable_inner_blanks`）
+    都读这一份 ⇒ 闸与修复工具不可能对「哪一段是围栏」有两种认识。
+    """
+    out = []
+    n = len(lines)
+    i = 0
+    while i < n:
+        if not _BQ_MATH_FENCE_RE.match(lines[i]):
+            i += 1
+            continue
+        j = i + 1
+        while j < n and not _BQ_MATH_FENCE_RE.match(lines[j]):
+            j += 1
+        if j >= n:                      # 未配对：不猜关门，跳过
+            i += 1
+            continue
+        out.append((i, j))
+        i = j + 1
+    return out
+
+
+def bq_deletable_inner_blanks(lines):
+    """围栏内空 `>` 行里哪些**能安全删除** → ``(可删行号集合, 拒删清单, 命中围栏数)``（行号 1 起）。
+
+    判据只说「这条空行落在围栏内」；动手前还要问：它是不是真在**分隔两段内容**——若第一条与
+    最后一条被点名空行之外、两侧都还有内容行，删掉会把两段并成一段。该形态（2026-11-01 全架
+    普查 0 处）是结构问题，不是删一行能治的 ⇒ 拒删，交人工分诊。
+
+    🔴 返回三元组而不是「只给可删集合」：闸（M 层 auto-fix `fix_displaymath_gt`）与批修工具
+    （`tools/fix_bq_math_blank.py`）必须用**同一个**拒删口径。闸若照判据整条删，就会在该形态上
+    并块；工具若自己另写一份决策，两份迟早分叉（这正是 2026-11-02 建 #83 的原因）。
+    """
+    per_block = {}
+    for op_ln, bl_ln in bq_math_inner_blanks(lines):
+        per_block.setdefault(op_ln - 1, []).append(bl_ln - 1)
+    drop, refuses, blocks = set(), [], 0
+    for op, cl in bq_math_fence_spans(lines):
+        blanks = sorted(per_block.get(op, []))
+        if not blanks:
+            continue
+        blocks += 1
+        inner = range(op + 1, cl)
+        left = [k for k in inner if k < blanks[0] and not _is_bq_blank(lines[k])]
+        right = [k for k in inner if k > blanks[-1] and not _is_bq_blank(lines[k])]
+        if left and right:                     # 空行真的在分隔两段内容 ⇒ 不动
+            refuses.append((op + 1,
+                            "围栏内空行两侧都有内容（L%d…L%d）——删除会并块，须人工分诊"
+                            % (op + 1, cl + 1)))
+            continue
+        drop.update(k + 1 for k in blanks)
+    return drop, refuses, blocks
+
+
+def bq_math_inner_blanks(lines):
+    """引用块内 display math 的**围栏内空 `>` 行**。→ ``[(围栏开行号, 空行行号)]``（1 起）。
+
+    🔴 这不是风格问题，是渲染断裂。CommonMark 里块引用内的空行**结束当前块**，于是
+    ``> $$`` 围栏被那条空行劈成两段，尾段 ``> $$`` 与后面的散文并进同一段。用
+    cmark-gfm（GitHub 自己的解析器）实测（p1185）：
+        甲 ``> $$`` / 式 / ``> $$`` / ``>`` / 散文
+          → ``<p>$$ … $$</p><p>散文</p>``            （围栏完整，散文独立成段）
+        乙 ``> $$`` / 式 / ``>`` / ``> $$`` / 散文
+          → ``<p>$$ … 式</p><p>$$\\n散文</p>``        （围栏裂开，**散文被吞进数学段**）
+    两种形的差别只有那条空行落在围栏**外**还是**内** ⇒ 修法唯一：空行属于围栏外。
+    旁证两条：全架甲形 52214 处 100% 都在开门围栏前已有一条空 `>` 行（单元门控 F7c
+    本来就要求它），乙只是**多**了一条落在围栏内。
+
+    只收「配对成功」的块；开门后找不到关门的块交给别的判据（本函数不猜）。
+    """
+    return [(op + 1, k + 1)
+            for op, cl in bq_math_fence_spans(lines)
+            for k in range(op + 1, cl) if _is_bq_blank(lines[k])]
+
+
 def check_displaymath_gt(md_file):
     """M-LAYER: detect `>` lines inside `$$...$$` display math blocks.
 
     When a display math block is wrapped in a blockquote context, empty `>`
     lines can leak inside the `$$` fences. KaTeX rejects bare `>` inside math
-    mode. Returns list of violation strings (with line numbers). Empty = pass."""
+    mode. Returns list of violation strings (with line numbers). Empty = pass.
+
+    两条子判据（2026-11-02 加第二条，全架命中面 0 后才开）：
+      * 顶层 `$$…$$` 里泄进 `>`（原有）；
+      * 引用块 `> $$ … > $$` 的**围栏内**空 `>` 行（`bq_math_inner_blanks`）——
+        它把围栏劈成两段、关门 `> $$` 会与后面的散文并段，是渲染断裂不是排版洁癖。
+    """
     try:
         with open(md_file, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -1198,11 +1280,17 @@ def check_displaymath_gt(md_file):
                 for k in range(i + 1, j):
                     ln = lines[k]
                     if ln.lstrip().startswith('>'):
-                        out.append(f"  x L{k+1}: `>` inside display math ($$...$$) — "
-                                   f"remove blockquote prefix: {ln.strip()[:60]}")
+                        out.append((k + 1,
+                                    f"  x L{k+1}: `>` inside display math ($$...$$) — "
+                                    f"remove blockquote prefix: {ln.strip()[:60]}"))
                 i = j
         i += 1
-    return out
+    for op_ln, bl_ln in bq_math_inner_blanks(lines):
+        out.append((bl_ln,
+                    f"  x L{bl_ln}: 空 `>` 行落在引用块 display math 的围栏内"
+                    f"（开门 L{op_ln}）— 删掉它，空 `>` 行须在整对 `> $$` 之外："
+                    f"{lines[bl_ln-1]!r}"[:100]))
+    return [msg for _ln, msg in sorted(out, key=lambda t: t[0])]
 
 
 # ===========================================================================

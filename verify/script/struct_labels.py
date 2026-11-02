@@ -302,3 +302,86 @@ def insert_item_separators(lines, owners=None):
     if new_owners is not None:
         return new_lines, new_owners
     return new_lines
+
+
+# ── 共享「`>` item 块 ↔ 顶层散文」分隔线缺口（writing-rules V-F / `i_prose_sep`）──
+#
+# 行走逻辑的**唯一实现**，三方共用：`format_verify.check_i_prose_separator`（文档级
+# 校验）、`merge_units._assemble`（拼接期归一化）、以及经判据本体间接使用它的交付复位
+# 守卫（`tools/sync_delivery_from_units.py` 的 F 层第 6 档）。
+#
+# 2026-11-02 Fraleigh ch25 实测补这一族：`> **Example…**` 块的**尾行**在
+# `0006_section_25_2.md`、紧跟的散文在 `0007_desc_D2.md`，而 `_assemble` 的类型状态机
+# 对 `desc` 只在 `prev == "item"` 时补线（此处 `prev == "heading"`）⇒ 复位把交付里
+# **必需**的 `---` 当噪声删掉，事后整书 verify 报 `F:2`、rc=1。单元层闸也看不见：
+# 它按**单文件**跑，块与散文分属两文件。
+#
+# 🔴 拼接侧**只补单元边界**上的缺口（靠 `owners` 逐行归属判定）：单元**内部**缺的那条
+# 线属于单元本身，归单元层闸管——那里跑同一判据、且带「译本结构继承源本」豁免。跨架
+# 1415 个章次-侧实测（2026-11-02）：无条件补线会把 Apostol IANT ch4 CN 那处**译本刻意
+# 镜像源本**的豁免位补出一条源侧没有的 `---`（SAME→DIFF，正是 2026-09-27/29 两次根治
+# 要防的「两版结构分叉」）；边界口径零翻面，且把 ch25 那类 4 行欠账修成逐字节 == 交付。
+# 顶层「非散文」块起始：这些块自带边界语义，item 块与其之间不要求 `---`。
+NON_PROSE_START_RE = re.compile(
+    r'^(?:---+\s*$|#{1,6}\s|\*\*[^*]+\*\*|\$\$|<div|\s*\||>)')
+
+
+def find_prose_separator_gaps(lines):
+    """→ ``[(块头下标, 块尾下标, 散文行下标)]``（纯检测，无副作用）。
+
+    块 = 以 `G_ITEM_BQ_HEAD_RE` 开头、且头行之外还有正文行的 `>` 引用块（半包块归 G 层，
+    不在此重复）；块结束后跳过空行，第一个非空行既不是散文豁免形（`---`/标题/顶层
+    `**标签**`/`$$`/表格/`<div`/`>`）也不是新的 item 头 ⇒ 该处缺一条顶层 `---`。
+    """
+    n = len(lines)
+    out = []
+    i = 0
+    while i < n:
+        if not G_ITEM_BQ_HEAD_RE.match(lines[i]):
+            i += 1
+            continue
+        j = i + 1
+        body = False
+        while j < n and lines[j].startswith('>'):
+            if lines[j].strip() not in ('>', '> '):
+                body = True
+            j += 1
+        if not body:
+            i = j
+            continue                      # 半包由 G 层报，不在此重复
+        k = j
+        while k < n and lines[k].strip() == '':
+            k += 1
+        if k < n and not NON_PROSE_START_RE.match(lines[k]) \
+                and not G_ITEM_BQ_HEAD_RE.match(lines[k]):
+            out.append((i, j, k))
+        i = j
+    return out
+
+
+def insert_prose_separators(lines, owners):
+    """在「块头与散文**分属两个单元**」处补顶层 `---`（上下各一空行，不重复已有空行）。
+
+    `owners` 须与 `lines` 等长（`merge_units._assemble` 的逐行归属）。单元内部的缺口
+    **故意不补**——那是单元自己的内容，已由单元层闸按同一判据裁定（译本侧还带源本继承
+    豁免），拼接器不得改写已过闸 DONE 的单元正文。补入的分隔线/空行归属 None，返回
+    ``(new_lines, new_owners)`` 以保持逐行对齐（回填据此定位源单元）。
+    """
+    gaps = [g for g in find_prose_separator_gaps(lines)
+            if owners[g[0]] != owners[g[2]]]
+    if not gaps:
+        return lines, owners
+    inserts = set(k for (_i, _j, k) in gaps)
+    new_lines, new_owners = [], []
+    for idx, ln in enumerate(lines):
+        if idx in inserts:
+            if new_lines and new_lines[-1].strip() != '':
+                new_lines.append('')
+                new_owners.append(None)
+            new_lines.append('---')
+            new_lines.append('')
+            new_owners.append(None)
+            new_owners.append(None)
+        new_lines.append(ln)
+        new_owners.append(owners[idx])
+    return new_lines, new_owners

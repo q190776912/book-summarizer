@@ -58,6 +58,15 @@ BODY = ["**例1 求解线性方程组**：",
 # F 层判据样本：`> ` 落在 `$$…$$` 围栏内 ⇒ check_displaymath_gt 命中
 BQ_MATH = ["$$", "> 围栏里的块引用", "$$", "于是 $x=1$。"]
 
+# I 层判据样本（Fraleigh ch25 实测形态）：`> **Example…**` 块结束后紧跟**顶层散文**，
+# 中间必须有一条 `---`（writing-rules V-F）。单元拼接侧给不出这一条——块尾与散文分属
+# 两个单元，`_assemble` 的状态机对 `desc` 只在 `prev == "item"` 时补线 ⇒ 复位会把交付
+# 里**已有且必需**的 `---` 删掉，前五档围栏判据对此完全量不到。
+PROSE_SEP = ["> **Example 25.1.** 求逆矩阵：",
+             "> 先把矩阵化成行阶梯形。",
+             "",
+             "于是 $x=1$。"]
+
 
 def _write(path, text, eol="\n"):
     d = os.path.dirname(path)
@@ -439,6 +448,40 @@ class TestFGuard(unittest.TestCase):
         root, ext, md, splice = _tree(unit_body=BQ_MATH)
         try:
             _write(md, splice.replace("于是 $x=1$。", u"于是 $x=1$。\n\n补一句。"), "\n")
+            st, note = _run(ext, root, commit=True)
+            self.assertEqual(st, "WRITTEN", note)
+            self.assertEqual(_read(md).replace("\r\n", "\n"), splice)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_blocks_removed_prose_separator(self):
+        """🔴 I 层回归（Fraleigh ch25 实测）：拼接侧给不出「`>` 块 → 顶层散文」之间的
+        `---`，复位若把交付里**必需**的分隔线当噪声删掉 ⇒ REFUSE，交付一个字节都不许变。
+
+        这一档前五判据（全是围栏 `>` 判据）看不见，单元层 gate 也看不见（块尾与散文分属
+        两个单元文件），当时以「46 章 WRITTEN + 幂等 SAME」全绿通过、事后整书 verify 才报
+        `F:2` rc=1 ⇒ 守卫必须自己拦，不能靠事后 verify。
+        """
+        root, ext, md, splice = _tree(unit_body=PROSE_SEP)
+        try:
+            self.assertNotIn("---", splice, "拼接侧本就没有分隔线（本用例的前提）")
+            good = splice.replace("\n于是 $x=1$。", "\n---\n\n于是 $x=1$。")
+            self.assertNotEqual(good, splice, "用例没能在散文前插入分隔线")
+            _write(md, good, "\n")
+            before = _snap(root)
+            st, note = _run(ext, root, commit=True)
+            self.assertEqual(st, "REFUSE", note)
+            self.assertIn("F 层围栏回归守卫", note)
+            self.assertIn("check_i_prose_separator", note)
+            self.assertEqual(_snap(root), before, "I 层守卫拦下时动了磁盘")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_allows_preexisting_missing_separator(self):
+        """对照：两侧**同样**缺那条 `---` ⇒ 不是净增，第 6 档不许把复位一刀切拒掉。"""
+        root, ext, md, splice = _tree(unit_body=PROSE_SEP)
+        try:
+            _write(md, splice + u"\n补一句。\n", "\n")
             st, note = _run(ext, root, commit=True)
             self.assertEqual(st, "WRITTEN", note)
             self.assertEqual(_read(md).replace("\r\n", "\n"), splice)

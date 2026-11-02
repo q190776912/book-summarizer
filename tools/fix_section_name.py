@@ -260,7 +260,7 @@ def _norm_keep_digits(text, sec_key):
 
 
 def check_heading(unit_file, sec_key, new_name):
-    """⑤ 本工具只校验：单元 H2 与修后契约名须在 `norm_title` 下相等。
+    r"""⑤ 本工具只校验：单元 H2 与修后契约名须在 `norm_title` 下相等。
 
     两条通道，按序取先命中者：
       `MATCH`       两侧 `norm_title` 直接相等（常规形）。

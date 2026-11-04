@@ -60,6 +60,20 @@ class TestEmbeddedRefLooksThroughOwnParen(unittest.TestCase):
     def test_cjk_prose_reference_same_rule(self):
         self.assertTrue(_emb('由（1.2.9）可知极限密度唯一', '1.2.9'))
 
+    def test_block_initial_paren_glued_to_cjk_is_reference(self):
+        # 🔴 郑大钟 ch2 §2.4 实测（2026-11-04）：句中回指被 OCR 切成块首，
+        # 编号零空格紧贴汉字 → 引用，不得锚定定义位置
+        self.assertTrue(_emb('(2.63)为<n 的情形。 为便于推证,通过引入微分算符'
+                             ' b=d/d,可表输入输出描述', '(2.63)'))
+        # 裸号形态同判（左邻是自身开括号 → 跨过再走同一谓词）
+        self.assertTrue(_emb('(2.63)为<n 的情形。', '2.63'))
+
+    def test_block_initial_paren_not_glued_still_anchors(self):
+        # 负向：右邻是空格/等号/换行而非紧贴汉字 → 仍是真标签，不得误撤
+        self.assertFalse(_emb('(2.64)', '(2.64)'))
+        self.assertFalse(_emb('(2.63) = x + u', '(2.63)'))
+        self.assertFalse(_emb('(2.63) (see above)', '(2.63)'))
+
     def test_standalone_label_still_anchors(self):
         # 行首就是一个编号 → 不是引用（真标签，必须继续锚定位置）
         self.assertFalse(_emb('(1.2.11)', '1.2.11'))
@@ -75,6 +89,33 @@ class TestEmbeddedRefLooksThroughOwnParen(unittest.TestCase):
         # 括号形态命中（span 含括号）与旧写法一致：左邻文字 → 引用
         self.assertTrue(_emb('Further, by (11.1.4),', '(11.1.4)'))
         self.assertFalse(_emb('(1.2.11)', '(1.2.11)'))
+
+
+class TestBlockInitialCJKGluedNoPosition(unittest.TestCase):
+    """端到端（本书体例：type=2/scope=2 → ncomp=2, keep_cross_refs=True）：
+    被 OCR 切成块首的句中回指 `(2.63)为<n…` 不得抢下 2.63 的定义位置，
+    否则总结忠实的 2.63→2.64 会因回指 y(≈1843) 晚于真标签 2.64 的 y(≈375)
+    被判成 2.64 ORDER_MISMATCH 假阳。"""
+
+    def _idx(self):
+        return SourceFormulaIndex(
+            '.', build_formula_patterns(2, allow_bare=True),
+            chapter_prefix=False, ncomp=2, keep_cross_refs=True)
+
+    def test_cross_ref_block_glues_no_position(self):
+        idx = self._idx()
+        nums = set()
+        # 页 55 真标签：独立成块的 (2.64)，y≈375
+        idx._scan_text('(2.64)', nums, pg=55, y=375.0)
+        # 页 55 句中回指被切成块首的 (2.63)，y≈1843（更晚，含 b=d/d、< 会被误判强）
+        idx._scan_text('(2.63)为<n 的情形。 为便于推证,通过引入微分算符'
+                       ' b=d/d,可表输入输出描述', nums, pg=55, y=1843.0)
+        # 2.63 无任何可信位置 → 不锚位（顺序支据此「无证据不判」）
+        self.assertIsNone(idx.primary_pos('2.63'))
+        # 但集合成员不受影响（总结里忠实的 \tag{2.63} 不会被误判 FABRICATED）
+        self.assertIn('2.63', nums)
+        self.assertIn('2.64', nums)
+        self.assertEqual(idx.primary_pos('2.64'), (55, 375.0))
 
 
 class TestAnchorLabelGrade(unittest.TestCase):

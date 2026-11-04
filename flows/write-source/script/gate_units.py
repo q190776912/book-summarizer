@@ -236,6 +236,59 @@ def _formula_scope(ext):
     return None
 
 
+def _formula_ignore(ext):
+    """verify_config.json 的 ``formula.ignore`` → 归一化裸编号集合。
+
+    🔴 **与 verify Q 层同口径的「合法省略」白名单（missing 方向）**：Q 层把登记进
+    `formula.ignore` 的编号视为「书源确有、但总结按体例合法省略」的推导/描述式，
+    既不判 MISSING 也不判 FABRICATED。单元门控 ③ 的「缺编号公式」对账必须**同样**
+    豁免这些号，否则同一本书「verify 绿 / gate 红」两头堵——写手被 gate 逼着把已
+    经用 ignore 正式裁定省略的编号公式凭空补回单元。与 `known_book`（extra 方向）
+    对称：`known_book` 豁免「编造」，`ignore` 豁免「漏写」。
+
+    兼容扁平 / 分组（ch/appendix/supplement）/ 历史 data 三种配置形状（与
+    `_formula_layer_enabled` / `_formula_scope` 同一口径）。ignore 项可为裸号
+    （`'2.7'`）或作用域键（`'9.8#17'`）；单元对账按**裸号**豁免，故作用域键同时
+    登记 `#` 之后的裸号部分。
+    """
+    path = os.path.join(ext, "verify_config.json")
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return set()
+
+    out = set()
+
+    def _harvest(node):
+        if isinstance(node, dict):
+            for x in (node.get("ignore") or []):
+                s = str(x).strip()
+                if not s:
+                    continue
+                out.add(s)
+                if "#" in s:
+                    out.add(s.split("#", 1)[1].strip())
+
+    def _from_container(container):
+        if not isinstance(container, dict):
+            return
+        _harvest(container.get("formula"))
+
+    _from_container(cfg)
+    for grp in ("ch", "appendix", "supplement"):
+        _from_container(cfg.get(grp))
+    data = cfg.get("data")
+    if isinstance(data, dict):
+        for sub in data.values():
+            _from_container(sub)
+    for v in cfg.values():
+        _from_container(v)
+    return out
+
+
 def _load_known_book(ext):
     """读 verify_config.json 的 ``formula.known_book`` → 裸编号集合。
 
@@ -737,6 +790,10 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
     ord_keys = chapter_ordinals(contract) if contract is not None else set()
     problems = []
     known_book = _load_known_book(ext)
+    # 🔴 与 verify Q 层同口径的「合法省略」白名单（missing 方向）：登记进
+    # formula.ignore 的编号是正式裁定省略的推导/描述式，单元 ③ 对账不得再逼写手
+    # 把它们补回（否则「verify 绿 / gate 红」两头堵）。见 `_formula_ignore` 文档。
+    formula_ignore = _formula_ignore(ext)
     _sec_scoped = _formula_scope(ext) == 3
     # 🔴 `\tag` 对账与章级 verify 的 Q 层同开关：未声明公式层时，单元级跳过 `\tag`
     # 缺失/编造对账（含 phantom 的跨节编号判定），不把 build_structure 过度挂上的
@@ -818,8 +875,12 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
             # 编号列）不作真值：既不再**要求**单元写 `\tag{00}`，单元里真写了就按
             # 「编造」报出，脏数据自动暴露（判据见 lib.numbering.formula_tag_noise，
             # 抽取侧同用，新契约不会再产生）。
+            # 🔴 同时剔除 `formula.ignore` 登记的「合法省略」编号：verify Q 层已把这些
+            # 号从 MISSING/FABRICATED 双向豁免，单元 ③ 对账必须同口径——不得逼写手把
+            # 正式裁定省略的推导/描述式补回单元（否则「verify 绿 / gate 红」两头堵）。
             exp = [str(t) for t in exp
-                   if not formula_tag_noise(t, section_scoped=_sec_scoped)]
+                   if not formula_tag_noise(t, section_scoped=_sec_scoped)
+                   and str(t).strip() not in formula_ignore]
         if not formula_on:
             exp = None
         # 图片 / 内容块真值（同 tags 语义）：主真值 = manifest.images / manifest.content

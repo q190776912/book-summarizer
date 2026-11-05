@@ -165,6 +165,27 @@ class TestLetterSlotFoldingPure(unittest.TestCase):
             self.assertEqual(_norm_path_labelfree(_norm_path_labelfree(k)),
                              _norm_path_labelfree(k), k)
 
+    def test_internal_whitespace_collapsed(self):
+        """标签词与编号之间的空格是排版噪声，必须折叠；`定理 35` ↔ `定理35` 视为同一实体。"""
+        # 核心回归：Serre ch16 `定理 35`（md 空格）与契约 `定理35`（无空格）不再两侧报错。
+        self.assertEqual(_norm_path_labelfree('定理 35'), '定理35')
+        self.assertEqual(_norm_path_labelfree('定理35'), '定理35')
+        self.assertEqual(_norm_path_labelfree('定理 35'),
+                         _norm_path_labelfree('定理35'))
+        # EN 同口径：`Theorem 12.3` ↔ `Theorem12.3`。
+        self.assertEqual(_norm_path_labelfree('Theorem 12.3'),
+                         _norm_path_labelfree('Theorem12.3'))
+        # 字母章位键带空格仍正确折到字母槽。
+        self.assertEqual(_norm_path_labelfree('定义 A.2-1'), 'A.2-1')
+        self.assertEqual(_norm_path_labelfree('Proposition A.1.2'), 'A.1-2')
+        # 折叠后单调性：原本匹配的照旧匹配（idempotent）。
+        for k in ('定理 35', '定理35', '定义 A.2-1', 'Theorem 12.3'):
+            self.assertEqual(_norm_path_labelfree(_norm_path_labelfree(k)),
+                             _norm_path_labelfree(k), k)
+        # 负向：空格不抹掉「标签差异」——`定义35` 与 `定理35` 仍不同（无空格，本就不同）。
+        self.assertNotEqual(_norm_path_labelfree('定义35'),
+                            _norm_path_labelfree('定理35'))
+
     def test_mention_domain_judgement_still_skips_letter_keys(self):
         """提及域判据（tag/figref/eqref 豁免）不得因本折顺带扫掉字母键。"""
         from item_numbering_integrity import _mention_num_regex

@@ -97,6 +97,15 @@ _TAIL_GAP_CAP = 5
 # 其编号解析不到 -> 误报「首项缺失」。约束改为「不跨行」([^\n])，仍由下一个 '**' 收尾。
 _SPAN_RE = re.compile(r'\*\*([^\n]*?)\*\*')
 _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)')
+# 🔴 引用式 m3 守卫（集合论第三卷 ch3 实测）：m3 用 re.search 在 span 任意位置找
+# 「类型词+编号」，会把块引用里的交叉参照「（2）由引理3.89 过渡．」误判成条目
+# 引理3.89 的又一次出现 → 假「疑似幽灵重复节点」。m3 本意是「类型词前带命名/归因」
+# （如「黎斯 (Riesz) 引理2.5-4」），其 label 前若是**引用动词直接贴着 label**
+# （「由引理」「见定理」），则是引用而非条头。判据：label 之前的前缀，剥掉尾部
+# 括号/空白后若以引用动词结尾 → 视为引用，拒绝复活。真正带归因括号的条头（「（由
+# Banach）引理3.1」）动词在括号内、前缀以 `）` 收尾，不中此判据，照常保留。
+_CITE_VERB_TAIL_RE = re.compile(
+    r'(?:见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)\s*[）)〕]?\s*$')
 
 # 「(continued)」/「（续）」续部标记（2026-10-24 elements-of-large-sample-theory
 # ch4/ch6 实测）：印面把被后续条目隔断的**同一条目**块续排时，续块条头沿用原编号
@@ -935,6 +944,11 @@ def _parse_entry(inner, levels, lang=None):
             elif _ch in ')）':
                 _depth -= 1
         if _depth > 0:
+            return None
+        # 🔴 引用式 m3 守卫：label 之前的前缀若以引用动词收尾（动词直接贴着 label，
+        # 如「（2）由引理」「（注）见定理」），这是交叉参照而非条头，拒绝复活。
+        # 真正带归因括号的条头（「（由 Banach）引理」）前缀以 `）` 收尾，不中此判据。
+        if _CITE_VERB_TAIL_RE.search(inner[:m3.start()]):
             return None
         numpath = m3.group(1)
         if _is_header_boundary(inner[m3.end():], lang):
@@ -2620,6 +2634,12 @@ def _norm_path_labelfree(k):
     由本层暴露（类型对账在闸门⑩ / P 层）。
     """
     s = _norm_path(k)
+    # 🔴 折叠键内空白（OCR/排版在「标签词 ↔ 编号」之间插入的空格，如 md `定理 35`
+    # 与契约 `定理35`）。这类空格是纯排版噪声、非真键形差异；不折则同一条目在
+    # 两条方向同时报错（Serre ch16 `定理 35` 误报 EXTRA-ENTRY，ch18 `定理 35'`
+    # 带撇重述亦误报）。折叠是函数且两侧同折：原本匹配的照旧匹配，只会多匹配，
+    # 不会新造 truly_missing / EXTRA（与 `_norm_path` 同源单调性）。
+    s = re.sub(r'\s+', '', s)
     m = _LETTER_SLOT_RE.match(s)
     if m:
         return f"{m.group(2)}.{m.group(3)}-{m.group(4)}"

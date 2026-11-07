@@ -179,28 +179,60 @@ class physical_evidence:
         return ex
 
     @staticmethod
-    def pages_all_landed(book_dir, extract_dir):
-        ex = physical_evidence._extract_dir(book_dir, extract_dir)
-        files = glob.glob(os.path.join(ex, "page_*.json"))
-        if not files:
-            return False, "无 page_*.json"
+    def _page_nums(d):
         nums = []
-        for f in files:
+        for f in glob.glob(os.path.join(d, "page_*.json")):
             base = os.path.basename(f)
             try:
                 nums.append(int(base[len("page_"):-len(".json")]))
             except ValueError:
                 continue
-        nums.sort()
+        return sorted(nums)
+
+    @staticmethod
+    def _gap(nums):
+        """返回 (首页非 1?, 断点前页?)，两者皆 None 表示 1..N 连续。"""
         if not nums:
-            return False, "page 编号解析失败"
+            return None, None
         if nums[0] != 1:
-            return False, f"首页非 1（{nums[0]}）"
-        # 连续性：无空洞
+            return nums[0], None
         for i in range(1, len(nums)):
             if nums[i] != nums[i - 1] + 1:
-                return False, f"page 序列在 {nums[i-1]} 后断裂"
-        return True, f"{len(nums)} 页连续落盘 (1..{nums[-1]})"
+                return None, nums[i - 1]
+        return None, None
+
+    @staticmethod
+    def pages_all_landed(book_dir, extract_dir):
+        """`page_*.json` 全落盘 = 每册（或单册根目录）页号 1..N 连续无空洞。
+
+        🔴 多册书的 page 文件**只在** `_extract/<册>/`（SKILL.md「上下册」条），
+        根目录恒为空 —— 只看根目录会把这类书一律判成「无 page_*.json」，
+        于是 audit / mark 对已收官的多册书永久报假缺页（数学分析实测 971 页在盘：
+        上册 + 下册各自连续）。册目录一律走 `lib.page_dir.volume_dirs`
+        （不硬编码「上册/下册」，且 `_`/`.` 前缀的备份·演练区不算分册）。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        dirs = []
+        root = physical_evidence._page_nums(ex)
+        if root:
+            dirs.append(("", root))
+        from lib.page_dir import volume_dirs
+        for d in volume_dirs(ex):
+            nums = physical_evidence._page_nums(d)
+            if nums:
+                dirs.append((os.path.basename(d), nums))
+        if not dirs:
+            return False, "无 page_*.json（根目录与各册子目录均无）"
+        for name, nums in dirs:
+            bad_first, bad_gap = physical_evidence._gap(nums)
+            tag = (name + " " if name else "")
+            if bad_first is not None:
+                return False, f"{tag}首页非 1（{bad_first}）"
+            if bad_gap is not None:
+                return False, f"{tag}page 序列在 {bad_gap} 后断裂"
+        detail = " / ".join("%s1..%d" % (n + " " if n else "", v[-1]) for n, v in dirs)
+        return True, "%d 页连续落盘（%d 组：%s）" % (
+            sum(len(v) for _, v in dirs), len(dirs), detail)
 
     @staticmethod
     def chapter_map_ok(book_dir, extract_dir):

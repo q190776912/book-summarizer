@@ -133,7 +133,7 @@ class ShapeLeg(unittest.TestCase):
 
     def test_short_core_is_skipped(self):
         self.assertEqual(cad.scan_text(u"$$\nx\n$$\n\n---\n\n$$\nx\n$$\n", u"x.md"), [])
-        self.assertLess(len(cad.block_core(u"$$\nx\n$$")), cad.MIN_CORE)
+        self.assertLess(len(cad.dup_core(u"$$\nx\n$$")), cad.MIN_CORE)
 
 
 class FillerPattern(unittest.TestCase):
@@ -192,6 +192,59 @@ def _backup_delivery(bak_dir):
             if len(mds) == 1:
                 return str(mds[0])
     return None
+
+
+class TextBodyIsDiscriminating(unittest.TestCase):
+    """🔴 本探测器**不许**删 `\\text{}` 体（2026-11-06 郑大钟 12 条假阳的根治）。
+
+    缺陷形态：内核归一复用 `census_unit_delivery_coverage.block_core()`，它经
+    `check_translate_parity._flatten_math` 删掉全部 `\\text{}` 散文体 —— 那对**跨语种**
+    parity 是对的（源 `\\text{and}` 与译 `\\text{且}` 是同一条式子），对「同一份交付里
+    同一条式子印了两遍」是错的：语种不变，中文就是判别内容。郑大钟《线性系统理论》
+    实测 SHAPE 12 条全部因此塌成同一内核，逐条读下来零真阳性（下面这对就是原文）。
+    """
+
+    # 第7章_7.3_线性相关和线性无关.md L58–L64 的逐字形态：两条**互为否定**的等价关系
+    ZDZ_PAIR = (
+        u"设 $\\boldsymbol{Q}(s)$ 为一个 $n\\times n$ 方多项式矩阵，则：\n"
+        u"\n"
+        u"$$\n"
+        u"\\boldsymbol{Q}(s)\\text{ 非奇异}\\iff \\boldsymbol{Q}(s)\\text{ 的行/列多项式向量为线性无关}\n"
+        u"$$\n"
+        u"\n"
+        u"$$\n"
+        u"\\boldsymbol{Q}(s)\\text{ 奇异}\\iff \\boldsymbol{Q}(s)\\text{ 的行/列多项式向量为线性相关}\n"
+        u"$$\n"
+    )
+    # 真重复（含 `\\text{}` 且逐字相同）：仍必须点名，否则本类测试等于把腿锯了
+    TRUE_DUP = (
+        u"**定理7.3.1**：\n"
+        u"\n"
+        u"$$\n"
+        u"\\boldsymbol{Q}(s)\\text{ 非奇异}\\iff \\boldsymbol{Q}(s)\\text{ 的行/列多项式向量为线性无关}\n"
+        u"$$\n"
+        u"\n"
+        u"---\n"
+        u"\n"
+        u"$$\n"
+        u"\\boldsymbol{Q}(s)\\text{ 非奇异}\\iff \\boldsymbol{Q}(s)\\text{ 的行/列多项式向量为线性无关}\n"
+        u"$$\n"
+    )
+
+    def test_cjk_text_bodies_keep_the_pair_apart(self):
+        self.assertEqual(cad.scan_text(self.ZDZ_PAIR, u"x.md"), [])
+
+    def test_identical_block_still_pairs(self):
+        hits = _shape(self.TRUE_DUP)
+        self.assertEqual(len(hits), 1)
+        self.assertIn(u"\\text{非奇异}", hits[0][4])   # 内核里中文可见 = 没被删体（空白已折叠）
+
+    def test_core_function_does_not_strip_text(self):
+        """直接锁 `dup_core` 与 parity 口径的分叉点（防「顺手换回公共函数」）。"""
+        blk = u"$$\nA\\text{ 甲}=B\n$$"
+        self.assertIn(u"甲", cad.dup_core(blk))
+        from census_unit_delivery_coverage import block_core
+        self.assertNotIn(u"甲", block_core(blk))       # 跨语种口径照旧删体，两者不该合流
 
 
 if __name__ == "__main__":

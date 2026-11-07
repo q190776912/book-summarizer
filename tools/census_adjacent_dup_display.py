@@ -30,8 +30,9 @@ known_true 控件（`--control <md 路径>`，零命中不可信）：把**手�
 GAP 不落 SHAPE」「前后任一份带 `>` ⇒ 不配」「多行块的配对基准是结束行」；改 `_FILLER`
 或配对口径必须先跑该测试，其 quoted 用例在 2026-10-31 收窄前是实测失败的）。
 
-归一内核走 `census_unit_delivery_coverage` 自己的 `block_core()`（同一函数 = 同一口径），
-语料遍历走 `_book_dirs()`（出厂入口，不自算等价口径）。
+归一内核是本文件自己的 `dup_core()`（**不**用 `census_unit_delivery_coverage.block_core`：
+后者删 `\text{}` 体服务跨语种 parity，在本探测器上会把不同公式折成同一内核，
+见 `dup_core` docstring），语料遍历走 `_book_dirs()`（出厂入口，不自算等价口径）。
 
 用法：
     python tools/census_adjacent_dup_display.py <corpus_root|book_dir>
@@ -57,9 +58,28 @@ for _p in (_ROOT, os.path.join(_ROOT, "lib"), os.path.join(_ROOT, "tools")):
 import lib.boot as _boot
 _boot.setup()
 
-from census_unit_delivery_coverage import DISPLAY_RE, _book_dirs, block_core
+from census_unit_delivery_coverage import DISPLAY_RE, _book_dirs, shape_norm  # noqa: E402
+from check_translate_parity import _SPACING_RE                                 # noqa: E402
 
 MIN_CORE = 8          # 短内核（`x` / `=0`）没有判别力，不参与配对
+
+
+def dup_core(blk):
+    """`$$…$$` → 配对比对用内核：**保留** `\\text{}` 体。
+
+    🔴 这里**故意不**复用 `census_unit_delivery_coverage.block_core()`：后者经
+    `check_translate_parity._flatten_math` 删掉全部 `\\text{}` 散文体，那是**跨语种**
+    判据的正确设计（源 `$$\\text{and } x=y$$` 与译 `$$\\text{且 } x=y$$` 是同一条式子）。
+    本探测器判的是「同一份交付里同一条式子印了两遍」，语种不变 ⇒ `\\text{}` 里的中文
+    **就是**判别内容：郑大钟《线性系统理论》实测 12 条 SHAPE 全因它塌成同一内核
+    （`$\\begin{bmatrix}\\text{…}\\end{bmatrix}$` 两个不同矩阵折成同一串），逐条读下来
+    零真阳性。删体 = 造出印面上并不存在的「同一条」，与 ⑭ 折平造 `(1n)` 假锚同类。
+    其余口径（剥 `>`、去 `$`、折空白与间距宏、`shape_norm` 剥脚手架）与 block_core 逐字同形。
+    """
+    s = "\n".join(re.sub(r"^\s*>?\s*", "", ln) for ln in blk.split("\n"))
+    s = _SPACING_RE.sub("", s)
+    return shape_norm(re.sub(r"\$+", "", re.sub(r"\s+", "", s)))
+
 # 两份之间允许的内容：空行 / 水平线 / ATX 标题 / 粗体条头（与 2026-10-31 标定逐字同形，
 # 收窄/放宽都要重跑 --control 控件与全语料基线）
 _FILLER = re.compile(r"^(?:\s*$|-+|#{1,6}\s.*|\*\*[^*]+\*\*[:：]?\s*)$")
@@ -85,7 +105,7 @@ def scan_text(text, label=u"", gap=20):
     out = []
     seen = defaultdict(list)                    # core -> [(start_ln, end_ln, in_quote)]
     for m in DISPLAY_RE.finditer(text):
-        core = block_core(m.group(0))
+        core = dup_core(m.group(0))
         if len(core) < MIN_CORE:
             continue
         ln = text.count("\n", 0, m.start()) + 1

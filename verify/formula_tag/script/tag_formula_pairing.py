@@ -444,13 +444,63 @@ def _containment(a: str, b: str) -> float:
     return matched / float(len(a))
 
 
+# 🔴 书侧配对账本自洽率下限（2026-11-08 线性系统理论郑大钟第二版根治）。
+# 一章里「总结贴在该号上的正文」能与「书侧为该号记下的任一账身」配上(>=hi)的比例，
+# 低于此值说明整章书侧账本普遍读烂/错位一格，用它反推「配错号/顺序错/放错节」
+# 都没有根据 —— 按 Q 层既有「账太薄不判 / 无证据不判」哲学整章降级，只作用于
+# ORDER_MISMATCH / MISPLACED / TAG_MISMATCH 三个 WARN 支，绝不触碰阻断支。
+# 标定（59 本全库，_tmp_20261108_fullcheck/q_ledger_coherence.py）：
+#   线性系统 12/13 章 0.191~0.476（ch1 仅 2 枚号、无告警）；
+#   OCR 质量同样差的 高等代数 0.853~1.000 / statistical-inference 0.800~1.000 /
+#   analytic-number-theory 0.592~1.000 / Elliptic PDE 0.750~0.889 均远离阈值。
+#   抽样里唯一误命中 数值分析 ch5 = 0.444（该章三个 WARN 支本就为 0）。
+#   全库 59 本 A/B 实测降级面为 7 本 24 章（其中 12 章零告警），见
+#   verify/formula_tag/formula_tag.md 的「标定」节——抽样每章只取第一份 md，
+#   低估了双语书影响面，以全库 A/B 为准。
+LEDGER_COHERENCE_MIN = 0.50
+
+
+def ledger_coherence(printed: Dict[str, List[str]],
+                     summary: List[tuple],
+                     hi: float = 0.80,
+                     min_body: int = 12,
+                     min_samples: int = 8):
+    """书侧配对账本的**自洽率**：多少号能配上自己那格的印面账身。
+
+    返回 ``float``（0~1）或 ``None``（样本不足/无可比账本 → 不降级，照常判）。
+    口径与 `pairing_problems` 的入账门槛一致：只计归一化正文 >= `min_body`
+    且书侧确有载体的号，每个号按总结首见取一次。纯函数，不读页、不改状态。
+    """
+    if not printed or not summary:
+        return None
+    total = ok = 0
+    seen: Set[str] = set()
+    for n, body in summary:
+        if n in seen:
+            continue
+        seen.add(n)
+        own = printed.get(n)
+        if not own:
+            continue
+        nb = norm_math(body)
+        if len(nb) < min_body:
+            continue
+        total += 1
+        if max(_ratio(nb, norm_math(p)) for p in own) >= hi:
+            ok += 1
+    if total < min_samples:
+        return None
+    return ok / float(total)
+
+
 def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
                      ncomp: Optional[int] = None,
                      ignore: Optional[Set[str]] = None,
                      lead: Optional[str] = None,
                      hi: float = 0.80,
                      min_body: int = 12,
-                     printed: Optional[Dict[str, List[str]]] = None
+                     printed: Optional[Dict[str, List[str]]] = None,
+                     ledger_coherence_val: Optional[float] = None
                      ) -> List[dict]:
     r"""总结里「正文与编号配错」的行（非阻断 WARN 族 `q_tag_mismatch`）。
 
@@ -502,6 +552,14 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
         if nn:
             ign.add(nn)
     summary = summary_tag_bodies(md_file)
+    # 🔴 章级「书侧账本判别力」闸：整章账本自洽率过低时，任何「配错号」结论
+    # 都无据（低质量 OCR 让多数号自己配不上自己，共享骨架的异号却拿高分）。
+    # 与 `len(printed) < 3` 的「账太薄不判」是同一哲学的推广：账本有但不可用。
+    # 单调（只减少告警、绝不新增）；`ledger_coherence_val` 由 Q 层 run() 复用
+    # 同一份账本传入，避免重复扫页；直接调用本函数时自行计算。
+    if (ledger_coherence_val is not None
+            and ledger_coherence_val < LEDGER_COHERENCE_MIN):
+        return []
     carrier: Dict[str, str] = {}          # 号 -> 总结贴在它那一格上的正文（首现）
     for n_, b_ in summary:
         carrier.setdefault(n_, b_)

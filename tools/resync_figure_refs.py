@@ -74,7 +74,8 @@ import lib.boot as boot  # noqa: E402
 boot.setup()
 
 from data.book_structure.book_structure import (  # noqa: E402
-    prime_chapter_kinds, unit_dir_name, resolve_chapter_json_path)
+    prime_chapter_kinds, reset_chapter_kinds, unit_dir_name,
+    resolve_chapter_json_path)
 
 RE_IMG = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)("[^>]*?>)', re.I)
 RE_ALT = re.compile(r'\balt="([^"]*)"', re.I)
@@ -646,6 +647,11 @@ def main():
     a = ap.parse_args()
     book = os.path.abspath(a.book)
     ext = os.path.join(book, "_extract")
+    # 🔴 本 CLI 一次只处理一本书：先清掉进程里其它书残留的章型，再按当前
+    # `ext` 灌注。否则跨书/跨测试连续调用时 `_PRIMED_KINDS` 会把上一本书的
+    # kind 串到本书，`unit_dir_name` 算出 `appendixN` 而非 `chN` → 整章 0 job
+    # （pytest 全量跑 ch14 实测）。见 `reset_chapter_kinds` docstring。
+    reset_chapter_kinds()
     prime_chapter_kinds(ext)
     sides = list(SIDES) if a.side == "both" else [a.side]
     keys = a.chapters or []

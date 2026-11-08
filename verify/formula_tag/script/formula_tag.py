@@ -3292,7 +3292,8 @@ def _split_scoped_ignore(keys) -> tuple:
     return glob, scoped
 
 
-def _tag_pairing_rows(ctx, ncomp, lead, ignore) -> list:
+def _tag_pairing_rows(ctx, ncomp, lead, ignore,
+                      printed=None, coherence=None) -> list:
     """「同号配错式」探针（`q_tag_mismatch`，非阻断 WARN）。
 
     实现在同包自包含模块 `tag_formula_pairing.py`：那里按 `page_*.json` 重建
@@ -3309,7 +3310,8 @@ def _tag_pairing_rows(ctx, ncomp, lead, ignore) -> list:
         from tag_formula_pairing import pairing_problems
         return pairing_problems(ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
                                 ctx.md_file, ncomp=ncomp, ignore=ignore,
-                                lead=lead)
+                                lead=lead, printed=printed,
+                                ledger_coherence_val=coherence)
     except Exception as exc:                      # noqa: BLE001
         print(f"[Q-LAYER TAG-PAIRING *WARN*] 配对探针未跑成：{exc!r}",
               file=sys.stderr)
@@ -3425,6 +3427,52 @@ class QLayer(VerifyLayer):
         # OrdinalDepthError。数字码 1/2/3 + legacy `letter_ch` 经解析器逐字节等价。
         lead, ncomp = resolve_formula_type(
             ftype, letter_ch=bool(formula.get('letter_ch')))
+        # 🔴 章级「书侧配对账本自洽率」评估（2026-11-08 线性系统根治，判据
+        # `tag_formula_pairing.ledger_coherence`）。整章账本大面积配不上自己
+        # 时，本层三个 WARN 支（ORDER / MISPLACED / TAG）所依赖的位置账与
+        # 配对账都不足为据 → 按既有「无证据不判」哲学降级跳过，**阻断支
+        # FABRICATED / INCONSISTENT / MISSING 一字不动**。
+        # 只建一次账本并通过 `_tag_pairing_rows(printed=...)` 复用，不重复扫页。
+        _ledger_printed = None
+        _ledger_coherence = None
+        _lc_min = None
+        if ncomp != 1:
+            try:
+                from tag_formula_pairing import (
+                    printed_tag_bodies, summary_tag_bodies,
+                    ledger_coherence as _ledger_coh,
+                    LEDGER_COHERENCE_MIN as _LEDGER_MIN)
+                _ledger_printed = printed_tag_bodies(
+                    ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
+                    ncomp=ncomp, lead=lead)
+                _ledger_coherence = _ledger_coh(
+                    _ledger_printed, summary_tag_bodies(ctx.md_file))
+                _lc_min = _LEDGER_MIN
+            except Exception as exc:      # noqa: BLE001
+                # 探针自身异常绝不静默吞掉，也绝不因此降级（fail-safe 照常判）。
+                print(f"[Q-LAYER LEDGER *WARN*] 自洽率未跑成，判据照常执行：{exc!r}",
+                      file=sys.stderr)
+                _ledger_printed = None
+                _ledger_coherence = None
+        _degraded = bool(_ledger_coherence is not None and _lc_min is not None
+                         and _ledger_coherence < _lc_min)
+
+        def _degrade_warn(om_rows, mp_rows, tm_rows):
+            skipped = []
+            for rows_, label in ((om_rows, 'ORDER_MISMATCH'),
+                                 (mp_rows, 'MISPLACED'),
+                                 (tm_rows, 'TAG_MISMATCH')):
+                if rows_:
+                    skipped.append('%s %s' % (
+                        label, ', '.join(str(r.get('number', '')) for r in rows_)))
+            print("[Q-LAYER EVIDENCE-DEGRADED] ch%s 书侧配对账本自洽率 %.3f < %.2f："
+                  "本章 page_*.json 的公式正文/标签普遍无法自证，"
+                  "ORDER_MISMATCH / MISPLACED / TAG_MISMATCH 三支 WARN 判据按"
+                  "「无证据不判」降级跳过；FABRICATED / INCONSISTENT / MISSING "
+                  "三个阻断支照常校验。跳过项：%s"
+                  % (ctx.ch, _ledger_coherence, _lc_min,
+                     '; '.join(skipped) if skipped else '无'),
+                  file=sys.stderr)
         # `formula.letter_ch` (default False): letter-chapter-led numbering
         # `(A.3)` / `（B.12）`（Lee ISM appendices）；roman type 码 16 → lead='roman'
         # `（II.5）`。Patterns and norm() then accept a leading capital-letter /
@@ -3528,7 +3576,11 @@ class QLayer(VerifyLayer):
                     scoped_ignore=fscoped)
                 tm = _tag_pairing_rows(
                     ctx, ncomp, lead,
-                    fglob | {nn for (_s, nn) in fscoped})
+                    fglob | {nn for (_s, nn) in fscoped},
+                    printed=_ledger_printed)
+                if _degraded:
+                    _degrade_warn(om, mp, tm)
+                    om, mp, tm = [], [], []
                 # RESERVED letter/Roman-led probe: only meaningful when the
                 # config has NOT selected an alpha-led family.  With `letter_ch`
                 # (letter) or roman type 16, that numbering IS validated by the
@@ -3579,7 +3631,11 @@ class QLayer(VerifyLayer):
             tags_sec, src, fignore, reset_on_section=False)
         fab, inc, miss, rows = _compare(
             tags, src, ctx.ch, chapter_prefix, fignore, s_empty_note=ll_note)
-        tm = _tag_pairing_rows(ctx, ncomp, lead, fignore)
+        tm = _tag_pairing_rows(ctx, ncomp, lead, fignore,
+                               printed=_ledger_printed)
+        if _degraded:
+            _degrade_warn(om, mp, tm)
+            om, mp, tm = [], [], []
         return LayerResult(code='Q', metadata={
             'q_checked': True,
             'q_fabricated': fab,

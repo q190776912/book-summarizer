@@ -156,6 +156,22 @@ def chapter_label(key: Any, kind: Any = None) -> str:
 _PRIMED_KINDS: Dict[str, int] = {}
 
 
+def reset_chapter_kinds() -> None:
+    """清空进程级 kind 注册表，供「一次只处理一本书」的 CLI 在灌注前调用。
+
+    `_PRIMED_KINDS` 是**进程级全局**；`prime_chapter_kinds` 只灌不清，因此同一
+    进程里连续处理多本书时，上一本书的 kind 会残留并污染下一本书的
+    `chapter_label` / `unit_dir_name` / `chapter_json_name`。实测事故：pytest
+    全量跑里章 `14` 被前序测试灌成 `KIND_APPENDIX`，`unit_dir_name("14")`
+    遂算出 `appendix14`，`resync_figure_refs` 对该章 0 job、图引用旧名残留
+    （`test_two_digit_chapter_label_is_not_blind` 单跑过、全量挂）。
+
+    本函数**只清空**，不改变 `prime_chapter_kinds` 既有的累积灌注语义；需要
+    「以当前 ext 为唯一真值」的入口显式调用它，多册书逐册汇总的流程照旧。
+    """
+    _PRIMED_KINDS.clear()
+
+
 def prime_chapter_kinds(extract_dir: Optional[str] = None) -> Dict[str, int]:
     """读 ``chapter_map.json`` 把 ``{num_str: kind}`` 灌进进程级注册表并返回它。
 

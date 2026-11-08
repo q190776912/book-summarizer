@@ -224,8 +224,27 @@
    （幂等可重跑，正常流程无需单独执行）。
 4. **单元拆分**（write-source 步骤 4）：`split_draft_units <extract_dir> [ch ...]` →
    `units/ch{N}/`（附录章 `units/appendix{X}/`；每 item 一单元 + `manifest.json`）。
-5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
-   图片真值 + 证明覆盖审计），FAIL 严禁拆分。复算与磁盘之间的**人工印面裁定**走
-   管线输入 `verify_config.json → content_overrides`（`lib/content_overrides.py`；
-   写入方 `config/verify_config/register_content_override.py`，登记即校验「落在磁盘 +
-   重算仍活」，两样都不满足直接 REFUSE）；未登记的偏离照旧 FAIL。
+  5. **内容完整性闸门**：`verify/script/check_content_completeness.py`（确定性复算 +
+     图片真值 + 证明覆盖审计），FAIL 严禁拆分。复算与磁盘之间的**人工印面裁定**走
+     管线输入 `verify_config.json → content_overrides`（`lib/content_overrides.py`；
+     写入方 `config/verify_config/register_content_override.py`，登记即校验「落在磁盘 +
+     重算仍活」，两样都不满足直接 REFUSE）；未登记的偏离照旧 FAIL。
+
+## 9. 进程级章型注册表（`prime` / `reset`）
+
+`_PRIMED_KINDS: {章号: kind}` 是**进程级全局**，供 `chapter_label` /
+`chapter_json_name` / `unit_dir_name` 等只传章号的调用点自动取得正确前缀。
+`prime_chapter_kinds(ext)` 读 `ext/chapter_map.json` **累积灌注**（多册书逐册汇总依赖
+此语义）；文件缺失/损坏时原样返回既有内容，不抛、不清空。
+
+🔴 **风险**：同一进程里连续处理多本书时，上一本书的 kind 会残留并污染下一本书，
+把 `ch14` 算成 `appendix14`，令依赖 `unit_dir_name` 的对账闸静默失效。
+`resolve_chapter_json_path` 已改用磁盘物理证据兜底，但其余调用点仍读注册表。
+
+**约定（2026-11-08）**：**一次只处理一本书**的 CLI 必须在 `prime_chapter_kinds(ext)`
+之前调用 `reset_chapter_kinds()`，使当前 `ext` 成为唯一真值；多册书逐册汇总的流程
+不调用它。`reset_chapter_kinds()` 只清空、不改变 `prime` 的累积语义。
+落地与判据：`tools/resync_figure_refs.py::main()`、
+`tools/tests/test_resync_figure_refs_isolation.py`（含「关掉 reset 必须复现原失败」
+负向锁）。实测事故：pytest 全量跑 `test_two_digit_chapter_label_is_not_blind`
+单跑通过、全量失败，注入 `_PRIMED_KINDS['14']=2` 可稳定复现。

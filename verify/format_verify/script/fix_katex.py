@@ -145,10 +145,8 @@ def fix_unclosed_dollars(lines: list) -> tuple:
             while j < len(lines) and lines[j].strip() == '':
                 j += 1
             if j < len(lines) and lines[j].strip().startswith('$$'):
-                # The unclosed $ will swallow the $$. Add closing $
-                # Find the last $... segment that has no closing
-                idx = len(stripped)
-                # Common trailing punctuation
+                 # The unclosed $ will swallow the $$. Add closing $
+                 # Common trailing punctuation
                 for punct in ',;:，；：。、?？)）':
                     if stripped.rstrip().endswith(punct):
                         pos = stripped.rstrip().rfind(punct)
@@ -397,8 +395,6 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
     in_single = False
     # Kind stack for open braces: 'g' = grouping `{`, 'l' = literal set `\{`.
     brace_stack = []
-    # flag: True if a literal-set opener `\{` is still unclosed
-    seen_esc_open = False
 
     def in_math():
         return in_dd or in_single
@@ -422,14 +418,12 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
             if not in_dd:
                 in_single = False  # leaving display math resets inline too
             brace_stack = []
-            seen_esc_open = False
             i += 2
             continue
         if content[i] == '$' and not in_dd:
             out.append('$')
             in_single = not in_single
             brace_stack = []
-            seen_esc_open = False
             i += 1
             continue
 
@@ -462,7 +456,6 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
                     out.append('{')
                 else:
                     out.append('\\{')
-                    seen_esc_open = True   # we are in \{... zone
                 brace_stack.append(kind)
                 i += 2
                 continue
@@ -481,7 +474,6 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
                     if brace_stack:
                         brace_stack.pop()
                     out.append('\\}')
-                    seen_esc_open = False  # set notation properly closed
                 i += 2
                 continue
 
@@ -501,7 +493,6 @@ def fix_escaped_braces_in_math(content: str) -> tuple:
             elif brace_stack and brace_stack[-1] == 'l':
                 brace_stack.pop()
                 out.append('\\}')
-                seen_esc_open = False
             else:
                 out.append(c)
             i += 1

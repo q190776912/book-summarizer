@@ -1255,8 +1255,11 @@ class physical_evidence:
             return None
         try:
             contract = json.load(open(contract_path, encoding="utf-8"))
-        except Exception:
-            return None
+        except Exception as exc:
+            # 🔴 契约存在却读不出来（损坏 / 编码错误）不能静默放行：调用方用
+            # `if miss:` 判空，返回 None 会让「骨架节 / 编号项在位」证据闸整章
+            # 失效。返回一条明确的失败项，经 missing_names 走硬拒并带出路径。
+            return [u"<结构契约读取失败 %s：%r>" % (contract_path, exc)]
         text = ""
         for f in md_files:
             try:

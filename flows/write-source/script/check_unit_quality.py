@@ -1,4 +1,4 @@
-"""check_unit_quality.py — 单元级「写对」质量校验（write-source 步骤 5 门控的一部分）
+r"""check_unit_quality.py — 单元级「写对」质量校验（write-source 步骤 5 门控的一部分）
 
 全部复用 verify 流程已有检测脚本，按 verify F 层校验顺序执行，不重新造轮子：
   F 层（按 verify 顺序）：
@@ -1176,7 +1176,7 @@ def collapse_digits_frag(frag):
 
 
 def tighten_math_text(text, collapse_digits=False):
-    """整篇正文的机械档反转 → `(new_text, n_changed, 机械档残留, 语义档残留)`。
+    r"""整篇正文的机械档反转 → `(new_text, n_changed, 机械档残留, 语义档残留)`。
 
     `collapse_digits=True` 时追加**第三档**数字收拢（`_collapse_digits_bare`，同样只删
     空白、渲染中性），收拢后仍残留的语义档 = 被 `\`/text 组截断的真歧义形，仍须人工。

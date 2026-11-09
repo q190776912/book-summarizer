@@ -549,6 +549,22 @@ def unit_seq(rows, side="units"):
     return cur, want, gone
 
 
+def undropped_want(cur, want, gone, gone_ok):
+    """契约目标序列：manifest 腿**未接受**的去重槽位回写为当前图名。
+
+    删契约 image 块不可逆，只有 manifest 腿接受的去重才许动契约；未接受的
+    槽位必须把目标从 ``DROP`` 还原成现状名，否则后续会按 ``gone`` 误删。
+    返回 ``(目标序列, gone_ok 的拷贝)``。
+
+    🔴 推导式目标在 Python 3 有独立作用域、不外泄到函数：此处必须用
+    ``cur[i]`` 显式取当前槽名，不能引用推导式外的同名循环变量
+    （2026-11-09 审计：旧写法引用自由名 ``c``，该分支一命中即 NameError）。
+    """
+    return ([cur[i] if (i in gone and i not in gone_ok) else t
+             for i, t in enumerate(want)],
+            set(gone_ok))
+
+
 def seq_keys(rows, side="units"):
     """`unit_seq` 的**同序**展平：章级第 i 槽 ↔ (单元文件, 该单元内 img 序号)。
 
@@ -847,13 +863,17 @@ def main():
             if not uedits:
                 continue
             uout = splice(uraw, uedits)
-            assert uout.count("\n") == uraw.count("\n") - ndel_nl, u"行数不守恒：%s" % up
+            # 🔴 写盘前的守恒校验必须显式抛错：python -O 会剥掉 assert，
+            # 那样行数 / 非 img 行被改坏也会照样写盘（fail-open）。
+            if uout.count("\n") != uraw.count("\n") - ndel_nl:
+                raise SystemExit(u"行数不守恒：%s" % up)
             keep = [l for l in uraw.split("\n") if "<img" not in l.lower()]
             kept = [l for l in uout.split("\n") if "<img" not in l.lower()]
-            assert len(keep) == len(kept), \
-                u"非 img 行数变了（去重只许删 img 整行）：%s" % up
+            if len(keep) != len(kept):
+                raise SystemExit(u"非 img 行数变了（去重只许删 img 整行）：%s" % up)
             bad = [(x, y) for x, y in zip(keep, kept) if x != y]
-            assert not bad, u"改到了非 img 行：%s ｜ %s" % (up, bad[:2])
+            if bad:
+                raise SystemExit(u"改到了非 img 行：%s ｜ %s" % (up, bad[:2]))
             staged[up] = (uraw, uout, len(uedits), u"单元")
             tot["unit"] += len(perfile.get(key, []))
             tot["alt"] += len(altjobs.get(key, []))
@@ -863,7 +883,8 @@ def main():
             mraw = mraws[mp]
             mout = splice(mraw, eds)
             dnl = sum(mraw[s:e].count("\n") for s, e, _t in eds)
-            assert mout.count("\n") == mraw.count("\n") - dnl, u"manifest 行数不守恒：%s" % mp
+            if mout.count("\n") != mraw.count("\n") - dnl:
+                raise SystemExit(u"manifest 行数不守恒：%s" % mp)
             try:
                 json.loads(mout)
             except ValueError as ex:
@@ -892,9 +913,9 @@ def main():
             keys = seq_keys(rows, side_ref)
             gone_ok = set(i for i in gone_en
                           if i < len(keys) and (side_ref,) + tuple(keys[i]) in ids)
-            want_en = [c if (i in gone_en and i not in gone_ok) else t
-                       for i, t in enumerate(want_en)]
-            gone_en = gone_ok
+            # 🔴 只有 manifest 腿接受的去重才许动契约；未接受的槽位还原现名。
+            # 抽成纯函数以便判据测试直接覆盖该分支（见 undropped_want docstring）。
+            want_en, gone_en = undropped_want(cur_en, want_en, gone_en, gone_ok)
             pos = [(m.start(1), m.end(1), os.path.basename(m.group(1)))
                    for m in re.finditer(r'"image"\s*:\s*"([^"]+)"', craw)]
             cedits, done = [], set()
@@ -970,7 +991,8 @@ def main():
             if cedits:
                 cout = splice(craw, cedits)
                 dnl = sum(craw[s:e].count("\n") for s, e, _t in cedits)
-                assert cout.count("\n") == craw.count("\n") - dnl, u"契约行数不守恒：%s" % cp
+                if cout.count("\n") != craw.count("\n") - dnl:
+                    raise SystemExit(u"契约行数不守恒：%s" % cp)
                 try:
                     json.loads(cout)
                 except ValueError as ex:

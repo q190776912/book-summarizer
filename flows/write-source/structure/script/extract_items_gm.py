@@ -170,7 +170,7 @@ def scan_gm(extract_dir, ch, start, end):
         """产出 (num, rest, strong) 候选：先试剥 §-标记的强轨，再试裸轨。"""
         out = []
         stripped = ls.lstrip('$§Ss€\u00a7 ')
-        if stripped is not ls and stripped[:1].isdigit():
+        if stripped != ls and stripped[:1].isdigit():
             m = SEC_HEAD_RE.match(stripped)
             if m:
                 out.append((m.group(1), m.group(2), True))

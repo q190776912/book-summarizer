@@ -62,11 +62,13 @@ def load(p):
 
 def scan_sectioned(extract_dir, patterns, first, last, md_sections):
     """Mirror q_layer.build_sectioned's section tracking + noise filter, but
-    additionally recover (latex, page) for each book formula number and track
-    the page ranges per section."""
+    additionally recover (latex, page) for each book formula number.
+
+    注：旧 docstring 曾宣称「track the page ranges per section」，实际从未实现
+    （只有一个从未被读取的 sec_pages 占位）；此处按真实行为订正，不虚称能力。
+    """
     compiled = [re.compile(p) for p in patterns]
     sectioned = {s: {} for s in md_sections}   # sec -> num -> {latex,page,ctx}
-    sec_pages = {s: set() for s in md_sections}
     cur = 0
     for pg in range(int(first), int(last) + 1):
         fp = os.path.join(extract_dir, f'page_{pg:03d}.json')

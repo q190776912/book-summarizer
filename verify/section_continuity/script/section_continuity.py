@@ -94,7 +94,7 @@ _D_SEP_NEG = r'[.\-–·/．－〜]'
 
 
 def _build_deeper_item_re(deeper):
-    """行首恰 `deeper` 段号的条目头正则（缓存）。尾部 (?!\d)(?!SEP\d)
+    r"""行首恰 `deeper` 段号的条目头正则（缓存）。尾部 (?!\d)(?!SEP\d)
     保证不吃更长号（4 段号列表 / 区间号）。"""
     rx = re.compile(
         r'^(\d{1,3}' + (r'[.\-–·/．－〜]\d{1,3}' * (deeper - 1)) + r')(?![\d])(?!'

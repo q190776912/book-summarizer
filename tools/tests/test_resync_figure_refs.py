@@ -664,5 +664,69 @@ class T(unittest.TestCase):
         self.assertEqual(self._contract_imgs(cp), [u"figure/" + A, u"figure/x.png"])
 
 
+class NoFreeNamesInDedupBranch(unittest.TestCase):
+    """🔴 负向锁：契约去重分支旧写法 `want_en = [c if …]` 必须被静态检查器点名。
+
+    `c` 是 722 行 `cur = [c for c, _t in srows]` 的**推导式目标**（Python 3
+    独立作用域），895 行引用它在运行时是 NameError；旧检查器把它误当函数
+    局部绑定而全库零报。此例同时钉住「修好的写法」与「检查器抓得住旧写法」。
+    """
+
+    def test_fixed_source_is_clean_and_old_wording_is_caught(self):
+        import check_undefined_names as C
+        src = (Path(_ROOT) / "tools" / "resync_figure_refs.py").read_text(
+            encoding="utf-8-sig")
+        # 该分支已抽成纯函数 undropped_want；锁住「显式取 cur[i]」这一形态。
+        self.assertIn("want_en, gone_en = undropped_want(", src)
+        old = "return ([cur[i] if (i in gone and i not in gone_ok) else t"
+        self.assertIn(old, src)
+        self.assertEqual(C.check_source(src), [])
+        broken = src.replace(old,
+                             "return ([c if (i in gone and i not in gone_ok) else t")
+        self.assertNotEqual(broken, src)
+        probs = C.check_source(broken)
+        self.assertTrue(any(p[0] == "c" for p in probs), probs)
+
+
+class UndroppedWantBranch(unittest.TestCase):
+    """🔴 契约去重分支的**运行时**覆盖（此前只有静态负向锁）。
+
+    `undropped_want` 是 main() 里「manifest 腿拒绝某条去重」时执行的纯函数：
+    拒绝的槽位必须把目标从 DROP 还原成当前图名，否则契约会被误删 image 块。
+    """
+
+    def test_rejected_drop_restores_current_name(self):
+        cur = [u"figure/a.png", u"figure/b.png"]
+        want = [u"figure/a.png", R.DROP]
+        out, keep = R.undropped_want(cur, want, {1}, set())
+        self.assertEqual(out, [u"figure/a.png", u"figure/b.png"])
+        self.assertEqual(keep, set())
+
+    def test_accepted_drop_keeps_drop_sentinel(self):
+        """负向锁：manifest 腿接受时不得回写，否则删槽会被跳过。"""
+        cur = [u"figure/a.png", u"figure/b.png"]
+        want = [u"figure/a.png", R.DROP]
+        out, keep = R.undropped_want(cur, want, {1}, {1})
+        self.assertEqual(out, [u"figure/a.png", R.DROP])
+        self.assertEqual(keep, {1})
+
+    def test_no_gone_is_identity(self):
+        cur = [u"figure/a.png", u"figure/b.png"]
+        out, keep = R.undropped_want(cur, list(cur), set(), set())
+        self.assertEqual(out, cur)
+        self.assertEqual(keep, set())
+
+    def test_unit_seq_gone_indices_are_in_range(self):
+        """gone 来自 unit_seq 的槽号，必须恒可索引 cur（防 IndexError 回归）。"""
+        rows = {(u"units", u"0001.md"): [
+            (u"figure/a.png", u"figure/a.png"),
+            (u"figure/b.png", R.DROP)]}
+        cur, want, gone = R.unit_seq(rows, u"units")
+        self.assertEqual(gone, {1})
+        self.assertTrue(all(i < len(cur) for i in gone))
+        out, _keep = R.undropped_want(cur, want, gone, set())
+        self.assertEqual(out, cur)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

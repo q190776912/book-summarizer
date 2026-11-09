@@ -236,7 +236,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
     if device == "cuda":
         torch.cuda.empty_cache()
         try: paddle.device.cuda.empty_cache()
-        except: pass
+        except Exception: pass
     gc.collect()
 
     # ===================================================================
@@ -257,7 +257,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
     if device == "cuda":
         torch.cuda.empty_cache()
         try: paddle.device.cuda.empty_cache()
-        except: pass
+        except Exception: pass
     gc.collect()
     t_prep = time.time() - phase2_t0
     log(f"  Preprocessing done ({t_prep:.1f}s)")
@@ -293,7 +293,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
                     batch_tensors = batch_tensors[:new_n]
                     torch.cuda.empty_cache()
                     try: paddle.device.cuda.empty_cache()
-                    except: pass
+                    except Exception: pass
                     gc.collect()
 
             batch_no += 1
@@ -318,7 +318,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
                 except torch.cuda.OutOfMemoryError:
                     torch.cuda.empty_cache()
                     try: paddle.device.cuda.empty_cache()
-                    except: pass
+                    except Exception: pass
                     if not attempt_cpu and len(batch_tensors) > 1:
                         log(f"  OOM on batch {batch_no}, retrying one-at-a-time...")
                         for t_idx, t in enumerate(batch_tensors):
@@ -330,7 +330,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
                                 all_pred_strs[batch_indices[t_idx]] = f"[MFR_ERR {str(e2)[:200]}]"
                             torch.cuda.empty_cache()
                             try: paddle.device.cuda.empty_cache()
-                            except: pass
+                            except Exception: pass
                             gc.collect()
                         log(f"  Batch {batch_no} done (split into single crops)")
                         break
@@ -355,7 +355,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
                 except NameError: pass
                 torch.cuda.empty_cache()
                 try: paddle.device.cuda.empty_cache()
-                except: pass
+                except Exception: pass
             gc.collect()
 
             done = sum(1 for s in all_pred_strs if s is not None)
@@ -378,7 +378,7 @@ def process_batch(tasks, mfr_model, mfr_proc, device,
     if device == "cuda":
         torch.cuda.empty_cache()
         try: paddle.device.cuda.empty_cache()
-        except: pass
+        except Exception: pass
     gc.collect()
 
     # ===================================================================
@@ -491,7 +491,7 @@ def main():
     if device == "cuda":
         torch.cuda.empty_cache()
         try: paddle.device.cuda.empty_cache()
-        except: pass
+        except Exception: pass
     gc.collect()
     log(f"ALL DONE -> {out_dir}")
 

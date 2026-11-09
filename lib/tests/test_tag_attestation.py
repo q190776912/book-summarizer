@@ -177,7 +177,7 @@ class TestPhantom(unittest.TestCase):
     def test_lettered_factorial_anchor_still_flagged(self):
         """`(2n)!!` 是双阶乘不是编号：块内任意位置的括号形态**不构成** lettered 豁免。
 
-        基础\数学分析 ch7 p325 / ch14 p209 实测——若豁免沿用宽松口径（`paren` 收块内
+        基础/数学分析 ch7 p325 / ch14 p209 实测——若豁免沿用宽松口径（`paren` 收块内
         任意 `(N)`），这个公式碎片号会被放行并要求写手 `\tag{2n}`。
         """
         tags = [str(n) for n in range(1, 20)] + ["2n"]
@@ -1225,7 +1225,7 @@ class TestAnchorLocations(unittest.TestCase):
 
 class TestAnchorFormWhitelist(unittest.TestCase):
     r"""🔴 折平**只**许删排版壳：内容宏留在形态里，否则展示式自己的括号会**造出**一个
-    印面上根本不存在的 `(N)` 锚点。动因（基础\数学分析 下册 物理页 259 = 印刷 245 实测）：
+    印面上根本不存在的 `(N)` 锚点。动因（基础/数学分析 下册 物理页 259 = 印刷 245 实测）：
     旧 `_label_forms` 用 `\\[a-zA-Z]+` 无差别删宏名，于是
     `f ^ { \prime } \left( { \frac { 1 } { n \pi } } \right)` 被折成 `f'(1n)'`
     ——幻影 tag `1n` / `1x` 拿到「括号锚点」→ ⑭ 判不出毒，且

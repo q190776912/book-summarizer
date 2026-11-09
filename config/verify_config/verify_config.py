@@ -531,15 +531,9 @@ def _canon_label(lbl):
     return lbl
 
 
-def ordinal_depth(ordinal: int) -> int:
-    """Back-compat re-export of `lib.numbering.ordinal_depth`.
-
-    Depth is now derived per-group via `GroupConfig.depth`; the canonical
-    implementation lives in `lib.numbering` and raises `OrdinalDepthError` on
-    any unregistered code (NO phantom default). Prefer importing
-    `ordinal_depth` from `lib.numbering` directly."""
-    from lib.numbering import ordinal_depth as _od
-    return _od(ordinal)
+# 🔴 `ordinal_depth` 只此一处（模块顶部 `from lib.numbering import ...` 的
+# re-export）。旧版在此又定义了一个同名包装函数，虽行为等价却覆盖了 re-export、
+# 违背「唯一真源在 lib.numbering」的约定，且 monkeypatch 时会分叉（ruff F811）。
 
 
 def _load_ignore_file(path: str) -> List[str]:
@@ -1275,7 +1269,8 @@ class ConfigLoader:
     """
 
     def __init__(self, extract_dir: str, book_dir: str,
-                 extra_ignore: Optional[List[str]] = None):
+                 extra_ignore: Optional[List[str]] = None,
+                 manual_override: Optional[str] = None):
         # Bug #21: normalize git-bash style paths (/d/...) to Windows drive
         # letters (D:/...) so os.path.exists / open work on native Windows
         # Python.  Idempotent for already-normal paths.
@@ -1295,6 +1290,11 @@ class ConfigLoader:
         # 在这些 kind 上回退正文配置是正确行为，不再发静默回退警告。
         self.special_same_style: Set[str] = set()
         self._load_verify_config()
+        # `--manual <overrides.json>`（verify_chapter CLI）覆盖书级人工补漏文件。
+        # 只作用于本次进程，不写回 verify_config.json；路径按 Windows 归一，
+        # 保证 manual_for_chapter() 的 os.path.exists 看得见 git-bash 风格路径。
+        if manual_override and self.book is not None:
+            self.book.manual = _norm_win(manual_override)
         self.chapters = self._load_chapter_map()
         # 🔴 灌注进程级 kind 注册表（chapter_map 的显式 kind）。`chapter_label` /
         # `_resolve_kind` 的命名判据依赖此注册表——不灌注则任何字母章位（含

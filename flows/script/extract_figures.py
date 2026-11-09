@@ -410,7 +410,8 @@ def load_layout_model(weights, device):
         from ultralytics import YOLO
         model = YOLO(weights)
         loader = f"ultralytics.YOLO(fallback:{e})"
-    assert model is not None, "failed to load layout model"
+    if model is None:
+        raise RuntimeError("failed to load layout model (loader=%s)" % loader)
     return model, loader
 
 

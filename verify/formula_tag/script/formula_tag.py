@@ -3293,7 +3293,7 @@ def _split_scoped_ignore(keys) -> tuple:
 
 
 def _tag_pairing_rows(ctx, ncomp, lead, ignore,
-                      printed=None, coherence=None) -> list:
+                      printed=None) -> list:
     """「同号配错式」探针（`q_tag_mismatch`，非阻断 WARN）。
 
     实现在同包自包含模块 `tag_formula_pairing.py`：那里按 `page_*.json` 重建
@@ -3305,13 +3305,18 @@ def _tag_pairing_rows(ctx, ncomp, lead, ignore,
 
     🔴 探针自身异常**不阻断 verify**（新判据，跨书形态未普查完），但会把
     「未跑成」打到 stderr——绝不静默吞掉。
+
+    🔴 `pairing_problems` 的 `ledger_coherence_val` 是给**直接调用方**（普查工具 /
+    判据测试）的可选闸；Q 层 `run()` 不传它——章级降级在 run() 统一处理：先拿到
+    原始 `q_tag_mismatch` 行供 `[Q-LAYER EVIDENCE-DEGRADED]` 逐号留痕，再把
+    ORDER / MISPLACED / TAG 三支清空。若在此提前返回 []，降级 INFO 会丢掉被跳过
+    的号（2026-11-09 审计订正，见 formula_tag.md）。
     """
     try:
         from tag_formula_pairing import pairing_problems
         return pairing_problems(ctx.ext_dir, ctx.ch, ctx.start, ctx.end,
                                 ctx.md_file, ncomp=ncomp, ignore=ignore,
-                                lead=lead, printed=printed,
-                                ledger_coherence_val=coherence)
+                                lead=lead, printed=printed)
     except Exception as exc:                      # noqa: BLE001
         print(f"[Q-LAYER TAG-PAIRING *WARN*] 配对探针未跑成：{exc!r}",
               file=sys.stderr)

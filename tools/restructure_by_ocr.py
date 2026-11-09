@@ -47,201 +47,202 @@ import shutil
 
 # ---- 定位 _extract（分章契约 book_structure/ 与 page_*.json 所在）----
 # 优先：src_md 同目录下的 _extract；其次：脚本同目录（skill 模式）；再其次：BKS_EXTRACT_DIR。
-if len(sys.argv) < 5:
-    print(__doc__)
-    raise SystemExit(2)
-SRC = sys.argv[4]
-SRC_DIR = os.path.dirname(os.path.abspath(SRC))
-if os.path.isdir(os.path.join(SRC_DIR, "_extract")):
-    EX = os.path.join(SRC_DIR, "_extract")
-elif os.path.isdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "_extract")):
-    EX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_extract")
-else:
-    EX = os.environ.get("BKS_EXTRACT_DIR", os.path.dirname(os.path.abspath(__file__)))
+if __name__ == "__main__":
+    if len(sys.argv) < 5:
+        print(__doc__)
+        raise SystemExit(2)
+    SRC = sys.argv[4]
+    SRC_DIR = os.path.dirname(os.path.abspath(SRC))
+    if os.path.isdir(os.path.join(SRC_DIR, "_extract")):
+        EX = os.path.join(SRC_DIR, "_extract")
+    elif os.path.isdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "_extract")):
+        EX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_extract")
+    else:
+        EX = os.environ.get("BKS_EXTRACT_DIR", os.path.dirname(os.path.abspath(__file__)))
 
-chkey = sys.argv[1]
-pg0, pg1 = int(sys.argv[2]), int(sys.argv[3])
-APPLY = "--apply" in sys.argv[5:]
-OUT = os.path.join(EX, "_restructure_%s.out.md" % chkey)
+    chkey = sys.argv[1]
+    pg0, pg1 = int(sys.argv[2]), int(sys.argv[3])
+    APPLY = "--apply" in sys.argv[5:]
+    OUT = os.path.join(EX, "_restructure_%s.out.md" % chkey)
 
-# ---------- 1) OCR 真值图 (label,num) -> section ----------
-# 契约唯一来源 = 分章契约 <extract>/book_structure/。
-from data.book_structure.book_structure import BookStructure
-_bs = BookStructure.load(EX)
-if _bs is None:
-    raise SystemExit("[restructure_by_ocr] BLOCKED: 分章契约缺失（%s/book_structure/）。"
-                     "请先跑 build_structure 生成结构契约。" % EX)
-_ch_node = _bs.find_chapter(chkey)
-secs = []
-def walk(node, level):
-    if node.get("type") == "section":
-        secs.append((str(node.key), int(node.page_start or 0), int(node.page_end or 0), level))
-    for v in (node.sub_sec or []):
-        walk(v, level + 1)
-if _ch_node is not None:
-    for v in (_ch_node.sub_sec or []):
-        walk(v, 1)
-def page_to_sec(pg):
-    best = None; bestlv = -1
-    for key, ps, pe, lv in secs:
-        if ps is None or pe is None: continue
-        if ps <= pg <= pe and lv > bestlv:
-            bestlv = lv; best = key
-    return best
-# OCR 行首条目头：兼容「带/不带章前缀」(定义2.5 / 定义5)，统一用章内号作键
-# （\d+ 贪婪取点号后的首位段；OCR 丢点时「定义25」也按 2.5→5 容错回收）
-HEADER_RE = re.compile(r'^(定义|定理|引理|推论|命题|例)\s*%s?\.?(\d+)' % chkey)
-ocr = {}
-for pg in range(pg0, pg1 + 1):
-    fn = os.path.join(EX, "page_%03d.json" % pg)
-    if not os.path.exists(fn): continue
-    d = json.load(open(fn, encoding="utf-8"))
-    for tb in d.get("text", []):
-        t = tb if isinstance(tb, str) else tb.get("text", "")
-        if not t: continue
-        tn = re.sub(r'\s+', '', t)
-        m = HEADER_RE.match(tn)
+    # ---------- 1) OCR 真值图 (label,num) -> section ----------
+    # 契约唯一来源 = 分章契约 <extract>/book_structure/。
+    from data.book_structure.book_structure import BookStructure
+    _bs = BookStructure.load(EX)
+    if _bs is None:
+        raise SystemExit("[restructure_by_ocr] BLOCKED: 分章契约缺失（%s/book_structure/）。"
+                         "请先跑 build_structure 生成结构契约。" % EX)
+    _ch_node = _bs.find_chapter(chkey)
+    secs = []
+    def walk(node, level):
+        if node.get("type") == "section":
+            secs.append((str(node.key), int(node.page_start or 0), int(node.page_end or 0), level))
+        for v in (node.sub_sec or []):
+            walk(v, level + 1)
+    if _ch_node is not None:
+        for v in (_ch_node.sub_sec or []):
+            walk(v, 1)
+    def page_to_sec(pg):
+        best = None; bestlv = -1
+        for key, ps, pe, lv in secs:
+            if ps is None or pe is None: continue
+            if ps <= pg <= pe and lv > bestlv:
+                bestlv = lv; best = key
+        return best
+    # OCR 行首条目头：兼容「带/不带章前缀」(定义2.5 / 定义5)，统一用章内号作键
+    # （\d+ 贪婪取点号后的首位段；OCR 丢点时「定义25」也按 2.5→5 容错回收）
+    HEADER_RE = re.compile(r'^(定义|定理|引理|推论|命题|例)\s*%s?\.?(\d+)' % chkey)
+    ocr = {}
+    for pg in range(pg0, pg1 + 1):
+        fn = os.path.join(EX, "page_%03d.json" % pg)
+        if not os.path.exists(fn): continue
+        d = json.load(open(fn, encoding="utf-8"))
+        for tb in d.get("text", []):
+            t = tb if isinstance(tb, str) else tb.get("text", "")
+            if not t: continue
+            tn = re.sub(r'\s+', '', t)
+            m = HEADER_RE.match(tn)
+            if m:
+                k = (m.group(1), int(m.group(2)))
+                if k not in ocr:
+                    s = page_to_sec(pg)
+                    if s: ocr[k] = s
+    print("[OCR 真值图] %d 项映射" % len(ocr))
+
+    # ---------- 2) 解析当前 md ----------
+    SEC_RE = re.compile(r'^(#{2,6})\s*§\s*(\d+(?:\.\d+)*)\b\s*(.*)$')
+    ITEM_RE = re.compile(r'^(?:>\s*)?\*\*(定义|定理|引理|推论|命题|例|问题|公理|注记|评注|注)\s*(\d+)(?:\.(\d+))?')
+    lines = open(SRC, encoding="utf-8").read().split('\n')
+    n = len(lines)
+    sec_header = {}
+    items = []
+    intro_prose = {}
+    preamble = []
+    cur_sec = None
+    i = 0
+    while i < n:
+        ln = lines[i]
+        m = SEC_RE.match(ln.strip())
         if m:
-            k = (m.group(1), int(m.group(2)))
-            if k not in ocr:
-                s = page_to_sec(pg)
-                if s: ocr[k] = s
-print("[OCR 真值图] %d 项映射" % len(ocr))
+            cur_sec = m.group(2)
+            if cur_sec not in sec_header:
+                sec_header[cur_sec] = ln.strip()
+            i += 1; continue
+        if cur_sec is None:
+            preamble.append(ln); i += 1; continue
+        im = ITEM_RE.match(ln.strip())
+        if im:
+            label = im.group(1)
+            num = int(im.group(3)) if im.group(3) else int(im.group(2))
+            itemkey = "%s%d" % (label, num)
+            content = [ln]; j = i + 1
+            while j < n:
+                nxt = lines[j].strip()
+                if SEC_RE.match(nxt) or ITEM_RE.match(nxt): break
+                content.append(lines[j]); j += 1
+            items.append({'key': itemkey, 'label': label, 'num': num,
+                          'cur': cur_sec, 'content': content})
+            i = j; continue
+        intro_prose.setdefault(cur_sec, []).append(ln)
+        i += 1
 
-# ---------- 2) 解析当前 md ----------
-SEC_RE = re.compile(r'^(#{2,6})\s*§\s*(\d+(?:\.\d+)*)\b\s*(.*)$')
-ITEM_RE = re.compile(r'^(?:>\s*)?\*\*(定义|定理|引理|推论|命题|例|问题|公理|注记|评注|注)\s*(\d+)(?:\.(\d+))?')
-lines = open(SRC, encoding="utf-8").read().split('\n')
-n = len(lines)
-sec_header = {}
-items = []
-intro_prose = {}
-preamble = []
-cur_sec = None
-i = 0
-while i < n:
-    ln = lines[i]
-    m = SEC_RE.match(ln.strip())
-    if m:
-        cur_sec = m.group(2)
-        if cur_sec not in sec_header:
-            sec_header[cur_sec] = ln.strip()
-        i += 1; continue
-    if cur_sec is None:
-        preamble.append(ln); i += 1; continue
-    im = ITEM_RE.match(ln.strip())
-    if im:
-        label = im.group(1)
-        num = int(im.group(3)) if im.group(3) else int(im.group(2))
-        itemkey = "%s%d" % (label, num)
-        content = [ln]; j = i + 1
-        while j < n:
-            nxt = lines[j].strip()
-            if SEC_RE.match(nxt) or ITEM_RE.match(nxt): break
-            content.append(lines[j]); j += 1
-        items.append({'key': itemkey, 'label': label, 'num': num,
-                      'cur': cur_sec, 'content': content})
-        i = j; continue
-    intro_prose.setdefault(cur_sec, []).append(ln)
-    i += 1
+    # ---------- 3) 贪心单调门：计算目标 §（保险：目标必须存在于 md） ----------
+    def sec_tuple(k): return tuple(int(x) for x in k.split('.'))
+    proposed = {}
+    for label in set(it['label'] for it in items):
+        grp = [it for it in items if it['label'] == label]
+        grp.sort(key=lambda x: x['num'])
+        maxsec = None
+        for it in grp:
+            cand = ocr.get((it['label'], it['num']), it['cur'])
+            if cand not in sec_header:          # 保险①：目标 § 不在 md 中 -> 留当前
+                cand = it['cur']
+            ct = sec_tuple(cand); curt = sec_tuple(it['cur'])
+            if maxsec is None or ct >= maxsec:
+                chosen = cand; maxsec = ct
+            else:
+                chosen = it['cur'] if curt >= maxsec else '.'.join(str(x) for x in maxsec)
+                maxsec = max(maxsec, sec_tuple(chosen))
+            proposed[it['key']] = chosen
 
-# ---------- 3) 贪心单调门：计算目标 §（保险：目标必须存在于 md） ----------
-def sec_tuple(k): return tuple(int(x) for x in k.split('.'))
-proposed = {}
-for label in set(it['label'] for it in items):
-    grp = [it for it in items if it['label'] == label]
-    grp.sort(key=lambda x: x['num'])
-    maxsec = None
-    for it in grp:
-        cand = ocr.get((it['label'], it['num']), it['cur'])
-        if cand not in sec_header:          # 保险①：目标 § 不在 md 中 -> 留当前
-            cand = it['cur']
-        ct = sec_tuple(cand); curt = sec_tuple(it['cur'])
-        if maxsec is None or ct >= maxsec:
-            chosen = cand; maxsec = ct
-        else:
-            chosen = it['cur'] if curt >= maxsec else '.'.join(str(x) for x in maxsec)
-            maxsec = max(maxsec, sec_tuple(chosen))
-        proposed[it['key']] = chosen
+    # ---------- 4) 聚合 + 发射（含 --- 归一化） ----------
+    secs_d = {}
+    for k in sec_header:
+        secs_d[k] = {'intro': intro_prose.get(k, []), 'items': []}
+    for it in items:
+        tgt = proposed[it['key']]
+        secs_d.setdefault(tgt, {'intro': [], 'items': []})
+        secs_d[tgt]['items'].append(it)
+    for k in secs_d:
+        secs_d[k]['items'].sort(key=lambda x: x['num'])
 
-# ---------- 4) 聚合 + 发射（含 --- 归一化） ----------
-secs_d = {}
-for k in sec_header:
-    secs_d[k] = {'intro': intro_prose.get(k, []), 'items': []}
-for it in items:
-    tgt = proposed[it['key']]
-    secs_d.setdefault(tgt, {'intro': [], 'items': []})
-    secs_d[tgt]['items'].append(it)
-for k in secs_d:
-    secs_d[k]['items'].sort(key=lambda x: x['num'])
-
-def level_of(key): return 2 if key.count('.') == 1 else 3
-def canon_sort(keys): return sorted(keys, key=sec_tuple)
-out = []
-out.extend(preamble)
-if preamble and preamble[-1].strip() != '': out.append('')
-out.append('')
-def emit(key, _depth=0):
-    node = secs_d.get(key)
-    hdr = sec_header.get(key, "%s §%s" % ('#'*level_of(key), key))
-    m = re.match(r'^#{2,6}\s*(§.*)$', hdr)
-    body = m.group(1) if m else "§%s" % key
-    out.append(('#' * level_of(key)) + ' ' + body)
-    if node:
-        for lp in node['intro']: out.append(lp)
-        its = node['items']
-        for idx, it in enumerate(its):
-            # 归一化：去尾部空行与尾随 '---'，同节相邻两条目间统一补 '---'
-            c = list(it['content'])
-            while c and c[-1].strip() == '': c.pop()
-            while c and c[-1].strip() == '---': c.pop()
-            while c and c[-1].strip() == '': c.pop()
-            for cl in c: out.append(cl)
-            if idx < len(its) - 1:
-                out.append(''); out.append('---'); out.append('')
+    def level_of(key): return 2 if key.count('.') == 1 else 3
+    def canon_sort(keys): return sorted(keys, key=sec_tuple)
+    out = []
+    out.extend(preamble)
+    if preamble and preamble[-1].strip() != '': out.append('')
     out.append('')
-    children = [k for k in secs_d if k.startswith(key + '.') and k[len(key)+1:].count('.') == 0]
-    for c in canon_sort(children): emit(c, _depth+1)
-top = [k for k in secs_d if k.count('.') == 1]
-for t in canon_sort(top): emit(t)
-result = '\n'.join(out)
+    def emit(key, _depth=0):
+        node = secs_d.get(key)
+        hdr = sec_header.get(key, "%s §%s" % ('#'*level_of(key), key))
+        m = re.match(r'^#{2,6}\s*(§.*)$', hdr)
+        body = m.group(1) if m else "§%s" % key
+        out.append(('#' * level_of(key)) + ' ' + body)
+        if node:
+            for lp in node['intro']: out.append(lp)
+            its = node['items']
+            for idx, it in enumerate(its):
+                # 归一化：去尾部空行与尾随 '---'，同节相邻两条目间统一补 '---'
+                c = list(it['content'])
+                while c and c[-1].strip() == '': c.pop()
+                while c and c[-1].strip() == '---': c.pop()
+                while c and c[-1].strip() == '': c.pop()
+                for cl in c: out.append(cl)
+                if idx < len(its) - 1:
+                    out.append(''); out.append('---'); out.append('')
+        out.append('')
+        children = [k for k in secs_d if k.startswith(key + '.') and k[len(key)+1:].count('.') == 0]
+        for c in canon_sort(children): emit(c, _depth+1)
+    top = [k for k in secs_d if k.count('.') == 1]
+    for t in canon_sort(top): emit(t)
+    result = '\n'.join(out)
 
-# ---------- 5) 保真校验 ----------
-def nonempty(p): return [l for l in open(p, encoding="utf-8").read().split('\n') if l.strip()]
-def content_lines(p):
-    # 去掉 '---' 分隔线与空行后，剩余即真实内容行（定义/定理/证明/公式文本等）
-    return [l for l in open(p, encoding="utf-8").read().split('\n')
-            if l.strip() and l.strip() != '---']
-def itemkeys(p):
-    s = set()
-    for l in open(p, encoding="utf-8").read().split('\n'):
-        mm = ITEM_RE.match(l.strip())
-        if mm:
-            s.add("%s%d" % (mm.group(1), int(mm.group(3)) if mm.group(3) else int(mm.group(2))))
-    return s
-open(OUT, 'w', encoding='utf-8').write(result)
-src_lines = nonempty(SRC); out_lines = nonempty(OUT)
-# 保真 = 条目键完全一致 且 去掉 '---' 后的内容行多重集完全一致
-# （归一化会增删节末装饰性 '---'，verify 不要求；仅内容行才是真保真判据）
-from collections import Counter
-faith_keys = (itemkeys(SRC) == itemkeys(OUT))
-faith_content = (Counter(content_lines(SRC)) == Counter(content_lines(OUT)))
-print("源非空行:", len(src_lines), " 输出非空行:", len(out_lines),
-      " (注: 差值为节末 '---' 归一化, verify 不要求)")
-print("源条目键:", len(itemkeys(SRC)), " 输出条目键:", len(itemkeys(OUT)), " 一致:", faith_keys)
-print("内容行(去 ---) 多重集一致:", faith_content)
-moved = [(it['key'], it['cur'], proposed[it['key']]) for it in items if proposed[it['key']] != it['cur']]
-print("移动条目数:", len(moved))
-for k, c, t in moved[:60]:
-    print("   %s : %s -> %s" % (k, c, t))
-if len(moved) > 60: print("   ... 共 %d 条" % len(moved))
+    # ---------- 5) 保真校验 ----------
+    def nonempty(p): return [l for l in open(p, encoding="utf-8").read().split('\n') if l.strip()]
+    def content_lines(p):
+        # 去掉 '---' 分隔线与空行后，剩余即真实内容行（定义/定理/证明/公式文本等）
+        return [l for l in open(p, encoding="utf-8").read().split('\n')
+                if l.strip() and l.strip() != '---']
+    def itemkeys(p):
+        s = set()
+        for l in open(p, encoding="utf-8").read().split('\n'):
+            mm = ITEM_RE.match(l.strip())
+            if mm:
+                s.add("%s%d" % (mm.group(1), int(mm.group(3)) if mm.group(3) else int(mm.group(2))))
+        return s
+    open(OUT, 'w', encoding='utf-8').write(result)
+    src_lines = nonempty(SRC); out_lines = nonempty(OUT)
+    # 保真 = 条目键完全一致 且 去掉 '---' 后的内容行多重集完全一致
+    # （归一化会增删节末装饰性 '---'，verify 不要求；仅内容行才是真保真判据）
+    from collections import Counter
+    faith_keys = (itemkeys(SRC) == itemkeys(OUT))
+    faith_content = (Counter(content_lines(SRC)) == Counter(content_lines(OUT)))
+    print("源非空行:", len(src_lines), " 输出非空行:", len(out_lines),
+          " (注: 差值为节末 '---' 归一化, verify 不要求)")
+    print("源条目键:", len(itemkeys(SRC)), " 输出条目键:", len(itemkeys(OUT)), " 一致:", faith_keys)
+    print("内容行(去 ---) 多重集一致:", faith_content)
+    moved = [(it['key'], it['cur'], proposed[it['key']]) for it in items if proposed[it['key']] != it['cur']]
+    print("移动条目数:", len(moved))
+    for k, c, t in moved[:60]:
+        print("   %s : %s -> %s" % (k, c, t))
+    if len(moved) > 60: print("   ... 共 %d 条" % len(moved))
 
-if not faith_keys or not faith_content:
-    print("!! 保真校验失败（条目键或内容行多重集不一致，疑似内容丢失）—— 未写回，请排查解析 bug。")
-elif APPLY:
-    bak = SRC + ".bak_restruct_%s" % chkey
-    shutil.copy2(SRC, bak)
-    open(SRC, 'w', encoding='utf-8').write(result)
-    print("已写回 %s (备份 %s)" % (SRC, bak))
-else:
-    print("未写回；输出在", OUT)
+    if not faith_keys or not faith_content:
+        print("!! 保真校验失败（条目键或内容行多重集不一致，疑似内容丢失）—— 未写回，请排查解析 bug。")
+    elif APPLY:
+        bak = SRC + ".bak_restruct_%s" % chkey
+        shutil.copy2(SRC, bak)
+        open(SRC, 'w', encoding='utf-8').write(result)
+        print("已写回 %s (备份 %s)" % (SRC, bak))
+    else:
+        print("未写回；输出在", OUT)

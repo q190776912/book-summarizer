@@ -37,13 +37,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scan_long_formulas import (row_metrics, rendered_rows, _split_top_rows,
                                 DEFAULT_W, DEFAULT_H)
 
-THRESH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else DEFAULT_W
-BOOK = sys.argv[1] if len(sys.argv) > 1 else '.'
-JSON_OUT = None
-if '--json' in sys.argv:
-    k = sys.argv.index('--json')
-    if k + 1 < len(sys.argv):
-        JSON_OUT = sys.argv[k + 1]
+if __name__ == "__main__":
+    THRESH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else DEFAULT_W
+    BOOK = sys.argv[1] if len(sys.argv) > 1 else '.'
+    JSON_OUT = None
+    if '--json' in sys.argv:
+        k = sys.argv.index('--json')
+        if k + 1 < len(sys.argv):
+            JSON_OUT = sys.argv[k + 1]
+else:
+    # 被静态工具 / 测试 import 时不解析 argv，给安全默认值（本模块只作 CLI）。
+    THRESH, BOOK, JSON_OUT = DEFAULT_W, '.', None
 
 DELIM = re.compile(r'^\s*(?:>\s*)?\$\$\s*$')
 TAG_RE = re.compile(r'\\tag\{[^}]*\}')

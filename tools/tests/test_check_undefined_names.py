@@ -92,5 +92,77 @@ class NoFalsePositives(unittest.TestCase):
         self.assertEqual(_scan(src), [])
 
 
+class ComprehensionScope(unittest.TestCase):
+    """🔴 2026-11-09 审计：Python 3 推导式目标不外泄到所在函数。
+
+    旧实现把推导式目标算进函数绑定集，于是同函数里 A 推导式的目标 `c`
+    会遮蔽 B 推导式误引用的自由名 `c` —— `resync_figure_refs.py:895`
+    的 NameError 曾全库零报。用 `check_source` 直接判内存源码，无需临时文件。
+    """
+
+    def test_target_does_not_leak_into_function(self):
+        src = ("def f():\n"
+               "    cur = [c for c, _t in [(1, 2)]]\n"
+               "    out = [c if i else t for i, t in enumerate([1, 2])]\n"
+               "    return cur, out\n")
+        probs = chk.check_source(src)
+        self.assertTrue(any(p[0] == "c" and p[1] == 3 for p in probs), probs)
+
+    def test_legal_target_not_reported(self):
+        self.assertEqual(
+            chk.check_source("def f(items):\n"
+                             "    return [x * 2 for x in items if x]\n"), [])
+
+    def test_nested_comprehension_targets(self):
+        self.assertEqual(
+            chk.check_source("def f(rows):\n"
+                             "    return [[y for y in row] for row in rows]\n"), [])
+
+    def test_generator_expression_free_name(self):
+        probs = chk.check_source("def f():\n    return sum(c for t in [1])\n")
+        self.assertTrue(any(p[0] == "c" for p in probs), probs)
+
+    def test_module_level_free_name_still_caught(self):
+        probs = chk.check_source("x = [z for t in [1]]\n")
+        self.assertTrue(any(p[0] == "z" for p in probs), probs)
+
+    def test_module_binding_visible_inside_comprehension(self):
+        self.assertEqual(
+            chk.check_source("K = 3\n"
+                             "def f(items):\n"
+                             "    return [x + K for x in items]\n"), [])
+
+
+    def test_module_level_cross_comprehension_shadow(self):
+        """🔴 二轮负向锁：模块级 A 推导式的目标不得遮蔽 B 推导式的自由名。
+
+        旧 `_module_bindings` 用 `ast.walk` 把 A 的 `c` 收成模块级绑定，
+        B 里误引用的 `c` 于是全库零报。
+        """
+        src = ("A = [c for c in [1]]\n"
+               "B = (c for t in [1])\n")
+        probs = chk.check_source(src)
+        self.assertTrue(any(p[0] == "c" and p[1] == 2 for p in probs), probs)
+
+    def test_class_body_cross_comprehension_shadow(self):
+        src = ("class A:\n"
+               "    X = [c for c in [1]]\n"
+               "    Y = (c for t in [1])\n")
+        probs = chk.check_source(src)
+        self.assertTrue(any(p[0] == "c" for p in probs), probs)
+
+    def test_module_level_legal_target_no_false_positive(self):
+        """正向：合法推导式目标在模块级 / 类体都不得误报。"""
+        self.assertEqual(chk.check_source("A = [c for c in [1]]\n"), [])
+        self.assertEqual(
+            chk.check_source("class B:\n    X = [y * 2 for y in range(3)]\n"), [])
+
+    def test_for_loop_target_still_bound_in_module_scope(self):
+        """正向：`for` 目标不是推导式目标，仍须按本作用域先绑定后使用放行。"""
+        src = ("for _i in range(3):\n"
+               "    print(_i)\n")
+        self.assertEqual(chk.check_source(src), [])
+
+
 if __name__ == "__main__":
     unittest.main()

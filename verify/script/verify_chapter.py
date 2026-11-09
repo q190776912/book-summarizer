@@ -388,7 +388,7 @@ def source_pair_for_md(book_dir, ch, md_file):
     return pair[0] if len(pair) == 1 else None
 
 
-def _make_loader(ext, book_dir, extra_ignore=None):
+def _make_loader(ext, book_dir, extra_ignore=None, manual_override=None):
     """Construct the single ConfigLoader (config source of truth).
 
     Enforces the mandatory book-config gate (config_setting 流程 规则1) before
@@ -416,13 +416,14 @@ def _make_loader(ext, book_dir, extra_ignore=None):
             f"再跑 verify。严禁跳步。"
         )
     loader = ConfigLoader(ext, book_dir or os.path.dirname(ext) or ext,
-                          extra_ignore=extra_ignore)
+                          extra_ignore=extra_ignore,
+                          manual_override=manual_override)
     loader.require_complete(allow_absent=False)
     return loader
 
 
 def verify_one(ch, start, end, md, ext, book_dir=None, extra_ignore=None,
-               src_pair_md=None):
+               src_pair_md=None, manual_override=None):
     """Verify a single chapter. Returns the byte-compatible result dict.
 
     All configuration is read by a ConfigLoader built from <ext>/<book_dir>;
@@ -432,7 +433,8 @@ def verify_one(ch, start, end, md, ext, book_dir=None, extra_ignore=None,
     唯一入口，由 `verify_all` 经 `_src_pair_view` 解析）。None = 解析不出配对 →
     一条都不豁免（fail-closed）。
     """
-    loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
+    loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore,
+                          manual_override=manual_override)
     mgr = VerifyManager(LAYER_REGISTRY, loader)
     return mgr.verify_one(ch, start, end, md, ext, src_pair_md=src_pair_md)
 
@@ -527,7 +529,8 @@ def _write_formula_audit(ext, rows):
         print(f"\n[Q] WARNING: failed to write formula_audit.md: {e}")
 
 
-def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
+def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
+               manual_override=None):
     """Verify all chapters using chapter_map.json (read by ConfigLoader).
     Returns True if all pass.
 
@@ -535,7 +538,8 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None):
     供 merge_source 步在翻译**之前**只校源版；merge_translation 末步不传（源+译全覆盖）。
     """
     only_lang = _norm_lang(only_lang)
-    loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
+    loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore,
+                          manual_override=manual_override)
     if not loader.chapters:
         cm_path = os.path.join(ext, 'chapter_map.json')
         print(f"ERROR: chapter_map.json not found / empty at {cm_path}")
@@ -758,6 +762,13 @@ def main():
 
 
 def _main_impl():
+    # 🔴 `--manual` 是人工补漏覆盖文件在 verify 侧的运行时入口（两种模式共用）。
+    # 旧版只在单章分支取过一次值却从不消费，用户按 help 传参静默无效。
+    manual_path = _flag_value('--manual')
+    if manual_path and not os.path.exists(_norm_win(manual_path)):
+        print("[verify] --manual 指向的文件不存在：%s" % manual_path,
+              file=sys.stderr)
+        sys.exit(2)
     ignore_path = _flag_value('--ignore')
     ignore_keys = load_ignore(ignore_path)
     ignore_fig_global = load_ignore_fig(_flag_value('--ignore-figure'))
@@ -860,7 +871,8 @@ def _main_impl():
             print("[FIX] 全层 --fix 已默认禁用（--all 批处理同理）；"
                   "如确需整书自动修复，改用 --fix --fix-force（仍受 PREFLIGHT 门约束）。")
         if _fix_requested(sys.argv):
-            loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore)
+            loader = _make_loader(ext, book_dir, extra_ignore=extra_ignore,
+                                  manual_override=manual_path)
             chapters = loader.chapters
             if chapters:
 
@@ -890,7 +902,8 @@ def _main_impl():
                             print(f"[FIX] {os.path.basename(md_file)}: {', '.join(parts)}")
 
         only_lang = _flag_value('--only-lang')
-        ok = verify_all(ext, book_dir, extra_ignore=extra_ignore, only_lang=only_lang)
+        ok = verify_all(ext, book_dir, extra_ignore=extra_ignore,
+                        only_lang=only_lang, manual_override=manual_path)
         # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
         suspect = _run_ignore_audit(ext)
         if suspect:
@@ -904,9 +917,9 @@ def _main_impl():
     if len(args) < 5:
         print("Usage: python verify_chapter.py <ch> <start> <end> <md_file> <extract_dir> "
               "[--manual overrides.json] [--ignore noise.json] [--ignore-figure fig_noise.json]")
-        print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--only-lang cn|en]")
+        print("       python verify_chapter.py --all <extract_dir> <book_dir> [--ignore noise.json] [--ignore-figure fig_noise.json] [--only-lang cn|en] [--manual overrides.json]")
         print("  <extract_dir> is REQUIRED — the book's _extract folder (e.g. D:\\study\\book\\<书名>\\_extract).")
-        print("  --manual: path to manual_overrides_ch{N}.json / manual_overrides_appendix{X}.json / manual_overrides_supplement{S}.json (added to extract_items items)")
+        print("  --manual: 人工补漏 JSON（书级覆盖，经 ConfigLoader.manual_for_chapter 并入 B 层真值；两种模式均生效，只作用于本次进程，不写回 verify_config.json）")
         print("  --ignore: JSON list/dict of confirmed-noise keys (removed before A/B compare)")
         print("  --ignore-figure: JSON list/dict of confirmed-noise figure labels, e.g. [\"6.7.9\"]")
         print("  --fix: 已默认禁用（2026-08-28）。须与 --fix-force 同用才执行全层自动修复")
@@ -918,7 +931,7 @@ def _main_impl():
         print("  显式配置（缺失 ordinal 将直接报错 exit 2；缺失文件仅警告并沿用默认 ordinal=3）。")
         sys.exit(2)
 
-    manual_path = _flag_value('--manual')
+    # `manual_path` 已在 _main_impl 开头取值并校验，此处不再重复解析。
 
     # 章号归一：数字章 → int，附录字母章（"A"/"B"…）保留原串（裸 int() 会对
     # 附录章 ValueError，单章校验无法定点跑附录）。
@@ -940,7 +953,8 @@ def _main_impl():
             print("[FIX] 未执行：PREFLIGHT 门未通过。")
     r = verify_one(ch, start, end, md, ext, book_dir_single,
                    extra_ignore=extra_ignore,
-                   src_pair_md=source_pair_for_md(book_dir_single, ch, md))
+                   src_pair_md=source_pair_for_md(book_dir_single, ch, md),
+                   manual_override=manual_path)
     status = print_result(r)
     # 🔴 强制最后一步：有 ignore 的校验流程收尾必须跑 agent 审计。
     suspect = _run_ignore_audit(ext, ch)

@@ -555,8 +555,11 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
     # 🔴 章级「书侧账本判别力」闸：整章账本自洽率过低时，任何「配错号」结论
     # 都无据（低质量 OCR 让多数号自己配不上自己，共享骨架的异号却拿高分）。
     # 与 `len(printed) < 3` 的「账太薄不判」是同一哲学的推广：账本有但不可用。
-    # 单调（只减少告警、绝不新增）；`ledger_coherence_val` 由 Q 层 run() 复用
-    # 同一份账本传入，避免重复扫页；直接调用本函数时自行计算。
+    # 单调（只减少告警、绝不新增）。🔴 该闸**只服务显式调用方**（普查工具 /
+    # 判据测试）：Q 层 `formula_tag.run()` 不传 `ledger_coherence_val`，因为章级
+    # 降级在那里统一处理——先取本函数的原始 rows 供 `[Q-LAYER EVIDENCE-DEGRADED]`
+    # 逐号留痕，再把 ORDER / MISPLACED / TAG 三支清空。若在这里提前 return []，
+    # 降级日志会丢掉被跳过的号。见 verify/formula_tag/formula_tag.md。
     if (ledger_coherence_val is not None
             and ledger_coherence_val < LEDGER_COHERENCE_MIN):
         return []

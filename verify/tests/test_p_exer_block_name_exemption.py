@@ -85,3 +85,23 @@ def test_bold_standalone_heading_respects_evidence():
     ext_yes = _ext(_contract("5.9 Exercises"))
     lines_yes = ["## §5.9 习题", "", "**习题**", "", "**问题 5.39**：设 $Q_n$ 是循环 quiver。"]
     assert check_exer_blocks(lines_yes, ext_yes, "5") == []
+
+
+def test_numbered_descriptive_heading_with_exercise_word_exempt():
+    """🔴 Convex Optimization ch1 实测根因回归：`### §1.5.6 Comments on exercises`
+    是真实编号子节（契约 §1.5.6 名为 `1.5.6 Comments on exercises`），标题里只是提到
+    exercises、并非习题归拢块——不得误报。对照 `§1.5.5 Comments on examples`（不含习题词）
+    本就放行，本例验证「含习题词的真实子节」同样放行，而纯 `§5.9 习题`（节号后只剩习题词、
+    且契约无据）照旧被抓（test_no_contract_evidence_still_flagged 锁死）。
+    """
+    d = tempfile.mkdtemp(prefix="bks_pexer_sec_")
+    bs = os.path.join(d, "book_structure")
+    os.makedirs(bs)
+    contract = {"key": "1", "type": "chapter", "name": "1 Introduction",
+                "sub_sec": [{"key": "1.5.6", "type": "section",
+                             "name": "1.5.6 Comments on exercises",
+                             "text": [{"text": "some body"}]}]}
+    with open(os.path.join(bs, "ch1.json"), "w", encoding="utf-8") as fh:
+        json.dump(contract, fh, ensure_ascii=False)
+    lines = ["### §1.5.6 Comments on exercises", "", "Every chapter ends with a set of exercises."]
+    assert check_exer_blocks(lines, d, "1") == []

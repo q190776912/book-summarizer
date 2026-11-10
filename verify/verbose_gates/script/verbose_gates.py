@@ -114,6 +114,16 @@ _CONTRACT_EXER_NAME_RE = re.compile(
     r'(?:练习|习题|问题|难题|exercises?|problems?|questions?)\s*$',
     re.I)
 
+# 🔴 真实编号小节标题豁免：节号之后**只剩纯习题词**（如 `§1.5 Exercises` /
+# `§5.9 习题`），才可能是「章末习题节」的归拢标题（仍走下方契约 / region 豁免）；
+# 若节号后还有描述性文字（如 `§1.5.6 Comments on exercises`、`§1.5.5 Comments on
+# examples`），它是不带习题块的真实子节，绝不可能是「无中生有的归拢块」——放行。
+# 与 `_CONTRACT_EXER_NAME_RE`（契约节名整条是习题词）互补：后者管「契约节名本身就是
+# Exercises/Problems」，本正则管「md 标题是带节号的真实子节、只是标题里提到了 exercises」。
+_PURE_EXER_TITLE_RE = re.compile(
+    r'^\s*(?:\*\*)?\s*(?:练习|习题|问题|难题|exercises?|problems?|questions?)\s*[：:.]?\s*(?:\*\*)?\s*$',
+    re.I)
+
 
 def contract_exer_heading_sections(ext_dir, ch):
     """契约中**自己印有**习题集小标题的节号集合（点分归一）。
@@ -220,6 +230,13 @@ def check_exer_blocks(lines, ext_dir=None, ch=None, cfg=None):
         hm = _MD_SECTION_HEAD_FOR_EXER_RE.match(ln)
         if hm:
             cur_sec = _norm_secnum(hm.group(1))
+            # 🔴 真实编号小节标题豁免：节号之后还有描述性文字（如 `§1.5.6 Comments
+            # on exercises`）→ 它是真实子节，不可能是「无中生有的习题归拢块」。仅当节号后
+            # 只剩纯习题词时才继续走下方正常判据（由契约节名 / exercise_region_headings
+            # 决定豁免），避免误杀真实习题节标题。
+            _rest = ln[hm.end():].strip()
+            if _rest and not _PURE_EXER_TITLE_RE.match(_rest):
+                continue
         if EXER_HEADING_RE.match(ln) or EXER_BOLD_RE.match(ln):
             if heads and _is_exercise_region_head(ln, heads):
                 continue      # 本书声明的章末习题区标题（任语言）→ 忠实，非归拢块

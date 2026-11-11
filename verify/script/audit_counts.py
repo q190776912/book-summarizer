@@ -53,13 +53,20 @@ LABEL_RE = re.compile(
     r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Assertion))'
     r'\s*[.．·。]?\s*[（(]?\s*([0-9]+(?:[.．·。][0-9l]+){0,2})\s*[）)]?', re.I)
 # 数字前置标签（Vakil 惯例）：`**12.2.1（定理 …）：**`；书内 OCR 为 `12.2.1. Theorem.`
-# —— 编号在前，类型在 `（`/`（`/`.` 之后
+# —— 编号在前，类型在 `（`/`（`/`.` 之后。编号须至少含一个点（节限定号 N.M/K）：
+# 裸 `1.` 是证明梗概列表标记，其后恰跟「Theorem…」时会伪造条目（ch4 英文 §4.1 实测）。
 LABEL_RE_NF = re.compile(
-    r'^\**\s*([0-9]+(?:\.[0-9]+){0,2})\s*[.．。（(]\s*'
+    r'^\**\s*([0-9]+(?:\.[0-9]+){1,2})\s*[.．。（(]\s*'
     r'((?:定义|定理|引理|推论|命题|公理|断言|'
     r'Definition|Theorem|Lemma|Corollary|Proposition|Axiom|Assertion))', re.I)
 # 章节标题：行首 `N.M Title`（Title 以大写字母开头；容忍 OCR 把破折号误识为 xx）
-SEC_RE = re.compile(r'^\s*(\d+\.\d+)\s*(?:[—–\-–—]+\s*|xx\s*)?([A-Z][A-Za-z].{1,40})')
+# 章节标题：行首 `N.M Title`（容忍 N.M 后的节号句点——本书印面节头为
+# 「1.2. Mean-Value Properties」，无 `\.?` 时 SEC_RE 在句点处失配，全书节头
+# 解析不出，书侧整本为空；标题首词允许单字母大写词「A Priori Estimates」，
+# 故标题第二字符不要求是字母）。Title 需含小写字母：running head 是全大写
+# （「5.3. HOLDER CONTINUITY…」），会把 cur 过早翻到下一节（p91 实测把正文
+# 里的 THEOREM 5.2.9 错挂 §5.3），须按家具拒收；正文节头恒为 Title-case。
+SEC_RE = re.compile(r'^\s*(\d+\.\d+)\.?\s*(?:[—–\-–—]+\s*|xx\s*)?([A-Z].{1,40})')
 # §N.M 仅当位于行首才算章节标题；行内 `in §11.3` 是交叉引用，不能作为标题
 SEC_RE2 = re.compile(r'^\s*§\s*(\d+\.\d+)')
 # 章节标题（冒号格式）：行首 `N: Title`（如 `1:Definitions`）→ 归入本章第 N 节
@@ -91,10 +98,31 @@ def texts_of_page(p, ext):
     return [s for _, s in blocks]
 
 
+def _map_type(word):
+    """TYPE_MAP 大小写不敏感查表。
+
+    决定性修复：本书（Han & Lin）印面用小型大写字母排条目头，OCR 落成
+    THEOREM/COROLLARY/DEFINITION——LABEL_RE 带 re.I 能匹配，但匹配返回的
+    原词直接查大小写敏感的 TYPE_MAP 会 miss，条目被静默丢弃（书侧全 0，
+    十个章文件全部 MISMATCH 的唯一根源）。title() 对中文词无副作用。
+    """
+    return TYPE_MAP.get(word) or TYPE_MAP.get(word.title())
+
+
 def _label_type(ln):
     """返回 (type_word, num_str) 或 None。兼容「类型前置」与「数字前置」两种标签。"""
     m = LABEL_RE.match(ln)
     if m:
+        # 行首「类型+编号」后紧跟正文（中文字符或小写拉丁续句）是段首交叉引用，
+        # 不是条目头：「定理 3.3.5 中要求…」「Theorem 1.2.9 to w…」拒收；
+        # 「THEOREM 1.2.2. Let…」「**定理 2.2.3**：设…」标点/粗体符/大写后接条目头放行。
+        j = m.end(2)
+        while j < len(ln) and ln[j] == ' ':
+            j += 1
+        if j < len(ln):
+            c = ln[j]
+            if ('\u4e00' <= c <= '\u9fff') or (c.isascii() and c.islower()):
+                return None
         return m.group(1), m.group(2)
     m = LABEL_RE_NF.match(ln)
     if m:
@@ -116,9 +144,10 @@ def parse_md(path):
         if m:
             cur = m.group(1)
         if cur:
-            r = _label_type(ln.strip())
+            body = re.sub(r'^[\s>]+', '', ln)  # 剥掉块引用前缀「> / > >」：例/证明块内的粗体条目标签也要计数
+            r = _label_type(body)
             if r:
-                t = TYPE_MAP.get(r[0])
+                t = _map_type(r[0])
                 if t:
                     secs.setdefault(cur, {}).setdefault(t, []).append(_norm_num(r[1]))
     return secs
@@ -135,8 +164,8 @@ def parse_book(start, end, ext, chnum=None):
                     continue
                 cand = None
                 ms = SEC_RE.match(st)
-                if ms:
-                    cand = ms.group(1)
+                if ms and any(c.islower() for c in ms.group(2)):
+                    cand = ms.group(1)  # 全大写标题 = 页眉 running head（家具），拒收
                 else:
                     ms2 = SEC_RE2.search(st)
                     if ms2:
@@ -168,7 +197,7 @@ def parse_book(start, end, ext, chnum=None):
                 ml = _label_type(st2)
                 # 无分隔符的纯数字标签（如正文引用「命题29」）不是正式条目，跳过
                 if ml and cur and re.search(r'[.．·。]', ml[1]):
-                    t = TYPE_MAP.get(ml[0])
+                    t = _map_type(ml[0])
                     if t:
                         secs.setdefault(cur, {}).setdefault(t, []).append(_norm_num(ml[1]))
     return secs
@@ -196,9 +225,16 @@ def main():
                 print('  [MISMATCH] §%s %s: 书中 %d 条, 总结 %d 条'
                       % (sec, t, bc, mc))
             mdnums = sorted(md_t.get(t, []))
-            if mdnums and (mdnums[0] != 1 or mdnums != list(range(1, len(mdnums) + 1))):
-                problems += 1
-                print('  [GAP]      §%s %s: 总结编号不连续 %s' % (sec, t, mdnums))
+            if mdnums:
+                # 编号核对 = 总结与原书按类型**集合相等**（体例无关的真值比较）：
+                # 共享计数器体例（Han & Lin：定理号是节内 N.M.1..N 连续流的子集，
+                # 如 §1.2 定理 = {2,4,5,6,9,11}）下 md 自身「从 1 连续」恒不成立，
+                # 旧判据（md 自身连续）对这类书全章假阳；且「与书一致」才是要审的事。
+                booknums = sorted(set(bk_t.get(t, [])))
+                if mdnums != booknums:
+                    problems += 1
+                    print('  [GAP]      §%s %s: 总结编号 %s != 书中编号 %s'
+                          % (sec, t, mdnums, booknums))
     if problems == 0:
         print('  PASS: 各节条数与书中一致')
         sys.exit(0)

@@ -374,6 +374,25 @@ def _heading_num(s: str) -> Optional[str]:
     # 唯一放行的是上面的希腊字母节题单 token 形态。
     if tail2[:1].isascii() and tail2[:1].islower() and not _greek_runin:
         return None
+    # 🔴 页眉守卫（2026-11-11 Cover & Thomas《信息论基础》2nd ed 实测）：扫描书的
+    # 书眉把「本页起始的新节名」以**全大写**紧排，并把**页码粘在词尾**（p107 页眉
+    # `4.4SECONDLAWOFTHERMODYNAMICS81`，同页真节标题在页中 y=555 带空格）。该形态
+    # 撞不过任何既有守卫（无空格粘连不违规、大写尾不违规、尾粘页码无碍），而
+    # 「书眉命名的节恰好真实起始于本页」使 `_track_heading` 的 ±2 契约锚核必然
+    # 放行 → 游标在页首即被推进到新节，印在页首（上一节在交界页的延续部分）的
+    # 公式整批错归 → 假 MISPLACED（本书 ch4 (4.43) / ch12 (12.40)(12.41) /
+    # ch13 (13.30) 三组实测；Evans PDE ch3、real-analysis ch24 的书眉同形态）。
+    # 判别只认一个形状：**紧贴尾数字之前有 ≥4 连续大写字母**——空格可有可无
+    # （本书 p459 书眉 `13.2UNIVERSAL CODINGFOR BINARY SEQUENCES433` 部分保留
+    # 空格、p443 `12.6BURG'SMAXIMUMENTROPYTHEOREM417` 全粘连，两态都须拒）。
+    # 不误伤的依据（corpus 27,588 页全量扫描，2026-11-11）：命中该形状的共 90 块，
+    # **全部位于页顶（y≤149）书眉**，无一块页中真标题；页中真标题的粘连形态各有
+    # 缓冲——中文标题粘页码（微分遍历论 `81.1稳定性3`）、混合大小写丢空格
+    # （basic-algebraic-geometry `5.5ExercisestoSection5`）、`IPv6`/`UTF8` 式短词
+    # （<4 连续大写）都不满足本形状。被拒的代价只是游标滞后到块序在后的真节标题
+    # （fail-soft，判定端契约页窗兜底），远轻于书眉抢跑的整批错归。
+    if re.search(r'[A-Z]{4}\d+$', tail2):
+        return None
     if re.search(r'[A-Za-z\u4e00-\u9fff]{2}', tail2):
         return _head_norm(hm.group(1))
     return None
@@ -1459,14 +1478,19 @@ class SourceFormulaIndex:
                     continue
                 if node.get('type') == 'section' and node.get('key'):
                     keys.add(str(node['key']))
-                    # 🔴 节起始页播种账本（2026-10-04 Iwaniec–Kowalski ch5 实测）：
-                    # 扫描书的印刷节头行常被 OCR 整块丢失，行走只能靠 1-2 页后的
-                    # 书眉认节 → 游标整章滞后，几十枚忠实 `\tag` 错归上一节。契约
-                    # 的 section.page_start 来自内容锚定，是节起始页的最佳真值；
-                    # build() 逐页据此把游标推进到「本页起始的、大于当前游标的」
-                    # 最大节号。页级粒度意味着交界页上前一节末尾的公式会被算给
-                    # 新节——比游标滞后一整段轻得多，且交界页残渣由逐章 ignore
-                    # 台账兜底（『cannot tell』语义）。
+                    # 🔴 契约节页窗账本（2026-10-04 Iwaniec–Kowalski ch5 实测立项）：
+                    # 扫描书的印刷节头行常被 OCR 整块丢失，行走游标整章滞后，几十枚
+                    # 忠实 `\tag` 错归上一节。救济**不在**行走端做页级播种——那会
+                    # 毁掉节头可见章的块级精度（ch1/ch2 全域错归实测，见
+                    # `_compute_order_and_section` 处同日注释），而是把契约的
+                    # section.page_start/page_end 存入 `_sec_ranges`，服务两端：
+                    #   ① 行走端 `_track_heading`：±2 页契约锚核，拦散文回指残行 /
+                    #     页眉抢跑（2026-11-11 页眉守卫在 `_heading_num` 源头收口）；
+                    #   ② 判定端 `_compute_order_and_section`：标签印面页落在
+                    #     「总结所在节」页窗内 = 书侧无法证明放错 → 跳过不判。
+                    # （原注释称 build() 逐页按 page_start 播种游标——该机制从未
+                    # 落地，`_cur_heading` 全文件仅 `_track_heading` 一处推进；
+                    # 2026-11-11 更正此文档。）
                     _p0 = node.get('page_start')
                     if isinstance(_p0, int):
                         _pe = node.get('page_end')

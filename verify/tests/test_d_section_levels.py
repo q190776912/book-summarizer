@@ -429,6 +429,12 @@ class TestReportNoDoubleCount(unittest.TestCase):
     def test_levels_block_with_no_findings_skips(self):
         from verify.script.report import print_result
         r = dict(DEFAULT_RESULT)
+        # U 层正常跑完时必发非空覆盖率账本；补上以免被「无证据」闸误拦
+        # （本测试只关心 D 层不重复计数）。
+        r["md_order_stats"] = {"units": 1, "expected": 1, "located": 1,
+                               "coverage": 100.0, "units_dir": "units",
+                               "unmeasurable": 0, "um_keys": [],
+                               "ambiguous": 0, "amb_keys": [], "unlocated": []}
         r["d_layer"] = {"continuity_sections": [], "missing_sections": [],
                         "levels": {1: {"continuity": [], "missing": []}}}
         buf = io.StringIO()

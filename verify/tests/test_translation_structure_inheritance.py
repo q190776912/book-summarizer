@@ -297,11 +297,16 @@ class TestPairingResolution(unittest.TestCase):
         e1, e2 = self._touch("Chapter3_1_A.md", "Chapter3_2_B.md")
         groups = vc.chapter_md_groups(self.tmp, "3")
         cn_grp = next(g for g in groups if vc._group_lang(g) == 'cn')
+        # 🔴 2026-11-12：临时视图按「用途 + 语言」复用固定名，且不再逐组删除
+        # （逐组删会在 52 章的书上触发宿主 50 次批量删除确认墙 → verify 中途
+        # 退出、日志无 PASS 行）。清理改由 `_cleanup_tmp_views()` 在进程退出时
+        # 统一完成；这里仍严格断言「清理后文件消失、章 md 一字未动」。
         with vc._src_pair_view(self.tmp, "3", cn_grp, groups) as pair:
-            self.assertTrue(pair.endswith("._verify_merged_ch3_en.md"))
+            self.assertTrue(pair.endswith("._verify_merged_pair_en.md"))
             self.assertTrue(os.path.exists(pair))
             seen = pair
-        self.assertFalse(os.path.exists(seen), "临时配对视图必须随上下文退出而清理")
+        vc._cleanup_tmp_views()
+        self.assertFalse(os.path.exists(seen), "临时配对视图必须被统一清理")
         self.assertTrue(all(os.path.exists(p) for p in (c1, c2, e1, e2)),
                         "除自建临时文件外不得碰任何章 md")
 

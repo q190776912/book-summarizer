@@ -168,10 +168,13 @@ def main():
     idx_path = os.path.join(ext, "figure_index.json")
     idx = []
     if os.path.exists(idx_path):
-        try:
-            idx = json.load(open(idx_path, encoding="utf-8"))
-        except Exception:
-            idx = []
+        # 🔴 读失败绝不降级为空列表：下面会无条件覆盖写回同一文件，
+        # 降级 = 把历史自动检测图条目全部清空，脚本却仍报 applied 并 exit 0。
+        with open(idx_path, encoding="utf-8-sig") as f:
+            idx = json.load(f)
+        if not isinstance(idx, list):
+            raise SystemExit("[apply_manual_figures] figure_index.json 不是 list，拒绝覆盖: %s" % idx_path)
+    idx_before = len(idx)
 
     fig_dir = figure_dir(ext)      # 书根 figure/（2026-09-01 起与总结 md 同级）
     n_ok = 0
@@ -184,6 +187,9 @@ def main():
         else:
             print(f"  FAIL {label} (page={spec.get('page')} bbox={spec.get('bbox')})")
 
+    if len(idx) < idx_before:
+        raise SystemExit("[apply_manual_figures] 图索引条目变少（%d -> %d），拒绝覆盖以防丢失"
+                         % (idx_before, len(idx)))
     with open(idx_path, "w", encoding="utf-8") as f:
         json.dump(idx, f, ensure_ascii=False, indent=2)
     print(f"applied {n_ok}/{len(manual)} manual figures; figure_index.json updated ({len(idx)} total entries)")

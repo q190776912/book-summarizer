@@ -88,7 +88,7 @@ def _load_evidenced_ignore(ext):
 
 # Tail-check tolerance: source max minus md max beyond this is treated as a
 # likely OCR phantom / alien-numbering and collapses to ONE summary warning
-# instead of a per-number flood (mirrors D-layer's TAIL_GAP_THRESHOLD=5).
+# instead of a per-number flood (same tolerance as the D-layer tail gap rule).
 _TAIL_GAP_CAP = 5
 
 # A bold **...** span. We parse the inner text to decide if it is a real item
@@ -102,10 +102,18 @@ _CITE_RE = re.compile(r'^[（(]*(见|由|根据|参考|参见|据|依照|按|Cf\
 # 引理3.89 的又一次出现 → 假「疑似幽灵重复节点」。m3 本意是「类型词前带命名/归因」
 # （如「黎斯 (Riesz) 引理2.5-4」），其 label 前若是**引用动词直接贴着 label**
 # （「由引理」「见定理」），则是引用而非条头。判据：label 之前的前缀，剥掉尾部
-# 括号/空白后若以引用动词结尾 → 视为引用，拒绝复活。真正带归因括号的条头（「（由
-# Banach）引理3.1」）动词在括号内、前缀以 `）` 收尾，不中此判据，照常保留。
+# 括号/空白后若以引用动词结尾 → 视为引用，拒绝复活。带归因括号的真条头（「黎斯
+# (Riesz) 引理2.5-4」）前缀以 `) ` 收尾，不中此判据，照常保留。⚠️ 旧注释曾称
+# 「（由 Banach）引理3.1」会「照常保留」，实测改前改后都是 None（由 m3 前段的
+# 括号深度守卫处理），与本判据无关；已按实测更正，勿再据旧注释推断行为。
 _CITE_VERB_TAIL_RE = re.compile(
-    r'(?:见|由|根据|参考|参见|据|依照|按|Cf\.|cf\.)\s*[）)〕]?\s*$')
+    r'(?:见|由|根据|参考|参见|据|依照|按|利用|结合|借助|运用|使用|依据|基于|'
+    r'通过|援引|参看|遵照|援用|Cf\.|cf\.)\s*[）)〕]?\s*$')
+# 🔴 结构性兜底（2026-11-13 二轮审计）：光靠动词白名单永远追不完表外动词。
+# 块引用里的交叉参照形态是「（N）+ 1~4 个汉字动词 + 紧贴 label」；真条头的
+# 归因括号是「（Riesz）」「（由 Banach）」，括号里不是纯数字，故不中此判据。
+_QUOTE_ITEM_TAIL_RE = re.compile(
+    r'[（(]\s*\d+\s*[）)]\s*[\u4e00-\u9fff]{1,4}\s*$')
 
 # 「(continued)」/「（续）」续部标记（2026-10-24 elements-of-large-sample-theory
 # ch4/ch6 实测）：印面把被后续条目隔断的**同一条目**块续排时，续块条头沿用原编号
@@ -948,7 +956,9 @@ def _parse_entry(inner, levels, lang=None):
         # 🔴 引用式 m3 守卫：label 之前的前缀若以引用动词收尾（动词直接贴着 label，
         # 如「（2）由引理」「（注）见定理」），这是交叉参照而非条头，拒绝复活。
         # 真正带归因括号的条头（「（由 Banach）引理」）前缀以 `）` 收尾，不中此判据。
-        if _CITE_VERB_TAIL_RE.search(inner[:m3.start()]):
+        _m3_prefix = inner[:m3.start()]
+        if (_CITE_VERB_TAIL_RE.search(_m3_prefix)
+                or _QUOTE_ITEM_TAIL_RE.search(_m3_prefix)):
             return None
         numpath = m3.group(1)
         if _is_header_boundary(inner[m3.end():], lang):
@@ -1438,9 +1448,11 @@ def _md_gap_blocking(ctx):
     if not ctx.md_file:
         return [], [], set(), []
     try:
-        txt = open(ctx.md_file, encoding='utf-8').read()
-    except Exception:
-        return [], [], set(), []
+        txt = open(ctx.md_file, encoding='utf-8-sig').read()
+    except Exception as exc:
+        # B 层 ORDERING 是 BLOCKING 判据；读不到 md 绝不能返回全空账本（= PASS）。
+        raise RuntimeError("B 层 _md_gap_blocking 读取 md 失败: %s (%r)"
+                           % (ctx.md_file, exc)) from exc
 
     # Grouping is now driven by the BookConfig.ordinal GroupConfig array.  For
     # each entry we parse its (comps, label) at the MOST SPECIFIC depth that

@@ -71,10 +71,8 @@ def main():
     fig_idx = None
     fp = os.path.join(extract_dir, 'figure_index.json')
     if os.path.exists(fp):
-        try:
-            fig_idx = figure_index.FigureIndex.load(fp).to_dict()
-        except Exception:
-            fig_idx = None
+        # 文件存在却读失败 → 必须炸，否则 bundle 写 "# FIGURES (0)" 骗下游 agent
+        fig_idx = figure_index.FigureIndex.load(fp).to_dict()
 
     for ch in (want or sorted(rng)):
         if ch not in rng:

@@ -202,6 +202,66 @@ def block_already_handled(blk):
                 or blk.get("mm_converted") or blk.get("mm_unavailable"))
 
 
+_COMPUTED_MANIFEST_KEYS = (
+    "pdf", "extract_dir", "text_thresh", "formula_conf", "src_dpi", "dpi",
+    "total_flagged", "status", "pages",
+)
+
+
+def merge_prev_manifest_pages(pages_out, prev_data):
+    """把上一轮 manifest 的条目按页并回本轮 ``pages_out``（纯函数，fail-closed）。
+
+    🔴 audit() 每轮从零构造 ``pages_out``：在 status=applied 的书上跑
+    ``--recheck`` 时，本轮只有被指认的 1 条，若不并回历史，整本 1921 条
+    已 resolved 的审计轨迹会被清空；更糟的是下游 ``_extraction_done`` 的
+    「每页 mm 标记核对」按 ``m["pages"]`` 的键取页集合，集合缩成 1 页后
+    闸门形同虚设。同 key 以**本轮新条目**为准（新 crop/current 才是待审真值），
+    其余历史条目（含仍未 resolved 的）原样保留，绝不静默丢弃。
+    """
+    if not prev_data:
+        return pages_out
+    for pkey, pinfo in (prev_data.get("pages") or {}).items():
+        old = list(pinfo.get("entries") or [])
+        if not old:
+            continue
+        tgt = pages_out.get(pkey)
+        if tgt is None:
+            tgt = {"sheet": pinfo.get("sheet"), "count": 0, "entries": []}
+            pages_out[pkey] = tgt
+        have = {e.get("key") for e in tgt.get("entries") or []}
+        for e in old:
+            if e.get("key") not in have:
+                tgt.setdefault("entries", []).append(dict(e))
+                have.add(e.get("key"))
+        tgt["count"] = len(tgt.get("entries") or [])
+    return pages_out
+
+
+def next_audit_status(total_flagged, prev_status=None, pages_out=None):
+    """无新 flag 的重跑不得把 applied 打回 none/pending（假回退）。
+
+    但并回的历史里若仍有 unresolved 条目，绝不能沿用 applied —— 那会把
+    「上一轮没修完」洗成「已完成」，是造假的绿。
+    """
+    if total_flagged:
+        return "pending"
+    if pages_out:
+        entries = [e for pg in pages_out.values() for e in (pg.get("entries") or [])]
+        if entries and not all(e.get("resolved") for e in entries):
+            return "partial"
+    return prev_status or "none"
+
+
+def preserve_prev_manifest_fields(manifest, prev_data):
+    """继承本轮不重算的历史字段（text_mode / hybrid / applied / ...）。"""
+    if not prev_data:
+        return manifest
+    for k, v in prev_data.items():
+        if k not in _COMPUTED_MANIFEST_KEYS:
+            manifest.setdefault(k, v)
+    return manifest
+
+
 def parse_recheck_spec(spec):
     """解析 `--recheck` 参数 → ``[(pno:int, key:str, why:str)]``（纯函数）。
 
@@ -297,6 +357,31 @@ def collect_recheck_flags(data, recheck_wanted):
     return flagged
 
 
+def load_prev_manifest(manifest_path):
+    """读取上一轮 manifest → ``(resolved_keys, prev_data)``（可单测）。
+
+    🔴 文件存在却读失败必须 fail-closed：旧实现 ``except: prev_resolved=set()``
+    让 ``prev_data`` 保持 None，三个并回保护全部失效，audit 仍从零重建并覆盖
+    写回 —— 历史 resolved 轨迹与 status 一起清空，``_extraction_done`` 的每页
+    mm 标记核对（按 ``m["pages"]`` 键取页集合）随之失效。
+    """
+    if not os.path.isfile(manifest_path):
+        return set(), None
+    try:
+        prev = mm_repair_manifest.MmRepairManifest.load(manifest_path).data
+    except Exception as exc:
+        raise RuntimeError(
+            "MM_AUDIT: 已有 manifest 读取失败，拒绝从零重建（会清空历史 resolved "
+            "轨迹）；请修复或从备份恢复: %s (%r)" % (manifest_path, exc)
+        ) from exc
+    resolved = set()
+    for p, info in (prev.get("pages") or {}).items():
+        for e in (info.get("entries") or []):
+            if e.get("resolved"):
+                resolved.add(f"{p}:{e['key']}")
+    return resolved, prev
+
+
 def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
           vpad_lines=0.5, thumb_w=420, recheck=None):
     mm_dir = os.path.join(extract_dir, REPAIR_DIRNAME)
@@ -310,16 +395,7 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
 
     # load existing manifest for already-resolved keys
     manifest_path = os.path.join(mm_dir, "manifest.json")
-    prev_resolved = set()
-    if os.path.isfile(manifest_path):
-        try:
-            prev = mm_repair_manifest.MmRepairManifest.load(manifest_path).data
-            for p, info in prev.get("pages", {}).items():
-                for e in info.get("entries", []):
-                    if e.get("resolved"):
-                        prev_resolved.add(f"{p}:{e['key']}")
-        except Exception:
-            prev_resolved = set()
+    prev_resolved, prev_data = load_prev_manifest(manifest_path)
 
     doc = fitz.open(pdf_path)
     pages_out = {}
@@ -428,6 +504,7 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
         raise ValueError(
             "--recheck 条目未落到任何页（页号错 / page_*.json 缺失）: %s" % unused)
 
+    pages_out = merge_prev_manifest_pages(pages_out, prev_data)
     manifest = {
         "pdf": os.path.abspath(pdf_path),
         "extract_dir": os.path.abspath(extract_dir),
@@ -436,9 +513,11 @@ def audit(pdf_path, extract_dir, text_thresh, formula_conf, src_dpi, dpi,
         "src_dpi": src_dpi,
         "dpi": dpi,
         "total_flagged": total_flagged,
-        "status": "pending" if total_flagged else "none",
+        "status": next_audit_status(
+            total_flagged, (prev_data or {}).get("status"), pages_out),
         "pages": pages_out,
     }
+    preserve_prev_manifest_fields(manifest, prev_data)
     mm_repair_manifest.MmRepairManifest(data=manifest).dump(manifest_path)
 
     if total_flagged:

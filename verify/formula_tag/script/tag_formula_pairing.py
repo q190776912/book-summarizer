@@ -416,17 +416,8 @@ def _ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
 
 
-def _containment(a: str, b: str) -> float:
-    r"""`a` 被 `b` 覆盖的比例：两侧匹配到的字符数 / `len(a)`（非对称，0~1）。
-
-    `_ratio` 是 `2M/(|a|+|b|)`，对「一条完整 + 一条残缺/字母形状误读」的同一条式子会
-    被长度差单方面压低（Koopman (5.32)/(16.40) 实测 0.76 / 0.75）。本函数把分母换成
-    **被检查的那一侧**，于是同一枚式子的两种转写 ≈ 1.0，而两枚不同的式子仍很低。
-    """
-    if not a or not b:
-        return 0.0
-    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
-    return sum(bl.size for bl in sm.get_matching_blocks()) / float(len(a))
+# 🔴 2026-11-12 全局审计：此处原有逐字等价的同名 `_containment`（仅 docstring
+# 措辞不同），被下方实现静默覆盖。已删除，唯一 SSOT 保留下方实现。
 
 
 def _containment(a: str, b: str) -> float:
@@ -434,7 +425,7 @@ def _containment(a: str, b: str) -> float:
 
     `_ratio` 是对称的长度归一比值（`2M/(|a|+|b|)`），一条**残缺**的印面正文与它的
     完整版本比，分母被完整版撑大 → 明明逐字包含也只能到 0.75 上下（Koopman p447
-    (16.40) 实测）。本函数将 `M` 除以**较短的那一侧**（被检查包含者），于是
+    (16.40) 实测）。本函数将 `M` 除以**第一个参数 `a` 的长度**（非对称；调用方需双向各调一次），于是
     「同一式子的两种不等长转写」≈ 1.0，而「两条不同的式子」仍然很低。
     """
     if not a or not b:
@@ -486,11 +477,41 @@ def ledger_coherence(printed: Dict[str, List[str]],
         if len(nb) < min_body:
             continue
         total += 1
-        if max(_ratio(nb, norm_math(p)) for p in own) >= hi:
+        # 🔴 2026-11-13：度量口径与 `pairing_problems` 对齐。后者对「同一枚
+        # 式子的残缺/误读账身」用 `_containment >= 0.90` 豁免（见 :607-615），
+        # 本函数此前只用对称 `_ratio`，残缺账身被长度差压到 ~0.75 < hi →
+        # 整章被误判「账本不自洽」→ ORDER/MISPLACED/TAG 三支 WARN 被撤（覆盖空洞）。
+        _nps = [norm_math(p) for p in own]
+        if (max(_ratio(nb, np) for np in _nps) >= hi
+                or max(_containment(np, nb) for np in _nps) >= _CONTAINMENT_EXEMPT):
             ok += 1
     if total < min_samples:
         return None
     return ok / float(total)
+
+
+def _ledger_gap_between(printed, n, m):
+    """n 与 claimed owner m 之间是否隔着「有编号却无账身」的账本空洞。
+
+    仅处理同前缀的两段编号 (C.N)：相隔 >=2 且**闭区间内恰好一个**号无
+    账身，才返回 True —— 密集标签页上 Voronoi 整体错配一格的物理痕迹是
+    「连续编号序列里恰好漏一格」（Cover & Thomas ch16: 16.150/151/153
+    有账身、16.152 空洞）。🔴 反向锁：区间内多处无载体属正常**稀疏账本**
+    （Koopman 5.17~5.32 只登记 3 个号），不得据此豁免；三段号 / 跨前缀
+    号亦不在此列。
+    """
+    try:
+        pa, pb = str(n).split('.'), str(m).split('.')
+        if len(pa) != 2 or len(pb) != 2 or pa[0] != pb[0]:
+            return False
+        lo, hi = sorted((int(pa[1]), int(pb[1])))
+    except (ValueError, IndexError):
+        return False
+    if hi - lo < 2:
+        return False
+    holes = [k for k in range(lo, hi + 1)
+             if not printed.get('%s.%d' % (pa[0], k))]
+    return len(holes) == 1
 
 
 def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
@@ -644,6 +665,16 @@ def pairing_problems(extract_dir: str, ch, start, end, md_file: str,
             if len(hn) >= min_body:
                 holder_r = max(_ratio(hn, norm_math(p)) for p in claim_side[best_m])
         if best_r <= holder_r:
+            continue
+        # 局部账本空洞守卫 (2026-11-12 Cover & Thomas ch16): 印面密集标签页
+        # 上 Voronoi 把标签与展示式整体错配一格时, 会留下「有标签无账身」
+        # 的唯一空洞 (本例 16.152 为 None, 其余 150/151/153 都有账身),
+        # 相邻号的正文则被算到隔了数格的另一号 (16.150 -> 16.153).
+        # 此时「b 像 (m)」只是错位
+        # 账本的产物, 不构成「b 属于 (m)」的证据 -> 无证据不判. 真移位一格
+        # (Lee 9.25->9.26) 相隔 1 不在此列; 三段号 (Katok 9.3.2->9.4.2)
+        # 不走本分支. 单调: 只减少告警.
+        if _ledger_gap_between(printed, n, best_m):
             continue
         seen.add(n)
         rows.append({

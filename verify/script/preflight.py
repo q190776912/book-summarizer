@@ -110,6 +110,9 @@ def print_preflight(md_files, label=''):
             all_ok = False
         outside = ''
         if pf['tags_outside']:
+            # 🔴 与 _preflight_gate 同口径：outside 非空即拒绝进入 --fix。
+            # 旧实现只打印警告却仍返回 exit 0，调用方会误判可以开修。
+            all_ok = False
             shown = ','.join(pf['tags_outside'][:8])
             if len(pf['tags_outside']) > 8:
                 shown += ',…'

@@ -68,21 +68,27 @@ def check_katex(md_file):
     The checker lives at `verify/format_verify/script/check_katex.py` (the
     whole katex detection subsystem — check_katex + katex_heuristics +
     katex_render + katex_validate.js). Resolve it from the skill root (`_ROOT`) so it always points
-    at the live file.  The subprocess is guarded: any failure to launch
-    (missing node / katex JS runtime) or a non-zero exit degrades to
-    "(False, [])" — never crashes `verify_one`."""
+    at the live file.  🔴 fail-closed (SKILL.md): a launch failure, a non-zero
+    exit, or stderr output is reported as an error — never silently degrades
+    to (False, []), which would render "checker never ran" as all-green."""
     check_path = os.path.join(
         _ROOT, 'verify', 'format_verify', 'script', 'check_katex.py')
     try:
         r = subprocess.run([
             sys.executable, '-X', 'utf8', check_path, md_file
         ], capture_output=True, text=True, encoding='utf-8')
-    except (OSError, FileNotFoundError):
-        # node / check_katex.py unavailable in this environment — skip silently.
-        return False, []
-    lines = [l for l in r.stdout.strip().splitlines()
+    except (OSError, FileNotFoundError) as exc:
+        # 🔴 校验器跑不起来 ≠ 没有错误（SKILL.md 对 KaTeX 明确要求
+        # 「校验执行失败 = 不通过（fail-closed）」）。
+        return True, ['[katex] checker unavailable: %r' % (exc,)]
+    raw = (r.stdout or '') + '\n' + (r.stderr or '')
+    lines = [l for l in raw.strip().splitlines()
              if l.strip() and not l.strip().startswith('KATEX ERRORS') and not l.startswith('KATEX CHECK')]
-    has_errors = bool(lines) and r.returncode != 0
+    # rc 必须单独成立：子进程崩溃时错误只在 stderr、stdout 为空，
+    # 旧式 `bool(lines) and rc != 0` 会把非零 rc 直接丢掉。
+    has_errors = (r.returncode != 0) or bool(lines)
+    if r.returncode != 0 and not lines:
+        lines = ['[katex] checker exited rc=%d with no parsed output' % r.returncode]
     return has_errors, lines
 
 
@@ -1096,10 +1102,11 @@ def check_heading_separators(md_file):
     paragraph or between adjacent items).  Returns a list of violation
     strings.  Empty = pass."""
     try:
-        with open(md_file, encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8-sig') as f:
             lines = f.read().split('\n')
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("F 层 heading_sep 读取 md 失败: %s (%r)"
+                           % (md_file, exc)) from exc
     out = []
     for i, ln in enumerate(lines):
         if FMT_HR_RE.match(ln):

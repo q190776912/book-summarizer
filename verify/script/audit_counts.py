@@ -81,8 +81,10 @@ def texts_of_page(p, ext):
         return []
     try:
         data = page_json.PageJson.load(fn).data
-    except Exception:
-        return []
+    except Exception as exc:
+        # 页文件存在却读失败 ≠「这一页没有文字」；静默返回 [] 会让书侧账本
+        # 凭空变空，最终把「无证据」显示成 PASS。
+        raise RuntimeError("[audit_counts] page json 解析失败: %s (%r)" % (fn, exc)) from exc
     blocks = []
     for e in data.get('text', []):
         if isinstance(e, dict):
@@ -211,6 +213,10 @@ def main():
     book_secs = parse_book(start, end, ext, ch)
     all_secs = sorted(set(md_secs) | set(book_secs),
                       key=lambda x: [int(z) for z in x.split('.')])
+    if not all_secs:
+        # 空 md + 空书侧 = 一次比对都没跑，不是「条数一致」。
+        print('  BLOCKED: md 与书侧均未定位到任何节（无证据，不得判 PASS）')
+        sys.exit(2)
     problems = 0
     print('=== 条数核对: %s (%s, pages %d-%d) ===' % (md, chapter_label(ch), start, end))
     for sec in all_secs:

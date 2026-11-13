@@ -94,8 +94,10 @@ def extract_region_text(page, y_band, x_band):
     """
     try:
         words = page.get_text("words")
-    except Exception:
-        words = []
+    except Exception as exc:
+        # 🔴 读取失败 ≠「该区域确实没有文本层」：后者会被 decide 判 keep/ok
+        # 并写 mm_reviewed，让低置信条目永久退出视觉修复闭环（假确证）。
+        raise RuntimeError("PDF 页 get_text('words') 失败: %r" % (exc,)) from exc
     if not words:
         return ""
     sel = []
@@ -196,8 +198,9 @@ def is_text_based(pdf_path, sample=6, min_avg_words=30):
     """自动探测：取样若干页，若平均每页可选中词数足够，判为文本类。"""
     try:
         doc = fitz.open(pdf_path)
-    except Exception:
-        return False
+    except Exception as exc:
+        raise RuntimeError("PDF 打开失败（不能判成扫描版跳过）: %s (%r)"
+                           % (pdf_path, exc)) from exc
     n = min(sample, len(doc))
     if n == 0:
         doc.close()
@@ -206,8 +209,8 @@ def is_text_based(pdf_path, sample=6, min_avg_words=30):
     for i in range(n):
         try:
             total += len(doc[i].get_text("words"))
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError("PDF 取样页 %d 文本层读取失败: %r" % (i, exc)) from exc
     doc.close()
     avg = total / n
     return avg >= min_avg_words
@@ -315,6 +318,28 @@ def run(pdf_path, extract_dir, src_dpi, expand_pt, force_text=False, force_scan=
     doc.close()
 
     repairs_path = os.path.join(mm_dir, "repairs.json")
+    # 🔴 不得从零覆盖已有 repairs.json：模式 A / merge 的产物里含 unavailable /
+    # to_structured 人工裁决，盲写会让它们全部消失。本轮裁决覆盖同 key，
+    # 其余历史条目按页与按 key 合并保留。
+    if os.path.isfile(repairs_path):
+        old = Repairs.load(repairs_path).to_dict()
+        for sec in ("corrections", "ok", "to_structured", "deferred", "unavailable"):
+            cur_blk, prev_blk = repairs.get(sec) or {}, old.get(sec) or {}
+            if not isinstance(cur_blk, dict) or not isinstance(prev_blk, dict):
+                continue
+            merged = {}
+            for page in set(prev_blk) | set(cur_blk):
+                pv, cv = prev_blk.get(page), cur_blk.get(page)
+                if isinstance(pv, dict) and isinstance(cv, dict):
+                    val = dict(pv)
+                    val.update(cv)
+                elif isinstance(pv, list) and isinstance(cv, list):
+                    val = list(dict.fromkeys(list(pv) + list(cv)))
+                else:
+                    val = cv if cv is not None else pv
+                if val:
+                    merged[page] = val
+            repairs[sec] = merged
     Repairs(**repairs).dump(repairs_path)
 
     manifest["status"] = "text_compared"

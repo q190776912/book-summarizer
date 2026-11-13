@@ -397,6 +397,16 @@ def print_result(r):
         for g in l_sep:
             print(g)
     # ---- 标题上方空行（L 层扩展）----
+    # 🔴 规则15（format_verify.md:385）：标题下紧跟 `---` 永不合法。
+    # 2026-11-12 全局审计前 F 层已 emit `heading_sep`，但 report.py 从未读取该键，
+    # 结论里既不打印也不计入 problems —— 规则形同虚设。现按 SSOT:419 接线。
+    h_sep = r.get('heading_sep', [])
+    if h_sep:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · Heading separator ({len(h_sep)}): a `---` sits "
+              f"directly under a section heading (rule 15) — remove it:")
+        for g in h_sep:
+            print(g)
     h_blank = r.get('heading_blank_above', [])
     if h_blank:
         problems += 1
@@ -532,6 +542,15 @@ def print_result(r):
     #   spuriously blocked every chapter of a digit-led book (Kreyszig).
     # Content correctness is left to human reconciliation via
     # <extract_dir>/formula_audit.md (written by verify_all).
+    # 🔴 2026-11-13：Q 层未配置而总结含编号公式 → 阻断，不再只是 stderr WARN。
+    q_unconf = r.get('q_unconfigured', []) or []
+    if q_unconf:
+        problems += 1
+        print(f"\nQ-LAYER UNCONFIGURED ({len(q_unconf)}): 总结含 `\\tag{{...}}` 公式，"
+              f"但 verify_config.json 缺 `formula` 配置 → Q 层未运行；"
+              f"按 verify.md:44 不得宣称「公式校验通过」:")
+        for row in q_unconf:
+            print(f"  ! {row}")
     q_checked = r.get('q_checked', False)
     if q_checked:
         q_fab = r.get('q_fabricated', []) or []
@@ -614,6 +633,8 @@ def print_result(r):
     q_part = (f"/ {q_fab_n} q-fab / {q_inc_n} q-inc / {q_miss_n} q-miss "
               f"/ {q_om_n} q-om / {q_mp_n} q-mp / {q_tm_n} q-tm / {q_ll_n} q-ll "
               if q_checked else "")
+    if q_unconf:
+        q_part += f"/ {len(q_unconf)} q-unconfigured "
 
     # U-LAYER: unit structural reading order (contract page monotonicity). BLOCKING.
     # 补各层盲区：B 层只查同节前缀序标单调、反向覆盖只比集合（同集合任意排列放行），
@@ -646,7 +667,17 @@ def print_result(r):
               f"lib/unit_order._monotonic_problems），要修的是契约登记不是交付块：")
         for g in md_order:
             print(f"  ~ {g}")
-    if md_st:
+    # 🔴 2026-11-12：无证据不得静音。旧实现 `if md_st:` 让空账本整段消失，
+    # 结论仍是 PASS —— 直接违反本段下面「coverage 低时『没有问题』根本不能作为证据」
+    # 的声明，也违反本模块 docstring「零覆盖绝不显示成通过」。
+    _u_noev = bool(not md_st or md_st.get('unmeasured'))
+    if _u_noev:
+        problems += 1
+        print(f"\nU-LAYER DELIVERED ORDER [BLOCKED]: 无证据 —— 交付顺序判据未能运行"
+              f"（{(md_st or {}).get('reason') or 'md_order_stats 为空'}）。"
+              f"不得把「没测」当作「没问题」：须先恢复契约 / units manifest / 交付 md，"
+              f"再重跑校验。")
+    if md_st and not _u_noev:
         # 覆盖率是这道闸的**可信度**，必须与问题同屏：定位不到 = 跳过 = 不测，
         # 所以 coverage 低时「没有问题」根本不能作为证据。
         _un = md_st.get('unlocated') or []
@@ -679,7 +710,8 @@ def print_result(r):
     # 任一格式子项非空即计入 F 总数；ex_warns 为非阻断 warn，不计入阻断计数。
     f_n = (len(r.get('katex_lines', [])) + len(r.get('quote_gaps', [])) + len(r.get('nested_bq', []))
            + len(ex_gaps) + len(h_bq) + len(h_stmt) + len(h_ul) + len(h_mbq)
-           + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(h_blank) + len(m_dm) + len(n_bq))
+           + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(h_blank) + len(m_dm) + len(n_bq)
+           + len(r.get('heading_sep', [])))
 
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "
@@ -693,7 +725,7 @@ def print_result(r):
               f"/ {len(p_bare)} p-layer-bare-item / {len(p_miss)} p-layer-missing-sec "
               f"/ {len(p_extra)} p-layer-fabricated-item "
               f"/ {len(p_verbose)} p-layer-verbose-prose / {len(p_proof_verbose)} p-layer-verbose-proof "
-              f"/ {len(u_order)} u-layer-order "
+              f"/ {len(u_order)} u-layer-order / {1 if _u_noev else 0} u-layer-no-evidence "
               f"{q_part}— {os.path.basename(md)}")
         return 'FAIL'
     else:

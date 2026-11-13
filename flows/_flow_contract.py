@@ -827,7 +827,7 @@ class physical_evidence:
             _vp = os.path.join(_d, "verify_config.json")
             if os.path.exists(_vp):
                 try:
-                    with open(_vp, encoding="utf-8") as vf:
+                    with open(_vp, encoding="utf-8-sig") as vf:
                         _cfg = json.load(vf)
 
                     def _harvest(formula):
@@ -859,8 +859,15 @@ class physical_evidence:
                     for _v in _cfg.values():
                         if isinstance(_v, dict):
                             _harvest_node(_v)
-                except Exception:
-                    known = set()
+                except Exception as _e:
+                    # 🔴 读失败不能静默降级成空白名单：known_book 登记的是
+                    # 「印面真号但抽取器漏挂」，清空会让这些号被判成编造编号
+                    # （或反之放过真缺陷）。按本函数既有 fail-closed 语义记入
+                    # problems，由上游判未达标。
+                    known.clear()
+                    problems.append(
+                        "[flow_gate] verify_config.json 读取/解析失败，known_book "
+                        "白名单无法装载（拒绝以空账本继续）: %s (%r)" % (_vp, _e))
                 break
             _d = os.path.dirname(_d)
         # 章契约路径（tag 真值回退 / src_text 忠实豁免共用）：units_dir =

@@ -39,7 +39,7 @@ def parse_pass(s):
         a, b = s.split("/")
         return (int(a), int(b))
     except Exception:
-        return (None, None)
+        return ("INVALID", "INVALID")
 
 
 def main():
@@ -62,6 +62,11 @@ def main():
             continue
         total_md += v.get("md_count", 0)
         pp = parse_pass(v.get("verify_pass"))
+        if pp[0] == "INVALID":
+            fail_books.append((b, v))
+            print("[make_summary] verify_pass 损坏（不得洗成未校验）: %s -> %r"
+                  % (b, v.get("verify_pass")))
+            continue
         if pp[0] is not None:
             total_pass += pp[0]
             total_ch += pp[1]

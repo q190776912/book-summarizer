@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """long_row_check.py — 检测「显示公式过长 → KaTeX \\tag 被挤离公式」风险。
 
-已并入 F 层公式校验（`format_verify.FLayer.run`，见 format_verify.md）：每章
-`verify_chapter.py` 都会自动扫描全部 `$$` / `> $$` 显示块，把「渲染行过宽」或
-「整块过高」的公式作为 **WARN（非阻断）** 列出——它不属于 KaTeX 渲染错误，不使章节
-FAIL，只提示排版风险供 writer 处理。
+已并入 F 层公式校验（`format_verify.FLayer.run`，见 format_verify.md）。
+⚠️ **默认关闭**：`LONG_FORMULA_CHECK_ENABLED` 为假时本项恒返回空列表，须设环境
+变量 `BOOKSUM_LONG_FORMULA=1` 才启用（与 `format_verify.md` 口径一致）。启用后每章
+扫描全部 `$$` / `> $$` 显示块，把「渲染行过宽」或「整块过高」的公式作为
+**WARN（非阻断）** 列出——它不属于 KaTeX 渲染错误，不使章节 FAIL，只提示排版风险。
 
 🔴 度量口径（按渲染行测量，勿按逐源码行测量）
 ------------------------------

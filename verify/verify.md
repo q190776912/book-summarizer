@@ -4,7 +4,7 @@
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
 > `write-source`（步骤 8）引用本流程对**源语言 + 翻译语言两组 md** 一次性校验（源版与翻译版共用同一套校验）。
 >
-> **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 8 个校验层模块，
+> **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 9 个校验层模块（注册表见下表），
 > 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
@@ -17,7 +17,7 @@
 
 ## 校验层注册表（SSOT）
 所有校验层脚本在 `verify/<snake>/script/<snake>.py`，子流程文档 `<snake>.md` 在 `verify/<snake>/` 目录内（与 `script/` 并列），
-由 `script/register_all.py` 遍历 `verify/*/script/` 用 `importlib` 按裸名 `import` 自动发现并注册（无 `__init__.py`，下划线前缀模块跳过）。`code` 为稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；
+由 `script/register_all.py` 遍历 `verify/*/script/` 自动发现并注册（无 `__init__.py`，下划线前缀模块跳过）。🔴 2026-11-12 起：层模块默认仍按裸名导入以保持可 patch，但**裸名解析到别的文件时**（实测 `unit_order` 曾撞 `lib/unit_order.py` 纯 helper，U 层被静默剔除而报告仍全绿，且只在全量 pytest 进程里复现）改按显式文件 spec 加载到唯一别名；导入/注册失败一律 fail-closed 抛错，末尾另有「注册层数 == 发现的层目录数」完整性闸。缺任何一层都不得出结论。`code` 为稳定字母代号（被 `SKILL.md` 与 per-book 记忆广泛引用，**不可更改**）；
 `name` 为语义名。`order` 决定运行顺序，`auto_fixable` / `fix_order` 决定 `--fix` 修复顺序（🔴 全层 `--fix` 默认禁用，见步骤 0 与步骤 3 修复纪律）。
 
 | code | 语义名 | 模块（snake） | order | auto_fixable | fix_order | 子流程文档 |
@@ -32,6 +32,10 @@
 | Q | formula-tag | formula_tag | 17 | 否 | — | [formula_tag](formula_tag/formula_tag.md) |
 | U | unit-order（合并后单元结构阅读顺序 = 契约 page_start 页码单调；补 B/⑩/subsection 看不见的跨节跨页错乱） | unit_order | 18 | 否 | — | [unit_order](unit_order/unit_order.md) |
 
+🔴 **2026-11-13 两条 fail-closed 补强**：
+- **U 层无证据不得静音**：`unit_order` 在契约/单元缺失、units manifest 为空、交付 md 读失败时原返回 `{}`，而 `report.py` 用 `if md_st:` 把覆盖率整段跳过 → 「没测」被显示成「没问题」，与本层 docstring「零覆盖绝不显示成通过」直接矛盾。现 U 层恒返回带 `unmeasured: True` 的显式账本（md 读失败按 B/P 层同口径 fail-closed 抛错），`report.py` 对无证据打印 `[BLOCKED]` 并计入 `problems` 与 FAIL 行 `u-layer-no-evidence`。全库 1487 个校验组实测原有覆盖率打印齐全，改动零冲击。判据测试 `verify/tests/test_heading_sep_and_unit_order_gate.py`。
+- **临时章视图复用（根治宿主 safe-delete 假失败）**：`verify_all` 原先每组新建 `._verify_merged_ch{N}_{lang}.md` 并立即删除，52 章的书在单条命令内累计 ~100 次删除，触发宿主 50 次批量删除确认墙 → verify 中途退出、日志无 PASS 行。现按「用途（view/pair）+ 语言」复用固定文件名，`atexit` 统一清理最多 4 个文件；文件名仍以 `_cn` / `_en` 结尾，`_group_lang` 与译版豁免判据照常工作。判据测试 `verify/tests/test_merged_view_reuse.py`。
+
 ## 步骤（有序）
 0. **🔒 前置检查表 PREFLIGHT（凡要跑 `--fix` 前必做）**：先跑只读检查表确认 `$$` 围栏配对（fences 为偶）且无 `\\tag` 落在配对块外，才允许进入任何块作用域修复：
    ```powershell
@@ -41,7 +45,7 @@
    - **机制**：Q 层 `_BLOCK_RE = \$\$(.*?)\$\$` 为顺序非贪婪配对——一个落单 `\$\$` 会使其后所有块的奇偶归属整体翻转，`\\tag` 全部被挤出块外；此时邻接启发式 fixer（G 层等）按错误的块图“修复”会静默污染正文（2026-08 实测两起：Ch1 顶层正文被吞进引用块、Ch6 补围栏越补 OUTSIDE 越多 12→18）。
    - **三数不变量**：`fences`（须偶）/ `blocks`（配对块数）/ `tags in vs OUTSIDE`（\\tag 应全部在块内）。OUTSIDE 非空时先以公式行/`\\tag` 为锚点**整体确定性重建**公式块（引用块内保留 `> ` 前缀），禁止逐处补围栏。
    - **CLI 守卫（🔴）**：**全层 `--fix` 默认禁用**——裸 `--fix` 只输出禁用提示，不运行任何 fixer（防止内容未归位时 G 层等邻接启发式修复污染正文，2026-08 Ch1/Ch6 事故）。确需整章自动修复时用 `--fix --fix-force`：仍须先过 PREFLIGHT 门（围栏配对且无块外 `\tag`，任一不满足即使 force 也拒绝）；G 层 fixer 另有独立内置守卫（不配对时跳过并报 `[G-FIXER] BLOCKED`）双保险。
-1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 2`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。
+1. **🔴 Q 层前置（若书有公式）**：确认 `verify_config.json` 含 `"formula"` map；缺失则按书实际公式编号推导写入（扫 `page_*.json` 的 `text[]` 实测段数：`C.N`→`type 2`(depth 2)，`C.S.N`/`C.S-N`→`type 3`(depth 3)，单分量 `(N)`→`type 1`(depth 1)，章级 `scope=2`），再写 `{"type":<码>,"scope":2,"ignore":[]}`（`depth` 由 `type` 经 `ORDINAL_DEPTH` 派生，不单独配置）。严禁在 `formula` 为 `None` 的 no-op 状态下宣称"公式校验通过"。`verify_all` 的 SUMMARY 行对未启用 Q 的章显示 `Q:SKIPPED`（旧实现显示 `QF:0/0/0`，看起来像查过且零问题）；2026-11-12 复核现有 13 本 Q 未启用书的章级 md 中 `\tag{` 计数为 0，属正当 no-op。🔴 2026-11-13：若总结**含** `\tag{...}` 而 `formula` 配置缺失，Q 层 emit `q_unconfigured` 阻断键，`report.py` 判 FAIL 并打印 `Q-LAYER UNCONFIGURED`（此前仅 stderr WARN、结论仍 PASS）；SUMMARY 行该章显示 `Q:UNCONFIGURED`。
 2. 批量校验：
    ```powershell
    python verify/script/verify_chapter.py --all <extract_dir> <book_dir>   # exit 0 才算通过
@@ -49,7 +53,7 @@
 3. 未过时的修复纪律（🔴 **全层 `--fix` 默认禁用**）：默认走**选择性单层修复 / 手工定点修改**（裸 LaTeX 包数学模式、围栏重建等本就不在 fixer 范围内）；确需整章自动修复时，先跑步骤 0 的 `--preflight` 确认围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受 PREFLIGHT 门约束），随后**不带 fix 旗标复验**确认 `exit 0`；至多 2 轮仍不过则继续定点修，**严禁停下来问用户**。
 4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/<snake>/script/<snake>.py`，文档 `verify/<snake>/<snake>.md`，各自 SSOT）。
 5. 公式序标保真（序列顺序 `ORDER_MISMATCH` + 小节定位 `MISPLACED`）已由 Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖；公式**内容**保真仍靠人工核对（机器不判内容对错）。
-6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对全部 8 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
+6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对全部 9 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
    ```bash
    python verify/script/audit_ignore.py <extract_dir> [--chapter N] [--json]
    ```

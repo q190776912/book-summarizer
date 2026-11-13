@@ -76,11 +76,53 @@
 - **公式内容校验（人工对账）**：`verify_all` 末聚合各章 `q_rows` 写出 `<extract_dir>/formula_audit.md`，并排列出「总结 LaTeX / 书源文本片段」，机器**不判内容对错**。
 - **S 为空降级**：若派生正则未抽到任何编号（S 空，绝大多数是 `formula` 的 `type`/`scope`/`lead` **配错**——例如把字母章位 `(A.3)` 或罗马章位 `(II.5)` 的书按纯数字家族配置，括号内核匹配不到首段），仅做结构检查（重复/章节前缀/规范），emit 一条 WARN，**不判编造/遗漏 FAIL**。字母章位 `(A.3)`（`letter_ch: true` 或 `type: 15`）与罗马章位 `(II.5)`（`type: 16` / `lead='roman'`）**均已支持**：书若正确配置对应 lead，这类编号照常机器校验、不进本降级支；只有当**数字家族**的书源里检出字母/罗马编号时，`_detect_letter_led_formulas` 才 emit 一条 mis-config WARN，提示按家族补 `letter_ch`/`type:15` 或 `type:16` 后重跑。🔴 **仅 `head` 不在本书章键集（书外附录交叉引用）才豁免**；**本书附录/补篇章键在册不豁免**——它恰是最可能漏配 `letter_ch` 的当事章，附录自己是数字家族配置、`(A.36)` 印面无人校验时，本提示正是唯一线索（2026-10-08 删除曾一度误加的「属本书附录/补篇章键即排除」分支；该分支会把探针判死到「字母头须是普通章键」，而字母头几乎只在附录出现）。**仅多字母词前缀（`App.2` / `Ap.3`）无对应 lead 家族**，仍作「暂不校验、须人工核对 formula_audit」的 WARN。**（探测正则已收紧：只认短字母/罗马前缀 + 点`·`分隔的真公式编号，不再误匹配 `(n-1)` 代数式与 `(Fig.)/(Chap.)/(Prob.)` 引用——旧正则曾使纯数字编号书（如 Kreyszig）每章被误 BLOCK。）**
 
+
+- 🔴 **三条页级/账本级 fail-open 守卫（2026-11-12 全库 62 本复核根治）**：三处
+  都是「证据不足以证明放错」，修法一律**单调放宽**（只可能少报，绝不新增告警），
+  零 ignore、零改动交付 md。出处：`convex optimization` 与 `Elements of
+  Information Theory 2nd ed`（Cover & Thomas）两本新入库书，
+  `D:/study/.workbuddy/memory/2026-11-11.md`。判据测试
+  `verify/tests/test_q_20261112_arith_boundary_ledger_gaps.py`（14 例，含反向锁）；
+  全 skill `pytest .` 3484 passed / 1 skipped / 73 subtests；全库 62 本 A/B 复核。
+  1. **算术残行守卫**（`_heading_num`）：convex ch9 `page_484.json` 散文行
+     ``10-8/20 ~ 0.4 each iteration. This reasonably rapid convergence is
+     predicted by``（长 79，绕开 `len(s) >= 80` 长度闸）被 `_HEAD_RE` 读成节号
+     `10.8`（`-` 是合法分隔符），尾部含 `each` 又过了「标题词」判定 → 游标从
+     §9.3.2 跳到跨章 §10.8，「只进不退」守卫随即把 §9.4~§9.7 全部真节头锁在
+     门外，ch9 后半 (9.21)(9.22)(9.58)(9.61) 四枚忠实 `\tag` 的
+     `book_section` 全错成 10.8（4 条假 MISPLACED）。守护：**节号后紧跟
+     `/数字`**（分数/比率）即算术残行，不是节标题；真节标题不会这样写。
+     拒收后游标从 10.8 恢复到 9.7.2，ch9 `MISPLACED 4→0`。
+  2. **交界页无证据不判**（`_compute_order_and_section` plain 支，契约页窗核
+     之后）：convex (1.7)/(5.15)/(5.44) 印在「下一节契约首页」的页顶——
+     页顶书眉已写下一节号、正文节题却在同页更下方（如 `page_251.json`
+     标签 (5.44)@y412、页眉 `5.4`@y261、正文节题 `5.4`@y1331），
+     标签实际属上一节尾部。契约 `page_start/page_end` 是**页级**粒度，
+     交界页无法分辨归属。守护：标签印面页恰等于书侧判定节 `bsec` 的契约
+     页窗首页 → 不判。真错位（印面页远离本节页窗）照判；反向锁见测试
+     `test_real_misplacement_still_flagged` / `test_no_contract_range_still_flagged`。
+  3. **局部账本空洞**（`tag_formula_pairing._ledger_gap_between`，判决点）：
+     Cover & Thomas ch16 `page_666.json` 密集标签页（16.144~16.155 共 10 枚）
+     上 Voronoi 把标签与展示式整体错配一格，留下「有编号无账身」的
+     **唯一空洞** 16.152=None（16.150/151/153 都有账身），于是 16.150 的
+     `\hat S_n = \int\prod \mathbf{b}^t\mathbf{x}_i d\mu` 被算到隔三格的
+     16.153 上（r=0.83），而总结 16.150~16.155 与印面 y 顺序**逐条吻合**、
+     md 内容正确。守护：同前缀两段编号、相隔 ≥2 且**闭区间内恰好一个**
+     号无账身 → 账本错配，「`b` 像 `(m)`」不构成「`b` 属于 `(m)`」的证据。
+     🔴 收紧依据：全量 pytest 反向钉实测——Koopman (5.32)→(5.17) 之间
+     5.19~5.31 共 13 个号不在账本属**正常稀疏**，旧版「任一无载体即空洞」
+     会吞掉原假阳复现，故必须「恰好一格」。真移位一格（Lee 9.25→9.26）
+     相隔 1 不适用，三段号（Katok 9.3.2→9.4.2）不走本支。
+  - **共同性质**：三条都只在「原本会开报」时把结论撤回，FABRICATED /
+    INCONSISTENT / MISSING 三个阻断支一字未动；不写 `formula.ignore`、
+    不动 `page_*.json`、不改交付 md —— 符合 no-fabrication 与「禁止隐藏问题」。
+
 - 🔴 **章级「书侧配对账本自洽率」闸（`ledger_coherence`，2026-11-08 线性系统理论郑大钟第二版根治）**：Q 层已有一族**逐条**的「无证据不判 / 账太薄不判」豁免，但它们假设书侧账本**整体可用**。劣质扫描书（本书 665/729 页 `MM_UNAVAILABLE=true`、81% 公式 latex 含 `\mathfrak`/`\boldmath` 乱码）会让一章里**绝大多数号自己都配不上自己**，而共享骨架的异号凭长度/前缀巧合拿高分 —— 逐条闸（`_CONTAINMENT_EXEMPT=0.90` / `hi=0.80` / 归属仲裁 / 账本判别力）在这类账本上同时失效，于是 34 条 WARN 全是校验器噪声，md 内容反而是对的（11-06 逐条回印面取证）。判据：`tag_formula_pairing.ledger_coherence(printed, summary)` = 「总结贴在该号上的正文能与书侧该号任一账身配上(≥`hi`)的号数 / 有载体且正文 ≥`min_body` 的号数」，样本 <8 返回 `None`（不降级）。低于 `LEDGER_COHERENCE_MIN = 0.50` 时，**本章** `ORDER_MISMATCH` / `MISPLACED` / `TAG_MISMATCH` 三支 WARN 判据整体降级跳过；`FABRICATED` / `INCONSISTENT` / `MISSING` 三个阻断支**一字不动**。
   - 语义 = 既有「账太薄不判（`len(printed) < 3`）」的推广：**账本有但不可用 = 无证据**。位置账（`SourceFormulaIndex` 扫 `text[]` 独立标签块）与配对账（扫 `formulas[].latex`）出自同一次 OCR，配对账自证失败即说明整章书侧证据不足为据，拿它反推交付的叙述次序/小节归属同样无据。
   - 🔴 **不静默**：降级时向 stderr 打 `[Q-LAYER EVIDENCE-DEGRADED] chN 自洽率 … 跳过项：ORDER_MISMATCH …; TAG_MISMATCH …`，逐条列出被跳过的号与类别（**含已知真缺陷**，可被人工继续追），只是不再计为 `[WARN, non-blocking]`。这既不是 ignore、也不是删/改被校验对象，更不是伪造 PASS；阻断支照常全量校验。
   - **单调**：只减少告警，绝不新增；`ncomp == 1` 整族不建账、不降级；`ledger_coherence` 抛异常时 fail-safe 照常判并打 `[Q-LAYER LEDGER *WARN*]`，绝不静默吞掉。账本只在 `run()` 里建一次，经 `_tag_pairing_rows(printed=…)` 透传给 `pairing_problems`，**不重复扫页**。🔴 **双层分工（2026-11-09 审计订正）**：`pairing_problems` 的 `ledger_coherence_val` 闸只给显式调用方（普查工具 / 判据测试）使用；Q 层 `run()` **不传**该值，章级降级统一在 `run()` 完成——先取原始 `q_tag_mismatch` 行用于逐号留痕，再把三支清空。若在下层提前 `return []`，降级 INFO 行会丢掉被跳过的号。`tools/q_tag_mismatch_census.py` 直调时也不传，以便暴露未降级的原始告警。
   - **标定**：① 只读抽样实验（8 本，`_tmp_20261108_fullcheck/q_ledger_coherence.py`）：线性系统 12/13 章 0.191~0.476（ch1 仅 2 枚号、无告警）；OCR 质量同样差的 高等代数 0.853~1.000 / statistical-inference 0.800~1.000 / analytic-number-theory 0.592~1.000 / Elliptic PDE 0.750~0.889 远离阈值；阈值 0.50 落在 0.476 与 0.592 之间。② **全库 59 本 A/B 实测**（改源码前后各跑一次 `verify_chapter.py --all`；`_tmp_20261108_fullcheck/ab/compare_out.txt`）：降级命中 **7 本 24 章**，其中 12 章三支 WARN 本就为 0（INFO 行「跳过项：无」，零影响）；真正有告警被撤的只有线性系统 12 章 / 34 条。59/59 `PASS N/N`、exit 0、FAIL/BLOCKED 0；`warns 15→0`、`q 34→0`，`exmen 328 / unl 26 / amb 196 / cov<100 150` 与基线逐本一致，其余 58 本零漂移。判据测试 `verify/tests/test_q_layer_ledger_coherence.py`（8 例，含「关掉闸必须复现真 TAG_MISMATCH」负向锁）。
+  - 🔴 **度量口径对齐（2026-11-13 二轮审计）**：旧 `ok` 谓词只用对称 `_ratio`，而 `pairing_problems` 对「同一枚式子的残缺 / 误读账身」早已用 `_containment(norm_math(p), nb) >= _CONTAINMENT_EXEMPT(0.90)` 豁免（`tag_formula_pairing.py:607-615`）——两者口径不一致：残缺账身被长度差压到 ~0.75 < `hi`(0.80)，本应判「配上自己」的章被误判账本不自洽、三支 WARN 遭撤，形成覆盖空洞。现 `ledger_coherence` 的 `ok` 改为 `_ratio >= hi` **或** `_containment >= 0.90`，与下层同源。**全库实验**：8 本降级书中 5 章恢复校验（降级章 26→21），WARN 仍为 0、PASS N/N 与 FAIL/BLOCKED 逐本不变，34 条假 WARN 未回流。判据测试 `verify/tests/test_ledger_coherence_containment.py`（含「无关账身仍判不自洽」反向锁）。⚠️ `LEDGER_COHERENCE_MIN = 0.50` 仍是 `_ratio` 时代的标定值，本次只补度量、未重标阈值；若日后发现降级面偏松，须重做全库标定，不得直接调数。
   - ⚠️ **fail-open 的代价已显式化，不静默**：24 章里那 12 个零告警章的三支判据本次同样被跳过（未来这些章若出现真 WARN，不会再由这 3 支报出），属设计取舍；每章都有 `[Q-LAYER EVIDENCE-DEGRADED]` 行留痕，且阻断支始终全量校验。抽样实验只取每章第一份 md、只覆盖 8 本，故**低估了双语书影响面**，一律以全库 A/B 为准。
   - ⚠️ 该闸**不修内容**：被跳过的号里若确有真缺陷（本书 ch7 的 `7.85` / `7.118` / `7.203` 属「给印面无号展示式贴号」），仍须回源补真值；降级只撤掉**无据的告警**，并在 INFO 行里把这些号如实列出，交人工追。
 
@@ -99,7 +141,7 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登�
 - `build_formula_patterns(ncomp)`：按 `depth`（由 `type` 经 `ORDINAL_DEPTH` 派生）生成源抽取正则（单捕获组、`depth` 决定分量数）。
 - 行尾标签判据三件套（全库唯一真源，`text[]` / `formulas[].latex` / 预检噪声门共用）：`tail_label_match(txt)`（形态② 完整判据，返回 Match 或 None）→ 内部调 `_tail_pre_guard(raw_pre)`（左邻守卫，**入参须未剥尾随空白**）；`latex_tail_token` / `latex_label_candidates` 是其 latex 侧薄封装；`agnostic_label_evidence(ext_dir, ch, start, end, nums)` 是预检侧的位置证据门。改口径只改 `tail_label_match` + `_tail_pre_guard`，不要在调用方复制判据。
 - `SourceFormulaIndex.norm()`：去空白/去外层 `（）()`/去 `Eq.`·`Equation`·`式` 前缀；把 `.\-·,` 任一分隔符归一为 `.`；**折叠末尾字母后缀(a)**（如 `5.1.3a`→`5.1.3`）。折叠后缀只为「书源子式 `(8a)`/`(8b)` 与汇总结点 `\tag{8}` 对齐」的 S 成员 / MISSING / FABRICATED 比对；**INCONSISTENT 重复检测另用 `norm_full()`（保留后缀）**，使 `(5.1.3a)`/`(5.1.3b)` 这类真实子式不被误判为重复 `\tag`。无字母后缀的书 `norm_full == norm`，故该改动对纯数字编号书零回归。例 `（11.1-1）`→`11.1.1`，`Eq. 2.3`→`2.3`，`2.3a`→`2.3`。
-- `LayerResult` 返回的 5 个 `q_*` 键须与 `DEFAULT_RESULT`、本 `contract-keys`、以及 `report.py` 读取完全一致（由 `verify/tests/test_key_contract.py` 强制校验）。
+- `LayerResult` 返回的全部 `q_*` 键须与 `DEFAULT_RESULT`、本 `contract-keys`、以及 `report.py` 读取完全一致（由 `verify/tests/test_key_contract.py` 强制校验）。2026-11-13 新增 `q_unconfigured`（阻断键）。
 
 ## 子流程
 无独立子脚本；`SourceFormulaIndex` 与 `build_formula_patterns` 在本层脚本内。
@@ -108,10 +150,15 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登�
 本层 `auto_fixable = False` 且 **opt-in**——总结里带 `\tag{X}` 的公式，其序标必须与
 **书源公式编号集合 S** 1:1 对应；编造/错位/跨章须人工核对书源，脚本不臆造编号。
 
-- **前置（缺一不可）**：`verify_config.json` 须配 `formula` map（`type`/`scope`），
-否则 Q 层静默 no-op（见本层顶部警告）。看到 `[Q-LAYER WARN]` 必须补全配置，禁止宣称公式校验通过。附录字母章位编号须 `formula.letter_ch: true`（落在外层 map 的 `appendix` 段；`make_config` 重生成即自动写入——手写 config 无效）。
+- **前置（缺一不可）**：`verify_config.json` 须配 `formula` map（`type`/`scope`）。
+🔴 2026-11-13 起 no-op 分两种：总结**含** `\tag{...}` 而配置缺失 → emit `q_unconfigured`
+阻断键，`report.py` 判 **FAIL** 并打印 `Q-LAYER UNCONFIGURED`（旧实现只往 stderr 打
+`[Q-LAYER WARN]` 却仍报 PASS，违反 `verify.md:44`）；总结**不含**编号公式 → 正当 no-op，
+SUMMARY 显示 `Q:SKIPPED`，不阻断。已复核现有 13 本 Q 未启用书的章级 md `\tag{` 计数为 0。
+附录字母章位编号须 `formula.letter_ch: true`（落在外层 map 的 `appendix` 段；`make_config` 重生成即自动写入——手写 config 无效）。
 - 🔴 **RESERVED letter-led 探针的两条正交豁免**（`_detect_letter_led_formulas`，2026-10-09 Lee ISM ch7 实测跟因）：该探针**只对数字家族的书**触发（`run()` 里 `alpha_led` 段直接短路），源页冒出字母/罗马开头编号（`(A.3)`/`(II.5)`）时发**非阻断** WARN 提示「可能漏配 letter_ch」。命中项按两条**独立**判据丢弃：(1) 头**不在本书章键集**（`list_chapter_keys`）= 对书外附录/他书的散文交叉引用（2026-10-04 Iwaniec–Kowalski `(A.36)`，chapter_map 无附录章）；(2) 头**归属某附录/补篇章、且该段 formula 已选用 alpha 家族**（`ConfigLoader.alpha_led_special_head_keys` 作 kind→段路由 SSOT，与 `config_for_chapter` 同源，绝不在层内复刻路由表）→ 该号已被**附录段自身**机器校验，数字正文章只是交叉回指（Lee ISM ch7 p186 `(B.3) expresses det(I + tA)`，附录 B 段 `letter_ch: true`、QF 干净），正文段再报即**假阳**，豁免。🔴 **与 2026-10-08 判据一致**：附录/补篇**自身是数字家族**（或根本没有该段、静默回退正文数字配置）时 (2) 不触发 → 告警照发——那才是「印面无人校验」的真漏配。本修复对全库单调（52 书 / 502 数字正文章普查：added=0、removed=1、invalid=0，唯一移除即 Lee ch7 的 `(B.3)`）；判据测试 `verify/tests/test_q_layer_letter_led_probe.py`。
-- **触发门（report.py）**：`Q-LAYER FORMULA FABRICATED` / `Q-LAYER FORMULA INCONSISTENT` → 始终 FAIL；
+- **触发门（report.py）**：`Q-LAYER UNCONFIGURED`（缺 `formula` 配置但总结含编号公式）→ FAIL；
+`Q-LAYER FORMULA FABRICATED` / `Q-LAYER FORMULA INCONSISTENT` → 始终 FAIL；
 `Q-LAYER FORMULA MISSING`（未登记 ignore）→ FAIL（阻断）；`Q-LAYER FORMULA ORDER_MISMATCH` / `Q-LAYER FORMULA MISPLACED` / `Q-LAYER FORMULA TAG_MISMATCH` → 仅 WARN（非阻断）。
 - **修复步骤**：
   1. `FABRICATED`（总结 `\tag` 编号不在 S → 编造/串号）→ 回源核对，删掉或改正 `\tag`。
@@ -132,6 +179,7 @@ FABRICATED / INCONSISTENT 非空 → 整章 FAIL；未在 `formula.ignore` 登�
 ## 字节契约键
 ```contract-keys
 q_checked
+q_unconfigured
 q_fabricated
 q_inconsistent
 q_missing

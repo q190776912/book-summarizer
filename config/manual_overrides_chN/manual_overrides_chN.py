@@ -21,5 +21,5 @@ def load_manual_overrides(path: Optional[str]) -> Any:
     guard in the extract scripts."""
     if not path or not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)

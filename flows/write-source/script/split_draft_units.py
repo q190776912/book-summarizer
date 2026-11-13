@@ -285,10 +285,14 @@ def _load_done_index(out_dir):
     if not os.path.exists(mpath):
         return {}
     try:
-        with open(mpath, encoding="utf-8") as f:
+        with open(mpath, encoding="utf-8-sig") as f:
             old = json.load(f)
-    except Exception:
-        return {}
+    except Exception as _e:
+        # 🔴 本索引用于保护已 DONE 单元；调用方随后可能整目录清空重建
+        # (--force)，空账本 = 把所有已改好的单元当草稿重建（数据全丢）。
+        raise RuntimeError(
+            "[split_draft_units] 旧 manifest 读取/解析失败，拒绝以空账本放行"
+            "（--force 会清空全部已 DONE 单元）: %s (%r)" % (mpath, _e)) from _e
     old_units = old.get("units") or []
     keys = _done_keys(old_units)
     out, seen = {}, set()

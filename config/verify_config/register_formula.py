@@ -160,7 +160,7 @@ def _contract_numbers(ext, chapter):
     if not p or not os.path.exists(p):
         return set()
     try:
-        with open(p, encoding="utf-8") as f:
+        with open(p, encoding="utf-8-sig") as f:
             tree = json.load(f)
         out = set()
         for lst in chapter_tag_map(tree).values():
@@ -169,8 +169,10 @@ def _contract_numbers(ext, chapter):
                 if nn:
                     out.add(nn)
         return out
-    except Exception:
-        return set()
+    except Exception as exc:
+        raise RuntimeError(
+            "[register_formula] 章节契约读取/解析失败，拒绝以空账本放行挂号: %s (%r)"
+            % (p, exc)) from exc
 
 
 def main(argv=None):

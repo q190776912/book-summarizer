@@ -654,8 +654,12 @@ def detect_pages_range(pdf_path, out_dir, start, end, model=None,
     if os.path.exists(dp):
         try:
             existing = figure_detect.FigureDetect.load(dp).data
-        except Exception:
-            existing = []
+        except Exception as _e:
+            # 🔴 下面 merged = existing + new_entries 会覆盖写回同一文件；
+            # 读失败降级成 [] 会永久丢掉历史图检测条目（同 apply_manual_figures）。
+            raise RuntimeError(
+                "[extract_figures] figure_detect.json 读取/解析失败，拒绝以空账本"
+                "覆盖写回: %s (%r)" % (dp, _e)) from _e
     merged = existing + new_entries
     figure_detect.FigureDetect(data=merged).dump(dp)
 
@@ -760,8 +764,12 @@ def run_chapter(pdf_path, out_dir, ch, start, end, weights=DEFAULT_WEIGHTS,
     if os.path.exists(dp):
         try:
             existing = figure_detect.FigureDetect.load(dp).data
-        except Exception:
-            existing = []
+        except Exception as _e:
+            # 🔴 下面 merged = existing + new_entries 会覆盖写回同一文件；
+            # 读失败降级成 [] 会永久丢掉历史图检测条目（同 apply_manual_figures）。
+            raise RuntimeError(
+                "[extract_figures] figure_detect.json 读取/解析失败，拒绝以空账本"
+                "覆盖写回: %s (%r)" % (dp, _e)) from _e
     existing = [e for e in existing if e.get("chapter") != ch]
     merged = existing + entries
     _write_detect(out_dir, merged, [])  # md_lines only meaningful for full-book

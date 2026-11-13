@@ -45,7 +45,7 @@ def load_ignore_dict(path):
     """Load ignore file as dict {key: reason}. Returns empty dict if missing/invalid."""
     if not path or not os.path.exists(path):
         return {}
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, 'r', encoding='utf-8-sig') as f:
         data = json.load(f)
     if isinstance(data, dict):
         return {normkey(str(k)): v for k, v in data.items()}
@@ -65,7 +65,7 @@ def load_ignore_raw(path):
     """Load ignore file as dict (key -> reason) without normalizing keys."""
     if not os.path.exists(path):
         return {}
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, 'r', encoding='utf-8-sig') as f:
         data = json.load(f)
     if isinstance(data, dict):
         return data

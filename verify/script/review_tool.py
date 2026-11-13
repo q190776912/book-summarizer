@@ -82,6 +82,10 @@ def review_chapter(extract_items, verify_chapter, chapter_map, book_dir, extract
     print(result.stdout)
     if result.stderr:
         print("STDERR:", result.stderr)
+    if result.returncode != 0:
+        print("[review_tool] BLOCKED: extract_items 失败 (rc=%d)，不得基于陈旧账本继续校验"
+              % result.returncode)
+        return False
 
     # Step2: Locate this chapter's ignore file (in the book's _extract folder)
     ignore_file = None

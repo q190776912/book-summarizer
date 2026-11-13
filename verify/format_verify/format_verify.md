@@ -417,6 +417,7 @@ $$
 
 ## 阻断性与可修复（出口判定）
 - 除 `long_formula_rows`（WARN 非阻断，不参与 FAIL 判定）外，其余键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
+- ✅ **2026-11-13 已闭环**（原为 11-12 全局审计查出的死键）：`heading_sep`（规则15）此前由 F 层 emit 进结果字典，但 `report.py` 与 `verify_chapter.py` 的 F 聚合、`problems` 计数均未读取，规则形同虚设。现已计入 `problems`、F 计数与 FAIL 行；从根因修 `merge_units` 的 V-F 状态机（父节标题后紧跟子节标题时不再插 `---`，纯函数 `_vf_section_sep_needed` 可测）；并按 SSOT fixer `_remove_heading_seps` 的**同一规则**全书机械清理 **336 个章级 md / 427 条违规行**（备份于 `_tmp_20261111_bookcheck/md_backup/`；逐文件守恒校验：非空行序列、`\tag{` / `$$` / `>` / `#` 计数不变，正文零改动）。接线后实测 convex ch2/ch3 报 `F:3 FAIL`，清理后恢复 `PASS 28/28`；全库 62 本复跑 0 违规。判据测试 `verify/tests/test_heading_sep_and_unit_order_gate.py`。
 - 本检测层 `auto_fixable = False`：**自动修复不由本层完成**，改由下方 FIXERS 注册表（按原 fixer 代号）执行，字节兼容不变。
 
 ## 出口条件

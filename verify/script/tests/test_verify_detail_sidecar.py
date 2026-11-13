@@ -66,6 +66,12 @@ def _base_r(extract_dir=None, **over):
         "fig_invalid_warn": [],
         "fig_skipped": True,
         "entry_keys": ["例2.2.1"],
+        # U 层正常跑完时必发非空覆盖率账本；这里补上以免被「无证据」闸误拦
+        # （本文件测的是 verify_detail 旁路，与 U 层无关）。
+        "md_order_stats": {"units": 1, "expected": 1, "located": 1,
+                           "coverage": 100.0, "units_dir": "units",
+                           "unmeasurable": 0, "um_keys": [],
+                           "ambiguous": 0, "amb_keys": [], "unlocated": []},
     }
     if extract_dir:
         r["extract_dir"] = extract_dir

@@ -29,6 +29,7 @@ Referenced by write-source 步骤 8（批量校验硬闸）。
 """
 import os
 import sys
+import atexit
 from pathlib import Path
 
 for _c in [Path(__file__).resolve(), *Path(__file__).resolve().parents]:
@@ -219,6 +220,23 @@ def chapter_md_groups(book_dir, ch):
 
 _MERGED_VIEW_LANG = re.compile(r"^\._verify_merged_(?P<label>.+)_(?P<lang>cn|en)\.md$")
 
+# 🔴 2026-11-12：临时章视图按「用途 + 语言」复用固定文件名，进程退出时统一清理。
+# 旧实现每组新建+删除一个文件，52 章的书在单条命令内累计 ~100 次删除，触发宿主
+# safe-delete 50 次批量确认墙，verify 中途退出、日志无 PASS 行（假失败）。
+_TMP_VIEWS = set()
+
+
+def _cleanup_tmp_views():
+    for p in list(_TMP_VIEWS):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    _TMP_VIEWS.clear()
+
+
+atexit.register(_cleanup_tmp_views)
+
 
 def _group_lang(grp):
     """判定一个 md 组属于哪种语言：cn（中文）/ en（英文）/ None（未知）。
@@ -311,10 +329,12 @@ def _merge_section_files(section_files):
     return '\n'.join(merged_lines).rstrip('\n') + '\n'
 
 
-def _merged_temp_path(book_dir, ch, section_files):
+def _merged_temp_path(book_dir, ch, section_files, kind='view'):
     """Write merged chapter content to a temp file and return its path.
 
     🔴 文件名必须携带**本组语言**（Iwaniec–Kowalski 解析数论 ch7/ch15 实测 2026-09-29）：
+    🔴 2026-11-12 起文件名按「用途 + 语言」复用（不再含章号），见
+    `_TMP_VIEWS`：避免逐组删除触发宿主批量删除确认墙。
     按节拆分的章会被并回一个临时文件再跑各层，而若干「译版豁免」判据
     （`verbose_gates.is_translated_md`）读的就是文件名的中文侧前缀。旧名
     `._verify_merged_ch{N}.md` 两侧共用、以 `.` 起头 → 中文侧节文件被并出的临时视图
@@ -323,9 +343,12 @@ def _merged_temp_path(book_dir, ch, section_files):
     """
     lang = _group_lang(section_files)
     suffix = f'_{lang}' if lang else ''
-    tmp = os.path.join(book_dir, f'._verify_merged_{chapter_label(ch)}{suffix}.md')
+    # kind 区分主视图 / 译组配对视图，避免互相覆盖；label 段仍能被
+    # _MERGED_VIEW_LANG 读回语种（只要求末尾 _cn / _en）。
+    tmp = os.path.join(book_dir, f'._verify_merged_{kind}{suffix}.md')
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(_merge_section_files(section_files))
+    _TMP_VIEWS.add(tmp)
     return tmp
 
 
@@ -354,14 +377,7 @@ def _src_pair_view(book_dir, ch, grp, groups):
         yield None
         return
     if len(pair) > 1:
-        tmp = _merged_temp_path(book_dir, ch, pair)
-        try:
-            yield tmp
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        yield _merged_temp_path(book_dir, ch, pair, kind='pair')
         return
     yield pair[0]
 
@@ -547,6 +563,7 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
 
     results = []
     matched_count = 0
+    skipped = []
     # Q-LAYER audit aggregation (only meaningful when a chapter enabled the `formula` map).
     q_active = False
     all_q_rows = []
@@ -565,6 +582,7 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
         groups = chapter_md_groups(book_dir, ch)
         if not groups:
             print(f"{chapter_label(ch)}: SKIP — no .md file found")
+            skipped.append(ch)
             continue
         # 🔴 配对解析始终用**未过滤**的全语言组：`--only-lang cn` 只影响「校哪些组」，
         # 不能顺手抹掉译本的配对源（否则同一份译本 md 在带/不带 --only-lang 时结论
@@ -585,16 +603,9 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
                 md = _merged_temp_path(book_dir, ch, grp)
                 md_display = (f"{os.path.basename(grp[0]).split('_')[0]}_"
                               f"合并{len(grp)}节")
-            try:
-                with _src_pair_view(book_dir, ch, grp, all_groups) as src_pair:
-                    r = verify_one(ch, start, end, md, ext, book_dir,
-                                   extra_ignore=extra_ignore, src_pair_md=src_pair)
-            finally:
-                if len(grp) > 1:
-                    try:
-                        os.remove(md)
-                    except OSError:
-                        pass
+            with _src_pair_view(book_dir, ch, grp, all_groups) as src_pair:
+                r = verify_one(ch, start, end, md, ext, book_dir,
+                               extra_ignore=extra_ignore, src_pair_md=src_pair)
             print(f"--- Chapter {ch}: {md_display} ---")
             status = print_result(r)
             r['status'] = status
@@ -642,14 +653,18 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
         # 所有格式子项 finding 数求和，单一 F 计数呈现。
         f_n = (ke + ggaps + epg + hbq + hstmt + hul + hmbq
                + isp + len(r.get('i_prose_sep', [])) + jsp + ksp + lsp + hblank
-               + mdm + nbq + nbq_nested)
+               + mdm + nbq + nbq_nested + len(r.get('heading_sep', [])))
         osub = len([g for g in r.get('o_subitem_gaps', []) if g.strip().startswith('x')])
         qf = len(r.get('q_fabricated', []) or [])
         qi = len(r.get('q_inconsistent', []) or [])
         qm = len(r.get('q_missing', []) or [])
+        # 🔴 Q 层未启用（formula 配置缺失）时不得显示成 "QF:0/0/0" —— 那看起来
+        # 像「查过且零问题」，直接违反 verify.md:44 的 no-op 红线。
+        q_disp = (f"QF:{qf}/{qi}/{qm}" if r.get('q_checked')
+                  else ("Q:UNCONFIGURED" if r.get('q_unconfigured') else "Q:SKIPPED"))
         print(f"  {chapter_label(r['ch']):>9s}: {status:4s}  M:{tm} B:{bl} Dc:{dcont} Dmiss:{dmiss} "
               f"FgMiss:{fgmiss} FgInv:{fginv} Emb:{emb_disp} F:{f_n} Osub:{osub} "
-              f"QF:{qf}/{qi}/{qm}  {os.path.basename(r['md'])}")
+              f"{q_disp}  {os.path.basename(r['md'])}")
 
     pass_count = sum(1 for r in results if r['status'] == 'PASS')
     print(f"\nPASS: {pass_count}/{len(results)}")
@@ -659,9 +674,16 @@ def verify_all(ext, book_dir, extra_ignore=None, only_lang=None,
         _write_formula_audit(ext, all_q_rows)
     # 🔴 语言过滤时空匹配 = 该语种 md 一个都没校验到（尚未拼接 / 语言标记错），
     # 绝不能当成 PASS 放行（否则 merge_source 证据会在源版根本没拼出来时假绿）。
+    if matched_count == 0:
+        print("[verify_all] BLOCKED: 一个 md 都没校验到（未拼接或命名不符）——视为未通过。")
+        return False
     if only_lang and matched_count == 0:
         print(f"[only-lang={only_lang}] BLOCKED: 没有任何 [{only_lang}] 版 md 被校验到"
               f"（未拼接或语言不符）——视为未通过。")
+        return False
+    if skipped:
+        print("[verify_all] BLOCKED: %d 章未找到任何 md（%s）——该章未参与校验，不得计入 PASS"
+              % (len(skipped), ", ".join(chapter_label(c) for c in skipped[:8])))
         return False
     return all_pass
 
@@ -739,8 +761,9 @@ def _run_ignore_audit(ext, chapter=None):
     try:
         from verify.script.audit_ignore import run_audit, _print_report
     except Exception as e:
-        print("\n[IGNORE-AUDIT] 跳过：无法导入 audit_ignore（%s）" % e)
-        return 0
+        # 🔴 ignore 审计是防「用 ignore 掩盖真实缺陷」的最后一道闸；
+        # 导入失败时返回 0 等于把闸门关掉后照样判 PASS。
+        raise RuntimeError("[IGNORE-AUDIT] audit_ignore 导入失败，拒绝静默跳过: %r" % (e,)) from e
     rep = run_audit(ext, chapter)
     if rep["total"] == 0:
         # 无编号 ignore → 审计不在本次 D/B 校验作用域内，静默跳过（不污染其他层输出）。

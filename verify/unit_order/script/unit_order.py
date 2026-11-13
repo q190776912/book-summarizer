@@ -157,7 +157,7 @@ class UnitOrderLayer(VerifyLayer):
             pass
         contract, units = _locate(ext, ctx.ch)
         problems = check_unit_order(contract, units) if (contract and units) else []
-        md_problems, md_stats = [], {}
+        md_problems, md_stats = [], _unmeasured_stats("contract-or-units-missing")
         if contract and units:
             md_problems, md_stats = _delivered_order(ext, ctx.ch, ctx.md_file, contract)
         return LayerResult(code=self.code, metadata={
@@ -166,13 +166,25 @@ class UnitOrderLayer(VerifyLayer):
             'md_order_stats': md_stats})
 
 
+def _unmeasured_stats(reason):
+    """判据没跑起来时的**显式无证据**账本（不是空 dict）。
+
+    🔴 2026-11-12 全局审计：旧实现在契约/单元缺失、manifest 为空、md 读失败时
+    返回 `{}`，而 report.py 用 `if md_st:` 整段跳过覆盖率打印 —— 「没测」被
+    静音成「没问题」，与本模块 docstring「零覆盖绝不显示成通过」直接矛盾。
+    """
+    return {"unmeasured": True, "reason": reason,
+            "expected": 0, "located": 0, "coverage": 0.0, "units_dir": None}
+
+
 def _delivered_order(ext, ch, md_file, contract):
     """按**文件路径**跑交付顺序复检（verify 层入口，`ctx.md_file` 已是合并视图）。"""
     try:
-        with open(md_file, encoding="utf-8") as f:
+        with open(md_file, encoding="utf-8-sig") as f:
             md_text = f.read()
-    except Exception:
-        return [], {}
+    except Exception as exc:
+        # 判据跑不起来 ≠ 顺序没问题；与 B/P 层同口径 fail-closed。
+        raise RuntimeError("U 层读取交付 md 失败: %s (%r)" % (md_file, exc)) from exc
     return _delivered_order_text(ext, ch, md_text, _md_lang(md_file), contract)
 
 
@@ -190,7 +202,7 @@ def _delivered_order_text(ext, ch, md_text, lang, contract):
     # 的出现序消费依赖顺序，而译版的单元顺序可以与源版不同（Kreyszig ch4 实测两侧文件
     # 集合相同、D-注与节标题先后差 26 位），中文交付 md 的真实拼接序就是译版 manifest 顺序。
     if not m_units:
-        return [], stats
+        return [], _unmeasured_stats("units-manifest-empty")
     bodies = _unit_bodies(_units_dir(ext, ch, sub), m_units)
     positions = md_unit_positions(bodies, md_text)
     # `merge:false` 单元按书写要求（V-I 集中习题块省略）本就不进交付 md →

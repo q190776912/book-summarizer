@@ -90,6 +90,15 @@ from verify.script.struct_labels import (
     insert_prose_separators as _insert_prose_seps)
 
 _DONE_RE = re.compile(r"<!-- book-summarizer (?:DRAFT|DONE) unit: id=\S+ type=\S+ key=(.*?) name=(.*?) -->")
+
+
+def _vf_section_sep_needed(prev, lines):
+    """V-F 状态机：一个 `section` 单元之前是否该插 `---`（纯函数，可单测）。
+
+    🔴 上一个单元是标题类（父节标题）时不插 —— 否则这条线的前置非空行正是
+    父节标题，落在规则15 禁止的「标题正下方」（2026-11-12 全库 336 个 md 实测）。
+    """
+    return bool(lines) and prev != "heading"
 _CH_NAME = re.compile(r"^([0-9A-Za-z]+)\s+(.+)$", re.DOTALL)
 
 
@@ -269,8 +278,13 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
         rel = u["file"]  # 单元文件名（相对 out_dir）；回填据此定位源单元
         # 分隔线状态机（V-F：条目级 ---，标题下第一元素不加）
         if utype == "section":
-            # 非首单元的节标题之前总是 ---（等价原「每节末 ---」）
-            if lines:
+            # 非首单元的节标题之前总是 ---（等价原「每节末 ---」）。
+            # 🔴 2026-11-12 根因修复：父节标题单元后紧跟子节标题单元时，这条线
+            # 的「最近前置非空行」正是父节标题，即落在规则15 禁止的
+            # 「标题正下方」（`check_heading_separators`）。实测 62 本交付库有
+            # 336 个章级 md 因此违规。上一个单元是标题类时**不插线** ——
+            # 标题后本来就该直接跟内容，无需分隔线。
+            if _vf_section_sep_needed(prev, lines):
                 lines.append("---"); lines.append(""); owners.append(None); owners.append(None)
         elif utype in ("item", "exercise"):
             if prev in ("desc", "item", "exercise"):

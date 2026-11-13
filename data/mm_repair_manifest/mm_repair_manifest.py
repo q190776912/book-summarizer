@@ -20,7 +20,9 @@ class MmRepairManifest:
 
     @classmethod
     def load(cls, path: str) -> "MmRepairManifest":
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig: Windows 手工编辑的 manifest 可能带 BOM；plain utf-8 会让
+        # audit 把「读失败」误当「无历史」，进而从零重建并清空 resolved 轨迹。
+        with open(path, encoding="utf-8-sig") as f:
             return cls(json.load(f))
 
     def dump(self, path: str) -> None:

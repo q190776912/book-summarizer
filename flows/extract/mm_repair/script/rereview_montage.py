@@ -38,7 +38,7 @@ def load_font(size=18):
                 pass
     return ImageFont.load_default(size)
 
-def find_unmarked(pdf_path, extract_dir, text_thresh, formula_conf):
+def find_unmarked(pdf_path, extract_dir, formula_conf):
     """返回 [(pno, fidx, conf, latex, bbox)] 仍低置信且未 mm_* 标记的公式。"""
     out = []
     for pf in sorted(glob.glob(os.path.join(extract_dir, "page_*.json"))):
@@ -68,11 +68,10 @@ def main():
                          "bbox 是该 DPI 下的【像素】坐标，get_pixmap(clip=) 要的是 PDF "
                          "【点】坐标——必须按 72/src_dpi 换算，否则裁剪区域放大且偏移。")
     ap.add_argument("--per", type=int, default=12, help="每张 montage 放几条")
-    ap.add_argument("--text-thresh", type=float, default=0.80)
     ap.add_argument("--formula-conf", type=float, default=0.30)
     args = ap.parse_args()
 
-    items = find_unmarked(args.pdf_path, args.extract_dir, args.text_thresh, args.formula_conf)
+    items = find_unmarked(args.pdf_path, args.extract_dir, args.formula_conf)
     print(f"找到未标记低置信公式 {len(items)} 条")
     if not items:
         return

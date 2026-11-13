@@ -62,6 +62,7 @@ from lib.numbering import formula_num_core, resolve_formula_type
 # DEFAULT_RESULT defaults so report.py / verify_all always see consistent keys.
 _EMPTY_Q: Dict[str, object] = {
     'q_checked': False,
+    'q_unconfigured': [],
     'q_fabricated': [],
     'q_inconsistent': [],
     'q_missing': [],
@@ -78,10 +79,11 @@ def _summary_has_tags(md_file: str) -> bool:
     legitimately has no labeled formulas from one whose operator simply forgot
     to configure the `formula` map."""
     try:
-        with open(md_file, encoding='utf-8') as f:
+        with open(md_file, encoding='utf-8-sig') as f:
             data = f.read()
-    except Exception:
-        return False
+    except Exception as exc:
+        # 读不到 md ≠「这章没有编号公式」；与 B/P/U 层同口径 fail-closed。
+        raise RuntimeError("Q 层读取交付 md 失败: %s (%r)" % (md_file, exc)) from exc
     return bool(_TAG_RE.search(data))
 
 # Separator characters that any book may use between number components.
@@ -334,6 +336,14 @@ def _heading_num(s: str) -> Optional[str]:
     s = s.strip()
     hm = _HEAD_RE.match(s)
     if not hm or len(s) >= 80:
+        return None
+    # 算术残行守卫 (2026-11-12 convex optimization ch9): OCR 把
+    # ``10^-8/20 ~ 0.4 each iteration ...`` 读成 ``10-8/20 ~ ...``, 被
+    # _HEAD_RE 当节号折成 10.8; 尾部含 "each" 又过了标题词判定, 于是
+    # 游标从 9.3.2 跳到跨章 10.8, 「只进不退」随后锁死 9.4~9.7 全部真
+    # 节头. 节号后紧跟 /数字 = 分数/比率, 真节标题不会这样写. 单调:
+    # 只可能少认一个伪节头, 绝不吞真标题.
+    if re.match(r'\s*/\s*\d', s[hm.end():]):
         return None
     # 🔴 例外（IDDS ch5 实测 2026-10-02）：印面 `§5.3 ε-orbits` 被 OCR 读成拉丁
     # 字母 `5.3 e-Orbits` / `5.3. e-Orbits`（本书 p124 是前形、p125/p127 是后形，
@@ -2866,6 +2876,16 @@ def _compare_sectioned(tags_sec: List[tuple], src_sectioned: Dict[str, Set[str]]
     return fab, inc, miss, rows
 
 
+def _seg_equal(x: str, y: str) -> bool:
+    """节号分量相等：数字段按 int 归一（'1' == '01'），字母/罗马段按原字符串。"""
+    if x == y:
+        return True
+    try:
+        return int(x) == int(y)
+    except (TypeError, ValueError):
+        return False
+
+
 def _section_prefix_compatible(a: str, b: str) -> bool:
     """True if section strings `a`, `b` are component-prefix-compatible
     (one is an ancestor of the other).  Resolves the spurious MISPLACED that
@@ -2873,16 +2893,20 @@ def _section_prefix_compatible(a: str, b: str) -> bool:
     e.g. the summary emits only `## §1.3` while the book defines the formula
     under `§1.3.1` / `§1.3.2` — those are descendants of §1.3, NOT misplaced.
     A genuine misplacement (book §1.4 but summary §1.3, or book §1.3.5 but
-    summary §1.3.2) shares no prefix and is still flagged."""
-    try:
-        ca = [int(x) for x in a.split('.')]
-        cb = [int(x) for x in b.split('.')]
-    except ValueError:
-        return a == b
+    summary §1.3.2) shares no prefix and is still flagged.
+
+    🔴 2026-11-13：旧实现 `int(x) for x in a.split('.')` 遇字母/罗马章位
+    （`A.2` / `II.1.3`，type 15/16/17/18）抛 ValueError → 退化成 `a == b`
+    全等比较，于是 `A.2` vs `A.2.1` 这种**祖孙关系**被判不兼容 → 假
+    MISPLACED。现逐分量比较，数字段仍 int 归一，非数字段按字符串前缀。
+    纯数字路径逐字节等价，改动单调（只可能少报）。
+    """
+    ca = str(a).split('.')
+    cb = str(b).split('.')
     if not ca or not cb:
         return a == b
     short, long = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
-    return short == long[:len(short)]
+    return all(_seg_equal(x, y) for x, y in zip(short, long))
 
 
 def _pos_before(a, b):
@@ -3144,7 +3168,14 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
             flagged = _reset_on_section_misplaced(src, sec, n, _self_reported)
         else:
             bsec = src._book_section_sec.get((sec, n)) or src.book_section(n)
-            flagged = (bsec is not None and not _self_reported
+            # 🔴 2026-11-13：原书「推导中重述前式并保留原号」时，本号在重述节
+            # 没有独立标签记录，`_book_section_sec[(sec,n)]` 为空 → 回退全局首现节
+            # `book_section(n)`（另一节）→ 假 MISPLACED。ORDER 支在上文已用同一
+            # `_reprint` 谓词豁免（印面确有其事才跳），MISPLACED 支此前缺对偶豁免
+            # （11-05 线性系统 23 ORDER + 1 MISPLACED 假阳族，如今只被降级遮住）。
+            # 复用同一谓词，检测与放宽永不漂移；无重印记录的书 `_dup_beyond_source`
+            # 返回 1 → `_reprint` 恒 False，逐字节行为不变。
+            flagged = (bsec is not None and not _self_reported and not _reprint
                        and not _section_prefix_compatible(bsec, sec))
             # 🔴 契约页窗核（2026-10-04 Iwaniec–Kowalski ch4/ch5 实测）：扫描书的
             # 印刷节头行常被 OCR 整块丢失（或只剩滞后 1-2 页的书眉），行走游标
@@ -3158,6 +3189,17 @@ def _compute_order_and_section(tags_sec: List[tuple], src: 'SourceFormulaIndex',
                 _rng = (getattr(src, '_sec_ranges', None) or {}).get(sec)
                 if (_rng and cur is not None and cur[0] is not None
                         and _rng[0] <= int(cur[0]) <= _rng[1]):
+                    flagged = False
+            # 交界页无证据不判 (2026-11-12 convex optimization ch1/ch5):
+            # 契约页窗是页级粒度, 交界页同时承载「上一节尾部的公式」与
+            # 「下一节的页顶书眉 + 页中正文节题」; 标签印面页恰等于书侧
+            # 判定节 bsec 的契约首页时, 页级证据无法分辨它属上一节尾部
+            # 还是下一节首部 -> 按既有 fail-open 约定跳过. 单调: 只把
+            # flagged 从 True 改 False. 真错位(标签页远离本节页窗)照判.
+            if flagged and bsec is not None:
+                _brng = (getattr(src, '_sec_ranges', None) or {}).get(str(bsec))
+                if (_brng and cur is not None and cur[0] is not None
+                        and int(cur[0]) == _brng[0]):
                     flagged = False
         if flagged and n not in seen_mp:
             seen_mp.add(n)
@@ -3365,7 +3407,8 @@ class QLayer(VerifyLayer):
             # chapter has `\tag{...}` formulas, the operator MUST first set up
             # the `formula` config from the book's real numbering — so warn
             # loudly instead of returning a clean no-op.
-            if _summary_has_tags(ctx.md_file):
+            _q_unconf = _summary_has_tags(ctx.md_file)
+            if _q_unconf:
                 print(
                     "[Q-LAYER WARN] 总结含带序标公式 (\\tag{...})，但 "
                     "verify_config.json 缺少 `formula` 配置 → Q 层已静默 no-op，"
@@ -3384,7 +3427,14 @@ class QLayer(VerifyLayer):
                     "    不确定段数时，先扫该书 page_*.json 的 text[] 实测公式标签。",
                     file=sys.stderr,
                 )
-            return LayerResult(code='Q', metadata=dict(_EMPTY_Q))
+            meta = dict(_EMPTY_Q)
+            if _q_unconf:
+                # 🔴 verify.md:44 红线：严禁在 formula=None 的 no-op 状态下
+                # 宣称「公式校验通过」。旧实现只往 stderr 喊一声，结论仍 PASS。
+                meta['q_unconfigured'] = [
+                    "总结含 \\tag{...} 公式但 verify_config.json 缺 `formula` 配置"
+                    " → Q 层未运行；请先按书实际公式编号补 formula（type/scope）"]
+            return LayerResult(code='Q', metadata=meta)
 
         formula = ctx.config.formula
         ftype = formula.get('type')

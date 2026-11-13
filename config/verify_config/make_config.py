@@ -139,11 +139,12 @@ def _load_old_ordinal(cfg_path, section_key="ch"):
 
     旧扁平格式（顶层有 ``ordinal``）仍走原分支, 零回归。
     """
-    try:
-        with open(cfg_path, encoding="utf-8") as f:
-            data = json.load(f) or {}
-    except Exception:
+    if not os.path.isfile(cfg_path):
         return []
+    # 🔴 文件存在但读失败必须炸：静默返回 [] 会让 --force 重生成时丢掉人工
+    # ordinal / Figure 组 / scope，并把退化后的配置写回（2026-09-08 同类回归）。
+    with open(cfg_path, encoding="utf-8-sig") as f:
+        data = json.load(f) or {}
     # map-format: 读匹配子配置的 ordinal
     if isinstance(data, dict) and any(k in data for k in ("ch", "appendix", "supplement")):
         sub = data.get(section_key)

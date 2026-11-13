@@ -1331,11 +1331,13 @@ class ConfigLoader:
         return isinstance(data.get('ordinal'), list) and len(data.get('ordinal')) > 0
 
     def _read_json(self, path: str) -> Dict[str, Any]:
+        # 🔴 主配置读取失败必须 fail-closed：旧实现 `except: return {}` 在
+        # BOM/坏 JSON 时让整本书退化为默认配置并照常出 PASS 报告（假绿）。
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 return json.load(f)
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise ConfigError("verify_config.json 读取/解析失败: %s (%r)" % (path, exc)) from exc
 
     def _load_verify_config(self) -> None:
         """Load the single verify_config.json, supporting BOTH the new outer-map
@@ -1676,10 +1678,10 @@ class ConfigLoader:
         if not os.path.exists(p):
             return None
         try:
-            with open(p, 'r', encoding='utf-8') as f:
+            with open(p, 'r', encoding='utf-8-sig') as f:
                 return json.load(f)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise ConfigError("figure_index.json 读取/解析失败: %s (%r)" % (p, exc)) from exc
 
     # ---- accessors ----
     def chapter(self, ch: int) -> Optional[ChapterInfo]:
@@ -1707,22 +1709,24 @@ class ConfigLoader:
         out: List[Dict[str, Any]] = []
         if self.book.manual and os.path.exists(self.book.manual):
             try:
-                with open(self.book.manual, 'r', encoding='utf-8') as f:
+                with open(self.book.manual, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 if isinstance(data, list):
                     out.extend(data)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ConfigError("manual overrides 读取/解析失败: %s (%r)"
+                                  % (self.book.manual, exc)) from exc
         per = os.path.join(self.extract_dir,
                            f'manual_overrides_{chapter_label(ch)}.json')
         if os.path.exists(per):
             try:
-                with open(per, 'r', encoding='utf-8') as f:
+                with open(per, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 if isinstance(data, list):
                     out.extend(data)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ConfigError("manual overrides 读取/解析失败: %s (%r)"
+                                  % (per, exc)) from exc
         return out
 
     def config_for_chapter(self, ch: int) -> BookConfig:

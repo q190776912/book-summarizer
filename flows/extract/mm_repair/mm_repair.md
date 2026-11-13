@@ -96,6 +96,18 @@ python data/repairs/repairs.py "<_extract>/_mm_repair" "<_extract>" --base "<_ex
 python flows/extract/mm_repair/script/mm_repair_apply.py      "<_extract>"
 ```
 
+**收官后返修（高分错读）**：审计只按置信度阈值捞条目，OCR「读得很自信但读错」的块永远进不了 repair 闭环。此类缺陷必须用 `--recheck` 指认，🔴 **绝不手改 `page_*.json`**（会绕过 `mm_repaired` / `text_ocr` 溯源标记）。指认项无视阈值与 `prev_resolved` 并入本轮 manifest，随后照常写 `repairs.json` + `apply`：
+
+```powershell
+python flows/extract/mm_repair/script/mm_repair_audit.py "<pdf>" "<_extract>" --recheck '[{"page":484,"key":"text:33","why":"印面 10⁻⁸/20 ≈ 0.4，OCR 丢上标读成 10-8/20，score 0.98"}]'
+# 写只含该条 corrections 的 repairs.json（不要覆盖全书 repairs.json）
+python flows/extract/mm_repair/script/mm_repair_apply.py "<_extract>" --repairs "<该条 repairs.json>"
+```
+
+🔴 2026-11-12 起，重跑 audit 会把上一轮 manifest 的条目**按页并回**（同 key 以本轮新条目为准），`status` 在无新 flag 时保持原值。旧实现从零重建 `pages_out`，在 `status=applied` 的书上跑 `--recheck` 会清空全部历史 `resolved` 轨迹（convex optimization 实测 1921 条），且 `_maybe_write_extraction_done` 按 `m["pages"]` 的键取「被 flag 页集合」，缩成 1 页后每页 mm 标记核对形同虚设。判据测试 `flows/extract/mm_repair/script/tests/test_audit_recheck_manifest_merge.py`（9 例，含「同 key 不重复」「旧未决条目不静默丢弃」「无新 flag 不打回 applied」）。
+
+🔴 2026-11-12 全局审计补强（同一红线）：① `manifest.json` 经 `MmRepairManifest.load` 以 `utf-8-sig` 读取；**文件存在却读失败时 `audit` 直接抛错**，不再因 `except` 把 `prev_data` 留成 None 而从零重建；`next_audit_status` 在并回的历史含未决条目时返回 `partial`，绝不沿用 `applied`。② `mm_repair_text_compare.py` 写 `repairs.json` 前按 `(段, 页, key)` 与已有文件合并（本轮裁决覆盖同 key），不再从零覆盖模式 A / merge 的人工裁决；PDF 打开、`get_text('words')`、取样页读取失败一律抛错，不得伪装成「扫描版」或「该区域无文本层」。③ `verify_config` / `make_config --force` / `register_formula` / `apply_manual_figures` 等配置读取统一 `utf-8-sig` 且读失败 fail-closed——书库实测已有 2 个带 BOM 的 sidecar，旧实现会把它们静默降级成空配置并照常出 PASS。
+
 ## 本阶段规则（🔴 内联）
 - **规则1 — MM Repair 门（必须跑，且必须 `apply` 写回）**：提取 100% 完结也必须跑：无新页可轮询时不能跳过本步，须对全书跑**完整链路（audit → 模式 B/A → Step 5 `apply` 写回 `page_*.json` → 出口验证）**。🔴 只跑到 `audit` + `text_compare` 产出 `repairs.json` 而**未执行 `apply` 写回**，视为**未完成**，严禁流入 config / structure / write-source。
 - **规则2 — 阈值**：`--text-thresh 0.80`（OCR `score<0.80` 才触发）、`--formula-conf 0.30`（`conf<0.30` 或 `latex` 含 `[MFR_ERR`/`[MFR_SKIPPED`/`.notdef`/替换字符 `�` 触发）、`--vpad-lines 0.5`。可按书调整。

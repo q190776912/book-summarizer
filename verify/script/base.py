@@ -223,6 +223,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'md_order_problems': [], 'md_order_stats': {},
     # Q-LAYER: formula sequence-label audit (opt-in via `formula` map; see q_layer.py).
     'q_checked': False,
+    'q_unconfigured': [],
     'q_fabricated': [], 'q_inconsistent': [], 'q_missing': [],
     'q_order_mismatch': [], 'q_misplaced': [],
     'q_tag_mismatch': [],

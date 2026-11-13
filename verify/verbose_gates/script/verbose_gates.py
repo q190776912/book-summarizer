@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from pathlib import Path
 
@@ -467,18 +467,9 @@ def _norm_title(t):
     return re.sub(r'\s+', ' ', t).strip().lower()
 
 
-def _md_section_titles(md_lines):
-    """提取 md 中 `## §` 小节的标题文本（跳过可选数字前缀）。"""
-    titles = []
-    for ln in md_lines:
-        m = SEC_HEADING_RE_OPT.match(ln)
-        if not m:
-            continue
-        rest = ln[m.end():].strip()
-        rest = re.sub(r'^\d+(?:\.\d+)*\s*', '', rest).strip()  # 去残留数字前缀
-        if rest:
-            titles.append(rest)
-    return titles
+# 🔴 2026-11-12 全局审计：此处原有同名 `_md_section_titles`（返回 list 的旧版）
+# 被下方同名函数（返回归一化 set）静默覆盖，是死代码且两份语义冲突；唯一调用点
+# 按 set 消费。已删除，唯一 SSOT 保留下方实现。
 
 
 def _md_section_count(md_lines):
@@ -1089,11 +1080,9 @@ class PLayer(VerifyLayer):
     def run(self, ctx):
         try:
             lines = ctx.read_md_lines()
-        except Exception:
-            return LayerResult(code=self.code, metadata={
-                'p_exer_block': [], 'p_noise': [], 'p_bare_item': [], 'p_missing_sec': [],
-                'p_extra_item': [], 'p_verbose': [], 'p_proof_verbose': [],
-            })
+        except Exception as exc:
+            raise RuntimeError("P 层读取 md 失败，拒绝返回空判据（BLOCKING 层不得静默放行）: %r"
+                               % (exc,)) from exc
         exer = check_exer_blocks(lines, ctx.ext_dir, ctx.ch, cfg=ctx.config)
         noise = check_noise(lines)
         bare = check_bare_items(lines, ctx.config.primary_type, cfg=ctx.config)

@@ -29,7 +29,7 @@ class FigureDetect:
 
     @classmethod
     def load(cls, path: str) -> "FigureDetect":
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             return cls(json.load(f))
 
     def dump(self, path: str) -> None:

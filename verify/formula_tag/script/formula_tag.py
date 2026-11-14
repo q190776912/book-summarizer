@@ -659,6 +659,9 @@ class SourceFormulaIndex:
         #   _cur_heading  : running "nearest preceding heading" during a scan
         self._pos_strong: Dict[str, bool] = {}
         self._sec_strong: Dict[str, bool] = {}
+        # 章首绪论（首个节标题之前）见过的强标签号：定义节证据刻意留空，
+        # 后文回指不得抢注。见 `_update_pos` 的章首绪论守卫注记。
+        self._pre_heading_strong: Set[str] = set()
         # 🔴 强弱分级（IDDS ch2 实测 2026-10-02）：**强信号**（带括号 `(2.1)` /
         # `Eq. 2.1` 前缀）才是印刷标签本身；裸命中（`B(w, 2-1)` 这类数学内容经
         # 分隔符归一得到的 `2.1`）只是同形的散文/坐标。旧写法「首个命中即锚定」，
@@ -715,6 +718,7 @@ class SourceFormulaIndex:
         self._book_section = {}
         self._pos_strong = {}
         self._sec_strong = {}
+        self._pre_heading_strong = set()
         self._full_keys = set()
         self._pos_sec = {}
         self._sec_start_page = {}
@@ -797,6 +801,7 @@ class SourceFormulaIndex:
         self._book_section = {}
         self._pos_strong = {}
         self._sec_strong = {}
+        self._pre_heading_strong = set()
         self._full_keys = set()
         self._pos_sec = {}
         # 🔴 per-(sec, n) 「本节该号的锚定位置是否来自一个纯独立编号块」——
@@ -1669,9 +1674,30 @@ class SourceFormulaIndex:
 
         定义节证据与位置证据同一强弱分级（见 `_record_pos`）：弱命中不得再
         抢占已登记的节，强标签可覆盖弱登记。
+
+        🔴 章首绪论守卫（常微分方程第2版 ch1 实测 2026-11-14）：书的第一节
+        标题往往印在章首页**之后**（本书 §1.1 标题在 p12，而章首绪论及公式
+        (1.3) 印在 p11）。此时 `_cur_heading is None`，旧写法直接 return——
+        位置证据由 `_record_pos` 记下，但**定义节证据始终空缺**；后续某节
+        散文里对该号的回指便被当成首现，把定义节抢注成别的节（实测 (1.3)
+        被 §1.2 页的回指抢注），于是总结把该式放在章首绪论（按 md 分节规则
+        自动附到首个 §1.1）被误判 MISPLACED。
+        规则：章首出现的**强标签**登记一个「已见章首强标签」哨兵，之后任何
+        回指/重印都只更新位置、不再改写定义节；`book_section(n)` 保持 None，
+        MISPLACED 按既有「无证据不判」跳过。弱命中不加哨兵（维持旧行为）。
+        本守卫只把 `_book_section` 从「被抢注的别的节」变回 None，**只可能
+        少报 MISPLACED，绝不多报**；FABRICATED / INCONSISTENT / MISSING /
+        ORDER / TAG 各支与集合成员一字不动。
         """
         self._record_pos(n, pg, y, strong=strong)
+        if n in getattr(self, '_pre_heading_strong', ()):
+            return
         if self._cur_heading is None:
+            if strong:
+                _pre = getattr(self, '_pre_heading_strong', None)
+                if _pre is None:
+                    _pre = self._pre_heading_strong = set()
+                _pre.add(n)
             return
         if self._sec_strong.get(n) and not strong:
             return

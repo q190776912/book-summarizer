@@ -431,6 +431,8 @@ $$
 
 **修复方向（不是删除）**：把越界行**搬回**所属 `desc` / `section` 单元与交付顶层，编号公式随段归位并同步 manifest / 契约 / `verify_config.json` 的 tag 归属；EN 先修、CN 1:1 同步。禁止直接删块内段落求绿——部分编号公式只存在于块内，删了即丢公式（no-fabrication 红线）。本判据 `auto_fixable = False`，无 fixer：内容归属需人回源 PDF 裁定。
 
+**单元级左移**：单元门控 `check_unit_quality._run_format_verify_unit_checks` 调用**同一个** `check_example_block_scope(lines)`（2026-11-16 接入），写源期单元内出现 ITEM / SECTION / DUP 即 FAIL，不必等拼接后的整章 verify；跨单元的 DUP 仍由文档级 F 层兜底（判据测试 `flows/write-source/script/tests/test_ex_bq_scope_unit_gate.py`）。
+
 **错误形态（越界）：**
 ```text
 > **Example 14.27.** … A similar computation shows that …

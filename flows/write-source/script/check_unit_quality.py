@@ -20,6 +20,7 @@ r"""check_unit_quality.py — 单元级「写对」质量校验（write-source �
     9b. 块引用/例/证明/列表结构（`_run_format_verify_unit_checks`，临时 .md
         复用 format_verify 原函数，不复制逻辑）：nested_bq / ex_proof_gaps /
         g_quote_continuity（blockquote内 bare blank line 打断连续性）/
+        ex_bq_scope（F 层规则17：例块越界吞后续散文/编号条目/小节标题）/
         h_structural_bq / h_stmt_bq / h_ul_bq / h_mbq / k_proof_list /
         n_bq_empty / m_dm_gt；文档级专属（`---` 分隔线 / 标题上下文类：
         i_sep / j_header / l_sep / heading_* / quote_gaps）不搬——孤立单元
@@ -148,6 +149,7 @@ from format_verify import (
     check_nested_blockquotes,          # G: > > ** 嵌套块引用
     check_example_proof_gap,           # G: 例与证明间断裂 / 同行
     check_g_quote_continuity,          # G: blockquote内 bare blank line 打断连续性
+    check_example_block_scope,         # F17: 例块越界吞后续散文/条目/标题（规则17）
     check_i_prose_separator,           # I: item 块结束后接顶层散文缺 `---`
     check_h_structural_blockquote,     # H: 结构标签误入 `>` / 孤儿空 `>`
     check_h_statement_in_blockquote,   # H: 陈述内容误包 `>`
@@ -637,6 +639,12 @@ def _run_format_verify_unit_checks(line_list, src_line_list=None):
                 msgs = res or []
             for m in msgs:
                 problems.append("[F/H-unit] " + m.strip())
+        # F 层规则17 `ex_bq_scope`：纯行列表函数（不读文件），与文档级
+        # `FLayer.run` 同一实现。单元级同样有效——ITEM（块内独立编号条目头）与
+        # SECTION（块内小节标题）不依赖跨单元比较；DUP 在同一单元里同时出现
+        # 「块内引用」与「顶层原文」时命中（跨单元的重复仍由合并后 F 层兜底）。
+        for m in check_example_block_scope(line_list):
+            problems.append("[F/H-unit] " + m.strip())
         if src_line_list is not None:
             _ex = inherited_structure_exemptions(line_list, src_line_list)
             if 'h_mbq' in _ex:

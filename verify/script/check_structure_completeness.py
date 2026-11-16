@@ -48,6 +48,7 @@ from verify.script.base import VerifyContext   # B 层 run() 所需的精简运�
 from audit_ignore import run_audit             # ignore 条目审核（防误用隐藏真实缺项）
 from check_section_attribution import (        # 条目↔节归属闸（锚点晚于最早节头 → 条目漂到节外）
     section_attribution_problems)
+from check_section_leak import section_leak_problems  # 节界泄漏闸（同页跨节头 → 尾部条目挂进下一节）
 from verify_config import (
     BookConfig, ConfigLoader, ORDINAL_THREE_LEVEL, ORDINAL_TWO_LEVEL,
     ORDINAL_SINGLE, ORDINAL_APP, ORDINAL_APP2, ORDINAL_VAKIL,
@@ -2093,9 +2094,18 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
             ext, ch, start, end, ch_node_after)
     except Exception as e:
         attribution_problems = ["条目↔节归属自查执行失败（fail-closed）：%r" % (e,)]
+    # 🔴 节界泄漏闸（见 check_section_leak 模块 docstring）：§N 的尾部编号条目与
+    # §N+1 节头同页且印在节头之上时，_place 的「位置未知 → 页末 → 归入本页
+    # 已开节的最后一节」回退把整批条目挂进 §N+1（Lee ISM 全书 65 处实测）。
+    # D 层 / check_contract_anchors / subsection_order_problems / B 层序号单调
+    # 对该形态全部失明，门控一路放绿，直到交付按节拆分才肉眼可见。此处补拦。
+    try:
+        leak_problems = section_leak_problems(ext, ch, start, end, ch_node_after)
+    except Exception as e:
+        leak_problems = ["节界泄漏自查执行失败（fail-closed）：%r" % (e,)]
     passed = (not sec_left) and (not readable_left) and (not real_b_blocking) \
         and (not order_problems) and (not anchor_problems) \
-        and (not attribution_problems)
+        and (not attribution_problems) and (not leak_problems)
     return {
         "passed": passed,
         "residual_sections": sec_left,
@@ -2105,6 +2115,7 @@ def step4_gate(ext, ch, start, end, cfg, bs, ch_node_after, bmeta_before):
         "residual_section_order": order_problems,
         "residual_anchor_order": anchor_problems,
         "residual_attribution": attribution_problems,
+        "residual_section_leak": leak_problems,
     }
 
 

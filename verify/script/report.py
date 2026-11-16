@@ -316,6 +316,16 @@ def print_result(r):
               f"must be wrapped in `>` blockquotes (writing-rules V-F) — add `> ` prefix:")
         for g in ex_no_bq:
             print(g)
+    ex_scope = r.get('ex_bq_scope', [])
+    if ex_scope:
+        problems += 1
+        print(f"\nF-LAYER FORMAT · Example block scope ({len(ex_scope)}): an "
+              f"`> **Example/例 …**` blockquote swallowed prose that belongs AFTER the "
+              f"printed end of the example — duplicated top-level prose (DUP), a following "
+              f"section heading (SECTION), or a standalone numbered item head (ITEM). "
+              f"Move those lines back to their own top-level section (keep every \\tag):")
+        for g in ex_scope:
+            print(g)
     # ---- 结构标签守卫（原 H 层）----
     h_bq = r.get('h_structural_bq', [])
     if h_bq:
@@ -711,7 +721,7 @@ def print_result(r):
     f_n = (len(r.get('katex_lines', [])) + len(r.get('quote_gaps', [])) + len(r.get('nested_bq', []))
            + len(ex_gaps) + len(h_bq) + len(h_stmt) + len(h_ul) + len(h_mbq)
            + len(i_sep) + len(j_hd) + len(k_list) + len(l_sep) + len(h_blank) + len(m_dm) + len(n_bq)
-           + len(r.get('heading_sep', [])))
+           + len(r.get('heading_sep', [])) + len(ex_scope))
 
     if problems:
         print(f"\nFAIL: {len(r['truly_missing'])} truly missing / {len(r['blocking'])} B-layer blocking "

@@ -207,6 +207,7 @@ DEFAULT_RESULT: Dict[str, Any] = {
     'quote_gaps': [], 'nested_bq': [],
     'ex_proof_gaps': ([], []),
     'ex_no_bq': [],
+    'ex_bq_scope': [],   # F-LAYER rule 17: Example blockquote swallowed following prose
     'h_structural_bq': [], 'h_stmt_bq': [], 'h_ul_bq': [], 'h_mbq': [],
     'i_sep_gaps': [], 'i_prose_sep': [], 'j_header_dash': [], 'k_proof_list': [], 'l_sep_blanks': [], 'm_dm_gt': [], 'n_bq_empty': [],
     'heading_sep': [],

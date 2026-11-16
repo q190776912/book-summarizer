@@ -351,6 +351,7 @@ Common patterns (after correction):
 - **例与证明分两行（同一连续块引用内）**：`> **例**` 行只含例子描述，其证明必须另起 `> **证明梗概**：` 行，不得同行（同行导致块内换行困难、校验难定位）。
 - **连续例必须在顶层用 `---` 分隔**：即使多个例共享同一 `>` 块（续行连接），每个 `> **例**` 之间也须用顶层 `---` + 空行断开，每个例独占独立块引用（否则 I 层漏检、阅读看不出边界）。
 - **例块连续性**：例的陈述与证明必须在同一连续 blockquote 中，禁止裸空行（无 `>` 的纯空行）或裸 `$$`（无 `>` 的展示公式）打断；需留白用 `>`（空引用行），需公式用 `> $$`。
+- **🔴 例块必须在原书 Example 环境结束处收口（V-F 规则17 / F 层 `ex_bq_scope`）**：`> **Example/例 …**` 块引用只装例子本体；印面例子结束符（Lee 一类教材的 `//`）之后的描述散文、编号公式、习题、下一小节标题一律**顶层另起**，不得继续包在 `>` 里。机器认三类硬信号：块内段落与顶层散文逐字重复（DUP）、块内出现下一节标题（SECTION）、块内出现独立编号条目头（ITEM）；`Theorem 2.4.3 assumes…` 式回指与 Example 内的 `\tag{}` 属合法体例，不判。越界时**搬回归属单元**而非删除（编号公式可能只存在块内，删即丢公式），并同步 EN/CN 与 tag 归属。
 - **半包例子可自动修复**：若例子头带了 `>` 但正文（方程组/文字）留在顶层裸奔（即"只有第一行有 `>`"），属半包缺陷。`tools/wrap_examples_bq.py` 与 `verify --fix` 的 F 层 fixer（代号 G）现均能识别并整段收进 `>` 块（幂等；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）；但 G 层 DETECTOR（`check_g_quote_continuity`）会先判 FAIL，需跑 `--fix`（强制启用）或该工具修复。两个脚本均同时匹配顶层 `**例/Example**` 头与已带 `>` 的例头。
 - **证明块下方缺 `---` 可自动修复（中英文 Proof 均识别）**：`> **证明**` / `> **Proof sketch**` 等证明块（正文已整体在 `>` 内）结束后，若紧接描述性散文而无 `---` 分隔（视觉上"证明像吞了后续描述"），`verify --fix` 的 F 层 fixer（代号 G；`fix_blockquote_continuity._ensure_proof_separator`）会自动在证明块下方插 `---`（幂等，重跑不重复插入；🔴 全层 `--fix` 默认禁用，须 `--fix --fix-force` + PREFLIGHT）。证明检测已双语化：`bq_core.PROOF_RE`/`PROF_LINE_RE`/`NESTED_BQ_RE`、`struct_labels.G_PF_RE`、`fix_blockquote_continuity._SAME_LINE_EX_PROOF_RE` 现均覆盖 中文 证明/证明思路/证明梗概/证明概要 与 英文 Proof/Proof sketch/Proof outline/Proof of …；块扩展遇到新的 `>` item 头（例/Proof/定理等）即停止，避免把后续例块吞入证明。
 
@@ -457,7 +458,7 @@ Common patterns (after correction):
 | **B**（item_numbering_integrity） | [V-I](#v-i-编号项收录b-层--硬性要求-3-5) + [V-S](#v-s-结构完整性d--b--o-层)：条目必录、不编造、首项+连续性、顺序单调不减、ignore 审计铁律 | `verify/item_numbering_integrity/item_numbering_integrity.md` |
 | **O**（subitem_continuity） | [V-S](#v-s-结构完整性d--b--o-层)：块内子编号连续 | `verify/subitem_continuity/subitem_continuity.md` |
 | **E**（figure_completeness） | [V-E](#v-e-图片归属e-层)：图归属层级、caption→条目映射、flex 包裹、书根相对 `figure/` 路径 | `verify/figure_completeness/figure_completeness.md` |
-| **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档) + [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
+| **F**（format_verify） | [V-F](#v-f-格式与块引用f-层母文档)（含例块边界 `ex_bq_scope`）+ [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（KaTeX 17 条 + 公式序标）：格式母文档即本节自身 | `verify/format_verify/format_verify.md`（承认本节为 SSOT） |
 | **P**（verbose_gates） | [V-P](#v-p-反照抄与自造结构闸门p-层不可--fix)：OCR 噪声剔除、纯散文不过度照抄、证明分条（p_exer_block / p_missing_sec / p_extra_item / p_bare_item 见 V-I / V-S） | `verify/verbose_gates/verbose_gates.md` |
 | **Q**（formula_tag） | [V-K](#v-k-katex-规则与公式序标f-层-c-子层--q-层)（公式序标小节）：带编号公式 1:1 跟书、`\tag{}` 进 `$$` 块、不编造/不跨章/不遗漏（合理省略须 `formula.ignore` 登记）、字母/罗马编号需配 `letter_ch`/`type 15`（`(A.3)`）、`type 16`（`(II.5)`）或三段 `type 17`/`18`（`(A.2.1)`/`(II.1.3)`）后校验 | `verify/formula_tag/formula_tag.md` |
 | **OCR 漏标** | [V-M](#v-m-ocr-漏标条目处理) | `verify/missing_label_policy.md` |

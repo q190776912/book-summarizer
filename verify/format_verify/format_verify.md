@@ -8,7 +8,7 @@
 统一全部「格式」类校验：KaTeX 渲染校验 + 引用块连续性/嵌套/例证空隙 + 结构标签守卫（4 子项）+ 条目分隔符完整性/条目内分隔符 + 证明-列表间距 + 分隔符空行 + 标题上方空行 + 数学块引用泄漏 + 引用块空行过多。任一子项非空即整章 FAIL（KaTeX 与结构类同阻断）。
 
 ## 步骤（实际校验流程）
-全部检测函数为内联实现（与原九个格式校验逐字一致，超长公式行检测独立成模块），`run()` 一次性返回下方 19 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
+全部检测函数为内联实现（与原九个格式校验逐字一致，超长公式行检测独立成模块），`run()` 一次性返回下方 21 个字节契约键。本子流程按如下步骤逐项校验（仅描述「做什么」，具体判定标准见下方 `## 规则`）：
 
 1. 加载章节 markdown，并调用 `verify/format_verify/script/check_katex.py` 子进程做 KaTeX 真渲染校验。
 2. 扫描显示公式块，检查「单行过长 → `\tag` 与公式重叠」风险（`long_formula_rows`，WARN 非阻断，阈值见 `long_row_check.py`）。〔**当前默认关闭**：`LONG_FORMULA_CHECK_ENABLED` 为假时本项恒返回空列表；恢复设环境变量 `BOOKSUM_LONG_FORMULA=1`。〕
@@ -415,8 +415,45 @@ $$
 ## §12.5 Simulation Results
 ```
 
+### 检测规则17 · ex_bq_scope（Example 块边界，阻断）
+
+`> **Example …**` / `> **例…**` 块引用必须**在原书 Example 环境结束处收口**（Lee 一类教材印面以 `//` 标记结束）。写源若继续把后续 OCR 文本包进同一 `>` 块，后续小节的描述散文、编号公式、习题、甚至下一小节标题都会变成「例子的一部分」，且同一段文字常同时在顶层再印一遍（2026-11-15 全库审计实测 26 个 EN 块 / 12 个 CN 块，`introduction-to-smooth-manifolds` 的 Example 9.50 / 14.27 / 9.52 是标本）。契约键 `ex_bq_scope`。
+
+机器只认三类**低误报硬信号**（63 本书语料标定，2026-11-15）：
+
+| 信号 | 判据 | 为什么不误报 |
+|---|---|---|
+| `DUP` | 块内散文行归一化后与**同一 md 的顶层散文行**逐字相同（行长 ≥80、归一后 ≥60 字符） | 正常写作不会把同一段正文既放进例子又印在顶层 |
+| `SECTION` | 块内出现 `##`/`###` 标题行，或块内加粗标题短语与交付文本的 `## §`/`### §` 标题归一化相同 | 例子内部不会出现下一节标题 |
+| `ITEM` | 块内行首是**独立编号条目头**：加粗 `**Exercise 14.6**` / `**定理 3.1**`，或 `Exercise 14.28. Prove …` / `习题 2.3 证明 …` | 正常行文 `Theorem 2.4.3 assumes …`、`Problem 13-21 shows …` 是句中引用，不匹配；全库收紧实验仅命中真条目 |
+
+🔴 **明确不查**：章节级叙述短语（`In this section we describe…`）、Example 内的 `	ag{}` 编号公式、`Theorem 8.37 gives…` 式回指——这些在多本书（概率统计 / 同调代数 / 曲线曲面）里都是合法体例，拿它们当判据会制造大面积假阳。判据只负责「结构越界」，公式编号归属仍由 Q 层负责。
+
+**修复方向（不是删除）**：把越界行**搬回**所属 `desc` / `section` 单元与交付顶层，编号公式随段归位并同步 manifest / 契约 / `verify_config.json` 的 tag 归属；EN 先修、CN 1:1 同步。禁止直接删块内段落求绿——部分编号公式只存在于块内，删了即丢公式（no-fabrication 红线）。本判据 `auto_fixable = False`，无 fixer：内容归属需人回源 PDF 裁定。
+
+**错误形态（越界）：**
+```text
+> **Example 14.27.** … A similar computation shows that …
+>
+> Recall the classical vector calculus operators on $\mathbb{R}^n$ …   ← 下一段正文
+> 	ag{14.24}
+>
+> Exercise 14.28. Prove that diagram (14.27) commutes …                 ← 独立习题
+```
+
+**正确形态（收口）：**
+```text
+> **Example 14.27.** … A similar computation shows that …
+
+---
+
+Recall the classical vector calculus operators on $\mathbb{R}^n$ …
+
+**Exercise 14.28.** Prove that diagram (14.27) commutes …
+```
+
 ## 阻断性与可修复（出口判定）
-- 除 `long_formula_rows`（WARN 非阻断，不参与 FAIL 判定）外，其余键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。
+- 除 `long_formula_rows`（WARN 非阻断，不参与 FAIL 判定）外，其余键中任一非空（KaTeX 除外：仅 `katex_lines` 非空且 returncode≠0 时阻断）→ 整章 FAIL。`ex_bq_scope`（规则17）阻断，且**无自动修复器**：`report.py` 的 F 段打印逐行明细并计入 `problems`，`verify_chapter.py` 的 F 聚合 `f_n` 同步计入（避免 `heading_sep` 死键事故重演）。
 - ✅ **2026-11-13 已闭环**（原为 11-12 全局审计查出的死键）：`heading_sep`（规则15）此前由 F 层 emit 进结果字典，但 `report.py` 与 `verify_chapter.py` 的 F 聚合、`problems` 计数均未读取，规则形同虚设。现已计入 `problems`、F 计数与 FAIL 行；从根因修 `merge_units` 的 V-F 状态机（父节标题后紧跟子节标题时不再插 `---`，纯函数 `_vf_section_sep_needed` 可测）；并按 SSOT fixer `_remove_heading_seps` 的**同一规则**全书机械清理 **336 个章级 md / 427 条违规行**（备份于 `_tmp_20261111_bookcheck/md_backup/`；逐文件守恒校验：非空行序列、`\tag{` / `$$` / `>` / `#` 计数不变，正文零改动）。接线后实测 convex ch2/ch3 报 `F:3 FAIL`，清理后恢复 `PASS 28/28`；全库 62 本复跑 0 违规。判据测试 `verify/tests/test_heading_sep_and_unit_order_gate.py`。
 - 本检测层 `auto_fixable = False`：**自动修复不由本层完成**，改由下方 FIXERS 注册表（按原 fixer 代号）执行，字节兼容不变。
 
@@ -425,7 +462,7 @@ $$
 
 ## 相关代码（`verify/format_verify/script/format_verify.py`）
 - `code = 'F'`，`order = 6`，`auto_fixable = False`。
-- `run()` 返回元数据含 19 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），`long_formula_rows` 为 WARN 清单（非阻断），其余为 list。
+- `run()` 返回元数据含 21 个字节契约键（见下方）。`ex_proof_gaps` 为二元组 `([], [])`（阻断, 警告），`long_formula_rows` 为 WARN 清单（非阻断），其余为 list。
 
 ## 子流程（自动修复）
 自动修复逻辑位于 `verify/format_verify/script/fix_*.py`，各自在模块顶层调用 `register_fixer(code, fix_order, apply_fix)` 注册，**fixer 代号沿用原层字母**，fix-dict 键顺序字节兼容不变：
@@ -457,6 +494,7 @@ quote_gaps
 nested_bq
 ex_proof_gaps
 ex_no_bq
+ex_bq_scope
 h_structural_bq
 h_stmt_bq
 h_ul_bq

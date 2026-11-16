@@ -31,7 +31,7 @@ fixer 代号 H/G/I/J/K/L/M/N 对应的检测项：
     M  math_blockquote_leak    -> `>` lines inside display math blocks
     N  blockquote_spacing      -> excessive empty `>` lines inside blockquotes
 
-所有检测逻辑内联于本文件（超长公式行检测独立于 `long_row_check.py`）；本层产出 19 个字节契约键（含 `heading_sep`/`heading_blank_above`/`long_formula_rows`）
+所有检测逻辑内联于本文件（超长公式行检测独立于 `long_row_check.py`）；本层产出 21 个字节契约键（含 `heading_sep`/`heading_blank_above`/`long_formula_rows`/`ex_bq_scope`）
 （显示公式行过长 → `\tag` 重叠风险，WARN 非阻断；由 DEFAULT_RESULT 与契约测试的
 动态 ALLOWED 集覆盖）——故 `report.py`、`verify_chapter.py` 与契约测试保持通过。
 
@@ -537,6 +537,131 @@ def check_example_blockquote(md_file):
     except Exception:
         return []
     return check_example_blockquote_lines(lines)
+
+
+# ===========================================================================
+# F-LAYER rule 17 (V-F): Example blockquote scope.
+#
+# An `> **Example …**` / `> **例…**` blockquote must END at the printed end of
+# the Example environment (in Lee's book the printer marks it with `//`). When
+# the writer keeps appending OCR text, the following section's prose, numbered
+# formulas, exercises and even the next subsection heading end up quoted INSIDE
+# the example. Readers then see descriptive text as part of the example, and
+# the same prose is often printed twice (once quoted, once top-level).
+#
+# Three machine-verifiable, low-false-positive signals (63-book corpus rehearsal
+# 2026-11-15): DUP / SECTION / ITEM. Deliberately NOT checked: chapter-level
+# narrative phrases ("In this section we…") and `\tag{}` inside examples, both
+# of which are legitimate in many books.
+# ===========================================================================
+_EX_SCOPE_HEAD_RE = re.compile(r'^\s*\*\*\s*(?:Example\b|例)', re.I)
+_EX_SCOPE_ITEM_RE = re.compile(
+    r'^\s*\*\*\s*(?:Exercise|Problem|练习|习题|例题|Theorem|Proposition|Lemma|Corollary'
+    r'|Definition|定理|命题|引理|推论|定义)\s*[0-9A-Z][\w.．\-]*\s*\*\*'
+    r'|^\s*(?:Exercise|Problem|练习|习题)\s*[0-9]+\s*[.．\-]\s*[0-9]+\s*[.．:：]?\s+'
+    r'(?:Prove|Show|Let|Find|Compute|Verify|证明|设|求|验证|试证|举例|说明)(?![A-Za-z])',
+    re.I)
+_EX_SCOPE_SECTION_RE = re.compile(r'^\s*#{2,6}\s+\S')
+_EX_SCOPE_BOLD_HEAD_RE = re.compile(r'^\s*\*\*([^*]{3,90}?)\*\*\s*[.:：]?')
+_EX_SCOPE_MIN_CHARS = 80
+_EX_SCOPE_MIN_NORM = 60
+
+
+def _ex_scope_norm(s):
+    """Strip markdown/LaTeX noise so both sides share one comparison space."""
+    s = re.sub(r'[*_`>\\]', '', s).lower()
+    return re.sub(r'[^a-z0-9\u4e00-\u9fff]+', '', s)
+
+
+def _ex_scope_blocks(lines):
+    """Consecutive `>` lines form one block; returns (1-based start, lines)."""
+    out, cur, start = [], [], None
+    for i, ln in enumerate(lines, 1):
+        if ln.startswith('>'):
+            if not cur:
+                start = i
+            cur.append(ln)
+        else:
+            if cur:
+                out.append((start, cur))
+            cur = []
+    if cur:
+        out.append((start, cur))
+    return out
+
+
+def _ex_scope_top_prose(lines):
+    """Normalised top-level prose lines (the truth for DUP)."""
+    top, in_math = set(), False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith('$$'):
+            in_math = not in_math
+            continue
+        if in_math or s.startswith(('>', '#', '<', '|', '---', '<!--')):
+            continue
+        if len(s) < _EX_SCOPE_MIN_CHARS or s.count('\\') > 14:
+            continue
+        n = _ex_scope_norm(s)
+        if len(n) >= _EX_SCOPE_MIN_NORM:
+            top.add(n)
+    return top, _ex_scope_section_heads(lines)
+
+
+def _ex_scope_section_heads(lines):
+    heads = set()
+    for ln in lines:
+        m = re.match(r'^#{2,6}\s+(?:\u00a7\s*)?(.+?)\s*$', ln)
+        if m:
+            heads.add(_ex_scope_norm(m.group(1)))
+    return heads
+
+
+def check_example_block_scope(lines):
+    """F-LAYER rule 17: Example blockquote must not swallow following prose.
+
+    Takes a list of markdown lines (pure function, unit-testable). Returns a
+    list of `  x L<n>: [SIGNAL] …` strings, one per offending line.
+    """
+    top, heads = _ex_scope_top_prose(lines)
+    out = []
+    for start, block in _ex_scope_blocks(lines):
+        first = ''
+        for ln in block:
+            s = ln.lstrip('> ').strip()
+            if s:
+                first = s
+                break
+        if not _EX_SCOPE_HEAD_RE.match(first):
+            continue
+        in_math = False
+        for j, ln in enumerate(block):
+            s = ln.lstrip('> ').strip()
+            if s.startswith('$$'):
+                in_math = not in_math
+                continue
+            if in_math or not s:
+                continue
+            lineno = start + j
+            sigs = []
+            if _EX_SCOPE_ITEM_RE.match(s):
+                sigs.append('ITEM')
+            if _EX_SCOPE_SECTION_RE.match(s):
+                sigs.append('SECTION')
+            m = _EX_SCOPE_BOLD_HEAD_RE.match(s)
+            if m:
+                h = _ex_scope_norm(m.group(1))
+                if len(h) >= 4 and h in heads:
+                    sigs.append('SECTION')
+            n = _ex_scope_norm(s)
+            if (len(s) >= _EX_SCOPE_MIN_CHARS
+                    and len(n) >= _EX_SCOPE_MIN_NORM and n in top):
+                sigs.append('DUP')
+            if sigs:
+                # one row per offending line; keep signals sorted for stable output
+                out.append("  x L%d: [%s] Example blockquote swallowed following prose "
+                           "(V-F rule 17): %s" % (lineno, '|'.join(sorted(set(sigs))), s[:90]))
+    return out
 
 
 # ===========================================================================
@@ -1379,6 +1504,7 @@ class FLayer(VerifyLayer):
             'nested_bq': check_nested_blockquotes(ctx.md_file),
             'ex_proof_gaps': check_example_proof_gap(ctx.md_file),
             'ex_no_bq': check_example_blockquote(ctx.md_file),
+            'ex_bq_scope': check_example_block_scope(_md_lines),
             'h_structural_bq': check_h_structural_blockquote(ctx.md_file),
             'h_stmt_bq': check_h_statement_in_blockquote(ctx.md_file),
             'h_ul_bq': check_unlabeled_blockquotes(ctx.md_file),

@@ -11,7 +11,8 @@
 
 🔴 本工具不判断真值方向（它只保证「交付 == merge(units)」），所以测试要盯的是**边界**：
 dry-run 零写入、写盘只动差异段、**按节拆分形态**（工厂拆分器 + 文件名精确配对）、
-文件名对不上即拒、合并件与节件混放即拒、删掉后 **src 消失**的图拒（只换 `> ` 围栏放行）、
+文件名对不上即拒、合并件与节件混放即拒、删掉后 **src 消失**的图拒（只换 `> ` 围栏放行；
+按节拆分形态按**整章**比 src ⇒ 节文件之间随正文搬家放行）、
 换行风格守恒、F 层围栏回归守卫（净增违规即拒、既有违规不误伤）、
 幂等、门控失败不得写盘、写后逐字节复核。
 
@@ -574,6 +575,41 @@ class TestSplitForm(unittest.TestCase):
             self.assertEqual(st, "REFUSE")
             self.assertIn("形态不唯一", note)
             self.assertEqual(_snap(root), before, "混放拒绝时动了磁盘")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_refuse_when_image_lost_from_whole_chapter(self):
+        """整章任何产出件都不再含该图 ⇒ 真丢图，拒。"""
+        root, ext, paths, expect = _split_tree()
+        try:
+            _write(paths[SEC1_MD],
+                   expect[SEC1_MD].replace(u"**例1 求解**：", IMG + u"\n\n**例1 求解**："),
+                   "\n")
+            before = _snap(root)
+            st, note = _run(ext, root, commit=True)
+            self.assertEqual(st, "REFUSE")
+            self.assertIn("不再出现", note)
+            self.assertEqual(_snap(root), before, "丢图拒绝时动了磁盘")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_allow_image_moved_between_section_files(self):
+        """图随正文在节文件之间搬家（旧件有、新件同章另一节有）⇒ 放行。"""
+        root, ext, paths, expect = _split_tree()
+        try:
+            # 单元侧：把图放进第二节的 desc 单元
+            d2 = os.path.join(ext, u"book_structure", u"units", u"ch6",
+                              u"0005_desc_D2.md")
+            with io.open(d2, "a", encoding="utf-8", newline="") as f:
+                f.write(u"\n" + IMG + u"\n")
+            # 交付侧：图出现在第一节（旧位置）
+            _write(paths[SEC1_MD],
+                   expect[SEC1_MD].replace(u"**例1 求解**：", IMG + u"\n\n**例1 求解**："),
+                   "\n")
+            st, note = _run(ext, root, commit=True)
+            self.assertEqual(st, "WRITTEN", note)
+            self.assertNotIn(IMG, _read(paths[SEC1_MD]))
+            self.assertIn(IMG, _read(paths[SEC2_MD]))
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

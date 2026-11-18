@@ -340,8 +340,12 @@ def _line_page_hit(ext, ch, tn, pages):
     """归一化行 tn 在 pages（有序页列表）内的首命中 (page, y)；梯前缀 40→32→24。
 
     同页多个命中时优先「体带」块（页顶行 + _HEAD_TOP_TOL 之下）——运行头/页眉
-    复本与正文行共享前缀时（Lee ISM 节头即 run-in 标题，p356 实测）取体带命中，
-    避免行位置被页眉劫走。"""
+    复本与正文行共享前缀时（Lee ISM 节头即 run-in 标题，p356 实测）取体带命中。
+    🔴 页顶带命中**一律不采信**：目录行、页眉跑马行、页脚水印都可能与描述首行
+    共享前缀（methods p124「5.Additive and Abelian Categories109」、rising-sea
+    "November 18, 2017 draft"、a-course 页眉章名实测），而这些标记可能属于
+    **另一章**，拿它们当锚点会做跨章误判。带下无命中 = 无证据，跳过不报。"""
+    tol = _bs.scan_skeleton._HEAD_TOP_TOL
     for L in (40, 32, 24):
         probe = tn[:L]
         if not probe:
@@ -352,12 +356,13 @@ def _line_page_hit(ext, ch, tn, pages):
             blocks = _page_blocks(ext, ch, p)
             if not blocks:
                 continue
-            ys = [y for (_x, y, t) in blocks if t.startswith(probe)]
-            if not ys:
+            hits = [(y, t) for (_x, y, t) in blocks if t.startswith(probe)]
+            if not hits:
                 continue
             top = min(y for (_x, y, _t) in blocks)
-            body = [y for y in ys if y > top + _bs.scan_skeleton._HEAD_TOP_TOL]
-            return (p, float(min(body) if body else min(ys)))
+            body = [y for y, _t in hits if y > top + tol]
+            if body:
+                return (p, float(min(body)))
     return None
 
 
@@ -498,12 +503,19 @@ def section_leak_findings(ext, ch, start, end, ch_node):
     for node, _parent, _e in secs:
         anchors[id(node)] = _section_anchor(ext, ch, node)
 
+    def _usable(a):
+        """(page, y) 锚点带 y<=0 是几何缺失哨兵（OCR 无 poly / 标题未命中），
+        不得当真值参与跨节/跨章比较——否则 intro-ca 的 y=0 会把整页条目
+        误判成越过下一节节头。"""
+        return a is not None and float(a[1]) > 0
+
     findings = []
     for i, (node, _parent, sub_end) in enumerate(secs):
-        a_s = anchors[id(node)]
+        a_s = anchors[id(node)] if _usable(anchors[id(node)]) else None
         # LEAK-B 边界 = 子树之后的第一个 section（S 自己子树内的节头不算边界）
         j = (sub_end + 1) if sub_end is not None else (i + 1)
-        a_next = anchors[id(secs[j][0])] if j < len(secs) else None
+        a_next = (anchors[id(secs[j][0])]
+                  if j < len(secs) and _usable(anchors[id(secs[j][0])]) else None)
         next_label = (str(_node_f(secs[j][0], "key")) if j < len(secs) else "")
         # SECORDER：节自身与下一结构兄弟的锚序（节头印得晚却排在兄弟之前）
         kids_struct = [c for c in (_node_f(node, "sub_sec") or [])
@@ -512,13 +524,13 @@ def section_leak_findings(ext, ch, start, end, ch_node):
             if str(_node_f(sc, "type") or "") != "section" or _node_f(sc, "consolidated"):
                 continue
             a_sc = anchors[id(sc)]
-            if a_sc is None or si + 1 >= len(kids_struct):
+            if not _usable(a_sc) or si + 1 >= len(kids_struct):
                 continue
             nxt = kids_struct[si + 1]
             a_nx = (_section_anchor(ext, ch, nxt)
                     if str(_node_f(nxt, "type") or "") == "section"
                     else _node_anchor(ext, ch, nxt))
-            if a_nx is None:
+            if not _usable(a_nx):
                 continue
             if (a_sc[0], a_sc[1]) > (a_nx[0], a_nx[1] + _EPS):
                 findings.append({
@@ -542,7 +554,7 @@ def section_leak_findings(ext, ch, start, end, ch_node):
             if t == "description" and a_s is not None and a_s[1] <= 0:
                 continue
             a_c = _node_anchor(ext, ch, c)
-            if a_c is None:
+            if not _usable(a_c):
                 continue
             ck = str(_node_f(c, "key") or "")
             ct = str(_node_f(c, "type") or "")

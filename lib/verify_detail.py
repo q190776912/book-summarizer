@@ -44,6 +44,8 @@ NONBLOCKING_BUCKETS = (
     ("q_letter_led", "q_letter_led"),
     # U 层「交付 md 自身顺序」= 非阻断 WARN（判据见 lib/unit_order.check_delivered_order）。
     ("md_order_problems", "md_order_problems"),
+    # S 层章节边界内容错位 = 非阻断 WARN（判据见 lib/section_boundary）。
+    ("section_boundary_findings", "section_boundary_findings"),
 )
 
 
@@ -65,6 +67,10 @@ def _computed(r):
                # 已经把它兜住了（这正是它与「量不到」的差别）。
                or int(st.get("unmeasurable") or 0) > 0):
         out["md_order_stats"] = _plain(st)
+    # S 层：只在有 finding 或无证据时落盘；零 finding 的章不产出空旁路。
+    sb = r.get("section_boundary_stats") or {}
+    if sb and (r.get("section_boundary_findings") or sb.get("unmeasured")):
+        out["section_boundary_stats"] = _plain(sb)
     return out
 
 SUBDIR = "verify_detail"

@@ -342,6 +342,44 @@ class TestSectionLeakGate(unittest.TestCase):
         self.assertIn("D9", probs[0])
         self.assertIn("LEAK-A", probs[0])
 
+    # ---- 负向：描述首行只命中页眉/目录行（可能属于邻章）→ 无证据不报 ----------
+    def test_desc_anchor_top_band_hit_is_ignored(self):
+        header = "5.Additive and Abelian Categories109"
+        _write_pages(self.tmp, {
+            124: [(93, header),
+                  (705, "5. Additive and Abelian Categories"),
+                  (839, "We have already mentioned in I.6.1 that any homology theory depends")],
+        })
+        u1 = _node("1.4", "section", 60, name="1.4 Earlier Section")
+        u2 = _node("2.5", "section", 124,
+                   _desc("D9", 124, header),
+                   name="2.5 Additive and Abelian Categories")
+        chapter = _node("2", "chapter", 55, u1, u2)
+        from check_section_leak import _node_anchor
+        a = _node_anchor(self.tmp, "2", u2.sub_sec[0])
+        self.assertIsNotNone(a)
+        self.assertEqual(a[1], 705.0,
+                         "目录行 y93 不得成为锚点；只能退到带下同前缀块 y705")
+        probs = section_leak_problems(self.tmp, "2", 55, 130, chapter)
+        self.assertEqual(probs, [], "无体带证据时不得报跨节/跨章泄漏")
+
+    # ---- 负向：节头锚点 y=0（几何缺失哨兵）不得充当跨节边界 ------------------
+    def test_zero_y_section_anchor_is_no_evidence(self):
+        _write_pages(self.tmp, {
+            31: [(432, "Corollary2.7.LetMbeafinitelygeneratedAmodule"),
+                 (666, "Proposition2.8.LetxbeelementsofMwhoseimages")],
+        })
+        u5 = _node("U5", "section", 30,
+                   _node("2.7", "corollary", 31),
+                   _node("2.8", "proposition", 31),
+                   name="Finitely Generated Modules")
+        u6 = _node("U6", "section", 31, name="Exact Sequences")
+        chapter = _node("2", "chapter", 28, u5, u6)
+        from check_section_leak import section_leak_findings
+        findings = section_leak_findings(self.tmp, "2", 28, 36, chapter)
+        self.assertEqual(findings, [],
+                         "y=0 是标题定位失败哨兵，不得据此报 LEAK-B: %r" % (findings,))
+
     # ---- 负向：consolidated 节（章末集中习题块）整节豁免 --------------------
     def test_consolidated_section_children_exempt(self):
         _write_pages(self.tmp, {

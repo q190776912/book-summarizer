@@ -26,6 +26,8 @@
  ② 被删除的交付行里的**图 src 必须在新拼接侧仍然存在**（按 src 多重集比，不按整行比）——
     拼接器注入的图单元侧没有 ⇒ 覆写真丢图，拒；同一张图只是被 `> ` 围栏重新包裹（整行形变了、
     src 没变）⇒ 放行，否则「块引用补围栏」这一类账永远复位不了（复变函数论 ch6 例6.20 实测）；
+    按节拆分形态下比的是**整章**（旧节件并集 − 新节件并集）：节界修复会让图随正文在节文件
+    之间搬家，逐件比会把合法搬家误判成丢图；
  ③ 门控默认必过（``require_gate=True``；``--no-gate`` 须显式放弃并打印警告）；
  ④ 写盘后逐字节比对 ``交付 == 拼接结果``，不等即非 0 退出（备份仍在）；
  ⑤ 换行风格守恒：按交付文件**自身**的 CRLF/LF 写回，不做全书换行符翻转；
@@ -441,6 +443,23 @@ def sync_chapter_split(ext, ch_key, book_dir, side, hits, target, language,
                              "、".join(sorted(got - exist)) or "无"))
 
     # 第一遍：全部件先过闸 —— 任一件不过 ⇒ 整章拒，绝不半写。
+    # 🔴 图片守恒按**整章**比较（不是逐件）：节界修复会让图随正文在节文件之间
+    # 搬家（Lee ch3 图 3.8 从 §Computations in Coordinates 移到 §The Tangent
+    # Bundle），逐件比会把它误判成「覆写真丢图」。本章是事务式整章再生，只要
+    # 旧件图多重集 − 新件图多重集为空就一张没丢。
+    old_imgs = Counter()
+    for name in sorted(exist):
+        _old_text, _ = _norm_read(os.path.join(book_dir, name))
+        old_imgs.update(_img_srcs(_old_text.split("\n")))
+    new_imgs = Counter()
+    for _text in produced.values():
+        new_imgs.update(_img_srcs(_text.split("\n")))
+    lost_ch = old_imgs - new_imgs
+    if lost_ch:
+        return "REFUSE", ("本章交付件要删的图在新拼接侧整章范围内不再出现（%s）——"
+                          "单元侧没有这些图，覆写会真丢内容"
+                          % "、".join(sorted(lost_ch)))
+
     plan = []
     for name in sorted(produced):
         path = os.path.join(book_dir, name)
@@ -452,11 +471,6 @@ def sync_chapter_split(ext, ch_key, book_dir, side, hits, target, language,
         hs = hunks(old.split("\n"), new.split("\n"), owners_f)
         removed = [l for h in hs for l in h["delivery"]]
         added = [l for h in hs for l in h["resplice"]]
-        lost = Counter(_img_srcs(removed)) - Counter(_img_srcs(added))
-        if lost:
-            return "REFUSE", ("%s：要删掉的交付行里的图在新拼接侧不再出现（%s）——"
-                              "单元侧没有这些图，覆写会真丢内容"
-                              % (name, "、".join(sorted(lost))))
         bad = _f_guard(old, new, name)
         if bad:
             return "REFUSE", ("F 层围栏回归守卫拦下 %s（新拼接侧净增违规）：%s"

@@ -222,6 +222,11 @@ DEFAULT_RESULT: Dict[str, Any] = {
     # 🔴 定位不到的单元一律跳过，所以 coverage=0 不等于通过，报告须把两者一起呈现。
     'unit_order_problems': [],
     'md_order_problems': [], 'md_order_stats': {},
+    # S-LAYER: section-boundary content misplacement (WARN, non-blocking).
+    # 'section_boundary_findings' = 每个节头一条（可能多种 kind 合并）；
+    # 'section_boundary_stats'   = files/lines/headings/findings/high/page_geometry
+    # 账本——页面几何是可选证据，缺 page JSON 时仍跑文本信号。
+    'section_boundary_findings': [], 'section_boundary_stats': {},
     # Q-LAYER: formula sequence-label audit (opt-in via `formula` map; see q_layer.py).
     'q_checked': False,
     'q_unconfigured': [],

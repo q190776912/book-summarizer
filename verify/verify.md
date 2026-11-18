@@ -4,7 +4,7 @@
 > 本流程是**语言无关**的校验逻辑，源语言总结与翻译语言总结共用同一套。
 > `write-source`（步骤 8）引用本流程对**源语言 + 翻译语言两组 md** 一次性校验（源版与翻译版共用同一套校验）。
 >
-> **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 9 个校验层模块（注册表见下表），
+> **本文件同时是「更大的公用子流程」**：它编排 `verify/<snake>/script/` 下的全部 10 个校验层模块（注册表见下表），
 > 既可被 `verify_chapter.py` 批量驱动，也可被其他消费者（如 `../flows/write-source`
 > 或外部 skill）整体或按层引用。每层自身的语义 / 阈值 / `--fix` 范围 / 字节契约键是各自 `verify/<snake>/<snake>.md` 的 SSOT。
 
@@ -24,6 +24,7 @@
 |------|--------|---------------|-------|--------------|-----------|------------|
 | EXTRACT | data-provider | data_provider | 0 | 否 | — | [data_provider](data_provider/data_provider.md) |
 | D | section-continuity | section_continuity | 1 | 否 | — | [section_continuity](section_continuity/section_continuity.md) |
+| S | section-boundary（节头附近跨节内容错位 / 重复：上一节尾巴挂到新节标题后、本节开头留在上一节、边界两侧同段重复；WARN 非阻断） | section_boundary | 2 | 否 | — | [section_boundary](section_boundary/section_boundary.md) |
 | B | item-numbering-integrity | item_numbering_integrity | 3 | 否 | — | [item_numbering_integrity](item_numbering_integrity/item_numbering_integrity.md) |
 | E | figure（图完整性 + 图有效性） | figure_completeness | 5 | 否 | — | [figure_completeness](figure_completeness/figure_completeness.md) |
 | F | format-verify（统一格式校验：KaTeX + 引用块 + 结构标签 + 条目分隔 + 证明间距 + 分隔空行 + 标题上空行 + 数学泄漏 + 引用块空行 + Example 块边界 `ex_bq_scope`） | format_verify | 6 | 否 | — | [format_verify](format_verify/format_verify.md) |
@@ -53,7 +54,7 @@
 3. 未过时的修复纪律（🔴 **全层 `--fix` 默认禁用**）：默认走**选择性单层修复 / 手工定点修改**（裸 LaTeX 包数学模式、围栏重建等本就不在 fixer 范围内）；确需整章自动修复时，先跑步骤 0 的 `--preflight` 确认围栏配对且无块外 `\tag`，再显式 `--fix --fix-force`（仍受 PREFLIGHT 门约束），随后**不带 fix 旗标复验**确认 `exit 0`；至多 2 轮仍不过则继续定点修，**严禁停下来问用户**。
 4. 校验层顺序、语义、`--fix` 范围、字节契约键集合见上方注册表表格与本文件各子流程文档链接（每层脚本 `verify/<snake>/script/<snake>.py`，文档 `verify/<snake>/<snake>.md`，各自 SSOT）。
 5. 公式序标保真（序列顺序 `ORDER_MISMATCH` + 小节定位 `MISPLACED`）已由 Q 层（`verify/formula_tag/`，opt-in `formula` 配置）覆盖；公式**内容**保真仍靠人工核对（机器不判内容对错）。
-6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对全部 9 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
+6. 🔴 **B 层（条目编号完整性）ignore 条目 agent 审计 —— D/B 结构完整性域的强制最后一步**：本审计**只作用于编号 ignore**（`verify_config.json` 的 `ignore` / `known_gaps` / `ignore_keys` + 各 `ignore_ch{N}.json`），即 B 层 `item_numbering_integrity` 实际消费的集合。**它是 D 层（section-continuity，§ 结构连续性）与 B 层（条目编号）这一"结构完整性"域的收尾步骤，不是对全部 10 个校验层的全局末步**——Q 层公式豁免（`formula.ignore`）、E 层图豁免（`ignore_fig`）各有独立命名空间，不在此审计范围内。仅当被验证章节存在编号 ignore 条目时本步才生效（“有编号 ignore 的 D/B 校验流程”才需此步）；编号 ignore 为空时本步静默跳过（审计对本次校验不适用）。
    ```bash
    python verify/script/audit_ignore.py <extract_dir> [--chapter N] [--json]
    ```

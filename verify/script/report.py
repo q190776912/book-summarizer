@@ -712,6 +712,32 @@ def print_result(r):
               f"；位置歧义 {md_st.get('ambiguous')} 条（整块正文在交付里出现 ≥2 次，不判序；"
               f"前 {min(len(_amb), 12)} 条：{', '.join(_amb[:12])}"
               + ("，全量见 verify_detail 旁路" if len(_amb) > 12 else "") + "）"))
+    # S-LAYER: section-boundary content misplacement (WARN, non-blocking).
+    # 边界错位 = 上一节尾巴挂到下一节标题后 / 下一节开头留在上一节末尾 /
+    # 同段内容在边界两侧重复。D 层（节头连续）与 B 层（编号连续）都看不见，
+    # 必须单独列；修复是整块搬移 + manifest 同步，本层只报不改。
+    sb_findings = r.get('section_boundary_findings', []) or []
+    sb_stats = r.get('section_boundary_stats', {}) or {}
+    if sb_findings:
+        print(f"\nS-LAYER SECTION BOUNDARY ({len(sb_findings)}) [WARN, non-blocking]: "
+              f"节头附近存在**跨节内容错位 / 重复**（上一节尾巴落在新节标题之后、"
+              f"本节开头留在上一节末尾，或同段文本在边界两侧各一份）。"
+              f"修复 = 按印面把整块正文搬回所属单元，并同步该章 units/manifest，"
+              f"禁止直接手改交付 md；详情见 lib/section_boundary：")
+        for f in sb_findings[:40]:
+            if not isinstance(f, dict):
+                print(f"  ~ {f}")
+                continue
+            loc = f.get('file') or '?'
+            ln = f.get('file_line') or f.get('line') or 0
+            kinds = ','.join(f.get('kinds') or [])
+            print(f"  ~ §{f.get('section') or '?'} ({loc}:{ln}) [{kinds}] "
+                  f"{(f.get('detail') or '')[:260]}")
+        if len(sb_findings) > 40:
+            print(f"  …（其余 {len(sb_findings) - 40} 条从略，全量见 verify_detail 旁路）")
+    elif sb_stats.get('unmeasured'):
+        print(f"\nS-LAYER SECTION BOUNDARY [WARN/NO-EVIDENCE]: "
+              f"{(sb_stats or {}).get('reason') or 'section_boundary_stats 为空'}")
     # B-LAYER BLOCKING 包含「重要概念首项缺失」检测（原 Q 层逻辑）：
     # 书中某节某类别（定义/定理/引理/推论/命题）首项在总结中缺失 → 该 finding
     # 已追加进 r['blocking']，于上方 "B-LAYER BLOCKING" 段统一展示。

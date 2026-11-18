@@ -7,7 +7,7 @@
   * make_summary.parse_pass：损坏值不得洗成「未校验」
   * preflight.print_preflight：tags_outside 必须让 all_ok=False
   * audit_counts.main：空 md + 空书侧必须 BLOCKED(2)，不得 PASS(0)
-  * 静态不变量：非 tests 模块不得有同作用域重复顶层定义；9 层注册必须齐全
+  * 静态不变量：非 tests 模块不得有同作用域重复顶层定义；10 层注册必须齐全
 """
 import ast
 import collections
@@ -156,10 +156,10 @@ class TestStaticInvariants(unittest.TestCase):
             walk(tree, "module")
         self.assertEqual(dups, [], "同作用域重复定义: %s" % (dups[:5],))
 
-    def test_all_nine_layers_registered(self):
+    def test_all_layers_registered(self):
         import register_all
         codes = set(register_all.LAYER_REGISTRY.by_code())
-        self.assertEqual(codes, {"EXTRACT", "D", "B", "E", "F", "O", "P", "Q", "U"})
+        self.assertEqual(codes, {"EXTRACT", "D", "S", "B", "E", "F", "O", "P", "Q", "U"})
 
 
 if __name__ == "__main__":

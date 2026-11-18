@@ -380,6 +380,48 @@ class TestSectionLeakGate(unittest.TestCase):
         self.assertEqual(findings, [],
                          "y=0 是标题定位失败哨兵，不得据此报 LEAK-B: %r" % (findings,))
 
+    # ---- 负向：契约 OCR 块挂到上一节页尾残文，不得充当本节点锚点 ----------
+    def test_contract_ocr_tail_not_in_unit_is_no_anchor(self):
+        tail = "Earlier section closes with a sentence about differential forms and their uses"
+        body = "This new section introduces a completely different construction in detail below"
+        _write_pages(self.tmp, {
+            31: [(200, tail),
+                 (800, "New Section"),
+                 (900, body)],
+        })
+        # 单元文件：只有新节正文；契约 text 块残留上一节页尾
+        udir = os.path.join(self.tmp, "book_structure", "units", "ch3")
+        os.makedirs(udir)
+        json.dump({"units": [{"key": "D1", "file": "0001_desc.md"}]},
+                  open(os.path.join(udir, "manifest.json"), "w", encoding="utf-8"))
+        with open(os.path.join(udir, "0001_desc.md"), "w", encoding="utf-8") as f:
+            f.write("<!-- book-summarizer DONE unit -->\n" + body + "\n")
+        u1 = _node("U1", "section", 30, name="Old Section")
+        u2 = _node("U2", "section", 31, _desc("D1", 31, tail),
+                   name="New Section")
+        chapter = _node("3", "chapter", 28, u1, u2)
+        from check_section_leak import section_leak_findings
+        self.assertEqual(section_leak_findings(self.tmp, "3", 28, 33, chapter), [],
+                         "契约页尾残文不在单元内，不得据此报跨节泄漏")
+
+    # ---- 单元表缓存必须按 ext 分键：一次进程审多书不得串单元 ----------------
+    def test_unit_cache_is_per_book(self):
+        from check_section_leak import _chapter_units
+        dirs = []
+        for tag, text in (("a", "AAA distinct unit body"), ("b", "BBB distinct unit body")):
+            ext = os.path.join(self.tmp, tag)
+            udir = os.path.join(ext, "book_structure", "units", "ch7")
+            os.makedirs(udir)
+            json.dump({"units": [{"key": "D1", "file": "0001_desc.md"}]},
+                      open(os.path.join(udir, "manifest.json"), "w", encoding="utf-8"))
+            with open(os.path.join(udir, "0001_desc.md"), "w", encoding="utf-8") as f:
+                f.write("<!-- DONE -->\n" + text + "\n")
+            dirs.append(ext)
+        a = _chapter_units(dirs[0], "7")["D1"][1]
+        b = _chapter_units(dirs[1], "7")["D1"][1]
+        self.assertIn("AAA", " ".join(a))
+        self.assertIn("BBB", " ".join(b))
+
     # ---- 负向：consolidated 节（章末集中习题块）整节豁免 --------------------
     def test_consolidated_section_children_exempt(self):
         _write_pages(self.tmp, {

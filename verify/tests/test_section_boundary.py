@@ -112,6 +112,29 @@ class SectionBoundarySignalsTest(unittest.TestCase):
         ]
         fs = scan_text(lines, PageCtx(blocks=blocks))
         second = _find(fs, "Second Section")
+        # Page geometry alone is weak evidence and must not raise a finding.
+        self.assertIsNone(second, "纯页码几何不得单独报 heading_late: %r" % (fs,))
+
+    def test_page_geometry_confirms_runin_heading_late(self):
+        """有 run-in 标题文本证据时，页码几何才升级为 heading_late finding。"""
+        prev = ("This body text is printed after the second heading even though "
+                "it belongs to the first section, and it continues long enough "
+                "to clear the body-character threshold of the run-in detector "
+                "so the run-in signal fires and confirms the geometry.")
+        nxt = ("The section really starts here with its own introductory body "
+               "text and enough characters to match.")
+        lines = [
+            "## § First Section", "",
+            "**Second Section.** " + prev, "",
+            "## § Second Section", "", nxt,
+        ]
+        blocks = [
+            (1, 400, norm_alnum("Second Section"), "Second Section"),
+            (1, 600, norm_alnum(prev), prev),
+            (1, 700, norm_alnum(nxt), nxt),
+        ]
+        fs = scan_text(lines, PageCtx(blocks=blocks))
+        second = _find(fs, "Second Section")
         self.assertIsNotNone(second, fs)
         self.assertIn("heading_late", second["kinds"])
 
@@ -122,7 +145,9 @@ class SectionBoundarySignalsTest(unittest.TestCase):
         tail = ("new section opening text that is welded onto the old paragraph "
                 "by a description unit and is printed only after the heading ")
         tail = tail * 3
-        prev_block = old + tail
+        # A run-in with the section's own title is the text evidence that
+        # upgrades the page-geometry tail signal to a real finding.
+        prev_block = "**Second Section.** " + old + tail
         nxt = ("Body of the new section after the heading with enough text to "
                "avoid being skipped by the scanner.")
         lines = [
@@ -170,6 +195,59 @@ class SectionBoundarySignalsTest(unittest.TestCase):
         second = _find(fs, "Second Section")
         self.assertIsNone(second, "页眉锚点被排除后不得再报 heading_late: %r" % (second,))
 
+    def test_intro_transition_not_late_start(self):
+        """节标题后第一段已是正常引言，后面的 'Now we' 是节内过渡，非 late_start。"""
+        lines = [
+            "# Chapter 7",
+            "",
+            "## § Lie Subgroups",
+            "",
+            "Suppose G is a Lie group. A Lie subgroup of G is a subgroup endowed "
+            "with a topology and smooth structure making it a Lie group.",
+            "",
+            "**Proposition 7.11.** Let G be a Lie group and H a subgroup.",
+            "",
+            "> **Proof.** We check that multiplication and inversion are smooth.",
+            "",
+            "Now we move beyond the open subgroups to more general Lie subgroups. "
+            "The following proposition shows the possibilities are limited.",
+        ]
+        fs = scan_text(lines)
+        sec = _find(fs, "Lie Subgroups")
+        self.assertIsNone(sec, "正常引言 + 节内过渡不得报 late_start: %r" % (fs,))
+
+    def test_delayed_intro_after_items_still_detected(self):
+        """真错位：节标题后先是 item/proof，节引言被挤到后面，仍须报 late_start。"""
+        lines = [
+            "# Chapter X",
+            "",
+            "## § Overdetermined Systems",
+            "",
+            "**Theorem 19.27.** Let W be an open subset of R^n.",
+            "",
+            "> **Proof.** Long proof text here that is definitely structural enough "
+            "to exceed the character threshold used by the delayed-intro signal "
+            "and to make this a genuinely displaced section opening.",
+            "",
+            "接下来我们把弗罗贝尼乌斯定理应用于一类非线性超定偏微分方程。",
+        ]
+        fs = scan_text(lines)
+        sec = _find(fs, "Overdetermined Systems")
+        self.assertIsNotNone(sec, fs)
+        self.assertIn("late_start", sec["kinds"])
+
+    def test_discussion_after_theorems_not_late_start(self):
+        """定理/证明之后的讨论段（'接下来我们…'）非迟到节引言，不报 late_start。"""
+        blocks = ["## § Systems"]
+        # several theorem/proof blocks first (discussion follows them)
+        for n in range(1, 4):
+            blocks += ["**Theorem X.%d.** A statement long enough to be a real item here." % n,
+                       "> **Proof.** A proof paragraph with enough structure and text."]
+        blocks += ["接下来我们把该定理应用于一类更一般的方程并展开讨论。"]
+        fs = scan_text(blocks)
+        sec = _find(fs, "Systems")
+        self.assertIsNone(sec, "item 后讨论段不得报 late_start: %r" % (fs,))
+
     def test_no_page_geometry_still_runs(self):
         lines = [
             "## § A",
@@ -178,7 +256,9 @@ class SectionBoundarySignalsTest(unittest.TestCase):
             "",
             "## § B",
             "",
-            "second body starts lowercase.",
+            "second body starts lowercase and then continues with enough extra "
+            "words to make it a substantive paragraph beyond the short-tail "
+            "threshold used to skip printed-page straddle fragments.",
         ]
         fs = scan_text(lines, None)
         b = _find(fs, "B")

@@ -910,7 +910,13 @@ def gate_chapter(ext, ch_key, units_sub="units", only_unit=None,
             try:
                 ok_q, qproblems = _quality.check_body(
                     utype, u.get("name") or "", body,
-                    expected_tags=exp, allow_extra=known_book,
+                    # 🔴 与 verify Q 层同口径：formula.ignore 登记的编号双向
+                    # 豁免（missing + fabricated）。上面已从 exp 剔除 ignore，
+                    # 这里必须同样把 ignore 放进 allow_extra，否则单元照印面
+                    # 写出被登记为合法省略的编号时 verify 绿 / gate 红两头堵
+                    # （methods ch1 的 \tag{I.2} 实测）。
+                    expected_tags=exp,
+                    allow_extra=(set(known_book or ()) | set(formula_ignore or ())),
                     expected_images=exp_imgs, content_blocks=exp_content,
                     source_text=src_map.get(str(u["key"])), key=str(u["key"]),
                     # 🔴 P 层散文照抄闸**只对源语言单元**跑：译文是中文，与原书

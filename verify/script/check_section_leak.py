@@ -311,8 +311,11 @@ def _chapter_units(ext, ch):
     步骤 3 闸门运行时 units 尚未拆出 → 空表，判据自然退化为「无证据跳过」
     （拆分前的书不报 desc 泄漏）。"""
     ck = str(ch)
-    if ck in _UNIT_MANIFEST_CACHE:
-        return _UNIT_MANIFEST_CACHE[ck]
+    # 🔴 缓存键必须含 ext：一次进程审计多本书时 ch1/ch2 会互相串单元，
+    # 把 A 书 desc 锚点算到 B 书的单元上（2026-11-18 代数几何七书联审实测）。
+    ckey = (os.path.abspath(str(ext)), ck)
+    if ckey in _UNIT_MANIFEST_CACHE:
+        return _UNIT_MANIFEST_CACHE[ckey]
     out = {}
     udir = os.path.join(ext, "book_structure", "units", unit_dir_name(ck))
     mfp = os.path.join(udir, "manifest.json")
@@ -332,7 +335,7 @@ def _chapter_units(ext, ch):
             except Exception:
                 continue
             out[str(u.get("key"))] = (fp, lines)
-    _UNIT_MANIFEST_CACHE[ck] = out
+    _UNIT_MANIFEST_CACHE[ckey] = out
     return out
 
 
@@ -376,22 +379,30 @@ def _desc_anchor(ext, ch, node):
         return None
     # 候选 snippet：契约 text 块（若有）优先，其次单元首行——两者都可能因
     # LaTeX/OCR 字符差异（$X x^{i}$ vs Xx^i）单源失配，多候选互为备份。
-    cands = []
+    # 🔴 契约 OCR 块按页几何挂载，desc 节点的 page_start 落在**新节首页**时
+    # 常把上一节页尾残文挂进来（an-intro ch3 D6 的「is the cokernel of the
+    # difference map」、leinster ch6 D5 的「defined as in Lemma 6.1.3(a)」）。
+    # 这些残文不在单元正文里，拿它们当锚点会报假跨节泄漏。故契约候选必须
+    # 与单元正文逐字相交才采信；无单元可核时宁可无证据，不猜。
+    units = _chapter_units(ext, ch)
+    info = units.get(str(_node_f(node, "key") or ""))
+    unit_norm = _norm_md("\n".join(info[1])) if info else ""
+    raw = []
     for blk in (_node_f(node, "text") or []):
         t = blk.get("text") if isinstance(blk, dict) else blk
         tn = _norm(t)
         if len(tn) >= _DESC_MIN_NORM:
-            cands.append(tn[:_DESC_SNIPPET])
-    if not cands:
-        for b in (_node_f(node, "sub_sec") or []):
-            if isinstance(b, dict) and b.get("text"):
-                tn = _norm(str(b.get("text")))
-                if len(tn) >= _DESC_MIN_NORM:
-                    cands.append(tn[:_DESC_SNIPPET])
-            if len(cands) >= 5:
-                break
-    units = _chapter_units(ext, ch)
-    info = units.get(str(_node_f(node, "key") or ""))
+            raw.append(tn[:_DESC_SNIPPET])
+    for b in (_node_f(node, "sub_sec") or []):
+        if isinstance(b, dict) and b.get("text"):
+            tn = _norm(str(b.get("text")))
+            if len(tn) >= _DESC_MIN_NORM:
+                raw.append(tn[:_DESC_SNIPPET])
+        if len(raw) >= 5:
+            break
+    # 无单元目录（拆分前的早期章节 / 契约-only 测试）无从交叉核对，沿用原候选；
+    # 有单元时只采信单元正文确实包含的片段。
+    cands = [s for s in raw if not unit_norm or s[:24] in unit_norm]
     if info:
         for ln in info[1]:
             tn = _norm_md(ln)

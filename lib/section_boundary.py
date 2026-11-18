@@ -346,6 +346,13 @@ def _lowercase_start(blocks):
     b = _first_content_block(blocks)
     if not b:
         return None
+    # A very short lowercase paragraph is typically the tail of a proof that
+    # straddled a printed page/section boundary (e.g. "for some matrices A,B,C
+    # of sizes ... respectively."), not a displaced fragment.  On this book
+    # such a desc unit is printed before the heading on the same page.  Only
+    # flag lowercase starts of substantive paragraphs.
+    if len(b.norm) < 80:
+        return None
     t = norm_text(b.lines[0]).lstrip()
     if t and 'a' <= t[0] <= 'z':
         return ('lowercase_start', 'first text after the heading begins lowercase: %r' % t[:90])
@@ -542,11 +549,33 @@ def _orphan_proof(blocks):
 
 
 def _delayed_intro(blocks):
+    # If the very first content block after the heading is already ordinary
+    # introductory prose (not an item/proof/figure and not a bold run-in label),
+    # the section opening is intact.  Any later INTRO_RE paragraph ("Now we",
+    # "本节", "接下来我们", ...) is a transition into a sub-topic, not a
+    # displaced section intro.  Scanning the first 14 blocks unconditionally
+    # used to flag those transitions as late_start (9 of 11 real cases on this
+    # book), which forced content edits against a correct section opening.
+    if blocks:
+        b0 = blocks[0]
+        if (len(b0.norm) >= 40 and not b0.bold_title
+                and not BOLD_ITEM_RE.match(b0.lines[0])
+                and not PROOF_RE.match(b0.lines[0])
+                and not FIG_RE.match(b0.lines[0])):
+            return None
     seen_chars = 0
     seen_blocks = 0
     has_struct = False
     for b in blocks[:14]:
         if INTRO_RE.match(b.text):
+            # If several structural blocks (theorems/proofs) already precede
+            # the INTRO_RE paragraph, it is a discussion paragraph following
+            # those items (e.g. "Next we apply the theorem..."), not a section
+            # intro displaced from the top.  On this book the two remaining
+            # late_start alarms had 7 and 9 preceding blocks (real displaced
+            # intros have 1-3).  Do not fight the printed order over that.
+            if seen_blocks >= 5 and has_struct:
+                return None
             if seen_blocks >= 1 and seen_chars >= 120 and has_struct:
                 return ('late_start', 'explicit section intro at line %d is preceded by %d chars of foreign item/proof content'
                         % (b.start, seen_chars))
@@ -701,10 +730,23 @@ def scan_text(lines, page_ctx=None):
         if page_ctx is not None:
             sig = page_ctx.check(h, prev_blocks, next_blocks)
             if sig:
-                kinds.append(sig[0])
-                details.append(sig[1])
-                if sig[0] == 'heading_late':
-                    severity = 'high'
+                # Printed-page geometry alone is weak evidence: a legitimate
+                # long proof can straddle a heading, leaving a tail snippet
+                # printed after it.  On a 26-chapter book this produced 23
+                # false heading_late alarms out of 27 (confirmed by manual
+                # review), while every real misplacement also carried a text
+                # signal -- a bold run-in with the section's own title,
+                # reported by _runin_before / _runin_after_content.  Keep
+                # geometry as a diagnostic detail unless text already
+                # confirmed the boundary error; otherwise do not raise it to
+                # a finding (do not fight a correct section over page layout).
+                if sig[0] in ('heading_late', 'heading_early') and sig[0] not in kinds:
+                    details.append('[page-geometry only] ' + sig[1])
+                else:
+                    kinds.append(sig[0])
+                    details.append(sig[1])
+                    if sig[0] == 'heading_late':
+                        severity = 'high'
 
         if kinds:
             findings.append({

@@ -248,7 +248,16 @@ def anchor_order_insert(home, node, ext, ch):
             continue
         a_c = (csl._section_anchor(ext, ch, c) if nt(c) == "section"
                else csl._node_anchor(ext, ch, c))
-        if a_c is None:
+        if a_c is None or a_c[1] is None:
+            # 锚点几何缺失（OCR 无 poly / 条头未命中）：只按页比较，y 未知不当证据。
+            # 同页未知按「本节点在其后」——搬移语义是前节尾部内容，落同页孩子之后。
+            # （an-intro ch4 实测：4.4-16 无锚点被整条跳过，D4 插到 p122 之前，
+            #  被 merge_units 门控以「早页内容出现在晚页之后」拒绝。）
+            cp = a_c[0] if a_c is not None else c.get("page_start")
+            if cp is None:
+                continue
+            if int(cp) <= int(a_node[0]):
+                pos = i + 1
             continue
         if (a_c[0], a_c[1]) <= (a_node[0], a_node[1]):
             pos = i + 1
@@ -771,9 +780,17 @@ def run_desc_split(ext, book_dir, ch_key, desc_key, n_paras, home_key,
                           int(csl._node_f(parent, "page_start") or 1),
                           int(csl._node_f(parent, "page_end") or 1))
     pg = pos[0] if pos else int(csl._node_f(parent, "page_start") or 1)
-    new_anchor = pos or (pg, 0.0)
-    print("   新节点 %s (p%s, y%s) 按 (page,y) 锚序插入 §%s 子树"
-          % (newkey, pg, new_anchor[1], home_key))
+    # 🔴 无几何证据（首段行未命中 OCR）时 new_anchor 保持 None，不得伪造 y=0：
+    # y=0 会被当成「页顶最早」参与比较，契约序与清单序各按各的兜底算出不同位置
+    # （an-intro ch9 实测：契约记第 27 位、清单排到第 32 位，门控以「次序与契约
+    # 前序不一致」+ 早页倒挂拒绝）。切分语义本就是「前 N 段 = home 尾部」，
+    # 无证据时两侧统一按追加到 home 末尾处理（尺寸可查、fail-closed）。
+    new_anchor = pos
+    print("   新节点 %s (p%s, %s) 插入 §%s %s"
+          % (newkey, pg,
+             ("y%s" % pos[1]) if pos else "y?(无几何证据→追加到节末)",
+             home_key,
+             "子树（按 (page,y) 锚序）" if pos else ""))
     for side in splits:
         print("   [%s] 首行: %s" % (side, splits[side][2][0][:90]))
     if dry_run:
@@ -796,15 +813,23 @@ def run_desc_split(ext, book_dir, ch_key, desc_key, n_paras, home_key,
     #    U2 子树之后（整段 §U2 内容被新节点压在后面）。
     subs = home.setdefault("sub_sec", [])
     cpos = len(subs)
-    for i, c in enumerate(subs):
-        if c is node:
-            continue
-        a_c = (csl._section_anchor(ext, ch_key, c) if nt(c) == "section"
-               else csl._node_anchor(ext, ch_key, c))
-        if a_c is None:
-            continue
-        if (a_c[0], a_c[1]) <= new_anchor:
-            cpos = i + 1
+    if new_anchor is not None:
+        for i, c in enumerate(subs):
+            if c is node:
+                continue
+            a_c = (csl._section_anchor(ext, ch_key, c) if nt(c) == "section"
+                   else csl._node_anchor(ext, ch_key, c))
+            if a_c is None or a_c[1] is None:
+                # 锚点几何缺失：只按页比较（同页未知按「新节点在其后」）；理由同
+                # anchor_order_insert 的缺锚兜底。
+                cp = a_c[0] if a_c is not None else c.get("page_start")
+                if cp is None:
+                    continue
+                if int(cp) <= int(new_anchor[0]):
+                    cpos = i + 1
+                continue
+            if (a_c[0], a_c[1]) <= new_anchor:
+                cpos = i + 1
     subs.insert(cpos, {"key": newkey, "type": "description", "name": "",
                        "page_start": pg, "page_end": pg, "sub_sec": []})
     backup.touch(chapter_json_path(ext, ch_key))
@@ -902,13 +927,15 @@ def run_desc_split(ext, book_dir, ch_key, desc_key, n_paras, home_key,
         # 兄弟并比较 y（Lee ch12 实测：D3 的 home=父节 U1，新节点锚 (322,160)
         # 必须排到子节 U2（锚 (322,1070)）之前，仅按页比较会插到 U2 子树后）
         pos = len(ordered)
-        for i, n in enumerate(sub_nodes):
-            a_n = (csl._section_anchor(ext, ch_key, n) if nt(n) == "section"
-                   else csl._node_anchor(ext, ch_key, n))
-            if a_n is None:
-                continue
-            if (a_n[0], a_n[1]) > new_anchor:
-                pos = i
+        if new_anchor is not None:
+            for i, n in enumerate(sub_nodes):
+                a_n = (csl._section_anchor(ext, ch_key, n) if nt(n) == "section"
+                       else csl._node_anchor(ext, ch_key, n))
+                if a_n is None or a_n[1] is None:
+                    continue
+                if (a_n[0], a_n[1]) > new_anchor:
+                    pos = i
+                    break
                 break
         ordered.insert(pos, new_rec)
         # 孤儿按原 span 序号回插（new_rec 占位后序号 +1 平移）

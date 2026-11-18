@@ -297,6 +297,12 @@ def _assemble(ext, ch_key, units_sub="units", clean_cjk=None, require_gate=True)
             lines.extend(body)
             owners.extend([rel] * len(body))
             lines.append(""); owners.append(None)
+        # 🔴 空正文单元（契约幻影 desc：OCR 块挂到邻节、单元只剩 DONE 标记）
+        # 不得参与分隔线状态机——否则节标题后紧跟空 desc，条目到来时按
+        # prev=desc 插 `---`，正好落在规则 15 禁止的「标题正下方」
+        # （an-intro ch5 §5.7 实测）。视同 `merge:false`：账照记、线不插。
+        if not any(x.strip() for x in body):
+            continue
         prev = {"section": "heading", "chapter": "heading",
                 "item": "item", "desc": "desc", "exercise": "item"}.get(utype, prev)
 

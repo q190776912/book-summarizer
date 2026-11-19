@@ -1013,6 +1013,45 @@ class physical_evidence:
         return (len(problems) == 0, problems)
 
     @staticmethod
+    def write_chapters_present(book_dir, extract_dir):
+        """轻量「产物在位」判据：每章 units/manifest.json 齐备、且清单列出的单元文件都在盘。
+
+        🔴 这是 ``audit`` / ``status`` / mark 前置护栏用的**投影判据**，不是落账判据：
+        不跑 ``check_unit_quality`` / KaTeX（那是 ``check_evidence`` 与本步 ``verify`` 的
+        职责）。护栏的立法目的只有「产物被删 / 被移动 / 被截断时立即告警」；对 2146 单元
+        的大书重跑全量质量门控需 ~190s，使 audit 看似卡死（discrete-mathematics-8th
+        实测）。落账当下仍由 ``write_chapters_ok`` 做深度判定。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        missing_manifest, missing_files, total = [], [], 0
+        for k in keys:
+            ud = os.path.join(ex, "book_structure", "units", unit_dir_name(k))
+            mp = os.path.join(ud, "manifest.json")
+            if not os.path.exists(mp):
+                missing_manifest.append(k)
+                continue
+            try:
+                manifest = json.load(open(mp, encoding="utf-8"))
+            except Exception:
+                missing_manifest.append(k)
+                continue
+            for u in manifest.get("units") or []:
+                f = u.get("file")
+                if not f:
+                    continue
+                total += 1
+                if not os.path.exists(os.path.join(ud, f)):
+                    missing_files.append("%s/%s" % (unit_dir_name(k), f))
+        if missing_manifest:
+            return False, f"{len(missing_manifest)} 章缺 units/manifest.json: {missing_manifest[:4]}"
+        if missing_files:
+            return False, f"缺 {len(missing_files)} 个单元文件: {missing_files[:4]}"
+        return True, f"{len(keys)} 章 {total} 个单元文件齐备（轻量在位复核，未重跑质量门控）"
+
+    @staticmethod
     def write_chapters_ok(book_dir, extract_dir):
         """写章节证据 = 每章单元门控通过（每个 item 都改好、一个不漏）。
 
@@ -1073,6 +1112,54 @@ class physical_evidence:
     def _tgt_language(src_lang):
         """源语言 → 翻译目标语言；中文源（或未知）返回 None = 无翻译阶段。"""
         return {"en": "cn"}.get((src_lang or "").lower())
+
+    @staticmethod
+    def translate_chapters_present(book_dir, extract_dir):
+        """轻量「产物在位」判据：需翻译的每章有 units-translate/manifest.json 且所列单元文件在盘。
+
+        与 ``write_chapters_present`` 同理——只查文件在位，不重跑源/译门控与 1:1 同构闸
+        （那是 ``translate_chapters_ok`` 与本步 ``verify`` 的职责；大书重跑同构闸需数分钟）。
+        中文源书（无目标语言）自动通过，与深度判据同语义。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        no_src, missing_manifest, missing_files, skip, total = [], [], [], 0, 0
+        for k in keys:
+            src = physical_evidence._src_manifest(ex, k)
+            if src is None:
+                no_src.append(k)
+                continue
+            if physical_evidence._tgt_language(src.get("language")) is None:
+                skip += 1
+                continue
+            td = os.path.join(ex, "book_structure", "units-translate", unit_dir_name(k))
+            mp = os.path.join(td, "manifest.json")
+            if not os.path.exists(mp):
+                missing_manifest.append(k)
+                continue
+            try:
+                manifest = json.load(open(mp, encoding="utf-8"))
+            except Exception:
+                missing_manifest.append(k)
+                continue
+            for u in manifest.get("units") or []:
+                f = u.get("file")
+                if not f:
+                    continue
+                total += 1
+                if not os.path.exists(os.path.join(td, f)):
+                    missing_files.append("%s/%s" % (unit_dir_name(k), f))
+        if no_src:
+            return False, f"{len(no_src)} 章缺源 units/manifest.json: {no_src[:4]}"
+        if missing_manifest:
+            return False, f"{len(missing_manifest)} 章缺 units-translate/manifest.json: {missing_manifest[:4]}"
+        if missing_files:
+            return False, f"缺 {len(missing_files)} 个译文单元文件: {missing_files[:4]}"
+        note = f"；{skip} 章中文源无翻译阶段" if skip else ""
+        return True, (f"{len(keys) - skip} 章 {total} 个译文单元文件齐备"
+                      f"（轻量在位复核，未重跑门控/同构闸）{note}")
 
     @staticmethod
     def translate_chapters_ok(book_dir, extract_dir):
@@ -1364,6 +1451,28 @@ class physical_evidence:
         return langs
 
     @staticmethod
+    def merge_source_present(book_dir, extract_dir):
+        """轻量「产物在位」判据 = ``merge_source_ok`` 的 ① 部分（不含 verify --all）。
+
+        ``merge_source_ok`` 的 ② 部分（全量 verify --all）单书可达 ~70s，audit 逐步重跑
+        会与其余重步叠加成十分钟级假死。落账当下仍由 ``merge_source_ok`` 跑完整 verify。
+        """
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        return physical_evidence._merge_present_ok(book_dir, ex, keys, want_tgt=False)
+
+    @staticmethod
+    def merge_translation_present(book_dir, extract_dir):
+        """轻量「产物在位」判据 = ``merge_translation_ok`` 的 ① 部分（不含 verify --all）。"""
+        ex = physical_evidence._extract_dir(book_dir, extract_dir)
+        keys = _chapter_map_keys(ex)
+        if not keys:
+            return False, "缺 chapter_map.json（config 步未完成）"
+        return physical_evidence._merge_present_ok(book_dir, ex, keys, want_tgt=True)
+
+    @staticmethod
     def merge_source_ok(book_dir, extract_dir):
         """文档步骤 6 证据（**翻译之前**先把源版校验收口）：
         ① 源语言章 md 已拼、契约骨架节 / 编号项在位（不含翻译版——翻译尚未开始）；
@@ -1516,6 +1625,39 @@ EVIDENCE = {
 def check_evidence(flow, step, book_dir, extract_dir):
     """返回 (ok, detail)。无证据函数的步返回 (True, 'agent 自证')。"""
     fn = EVIDENCE.get(f"{flow}.{step}")
+    if fn is None:
+        return True, "agent 自证（环境/手填步骤）"
+    return fn(book_dir, extract_dir)
+
+
+# ── 轻量「产物在位」投影判据（audit / status / mark 前置护栏专用） ────────────
+# 🔴 判据口径：步骤集合必须与 EVIDENCE 完全一致（见 lib/tests/test_snapshot_guard.py
+# 的键集合不变量测试）；对**轻量步骤**直接复用 EVIDENCE 里的同一个函数对象，对四个
+# 重量级步骤（写单元质量门控 / 翻译同构闸 / 两次 verify --all）只查产物是否在盘。
+# 这不是「第二套落账标准」：落账当下 `cmd_mark` / `cmd_run` 仍以 EVIDENCE 深度判定
+# 当前步；本投影只服务于 snapshot_guard 的立法目的——发现已 DONE 步的产物被删/被移动。
+# 背景：discrete-mathematics-8th（2146 单元）上四个重步分别 ~190s / ~330s / ~70s /
+# ~70s，逐步重跑使 `flow_runner audit` 十分钟不返回，形同死锁。
+PRESENCE_EVIDENCE = {
+    "prep.env": None,
+    "extract.place_pdf": None,
+    "extract.extract_text": physical_evidence.pages_all_landed,
+    "extract.mm_repair": physical_evidence.mm_repair_complete,
+    "write_source.config": physical_evidence.config_ok,
+    "write_source.build_chapter_map": physical_evidence.chapter_map_built,
+    "write_source.figure_detection": physical_evidence.figure_ok,
+    "write_source.structure": physical_evidence.structure_ok,
+    "write_source.draft": physical_evidence.draft_ok,
+    "write_source.write_chapters": physical_evidence.write_chapters_present,
+    "write_source.merge_source": physical_evidence.merge_source_present,
+    "write_source.translate_chapters": physical_evidence.translate_chapters_present,
+    "write_source.merge_translation": physical_evidence.merge_translation_present,
+}
+
+
+def check_presence(flow, step, book_dir, extract_dir):
+    """与 ``check_evidence`` 同签名的轻量版；无谓词的步返回 (True, 'agent 自证')。"""
+    fn = PRESENCE_EVIDENCE.get(f"{flow}.{step}")
     if fn is None:
         return True, "agent 自证（环境/手填步骤）"
     return fn(book_dir, extract_dir)

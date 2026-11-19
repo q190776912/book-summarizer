@@ -105,15 +105,22 @@ def _section_num_from_filename(fn):
     `Chapter{N}_{M}_{名称}.md` (en) — one underscore after the chapter marker,
     another after the section id {M}. Legacy forms without the second
     underscore (`第{N}章_{M}{名称}.md`, `第{N}章{M}{名称}.md`) still parse.
+    🔴 Section id {M} may use dot (`3.2`) OR dash (`5-2`) as its intra-chapter
+    separator — do Carmo's `Chapter5_5-2_...` uses dash (76 files, verified
+    across corpus). Old regex `[\\d.]+` truncated `5-2` to `5`, making every
+    section of that chapter share one sort key → `chapter_md_groups` fell back
+    to lexicographic order (5-10, 5-11, 5-1, …) → U-layer delivered-order gate
+    produced 132 false "late-page-before-early-page" reports. Both this regex
+    and the sort key in `chapter_md_groups` must split on `[.\\-]` together.
     Returns None if the name is not a section file (e.g. the merged
     第N章_*.md / ChapterN_*.md file).
     """
     base = os.path.basename(fn)
     m = None
     if base.startswith('第') and '章' in base:
-        m = re.match(r'^第\d+章_?(\d+(?:\.\d+)*)', base)
+        m = re.match(r'^第\d+章_?(\d+(?:[.\-]\d+)*)', base)
     else:
-        m = re.match(r'^Chapter\d+_([\d.]+)', base)
+        m = re.match(r'^Chapter\d+_(\d+(?:[.\-]\d+)*)', base)
     if not m:
         return None
     sec = m.group(1)
@@ -213,7 +220,7 @@ def chapter_md_groups(book_dir, ch):
         sec = [(f, n) for f, n in sec if n is not None]
         if not sec:
             continue
-        sec.sort(key=lambda x: tuple(int(p) for p in x[1].split('.')))
+        sec.sort(key=lambda x: tuple(int(p) for p in re.split(r'[.\-]', x[1])))
         groups.append([f for f, n in sec])
     return groups
 

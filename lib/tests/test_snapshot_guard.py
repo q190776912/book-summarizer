@@ -155,3 +155,106 @@ def test_restore_hint_points_at_newest_archive():
         assert d2 in hint and d1 not in hint, hint
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ------------------------------------------- lightweight presence projection (audit fix)
+# 背景：discrete-mathematics-8th（2146 单元）上 `flow_runner audit` 因逐步重跑四个
+# 重量级 EVIDENCE 谓词（单元质量门控 ~190s / 翻译同构闸 ~330s / 两次 verify --all
+# ~70s each）而十分钟不返回，形同死锁。audit/status/mark 前置护栏改走轻量产物在位
+# 投影；落账当下仍由 EVIDENCE 深度判定。下列测试钉住两条不变量。
+
+
+def test_presence_evidence_is_a_projection_of_evidence():
+    from flows._flow_contract import EVIDENCE, PRESENCE_EVIDENCE
+    # 步骤集合必须完全一致（否则 audit 覆盖不到某些 DONE 步）
+    assert set(PRESENCE_EVIDENCE) == set(EVIDENCE)
+    # 轻量步骤直接复用同一函数对象，杜绝判据漂移
+    reused = ("extract.extract_text", "extract.mm_repair", "write_source.config",
+              "write_source.build_chapter_map", "write_source.figure_detection",
+              "write_source.structure", "write_source.draft")
+    for k in reused:
+        assert PRESENCE_EVIDENCE[k] is EVIDENCE[k], k
+    # 四个重步必须换成轻量投影，不能还是深度函数
+    heavy = ("write_source.write_chapters", "write_source.merge_source",
+             "write_source.translate_chapters", "write_source.merge_translation")
+    for k in heavy:
+        assert PRESENCE_EVIDENCE[k] is not EVIDENCE[k], k
+
+
+def _presence_book(tmp, lang=None, translated=False):
+    """造一本最小书：chapter_map + units(/units-translate) manifest + 单元文件。"""
+    ext = os.path.join(tmp, "_extract")
+    bs = os.path.join(ext, "book_structure")
+    ud = os.path.join(bs, "units", "ch1")
+    os.makedirs(ud, exist_ok=True)
+    with open(os.path.join(ext, "chapter_map.json"), "w", encoding="utf-8") as f:
+        json.dump({"chapters": [{"num": 1, "name": "X"}]}, f)
+    unit = os.path.join(ud, "0001_item_x.md")
+    with open(unit, "w", encoding="utf-8") as f:
+        f.write("**定理 1.1**\n")
+    with open(os.path.join(ud, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump({"language": lang, "units": [{"file": "0001_item_x.md",
+                                                "type": "item", "key": "1.1"}]}, f)
+    tunit = None
+    if translated:
+        td = os.path.join(bs, "units-translate", "ch1")
+        os.makedirs(td, exist_ok=True)
+        tunit = os.path.join(td, "0001_item_x.md")
+        with open(tunit, "w", encoding="utf-8") as f:
+            f.write("**Theorem 1.1**\n")
+        with open(os.path.join(td, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"units": [{"file": "0001_item_x.md",
+                                  "type": "item", "key": "1.1"}]}, f)
+    return tmp, ext, unit, tunit
+
+
+def test_presence_write_chapters_flags_deleted_unit_without_running_quality_gate(monkeypatch):
+    from flows import _flow_contract as fc
+    tmp = tempfile.mkdtemp()
+    try:
+        book, ext, unit, _ = _presence_book(tmp)
+        # 深度门控若被触发就炸——轻量投影绝不该调用它
+        def explode(*a, **kw):
+            raise AssertionError("presence 不应调用 _units_gate_ok")
+        monkeypatch.setattr(fc.physical_evidence, "_units_gate_ok", explode)
+
+        ok, detail = fc.check_presence("write_source", "write_chapters", book, ext)
+        assert ok, detail
+        os.remove(unit)
+        ok, detail = fc.check_presence("write_source", "write_chapters", book, ext)
+        assert not ok and "单元文件" in detail, detail
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_presence_translate_flags_deleted_translated_unit(monkeypatch):
+    from flows import _flow_contract as fc
+    tmp = tempfile.mkdtemp()
+    try:
+        book, ext, _, tunit = _presence_book(tmp, lang="en", translated=True)
+        def explode(*a, **kw):
+            raise AssertionError("presence 不应调用 check_translate_parity subprocess")
+        monkeypatch.setattr(fc.subprocess, "call", explode)
+
+        ok, detail = fc.check_presence("write_source", "translate_chapters", book, ext)
+        assert ok, detail
+        os.remove(tunit)
+        ok, detail = fc.check_presence("write_source", "translate_chapters", book, ext)
+        assert not ok and "译文单元文件" in detail, detail
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_flow_runner_audit_defaults_to_presence_deep_is_optin():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "tools", "flow_runner.py")
+    spec = importlib.util.spec_from_file_location("flow_runner_under_test", path)
+    fr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fr)
+    ev, chk = fr._evidence_for(False)
+    from flows._flow_contract import PRESENCE_EVIDENCE, check_presence
+    assert ev is PRESENCE_EVIDENCE and chk is check_presence
+    ev, chk = fr._evidence_for(True)
+    from flows._flow_contract import EVIDENCE, check_evidence
+    assert ev is EVIDENCE and chk is check_evidence

@@ -48,7 +48,8 @@ from lib.flow_gate import (FLOW_ORDER as FG_FLOW_ORDER,  # noqa: E402
                            require_ordered, require_flow_prereqs, mark, unmark,
                            is_done, status as gate_status, bootstrap as gate_bootstrap,
                            ledger_path, FlowGateError)
-from flows._flow_contract import RUN_COMMANDS, EVIDENCE, check_evidence  # noqa: E402
+from flows._flow_contract import (RUN_COMMANDS, EVIDENCE, check_evidence,  # noqa: E402
+                                  PRESENCE_EVIDENCE, check_presence)
 from lib import snapshot_guard  # noqa: E402
 
 # 需要连 OCR / 图像一起归档的步（重跑代价最大，且此后再不会变）
@@ -56,13 +57,16 @@ FULL_SNAPSHOT_STEPS = {"extract.mm_repair"}
 
 
 def _guard_existing_evidence(book_dir, extract_dir):
-    """落账新步之前复演**已完成步**的证据谓词：产物消失（误删/挪走/截断）即拒绝。
+    """落账新步之前复演**已完成步**的产物是否在位：被删/挪走即拒绝。
 
-    判据与当初 mark 用的完全同一套（``flows._flow_contract.EVIDENCE``），所以这里
-    FAIL 的含义只有一个：账上已经做完的东西，盘上不存在了。
+    用 ``PRESENCE_EVIDENCE``（EVIDENCE 的轻量投影，同一批步骤、只查产物在位）——
+    护栏只回答「账上做完的东西盘上还在不在」，不重跑全量质量门控 / verify --all
+    （大书上会让每次 mark/run 前空等十分钟，形同死锁）。当前步的深度判定仍在
+    ``cmd_mark`` / ``cmd_run`` 里由 ``check_evidence`` 执行。
     """
     ex = _extract_dir(book_dir, extract_dir)
-    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status,
+                               PRESENCE_EVIDENCE, check_presence)
     if bad:
         print("❌ 拒绝继续：台账里已完成的步骤，其物理证据已不在位（疑似误删/挪动）：")
         for step, detail in bad:
@@ -123,10 +127,16 @@ def _next_step(book_dir, extract_dir=None):
     return None
 
 
-def cmd_status(book_dir, extract_dir):
+def _evidence_for(deep):
+    """deep=False（默认）= 轻量产物在位投影；deep=True = 完整 EVIDENCE 重跑。"""
+    return (EVIDENCE, check_evidence) if deep else (PRESENCE_EVIDENCE, check_presence)
+
+
+def cmd_status(book_dir, extract_dir, deep=False):
     _print_status(book_dir, extract_dir)
     ex = _extract_dir(book_dir, extract_dir)
-    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    ev, chk = _evidence_for(deep)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status, ev, chk)
     if bad:
         print("\n🔴 证据复演（已完成步的产物是否仍在位）:")
         for step, detail in bad:
@@ -135,10 +145,15 @@ def cmd_status(book_dir, extract_dir):
     return 1 if bad else 0
 
 
-def cmd_audit(book_dir, extract_dir):
-    """只跑证据复演：台账说做完了，盘上还在不在。"""
+def cmd_audit(book_dir, extract_dir, deep=False):
+    """只跑证据复演：台账说做完了，盘上还在不在。
+
+    默认走轻量产物在位投影（快）；``--deep`` 重跑完整 EVIDENCE（含单元质量门控、
+    verify --all、翻译同构闸），大书可能耗时十分钟级，仅在做整书深度回归时用。
+    """
     ex = _extract_dir(book_dir, extract_dir)
-    bad = snapshot_guard.audit(book_dir, ex, gate_status, EVIDENCE, check_evidence)
+    ev, chk = _evidence_for(deep)
+    bad = snapshot_guard.audit(book_dir, ex, gate_status, ev, chk)
     if not bad:
         print(f"✅ 证据复演通过：{ex}")
         return 0
@@ -278,12 +293,14 @@ def cmd_bootstrap(book_dir, extract_dir=None):
 
 USAGE = """\
 用法:
-  flow_runner.py status  <book_dir> [--extract <extract_dir>]
+  flow_runner.py status  <book_dir> [--extract <extract_dir>] [--deep]
   flow_runner.py next    <book_dir> [--extract <extract_dir>]
   flow_runner.py verify  <book_dir> <flow> <step> [--extract <extract_dir>]
   flow_runner.py mark    <book_dir> <flow> <step> [--extract <extract_dir>]
   flow_runner.py run     <book_dir> <flow> <step> [--pdf <pdf>] [--extract <extract_dir>]
-  flow_runner.py audit   <book_dir> [--extract <extract_dir>]   # 已完成步的证据复演（产物是否仍在位）
+  flow_runner.py audit   <book_dir> [--extract <extract_dir>] [--deep]
+      # 默认：轻量投影，只查已完成步的产物是否仍在位（快）
+      # --deep：重跑完整 EVIDENCE（单元质量门控 / verify --all / 翻译同构闸），大书十分钟级
   flow_runner.py bootstrap <book_dir> [--extract <extract_dir>]
 
 多册书：每册操作时传 --extract <book_dir>/_extract/<册>，账本分册隔离。
@@ -308,16 +325,14 @@ def main():
     cmd = args[0]
     rest = args[1:]
 
-    if cmd == "status":
+    if cmd in ("status", "audit"):
         if not rest:
             print(USAGE); return 2
         ex = _pop_extract(rest)
-        return cmd_status(rest[0], ex)
-    if cmd == "audit":
-        if not rest:
-            print(USAGE); return 2
-        ex = _pop_extract(rest)
-        return cmd_audit(rest[0], ex)
+        deep = "--deep" in rest
+        if deep:
+            rest.remove("--deep")
+        return (cmd_status if cmd == "status" else cmd_audit)(rest[0], ex, deep=deep)
     if cmd == "next":
         if not rest:
             print(USAGE); return 2

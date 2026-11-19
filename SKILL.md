@@ -76,9 +76,11 @@ description: "Summarizes a textbook (local PDF or knowledge base) into chapter-b
   主代理只有一条**有限**清理权（可删自己本轮写的一次性脚本/探针输出，须走白名单守卫脚本，
   交付形态文件与校验回执不在授权内）；四条边界与措辞见 [`flows/_flow_gate.md`](flows/_flow_gate.md)
   禁止清单，**下放给子代理的删除授权一律无效**。
-  `flow_runner` 现会在每次 `mark`/`run` 前**复演已完成步的证据**（产物消失即硬拒并给回滚
+  `flow_runner` 现会在每次 `mark`/`run` 前**复演已完成步的产物是否在位**（轻量投影 `PRESENCE_EVIDENCE`，产物消失即硬拒并给回滚
   命令），并在 `mark` 后自动快照到 `<extract>/_snapshots/`；单独巡检用
-  `python tools/flow_runner.py audit <book_dir>`。
+  `python tools/flow_runner.py audit <book_dir>`（默认快；`--deep` 重跑完整 `EVIDENCE`；
+  落账当下仍由完整 `EVIDENCE` 深度复核当前步）。两层判据与不变量见
+  [`flows/_flow_gate.md`](flows/_flow_gate.md) 第 5 节。
 
 ## 退出条件
 

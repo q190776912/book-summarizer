@@ -61,10 +61,19 @@ assert 上游完成，照样被挡：
 > 方向搞反把**真书目录整棵树**删掉——源 PDF、15 份分章契约、703 个已验收 DONE 单元、
 > 全部 manifest、OCR `page_*.json`、图像资产、台账一次全灭；回收站无记录，而账本仍显示
 > 步骤 5 收官，**55 分钟内没有任何机械信号**。
-- **复演**：`mark` / `run` 落账前，对台账里每个已完成步骤**重新跑一遍它当初的证据谓词**
-  （判据与落账完全同源 = `flows/_flow_contract.EVIDENCE`，不另造第二套标准）。任一产物
-  已不在位 → 🔴 硬拒继续推进，并打印最近快照回滚命令。单独巡检用
+- **复演（两层判据，同一个步骤集合）**：`mark` / `run` 落账前与单独巡检的护栏目标是
+  **发现已 DONE 步的产物被删 / 被移动**，故默认走轻量判据 `PRESENCE_EVIDENCE`
+  （`flows/_flow_contract.py`，与 `EVIDENCE` **键集合完全相同**；轻量步直接复用同一函数对象，
+  四个重步——写单元质量门控 / 翻译同构闸 / 两次 `verify --all`——只查产物是否在盘）。
+  任一产物已不在位 → 🔴 硬拒继续推进，并打印最近快照回滚命令。单独巡检用
   `python tools/flow_runner.py audit <book_dir>`（`status` 也会附带报告）。
+  🔴 **落账当下的深度判定不变**：`cmd_verify` / `cmd_mark`（当前步）/ `cmd_run`（跑完的当前步）
+  仍以完整 `EVIDENCE`（`check_evidence`）复核；本投影只回答「产物在位」，不代表「质量已重验」。
+  需要整书深度回归时显式 `audit --deep` / `status --deep`（重跑完整 `EVIDENCE`，大书十分钟级）。
+  *成因（2026-11-19）*：`discrete-mathematics-8th`（2146 单元）四个重步分别 ~190s / ~330s /
+  ~70s / ~70s，`audit` 逐步重跑十分钟不返回、形同死锁；改投影后全书 20 本 audit ≤1.5s。
+  不变量与负向用例见 `lib/tests/test_snapshot_guard.py`（键集合相同、删单元/删译文单元必报、
+  轻量趟绝不触发深度门控）。
 - **留底**：每次成功 `mark` 自动写 `<extract_dir>/_snapshots/<时间戳>_<flow>.<step>.tar.gz`，
   轻量快照含 `book_structure/`（契约 + units + units-translate + manifest）+ `_extract`
   顶层 JSON/MD + 台账 + 书目录根级章 md；`extract.mm_repair` 那一次打 **全量快照**（tag 带

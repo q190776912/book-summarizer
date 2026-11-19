@@ -40,7 +40,10 @@ ITEM_HEAD_RE = re.compile(
 BOLD_ITEM_RE = re.compile(
     r'^\s*(?:>\s*)?\*\*\s*(?P<label>' + ITEM_LABELS + r')\s*'
     r'(?P<num>\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b', re.I)
-PROOF_RE = re.compile(r'^\s*(?:>\s*)?(?:\*\*)?\s*Proof\b|^\s*(?:>\s*)?(?:\*\*)?\s*证明', re.I)
+# 印刷体证明块一律是 `> **Proof...**` / `> **证明...**` 的粗体标签行。
+# 旧正则允许无粗体的裸 Proof/证明，会把「证明留给读者」「Proof of (4.2)」
+# 这类普通散文当证明块，制造孤立证明误报。只认粗体标签是保守收紧：只会少报。
+PROOF_RE = re.compile(r'^\s*(?:>\s*)?\*\*\s*(?:Proof|证明)\b', re.I)
 FIG_RE = re.compile(r'^\s*(?:<div\b|</div>|<img\b|!\[)', re.I)
 INTRO_RE = re.compile(
     r'^\s*(?:In this section|This section|In the remainder of this section|'
@@ -142,6 +145,41 @@ def base_title(s):
     if '(' in s:
         s = s.split('(', 1)[0]
     return norm_title(s)
+
+
+# 编号条目陈述在印面上的合法形态远多于旧 BOLD_ITEM_RE 认的「标签 + X.Y」：
+# 字母附录号 (Lemma A.1)、编号在前 (8.3.1 (Lemma/Definition)、9.4.9 Barr 引理)、
+# 人名前缀 (Krull's Theorem 6.11.1)、无编号标签行 (**Definition**: ...)。
+# 孤立证明 / 迟到导语 / run-in 标题三处共用同一判据，避免把合法陈述误判为缺失。
+_ORDINAL_LEAD_RE = re.compile(
+    r'^\s*(?:[^\w]{0,4})?(?:\d{1,3}(?:\.\d{1,3}){0,2}|[A-Za-z]\.?\d{1,3}(?:\.\d{1,3})?)(?!\w)')
+
+
+def _is_item_statement_text(t, raw_line=False):
+    """粗体文本是否为编号/带标签的条目陈述。
+
+    raw_line=True 时 t 是**原始行**（可能只是普通散文）——必须先见到粗体起标记
+    才认，否则普通散文里出现 'definition' 等词就会被误当成条目陈述。
+    raw_line=False 时 t 来自 `Block.bold_title`（已去 `**`），直接看标签/编号。
+    """
+    if raw_line:
+        m = re.match(r'^\s*(?:>\s*)?\*\*\s*', t)
+        if not m:
+            return False
+        s = t[m.end():].split('**', 1)[0]
+    else:
+        s = t.split('**', 1)[0]
+    if re.search(r'\b(?:' + ITEM_LABELS + r')\b', s[:70], re.I):
+        return True
+    return bool(_ORDINAL_LEAD_RE.match(s))
+
+
+_MATH_INLINE_RE = re.compile(r'\$[^$\n]+\$')
+
+
+def _math_tokens(s):
+    """块内行内数学 token 列表——用于区分「模板相同但公式不同」的平行命题。"""
+    return _MATH_INLINE_RE.findall(s)
 
 
 def is_prose(s):
@@ -313,7 +351,7 @@ def _runin_before(heading, blocks):
         if not b.bold_title:
             continue
         bt = b.bold_title
-        if re.match(r'^(?:' + ITEM_LABELS + r')\b', bt, re.I):
+        if _is_item_statement_text(bt):
             continue
         if _title_match(norm_title(bt), heading.norm_title) or _title_match(base_title(bt), heading.norm_title):
             after = blocks[bi + 1:]
@@ -402,7 +440,7 @@ def _runin_after_content(heading, blocks):
         if _block_is_figure(b):
             continue
         bt = b.bold_title
-        if bt and not re.match(r'^(?:' + ITEM_LABELS + r')\b', bt, re.I):
+        if bt and not _is_item_statement_text(bt):
             if _title_match(norm_title(bt), heading.norm_title) or _title_match(base_title(bt), heading.norm_title):
                 if before:
                     chars = sum(len(x.norm) for x in before)
@@ -529,9 +567,18 @@ def _dup_within(blocks):
             if len(a.norm) < 100 or len(b.norm) < 100:
                 continue
             sm = difflib.SequenceMatcher(None, a.norm, b.norm)
-            if sm.ratio() >= 0.9:
-                hits.append((a, b))
-                break
+            if sm.ratio() < 0.9:
+                continue
+            # 数学文本里大量平行命题（如 Hom(A,-) vs Hom(-,B) 的对偶定理）
+            # 模板散文几乎逐字相同、只差公式里的变量名，字符级相似度可 >0.97。
+            # 两段都带行内数学时，再要求公式 token 也基本一致，否则不是重复。
+            ma, mb = _math_tokens(a.text), _math_tokens(b.text)
+            if ma and mb:
+                sa, sb = set(ma), set(mb)
+                if len(sa & sb) / len(sa | sb) < 0.6:
+                    continue
+            hits.append((a, b))
+            break
     if not hits:
         return None
     a, b = hits[0]
@@ -543,7 +590,7 @@ def _orphan_proof(blocks):
     for b in blocks[:4]:
         if PROOF_RE.match(b.lines[0]):
             return ('orphan_proof', 'section opens with a proof block (line %d) and no statement precedes it' % b.start)
-        if BOLD_ITEM_RE.match(b.lines[0]):
+        if _is_item_statement_text(b.lines[0], raw_line=True):
             break
     return None
 

@@ -287,6 +287,95 @@ class SectionBoundaryFileMappingTest(unittest.TestCase):
         self.assertFalse(stats["page_geometry"])
 
 
+class SectionBoundaryFalsePositiveRegressionTest(unittest.TestCase):
+    """编号陈述形态 / 平行命题 / 编号定理标题的误报回归（2026-11 修复）。"""
+
+    def test_orphan_proof_various_statement_formats(self):
+        """合法陈述用字母号 / 编号在前 / 人名前缀 / 中英混合时，不得报孤立证明。"""
+        statements = [
+            "**Lemma A.1**: Let C be a complete locally small category.",
+            "**8.3.1 (Lemma/Definition)**: If X is fibrant then the relation is an equivalence.",
+            "**Krull's Theorem 6.11.1** The Galois group is the inverse limit of finite groups.",
+            "**9.4.9 Barr 引理** 若 u 满足对一切代数都成立的条件则为标量。",
+        ]
+        for stmt in statements:
+            lines = ["## § S", "", stmt, "",
+                     "> **Proof.** We check the statement by a long argument that "
+                     "is clearly a proof of the preceding item.", ""]
+            fs = scan_text(lines)
+            self.assertFalse(any("orphan_proof" in f["kinds"] for f in fs),
+                             "%s 被误判为孤立证明: %r" % (stmt, fs))
+
+    def test_orphan_proof_still_detected(self):
+        """真·孤立证明（标题后直接是证明、无任何陈述）仍须报。"""
+        lines = ["## § S", "",
+                 "> **Proof.** A proof with no preceding statement at all, "
+                 "long enough to be a substantive proof block.", ""]
+        fs = scan_text(lines)
+        self.assertTrue(any("orphan_proof" in f["kinds"] for f in fs), fs)
+
+    def test_dup_within_parallel_math_statements_not_flagged(self):
+        """模板相同但公式变量不同的对偶命题，字符相似度 >0.9 也不是重复。"""
+        a = ("**Theorem 2.1.** Let $B' \\xrightarrow{\\mu} B \\xrightarrow{\\varepsilon} B''$ "
+             "be an exact sequence of $\\Lambda$-modules. For every $\\Lambda$-module "
+             "$A$ the induced sequence")
+        b = ("**Theorem 2.2.** Let $A' \\xrightarrow{\\mu} A \\xrightarrow{\\varepsilon} A''$ "
+             "be an exact sequence of $\\Lambda$-modules. For every $\\Lambda$-module "
+             "$B$ the induced sequence")
+        lines = ["## § S", "", a, "", "An intermediate remark.", "", b, "",
+                 "A closing remark.", ""]
+        fs = scan_text(lines)
+        self.assertFalse(any("dup_within" in f["kinds"] for f in fs), fs)
+
+    def test_dup_within_genuine_duplicate_still_flagged(self):
+        """真·段内重复（散文或同公式）仍须报。"""
+        para = ("This paragraph is genuinely duplicated inside the same section "
+                "and it is long enough to clear the one-hundred character floor "
+                "used by the intra-section duplicate detector.")
+        lines = ["## § S", "", para, "", "Some other text here.", "", para, "",
+                 "A final remark.", ""]
+        fs = scan_text(lines)
+        self.assertTrue(any("dup_within" in f["kinds"] for f in fs), fs)
+
+    def test_dup_within_identical_math_still_flagged(self):
+        """带数学的真重复（公式也相同）不得被数学 token 判据压下。"""
+        para = ("Let $A \\to B$ be a map of modules and consider its induced "
+                "sequence of homology groups in degree two. " * 3).strip()
+        lines = ["## § S", "", para, "", "An intermediate remark.", "", para, "",
+                 "A final remark.", ""]
+        fs = scan_text(lines)
+        self.assertTrue(any("dup_within" in f["kinds"] for f in fs), fs)
+
+    def test_numbered_theorem_title_not_heading_early(self):
+        """编号定理标题与节标题同名，不是「节 run-in 标题迟到」。"""
+        lines = ["## § 12.4 Bertini's Theorem", "",
+                 "Introductory body text about Bertini's theorem that is long "
+                 "enough to count as substantive content before any item.", "",
+                 "**12.4.2 Bertini's Theorem.** Suppose k is algebraically closed.", "",
+                 "**12.4.3 Example.** An illustrative example.", ""]
+        fs = scan_text(lines)
+        self.assertFalse(any("heading_early" in f["kinds"] for f in fs), fs)
+
+    def test_plain_proof_word_in_prose_not_orphan_proof(self):
+        """'证明留给读者' / 'Proof of (4.2)' 是散文，不是证明块标题。"""
+        for first in ("证明上半连续定理的关键在于如下想法，我们随后给出解释。",
+                      "Proof of (4.2). We have to check several cases carefully."):
+            lines = ["## § S", "", first, "",
+                     "**Lemma A.1**: A genuine statement follows the introduction.", ""]
+            fs = scan_text(lines)
+            self.assertFalse(any("orphan_proof" in f["kinds"] for f in fs), fs)
+
+    def test_heading_early_still_detected(self):
+        """真·节 run-in 标题迟到（非编号条目标题）仍须报。"""
+        lines = ["## § Smooth Maps", "",
+                 "Considerable body text that belongs to the previous section "
+                 "and sits before this section's own run-in title.", "",
+                 "**Smooth Maps.** The actual section body starts here with its "
+                 "own introductory content.", ""]
+        fs = scan_text(lines)
+        self.assertTrue(any("heading_early" in f["kinds"] for f in fs), fs)
+
+
 class SectionBoundaryRegistryTest(unittest.TestCase):
     def test_layer_registered_non_blocking(self):
         from verify.script.register_all import LAYER_REGISTRY

@@ -89,6 +89,19 @@ def check_katex(md_file):
     has_errors = (r.returncode != 0) or bool(lines)
     if r.returncode != 0 and not lines:
         lines = ['[katex] checker exited rc=%d with no parsed output' % r.returncode]
+    # MathJax 兼容差异（tag 在 aligned/gathered/... 内）：KaTeX 容忍但
+    # MathJax（Obsidian/Typora）报错。纯行形态扫描，并入本层错误集，
+    # 使 `verify --all` 自动覆盖这一 KaTeX 校验看不见的盲区。
+    try:
+        from check_mathjax import scan_file as _mj_scan, format_problems as _mj_fmt
+        mj = _mj_scan(md_file)
+        if mj:
+            has_errors = True
+            lines.extend(_mj_fmt(md_file, mj))
+    except Exception as _mj_exc:
+        # fail-closed：检测脚本自身失败也不能静默放过
+        has_errors = True
+        lines.append('[mathjax] checker error: %r' % (_mj_exc,))
     return has_errors, lines
 
 

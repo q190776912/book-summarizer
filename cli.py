@@ -25,6 +25,7 @@ DISPATCH = {
     "extract-items-hom": "flows/write-source/structure/script/extract_items_hom.py",
     "write-chapter-map": "data/chapter_map/chapter_map.py",
     "check-katex": "verify/format_verify/script/check_katex.py",
+    "check-mathjax": "verify/format_verify/script/check_mathjax.py",
     "fmt-proofs": "tools/fmt_proofs.py",
     "fmt-extras": "tools/fmt_extras.py",
     "wrap-examples": "tools/wrap_examples_bq.py",

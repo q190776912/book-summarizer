@@ -1158,6 +1158,142 @@ def _cross_chapter_registered(c, it, ch, owners):
     return None
 
 
+# 🔴 字母附录章源侧节头扫描（2026-11-20）：旧逻辑对字母章**整项跳过**节查漏
+# （见 step2_sections 旧分支），理由是 D 层节号解析为数字域且回填路径 int("A")
+# 会崩。代价：字母章「印面有节头、契约漏登」无闸可拦——convex optimization
+# 附录B 的 B.2/B.3/B.4、附录C 的 C.5、附录A 的 A.1.1 实测 2026-11-20，写源期
+# 一路假绿。此处补字母章**专用**节头扫描：检测进闸（missing_sections 与数字章
+# 同口径阻断）；**不自动回填**（回填路径会 int(ch) 崩溃，且字母节须按印面人工
+# 登记契约/单元）。
+#
+# 判据（按印面实测形态设计，全部整行锚定）：
+#   ① `^{字母}.{节号}[.{子号}] Title` —— Boyd 附录 `B.2 The S-procedure`、
+#      OCR 残号 `B.2 (1-norm approximation`（ℓ 被啃成 "("）都须收；
+#   ② 号裸行 `^{字母}.{节号}` —— OCR 把标题拆行（`B.2` + 次行 `The S-procedure`）
+#      时只有号行在场，同样算证据（章窗内裸号行几乎只能是节头碎片）；
+#   ③ `Section {字母}.{号}. Title` 显式词头形（Lehmann 附录体例）——**必须带
+#      Title-Case 标题**（裸 `Section A.1` 是分组头，不是节头，与 SEC_APP_WORD
+#      同判）。
+# 防假阳四闸：
+#   a. 标题形闭（≤72 字、大写/括号/汉字起、无句界 `\.\s+[A-Z]`、无数学运算符、
+#      无 Chapter/Appendix/Index/§ 页眉词、≥8 词且句点结尾 = 散文题拒收）；
+#   b. (字母,号) **读序单调前缀**过滤：习题/散文回指的「倒挂」号（章末习题
+#      B.1 重现于 B.4 之后）一律落空；页眉复本与真头同键去重；
+#   c. 命中键若与契约**任意节点键**同键 → 不算缺失（合法性过滤，与数字章
+#      「编号项号 ≠ 缺失节」同判）；
+#   d. 习题区声明（exercise_region_headings，opt-in）复用 exercise_region。
+LET_SEC_NUM_RE = re.compile(r'^([A-Z])\.(\d{1,2}(?:\.\d{1,2})?)(?:\s+([^\n].*))?$')
+LET_SEC_WORD_RE = re.compile(
+    r'^(?:Sections?)\s+([A-Z])\.(\d{1,2}(?:\.\d{1,2})?)\.?(?:\s+([A-Z][^\n]{2,70}))$')
+_LET_TITLE_SENT_RE = re.compile(r'\.\s+[A-Z]')
+_LET_TITLE_MATH_RE = re.compile(r'[≤≥≈≠=+*×÷→←^]|\\(?:frac|sum|int|sqrt)|\$')
+_LET_TITLE_STOP_RE = re.compile(r'\b(?:Chapter|CHAPTER|Appendix|APPENDIX|Index|INDEX|§)\b')
+
+
+def _letter_title_ok(title):
+    """节头标题形闭：假标题（纯号/数学碎片/成句散文/页眉词）一律拒收。"""
+    t = (title or '').strip()
+    if t.endswith('.'):
+        t = t[:-1].rstrip()
+    if not t or len(t) > 72:
+        return False
+    if not re.match(r'^[A-Z(\[\u4e00-\u9fff]', t):
+        return False
+    if _LET_TITLE_SENT_RE.search(t) or _LET_TITLE_MATH_RE.search(t):
+        return False
+    if _LET_TITLE_STOP_RE.search(t):
+        return False
+    if re.fullmatch(r'\d{1,2}(?:\.\d{1,3})*', t):
+        return False
+    if t.endswith('.') and len(t.split()) >= 8:
+        return False
+    return True
+
+
+def _letter_sec_key(letter, num):
+    """'B' + '2' / '1.1' → ('B.2', (2,) / (1,1))。号分量恒为 int。"""
+    parts = tuple(int(p) for p in num.split('.'))
+    return '%s.%s' % (letter, num), parts
+
+
+def letter_source_sections(ext, ch, start, end, tree=None):
+    """字母附录章源侧节头扫描。返回::
+
+        {"printed": set('B.2' 形键),
+         "occurrences": [(key, page, line[:80])],
+         "missing": sorted list（printed − 契约节点键，tree 给定时）,
+         "rejected": [(page, line[:80], reason)]}
+
+    纯检测：不写契约、不回填。`ch` 须为字母章号（'A'..）。
+    """
+    letter = str(ch).strip()
+    if not letter or not letter[:1].isalpha():
+        return {"printed": set(), "occurrences": [], "missing": [], "rejected": []}
+    from lib.page_dir import resolve_page_dir
+    try:
+        page_dir = resolve_page_dir(ext, ch)
+    except Exception:
+        page_dir = ext
+    occ, rejected = [], []
+    running = (0,)  # 读序单调游标：(节, 子号)，首键 (1,) > (0,) 必收
+    for p in range(int(start), int(end) + 1):
+        fp = os.path.join(page_dir, f'page_{p:03d}.json')
+        if not os.path.exists(fp):
+            continue
+        try:
+            data = page_json.PageJson.load(fp).data
+        except Exception:
+            continue
+        for blk in data.get('text', []):
+            txt = (blk.get('text') or '').strip()
+            if not txt:
+                continue
+            m = LET_SEC_NUM_RE.match(txt)
+            worded = False
+            if m and m.group(3) is None:
+                # ①号+题 / ②号裸行 —— 裸行无标题可校验，直接作号证据
+                pass
+            elif m and _letter_title_ok(m.group(3)):
+                pass
+            else:
+                mw = LET_SEC_WORD_RE.match(txt)
+                if mw and _letter_title_ok(mw.group(3)):
+                    m, worded = mw, True
+                else:
+                    # 带题但标题形闭不过 → 记审计（不判缺）
+                    if m and m.group(3) is not None:
+                        rejected.append((p, txt[:80], 'title-guard'))
+                    m = None
+            if not m:
+                continue
+            key, tup = _letter_sec_key(m.group(1), m.group(2))
+            if m.group(1) != letter:
+                rejected.append((p, txt[:80], 'letter-mismatch'))
+                continue
+            if tup <= running:
+                # 读序倒挂/复本：习题号、页眉复本、正文回指 —— 不作节证据
+                rejected.append((p, txt[:80], 'non-monotonic'))
+                continue
+            running = tup
+            occ.append((key, p, txt[:80]))
+    printed = {k for k, _p, _l in occ}
+    missing = []
+    if tree is not None:
+        tree_keys = set()
+
+        def _collect_keys(n):
+            tree_keys.add(str(n.key))
+            for c in n.sub_sec:
+                _collect_keys(c)
+
+        _collect_keys(tree)
+        missing = sorted(k for k in printed if k not in tree_keys)
+    else:
+        missing = sorted(printed)
+    return {"printed": printed, "occurrences": occ,
+            "missing": missing, "rejected": rejected}
+
+
 def step2_sections(ch, start, end, ext, cfg, tree):
     """第 2 步：用 section_continuity（D 层）校验遗漏章节并回填 book_structure。
 
@@ -1166,11 +1302,18 @@ def step2_sections(ch, start, end, ext, cfg, tree):
       * continuity_sections：书内章节序列的内部洞（节序断裂）；
       * missing_sections：落在 book_structure 最后一个已写节之后的整节缺失。
     二者合并即「源有而 book_structure 无」的遗漏章节集合。
+
+    字母附录章走 `letter_source_sections` 专用扫描（2026-11-20 起不再整项跳过；
+    检测进闸、不自动回填——回填路径 int(ch) 会崩，字母节须按印面人工登记）。
     """
     if not str(ch)[:1].isdigit():
-        # 附录字母章：D 层数字节号解析域之外，源侧节查漏跳过（不做无意义扫描，
-        # 也避免回填路径 int("A") 崩溃）。
-        return [], {"continuity": [], "tail": [], "skipped": "appendix-letter-chapter"}
+        letter = letter_source_sections(ext, ch, start, end, tree=tree)
+        detail = {"continuity": [], "tail": [],
+                  "skipped": None,
+                  "letter_printed": sorted(letter["printed"]),
+                  "letter_occurrences": letter["occurrences"],
+                  "letter_rejected": letter["rejected"]}
+        return list(letter["missing"]), detail
     md = synthetic_section_md(tree)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(md)
@@ -1519,12 +1662,35 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
             canon_labels.setdefault(_canon, set()).add(_lab)
 
     missing_items = []
+    _letter_sec_accounted = []   # 字母章「号已作为节登记」豁免留痕（仅报告）
     _contract_keys = _contract_item_keys(tree)
     _sec_titles = _section_title_map(tree)
+    # 🔴 字母附录章「三级号已作为节登记」豁免（2026-11-20）：字母章的三级小节
+    # （A.1.2 …）规范化后在契约里是 **section** 节点（三级 run-in 转 ###）。
+    # 源侧 scan_raw_items 仍会把 `Definition A.1.2` 扫成条目候选——它已作为节
+    # 在账，不是缺失条目；否则附录A/C 每次闸门都挂 19/10 条 needs_agent 噪音，
+    # 淹没真信号。仅字母章生效，数字章零回归。
+    _letter_sec_keys = set()
+    if not str(ch)[:1].isdigit():
+
+        def _collect_sec_keys(n):
+            if getattr(n, "type", None) == "section":
+                _letter_sec_keys.add(str(n.key))
+            for c in n.sub_sec:
+                _collect_sec_keys(c)
+
+        _collect_sec_keys(tree)
     _phantom_sec_ck = set()   # 节题伪装候选（同样不得喂 B 层）
     _exempt_ck = set()   # suffix_confusion 豁免候选的复合键（B 层同样不得喂入）
     for ck, it in best.items():
         if ck in contract_items:
+            continue
+        if (not str(ch)[:1].isdigit()
+                and str(it.get("key", "")) in _letter_sec_keys):
+            # 三级号已作为字母章 section 在账（见上方豁免注释）→ 留痕跳过
+            _letter_sec_accounted.append(
+                {"key": it["key"], "label": it["label"], "page": it["page"],
+                 "note": "already registered as a section node in the contract"})
             continue
         c = tuple(it["canon"]) if isinstance(it["canon"], list) else it["canon"]
         # 🔴 uncat 影子匹配（Kreyszig 4.1-5 实测 2026-09-26）：契约侧该 canon
@@ -1723,6 +1889,8 @@ def step3_items(ch, start, end, ext, cfg, tree, contract_items, bs=None):
                 continue
             b_raw.append(it)
     bmeta = _run_b_layer(ch, start, end, ext, cfg, tree, b_raw)
+    # 字母章「号已作为节登记」豁免留痕：挂在 bmeta 上带回调用方（返回签名不变）
+    bmeta["letter_section_accounted"] = _letter_sec_accounted
 
     return missing_items, bmeta
 
@@ -2152,6 +2320,13 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     backfilled_sections = []
     if backfill:
         for ms in missing_sections:
+            # 🔴 字母附录章缺节不自动回填：回填路径 int(ch)/canon 全是数字域，
+            # 且字母节的正确登记须按印面人工补契约节点/单元/交付三本账。
+            # 缺失已由 step2_sections 上报进闸（fail-closed），此处只提示。
+            if not str(ms)[:1].isdigit():
+                print(f"[BACKFILL] {chapter_label(ch)} 缺字母节 {ms}："
+                      f"字母章不自动回填，须按印面人工登记契约节点")
+                continue
             parts = [int(x) for x in ms.split(".")]
             pg = _find_section_page(ext, ch, parts)
             if insert_section(tree, ms, pg):
@@ -2330,10 +2505,12 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
         "contract_sections": sorted(contract_sections),
         "ignore_audit": run_audit(ext, ch),  # ignore 条目审核：SUSPECT 提示 agent 复核
         "raw_items_scanned": _count_raw_items(ext, ch, start, end, cfg.chapter_first,
-                                              getattr(cfg, "two_level_items", False)),
+                                              getattr(cfg, "two_level_items", False),
+                                              cfg=cfg),
         "raw_sections_present": sorted(set(sec_detail.get("continuity", []) + sec_detail.get("tail", []))),
         "missing_sections": missing_sections,
         "missing_items": missing_items,
+        "letter_section_accounted": bmeta.get("letter_section_accounted", []),
         "backfilled_items": backfilled_items,
         "backfilled_sections": backfilled_sections,
         "manual_override_backfills": [b for b in backfilled_items if b.get("source") == "manual_override"],
@@ -2372,8 +2549,23 @@ def check_chapter(ext, ch, start, end, cfg, backfill, report_dir):
     return report
 
 
-def _count_raw_items(ext, ch, start, end, chapter_first: bool = True, two_level_items: bool = False):
-    """轻量统计源侧（含练习过滤前）扫描到的原始条目数，仅用于报告，不影响回填。"""
+def _count_raw_items(ext, ch, start, end, chapter_first: bool = True,
+                     two_level_items: bool = False, cfg=None):
+    """轻量统计源侧（含练习过滤前）扫描到的原始条目数，仅用于报告，不影响回填。
+
+    🔴 2026-11-20：字母附录章此前恒返回 0（报告计数器只有数字模式），报告里
+    `raw_items_scanned: 0` 让人误以为附录章条目扫描也是死的——实际 step3 的
+    scan_raw_items 对字母章（ORDINAL_APP/APP2）是活的。补 cfg 口径：**字母章**
+    用按章路由的 cfg 跑同一条 scan_raw_items（type 13/14 附录正则），报告不再
+    误导；**数字章保持旧口径不变**（primary=None 全方案扫描，零回归）。
+    """
+    if not str(ch)[:1].isdigit():
+        primary = getattr(cfg, "primary_type", None) if cfg is not None else None
+        language = getattr(cfg, "language", None) if cfg is not None else None
+        groups = getattr(cfg, "ordinal", None) if cfg is not None else None
+        return len(scan_raw_items(ext, ch, start, end, primary, chapter_first,
+                                  language=language, groups=groups,
+                                  two_level_items=two_level_items))
     return len(scan_raw_items(ext, ch, start, end, None, chapter_first,
                               two_level_items=two_level_items))
 

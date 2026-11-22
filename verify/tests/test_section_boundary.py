@@ -376,6 +376,91 @@ class SectionBoundaryFalsePositiveRegressionTest(unittest.TestCase):
         self.assertTrue(any("heading_early" in f["kinds"] for f in fs), fs)
 
 
+class StrandedOpeningTest(unittest.TestCase):
+    r"""错挂（下一节开头正文被挂到上一节末尾）= BLOCKING 实质错误。"""
+
+    def test_stranded_opening_is_blocking(self):
+        # §21.2 的标题 + 开头段落被错挂在 §21.1 末尾；§21.2 以续句开头。
+        lines = [
+            "# Chapter 21",
+            "",
+            "## § 21.1 Definitions",
+            "",
+            "Now choose $x_0$ equal to $\\mathbb{E}X$, which completes the proof.",
+            "",
+            "---",
+            "",
+            "Independence. Let us say two events $A$ and $B$ are independent if "
+            "$\\mathbb{P}(A\\cap B)=\\mathbb{P}(A)\\mathbb{P}(B)$.",
+            "",
+            "---",
+            "",
+            "## § 21.2 INDEPENDENCE",
+            "",
+            "whenever $1\\leq i_1<\\cdots<i_j\\leq n$. When $n$ is three, "
+            "not only must the joint probability factor.",
+            "",
+        ]
+        fs = scan_text(lines)
+        b = _find(fs, "21.2 INDEPENDENCE")
+        self.assertIsNotNone(b, fs)
+        self.assertIn("stranded_opening", b["kinds"])
+        self.assertEqual(b["severity"], "blocking", b)
+
+    def test_legit_lowercase_start_not_blocking(self):
+        """正常的跨页小写开头（上一节无本节标题 run-in）不报错挂。"""
+        lines = [
+            "# Chapter 21",
+            "",
+            "## § 21.1 Definitions",
+            "",
+            "This paragraph ends with a complete sentence about something else.",
+            "",
+            "## § 21.2 INDEPENDENCE",
+            "",
+            "whenever $1\\leq i_1<\\cdots<i_j\\leq n$ we say the events are independent.",
+            "",
+        ]
+        fs = scan_text(lines)
+        b = _find(fs, "21.2 INDEPENDENCE")
+        self.assertFalse(b and "stranded_opening" in b["kinds"], fs)
+
+    def test_cjk_stranded_opening_is_blocking(self):
+        """CJK 无小写：靠边界两侧重复的续句（只要 $1\\leq...$）也能判错挂。"""
+        lines = [
+            "# 第21章 概率", "",
+            "## § 21.1 定义", "",
+            "现在取 $x_0$ 等于 $\\mathbb{E}X$，证明完毕。", "", "---", "",
+            "独立性。我们说两个事件 $A$ 和 $B$ 独立，如果 $\\mathbb{P}(A\\cap B)=\\mathbb{P}(A)\\mathbb{P}(B)$。",
+            "", "$$", "\\mathbb{P}(A_{i_1})=\\mathbb{P}(A_{i_1})\\mathbb{P}(A_{i_2})", "$$", "",
+            "只要 $1\\leq i_1<\\cdots<i_j\\leq n$。", "", "---", "",
+            "## § 21.2 独立性", "",
+            "只要 $1\\leq i_1<\\cdots<i_j\\leq n$。当 $n$ 为三时，不仅联合概率要分解。", "",
+        ]
+        fs = scan_text(lines)
+        b = next((f for f in fs if "21.2" in f["section"]), None)
+        self.assertIsNotNone(b, fs)
+        self.assertIn("stranded_opening", b["kinds"])
+        self.assertEqual(b["severity"], "blocking")
+
+    def test_bare_label_heading_not_blocking(self):
+        """标题仅为通用标签（Definition/例）时不报，避免误伤普通段落。"""
+        lines = [
+            "# Chapter 1",
+            "",
+            "## § 1.11 Definition",
+            "",
+            "Definition 1.10 An operation on a set is commutative if it is symmetric.",
+            "",
+            "## § 1.12 Definition",
+            "",
+            "the previous sentence continues here with lowercase start.",
+            "",
+        ]
+        fs = scan_text(lines)
+        self.assertFalse(any("stranded_opening" in f["kinds"] for f in fs), fs)
+
+
 class SectionBoundaryRegistryTest(unittest.TestCase):
     def test_layer_registered_non_blocking(self):
         from verify.script.register_all import LAYER_REGISTRY

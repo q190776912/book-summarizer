@@ -2,6 +2,7 @@
 
 > 本文件是 **S 层** 的唯一权威详情（SSOT）。语义 / 判据 / 阈值 / 实现只在此描述；汇总索引与全局架构见 [`../verify.md`](../verify.md)。
 > **注册机制**：脚本 `verify/section_boundary/script/section_boundary.py`，由 `verify/script/register_all.py` 按裸名扫描 `verify/*/script/` 自动发现并注册。`code = 'S'`，`order = 2`，`auto_fixable = False`。
+> 🔴 **错挂（stranded_opening）= BLOCKING**：绝大多数 finding 是非阻断 WARN；但「下一节标题连同开头正文被错挂到上一节末尾」是**实质内容错位**，severity=`blocking`，由 `report.py` 计入 `problems` → 本章 FAIL。判据（保守设计、全库 0 误报）：节标题有**实质标题**（非 Definition/例 这类裸标签），下一节首段是承接上段的续句（拉丁语小写/标点/数学开头，或用边界两侧**重复的同句续句**覆盖 CJK），且上一节尾块（末 3 块）以**整个标题词序**起首（run-in）。修复须整块搬回所属单元 + 同步 manifest，不可手改交付 md。
 
 ```contract-keys
 section_boundary_findings

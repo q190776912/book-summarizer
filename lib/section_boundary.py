@@ -321,6 +321,72 @@ def _split_signal(prev_blocks, next_blocks):
     return None
 
 
+def _bare_label_title(norm_title):
+    """True when a heading's whole title is just a generic item label
+    (``Definition`` / ``例`` / ``Theorem`` ...), i.e. not a substantive title.
+    Such headings must not anchor the stranded-opening detector: their label
+    word begins many ordinary prose paragraphs, so matching it would produce
+    false positives (e.g. ``§1.12 Definition`` vs a ``Definition 1.11 ...``
+    paragraph in the previous section)."""
+    wt = tuple(re.findall(r'[a-z0-9\u4e00-\u9fff]+', norm_title.lower()))
+    labels = set(w.lower() for w in re.findall(r'[A-Za-z\u4e00-\u9fff]+', ITEM_LABELS))
+    return len(wt) == 1 and wt[0] in labels
+
+
+def _stranded_opening(heading, prev_blocks, next_blocks):
+    """错挂：下一节开头的正文被错挂在上一节末尾（BLOCKING）。
+
+    Printed form: a section heading ``§N Title`` is followed by text that
+    continues a sentence from the previous section (lowercase / punctuation /
+    math start), AND the previous section's tail contains the SAME substantive
+    title as a run-in (``Title. Let us ...``) — i.e. the heading plus its opening
+    paragraph were extracted into the wrong (previous) section.  This is a real
+    misattribution that must be fixed by moving the whole block across the unit
+    boundary, not a cosmetic warning.
+
+    Conservative on purpose (0 fires across the 20-book corpus after the real
+    case was fixed): requires a substantive (non-bare-label) heading title, a
+    continuation-style next-opening, and a whole-word title prefix in one of the
+    previous section's last three content blocks.
+    """
+    if not prev_blocks or not next_blocks:
+        return None
+    wt = tuple(re.findall(r'[a-z0-9\u4e00-\u9fff]+', heading.norm_title.lower()))
+    if not wt or _bare_label_title(heading.norm_title):
+        return None
+    next_first = norm_text(next_blocks[0].lines[0])
+    # The next section's opening is a continuation: either a classic lowercase /
+    # punctuation / math start (Latin), OR it repeats a substantive sentence from
+    # the previous section's tail (language-independent — covers CJK where there
+    # is no lowercase).  In the concrete bug both sides begin with the identical
+    # "whenever $1\leq...$" / "只要 $1\leq...$" sentence.
+    cont = _starts_continuation(next_blocks[0].lines[0])
+    if not cont:
+        for pb in reversed(prev_blocks):
+            pn = norm_text(pb.lines[-1])
+            if len(pn) >= 30 and (next_first.startswith(pn[:40]) or pn.startswith(next_first[:40])):
+                cont = True
+                break
+    if not cont:
+        return None
+    for b in prev_blocks[-3:]:
+        head_words = tuple(re.findall(r'[a-z0-9\u4e00-\u9fff]+', norm_text(b.lines[0]).lower()))
+        if head_words[:len(wt)] == wt:
+            return ('stranded_opening',
+                    '错挂：下一节「%s」的开头正文被挂在上一节末尾——上一节尾块以本节标题起首 '
+                    '(%r)，而本节首段是承接上段的续句 (%r)；须把整块正文搬回本节单元并同步 '
+                    'units/manifest' % (heading.title,
+                                        norm_text(b.lines[0])[:60],
+                                        norm_text(next_blocks[0].lines[0])[:60]))
+        if b.bold_title:
+            bold_words = tuple(re.findall(r'[a-z0-9\u4e00-\u9fff]+', norm_text(b.bold_title).lower()))
+            if bold_words[:len(wt)] == wt:
+                return ('stranded_opening',
+                        '错挂：上一节尾块含本节标题的 run-in（%r），本节首段为续句；须整块搬回'
+                        % norm_text(b.bold_title)[:60])
+    return None
+
+
 def _title_match(a, b):
     """Whole-word title equality / prefix match.
 
@@ -773,6 +839,12 @@ def scan_text(lines, page_ctx=None):
         if sig:
             kinds.append(sig[0])
             details.append(sig[1])
+
+        sig = _stranded_opening(h, prev_blocks, next_blocks)
+        if sig:
+            kinds.append(sig[0])
+            details.append(sig[1])
+            severity = 'blocking'   # 错挂是实质错误，必须修，不是 WARN
 
         if page_ctx is not None:
             sig = page_ctx.check(h, prev_blocks, next_blocks)

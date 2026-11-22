@@ -718,6 +718,19 @@ def print_result(r):
     # 必须单独列；修复是整块搬移 + manifest 同步，本层只报不改。
     sb_findings = r.get('section_boundary_findings', []) or []
     sb_stats = r.get('section_boundary_stats', {}) or {}
+    # 错挂（stranded_opening）= 下一节开头正文被挂在上一节末尾，是实质错误、
+    # 必须整块搬回正确单元，不是「提示」。severity='blocking' 的 S 层 finding
+    # 计入 problems → 本章 FAIL；其余边界警告仍是非阻断 WARN。
+    sb_blocking = [f for f in sb_findings
+                   if isinstance(f, dict) and f.get('severity') == 'blocking']
+    if sb_blocking:
+        problems += 1
+        print(f"\nS-LAYER MISATTRIBUTION / BLOCKING ({len(sb_blocking)}): "
+              f"节标题连同开头正文被错挂到上一节末尾——这是实质内容错位，"
+              f"须按印面把整块搬回所属单元并同步 units/manifest（禁止手改交付 md）：")
+        for f in sb_blocking:
+            print(f"  ! §{f.get('section') or '?'} (line {f.get('line') or 0}) "
+                  f"{(f.get('detail') or '')[:260]}")
     if sb_findings:
         print(f"\nS-LAYER SECTION BOUNDARY ({len(sb_findings)}) [WARN, non-blocking]: "
               f"节头附近存在**跨节内容错位 / 重复**（上一节尾巴落在新节标题之后、"
@@ -762,6 +775,7 @@ def print_result(r):
               f"/ {len(p_extra)} p-layer-fabricated-item "
               f"/ {len(p_verbose)} p-layer-verbose-prose / {len(p_proof_verbose)} p-layer-verbose-proof "
               f"/ {len(u_order)} u-layer-order / {1 if _u_noev else 0} u-layer-no-evidence "
+              f"/ {len(sb_blocking)} s-layer-misattributed "
               f"{q_part}— {os.path.basename(md)}")
         return 'FAIL'
     else:
